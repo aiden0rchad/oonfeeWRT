@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -103,7 +104,7 @@ func New(opt Options) *Client {
 	}
 	c := &Client{
 		baseURL:    fmt.Sprintf("%s://%s/ubus", scheme, opt.Host),
-		pinnedCert: opt.PinnedCert,
+		pinnedCert: strings.ToLower(opt.PinnedCert),
 		session:    nullSession,
 	}
 	tr := &http.Transport{
@@ -130,7 +131,7 @@ func (c *Client) verifyPin(rawCerts [][]byte) error {
 		return errors.New("ubus: device presented no certificate")
 	}
 	sum := sha256.Sum256(rawCerts[0])
-	got := hex.EncodeToString(sum[:])
+	got := hex.EncodeToString(sum[:]) // lowercase hex
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -143,11 +144,20 @@ func (c *Client) verifyPin(rawCerts [][]byte) error {
 		return nil
 	}
 	if got != c.pinnedCert {
+		// Truncate safely: a caller-supplied pin may be any length, and
+		// slicing it blindly panics inside the TLS handshake callback.
 		return fmt.Errorf("ubus: certificate fingerprint changed "+
 			"(pinned %s, got %s) — device reflashed, replaced, or intercepted",
-			c.pinnedCert[:16], got[:16])
+			short(c.pinnedCert), short(got))
 	}
 	return nil
+}
+
+func short(s string) string {
+	if len(s) > 16 {
+		return s[:16] + "…"
+	}
+	return s
 }
 
 // PinnedCert returns the fingerprint in use, for persisting at adoption.
@@ -248,17 +258,16 @@ func hostFromURL(u string) string {
 
 // Login authenticates and stores the session token.
 func (c *Client) Login(ctx context.Context, user, pass string) error {
-	c.mu.Lock()
-	c.session = nullSession
-	c.user, c.pass = user, pass
-	c.mu.Unlock()
-
 	var out struct {
 		Session string `json:"ubus_rpc_session"`
 		Timeout int    `json:"timeout"`
 	}
-	err := c.call(ctx, "session", "login",
-		map[string]string{"username": user, "password": pass}, &out, false)
+	// Authenticate with the null session explicitly rather than by clearing our
+	// own token first. A failed re-login must leave a still-valid session
+	// intact — discarding it would turn one transient auth failure into a dead
+	// client, and inside a confirmation window into a guaranteed revert.
+	err := c.callWithSession(ctx, nullSession, "session", "login",
+		map[string]string{"username": user, "password": pass}, &out)
 	if err != nil {
 		return err
 	}
@@ -267,6 +276,8 @@ func (c *Client) Login(ctx context.Context, user, pass string) error {
 	}
 	c.mu.Lock()
 	c.session = out.Session
+	c.user, c.pass = user, pass
+	c.shared = false // a new token: any previous sharing verdict is stale
 	c.mu.Unlock()
 	return nil
 }
@@ -360,13 +371,20 @@ type rpcResponse struct {
 }
 
 func (c *Client) callOnce(ctx context.Context, object, method string, args, out any) error {
+	c.mu.Lock()
+	session := c.session
+	c.mu.Unlock()
+	return c.callWithSession(ctx, session, object, method, args, out)
+}
+
+func (c *Client) callWithSession(ctx context.Context, session, object, method string, args, out any) error {
 	if args == nil {
 		args = struct{}{}
 	}
 	c.mu.Lock()
 	c.nextID++
 	req := rpcRequest{JSONRPC: "2.0", ID: c.nextID, Method: "call",
-		Params: []any{c.session, object, method, args}}
+		Params: []any{session, object, method, args}}
 	c.mu.Unlock()
 
 	var resp rpcResponse

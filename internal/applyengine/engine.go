@@ -54,8 +54,10 @@ func New() *Engine {
 //
 // applier is the session that stages and applies; it is also the ONLY session
 // that may confirm. verify must produce independent sessions for reading state.
-func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, health HealthCheck) (Result, error) {
-	res := Result{Started: e.now()}
+func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, health HealthCheck) (res Result, err error) {
+	res = Result{Started: e.now()}
+	// Named results, so this lands on what the caller receives rather than on
+	// a local that every return path discards.
 	defer func() { res.Finished = e.now() }()
 
 	if len(plan.Ops) == 0 {
@@ -73,6 +75,9 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	// staged, makes the snapshot equal the new state, and silently protects
 	// nothing.
 	if err := e.stage(ctx, applier, plan); err != nil {
+		// Batch runs every op, so a failure part-way leaves its predecessors
+		// staged. Clear them, or they ride along on the next apply.
+		e.discardStaged(ctx, applier, plan)
 		return res, fmt.Errorf("stage: %w", err)
 	}
 	if err := e.verifyStaged(ctx, applier, plan); err != nil {
@@ -88,7 +93,7 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	defer endWindow()
 
 	timeout := plan.timeout()
-	err := applier.Call(ctx, "uci", "apply", map[string]any{
+	err = applier.Call(ctx, "uci", "apply", map[string]any{
 		"rollback": true, "timeout": int(timeout.Seconds()),
 	}, nil)
 	if err != nil {
@@ -110,6 +115,7 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 		endWindow()
 		out := e.awaitRevert(ctx, applier, plan, timeout,
 			fmt.Sprintf("health check failed: %v", healthErr))
+		e.discardStaged(ctx, applier, plan)
 		out.HealthErr = healthErr
 		out.Started = res.Started
 		return out, nil
@@ -125,8 +131,22 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	}
 	out := e.awaitRevert(ctx, applier, plan, timeout,
 		fmt.Sprintf("confirm never landed: %v", confirmErr))
+	e.discardStaged(ctx, applier, plan)
 	out.Started = res.Started
 	return out, nil
+}
+
+// discardStaged clears the rejected delta from the applying session.
+//
+// A fired rollback restores /etc/config but leaves the applying session's
+// staged delta in place — and uci.apply is one all-or-nothing transaction
+// across everything staged. So a rejected change left staged here rides along
+// on the NEXT apply from this client and silently lands, minutes later, having
+// already been reported as reverted. Reproduced before this call existed.
+func (e *Engine) discardStaged(ctx context.Context, applier *ubus.Client, plan Plan) {
+	for _, cfg := range plan.Configs() {
+		_ = applier.Call(ctx, "uci", "revert", map[string]any{"config": cfg}, nil)
+	}
 }
 
 // preflight refuses to touch a device someone else is mid-edit on.
@@ -246,9 +266,19 @@ func (e *Engine) verifyStaged(ctx context.Context, c *ubus.Client, plan Plan) er
 	if err := c.Call(ctx, "uci", "changes", struct{}{}, &out); err != nil {
 		return fmt.Errorf("verify staged: %w", err)
 	}
+	want := map[string]bool{}
 	for _, cfg := range plan.Configs() {
+		want[cfg] = true
 		if len(out.Changes[cfg]) == 0 {
 			return fmt.Errorf("verify staged: nothing staged for %q; refusing to apply", cfg)
+		}
+	}
+	// apply commits EVERYTHING staged on this session, so an extra config in
+	// the delta would be applied too. Refuse rather than carry it along.
+	for cfg := range out.Changes {
+		if !want[cfg] {
+			return fmt.Errorf("verify staged: unexpected staged changes for %q; "+
+				"apply is all-or-nothing and would commit them too", cfg)
 		}
 	}
 	return nil
@@ -340,11 +370,22 @@ func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Pla
 		res.Finished = e.now()
 		return res
 	}
-	defer verify.Destroy(ctx)
+	// Close, NOT Destroy. While any rollback is armed anywhere on the device —
+	// including one belonging to a second controller or a LuCI apply — rpcd
+	// hands every new login the APPLYING session's token, and we cannot tell
+	// from here whose it is. Destroying it would revert a third party's change.
+	// A lingering token costs 300s of idle timeout; the alternative costs
+	// somebody else's config.
+	defer verify.Close()
 
-	stillThere, checkErr := planStillApplied(ctx, verify, plan)
+	stillThere, checked, checkErr := planStillApplied(ctx, verify, plan)
 	res.Finished = e.now()
 	switch {
+	case checkErr == nil && !checked:
+		res.Outcome = Unknown
+		res.Stranded = true
+		res.Reason = reason + "; the plan has nothing readable to verify " +
+			"(deletes only), so the revert could not be confirmed"
 	case checkErr != nil:
 		res.Outcome = Unknown
 		res.Stranded = true
@@ -363,7 +404,11 @@ func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Pla
 }
 
 // planStillApplied reports whether the plan's writes survive on the device.
-func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan) (bool, error) {
+// planStillApplied reports whether the plan's writes survive, and whether it
+// was able to check anything at all. "Nothing to check" must not read as
+// "reverted" — a plan of pure deletes leaves no value to look for, and
+// answering Reverted there is a guess wearing a verdict's clothes.
+func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan) (still, checked bool, err error) {
 	for _, op := range plan.Ops {
 		if op.Kind == OpDelete || len(op.Values) == 0 {
 			continue
@@ -379,21 +424,24 @@ func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan) (bool
 			var out struct {
 				Value string `json:"value"`
 			}
-			err := verify.Call(ctx, "uci", "get", map[string]any{
+			callErr := verify.Call(ctx, "uci", "get", map[string]any{
 				"config": op.Config, "section": section, "option": k}, &out)
-			if err != nil {
+			if callErr != nil {
 				var se *ubus.StatusError
-				if errors.As(err, &se) && (se.Status == ubus.StatusNotFound || se.Status == ubus.StatusNoData) {
+				if errors.As(callErr, &se) &&
+					(se.Status == ubus.StatusNotFound || se.Status == ubus.StatusNoData) {
+					checked = true
 					continue // gone: consistent with a revert
 				}
-				return false, err
+				return false, checked, callErr
 			}
+			checked = true
 			if out.Value == want {
-				return true, nil
+				return true, checked, nil
 			}
 		}
 	}
-	return false, nil
+	return false, checked, nil
 }
 
 func (e *Engine) now() time.Time {

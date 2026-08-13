@@ -133,8 +133,13 @@ func probeSwitchAndFirewall(ctx context.Context, c *ubus.Client, r *Registry) {
 	case isDenied(err):
 		r.Set(FeatFirewall4, NotObservable)
 		r.Note("firewall4 undetermined: exec of nft not granted (%v)", err)
+	case isNotFound(err):
+		r.Set(FeatFirewall4, Absent) // the binary genuinely is not installed
 	default:
-		r.Set(FeatFirewall4, Absent)
+		// A transport or protocol failure never reached a device answer.
+		// Calling it Absent silently selects the legacy iptables model.
+		r.Set(FeatFirewall4, NotObservable)
+		r.Note("firewall4 undetermined: %v", err)
 	}
 }
 
@@ -154,15 +159,15 @@ type surveyRow struct {
 // readSurvey returns the in-use row — a 5 GHz radio reports one row per
 // frequency and only the active one carries counters, so rows[0] is often the
 // empty one.
-func readSurvey(ctx context.Context, c *ubus.Client, dev string) (surveyRow, bool) {
+func readSurvey(ctx context.Context, c *ubus.Client, dev string) (surveyRow, error) {
 	var out struct {
 		Results []surveyRow `json:"results"`
 	}
 	if err := c.Call(ctx, "iwinfo", "survey", map[string]any{"device": dev}, &out); err != nil {
-		return surveyRow{}, false
+		return surveyRow{}, err
 	}
 	if len(out.Results) == 0 {
-		return surveyRow{}, false
+		return surveyRow{}, nil // answered, with nothing to report
 	}
 	best := out.Results[0]
 	for _, row := range out.Results[1:] {
@@ -170,7 +175,7 @@ func readSurvey(ctx context.Context, c *ubus.Client, dev string) (surveyRow, boo
 			best = row
 		}
 	}
-	return best, true
+	return best, nil
 }
 
 // advancesProportionately reports whether rx_time+tx_time grew by enough of the
@@ -200,6 +205,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	}
 
 	surveyOK, splitOK := Absent, Absent
+	surveyUnreachable := false
 	for _, dev := range devs.Devices {
 		radio := Radio{Device: dev, SurveyUsest: Absent}
 
@@ -226,8 +232,16 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		// them into (busy - rx - tx)/active yields busy/active wearing an
 		// "interference" label, which is exactly the confidently-wrong number
 		// UI-SPEC §7 forbids.
-		first, ok1 := readSurvey(ctx, c, dev)
-		if ok1 {
+		first, surveyErr := readSurvey(ctx, c, dev)
+		if surveyErr != nil {
+			// Refused is not "this driver has no survey". Record why, and let
+			// the aggregate below stay NotObservable rather than Absent.
+			if isDenied(surveyErr) {
+				surveyUnreachable = true
+				r.Note("%s: iwinfo.survey denied; channel utilization "+
+					"undetermined rather than absent (%v)", dev, surveyErr)
+			}
+		} else {
 			if first.ActiveTime > 0 {
 				surveyOK = Present
 				radio.SurveyUsest = Present
@@ -241,9 +255,9 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 					Reason: "uninitialised on this driver (absurd u64); the airtime split is not computable"})
 			} else {
 				time.Sleep(surveySampleGap)
-				second, ok2 := readSurvey(ctx, c, dev)
+				second, err2 := readSurvey(ctx, c, dev)
 				switch {
-				case !ok2:
+				case err2 != nil:
 					// leave splitOK as-is; we could not tell
 				case second.BusyTime <= first.BusyTime:
 					// Idle channel: this sample proves nothing either way.
@@ -275,6 +289,9 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		r.Radios = append(r.Radios, radio)
 	}
 
+	if surveyUnreachable && surveyOK != Present {
+		surveyOK, splitOK = NotObservable, NotObservable
+	}
 	r.Set(FeatSurvey, surveyOK)
 	// A recorded quirk on these fields settles it for the whole device: one
 	// radio reporting a plausible-looking counter cannot license a metric the
@@ -296,7 +313,10 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 func probePreflight(ctx context.Context, c *ubus.Client, r *Registry) {
 	err := c.Call(ctx, "file", "list", map[string]any{"path": "/tmp/.uci"}, nil)
 	switch {
-	case err == nil:
+	case err == nil, isNotFound(err):
+		// NOT_FOUND means the grant answered and the savedir simply does not
+		// exist yet — a clean device. Recording that as Absent would disable
+		// the foreign-edit guard on exactly the devices where it works.
 		r.Set(FeatPreflightDirty, Present)
 	case isDenied(err):
 		r.Set(FeatPreflightDirty, NotObservable)
@@ -304,7 +324,8 @@ func probePreflight(ctx context.Context, c *ubus.Client, r *Registry) {
 			"file.list on /tmp/.uci. uci.changes CANNOT substitute — it only " +
 			"sees our own session's staged delta.")
 	default:
-		r.Set(FeatPreflightDirty, Absent)
+		r.Set(FeatPreflightDirty, NotObservable)
+		r.Note("PREFLIGHT dirty-check undetermined: %v", err)
 	}
 }
 
@@ -323,9 +344,18 @@ func probeAccounting(ctx context.Context, c *ubus.Client, r *Registry) {
 			"defaults to 24h, so read after `nlbw -c commit` or you get zeroes.")
 	case isDenied(err):
 		r.Set(FeatAccounting, NotObservable)
+	case isNotFound(err):
+		r.Set(FeatAccounting, Absent) // nlbwmon not installed
 	default:
-		r.Set(FeatAccounting, Absent)
+		r.Set(FeatAccounting, NotObservable)
+		r.Note("per-client accounting undetermined: %v", err)
 	}
+}
+
+// isNotFound reports a genuine device answer of "that is not here".
+func isNotFound(err error) bool {
+	var se *ubus.StatusError
+	return errors.As(err, &se) && se.Status == ubus.StatusNotFound
 }
 
 // isDenied reports a reach problem rather than a device answer: either rpcd

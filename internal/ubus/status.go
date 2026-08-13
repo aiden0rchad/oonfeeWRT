@@ -6,7 +6,10 @@
 // arbitrary, it is not — it is a device behaviour that bites silently.
 package ubus
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Status is the ubus-level result code carried *inside* a successful JSON-RPC
 // response, as the first element of the result array.
@@ -120,12 +123,14 @@ func (e *ProtocolError) Error() string {
 // IsPermanent reports whether retrying err could ever succeed. Callers use it
 // to decide between backoff and giving up with a clear message.
 func IsPermanent(err error) bool {
-	type permanent interface{ Permanent() bool }
-	if p, ok := err.(permanent); ok {
+	// errors.As, not a bare type assertion: these errors are routinely wrapped
+	// with fmt.Errorf("%w") on the way up, and a bare assertion reports every
+	// wrapped permanent failure as retryable — which turns a permanent ACL gap
+	// into an infinite backoff loop against the device.
+	var p interface{ Permanent() bool }
+	if errors.As(err, &p) {
 		return p.Permanent()
 	}
-	if _, ok := err.(*ProtocolError); ok {
-		return true
-	}
-	return false
+	var pe *ProtocolError
+	return errors.As(err, &pe)
 }
