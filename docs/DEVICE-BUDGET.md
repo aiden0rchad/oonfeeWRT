@@ -103,13 +103,13 @@ data via a spawned `iw`.
   C, where every one of those driver calls is worse, this is the difference
   between the focused tier being affordable and not.
 
-  **Take the radio-level win; treat the client-level one as unproven.**
+  **Take the radio-level win; the client-level one is smaller than it looks.**
   `hostapd.get_status` is a safe substitute for `iwinfo.info` and is where most
-  of the saving is. `hostapd.get_clients` is *not* yet a safe substitute for
-  `iwinfo.assoclist`: the two were measured disagreeing about who was connected
-  for 131 s continuously (ARCHITECTURE §5, unresolved), and `assoclist` carries
-  row fields hostapd lacks anyway. Budget for `iwinfo.assoclist` at ~30 ms per
-  radio on the focused tier until that is settled. `iwinfo` also remains required
+  of the saving is. `hostapd.get_clients` agrees with `iwinfo.assoclist` on who
+  is connected (57 samples, 100 %), but it lacks `tx.retries`, `connected_time`,
+  `signal_avg`, `noise` and `thr`, so the Client Devices row needs `assoclist`
+  regardless. Budget ~30 ms per radio for it on the focused tier and take the
+  saving on `info`. `iwinfo` also remains required
   for noise (signed), txpower, country and hwmodes, all near-static and
   belonging on the slow tier.
 - **Batch ubus calls into one HTTP request** where the JSON-RPC batch form is

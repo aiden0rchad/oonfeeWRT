@@ -115,6 +115,16 @@ lacks the capability — never cut a feature on that evidence. (An earlier versi
 of this tool conflated the two and reported "no DSA" and "legacy iptables" for a
 device that has both.)
 
+**The same trap applies to ad-hoc scripts you write alongside this one**, and it
+is easy to walk into. A ubus helper that returns `None` on failure, consumed as
+`(call(...) or {}).get("results", [])`, turns *one failed call* into *"zero
+stations"* — indistinguishable from an empty radio. That pattern produced a
+confident, wrong finding during hardware validation (a 131-second "divergence"
+between `iwinfo.assoclist` and `hostapd.get_clients` that did not exist; 57
+status-checked samples later showed 100 % agreement). Any measurement script
+here should return the call status alongside the data and print it, so a failure
+can never masquerade as a measurement.
+
 | Finding | Consequence |
 |---|---|
 | Rollback doesn't revert | Redesign the safety mechanism. Blocking. |

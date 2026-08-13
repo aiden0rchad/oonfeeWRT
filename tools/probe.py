@@ -775,11 +775,10 @@ def probe_radios(ub, rep):
         else:
             rep.item(None, f"  assoclist ({dev})", UBUS_STATUS.get(code, code))
 
-        # Cross-source presence check. These two were measured disagreeing for
-        # 131 s continuously on real hardware, with hostapd's event log
-        # bracketing the window — i.e. iwinfo was the one under-reporting, most
-        # likely for a power-saving station. Which source to trust is still
-        # open, so report the divergence rather than pick a winner.
+        # Cross-source presence check. These agreed across 57 samples on real
+        # hardware, including long idle periods, so a divergence here is worth
+        # surfacing: it means one source is wrong on this device and the client
+        # list cannot be trusted until you know which.
         code_h, hc = ub.call(f"hostapd.{dev}", "get_clients")
         if code_h == UBUS_OK and code == UBUS_OK:
             iw_macs = {s.get("mac", "").lower()
