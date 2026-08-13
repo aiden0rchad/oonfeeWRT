@@ -737,12 +737,28 @@ Also measured, and worth carrying into the design:
   README applies to **hardware** offload, which mvebu does not implement — so
   it remains untested and must be scoped to class B/C rather than stated
   generally. Note also `nf_conntrack_acct` is already `1` by default.
-- **`network.wireless status` is unreachable over rpcd.** It works on the local
-  ubus socket but returns `INVALID_ARGUMENT` (2) through `/ubus` at any
-  argument, because rpcd injects `ubus_rpc_session` into the args and netifd's
-  strict policy rejects the unknown field. Radio state must come from
-  `uci get wireless` + `iwinfo` + `hostapd.*`. Treat this as a *class* of
-  hazard: any ubus method with a strict policy is unreachable via rpcd.
+- **The whole `network.wireless` object is unreachable over rpcd** — `status`,
+  `up` and `down` all return `INVALID_ARGUMENT` (2) through `/ubus` at any
+  argument, while working fine on the local ubus socket. rpcd injects
+  `ubus_rpc_session` into the args and netifd's strict policy rejects the
+  unknown field. **Do not grant `network.wireless` anything**; the grant is
+  inert and only widens the stated blast radius. Radio state comes from
+  `uci get wireless` + `iwinfo` + `hostapd.*`, and enable/disable is
+  `uci set wireless.radioN.disabled` followed by `uci.apply` — verified working.
+
+  This is a *class* of hazard, not one method, so the reachable surface was
+  mapped explicitly:
+
+  | netifd method | Through rpcd |
+  |---|---|
+  | `network.reload` | ✅ |
+  | `network.get_proto_handlers` | ✅ |
+  | `network.interface.dump` / `.status` | ✅ |
+  | `network.device.status` (with or without `name`) | ✅ |
+  | `network.wireless.status` / `.up` / `.down` / `.reconf` | ❌ status 2 |
+
+  Test any new netifd call through `/ubus` before designing on it — a local
+  `ubus call` proving it works tells you nothing about the rpcd path.
 - **`dhcp.ipv4leases` does not exist on this build** — the `dhcp` object exposes
   only `ipv6leases`, `ipv6ra` and `add_lease`. Use `luci-rpc.getDHCPLeases`,
   which returns both families.

@@ -45,7 +45,6 @@
 			"ubus": {
 				"uci": [ "add", "set", "delete", "rename", "order", "revert", "commit", "apply", "confirm", "rollback" ],
 				"network": [ "reload" ],
-				"network.wireless": [ "up", "down" ],
 				"hostapd.*": [ "del_client" ],
 				"file": [ "exec" ]
 			},
