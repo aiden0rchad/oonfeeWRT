@@ -74,8 +74,19 @@ func TestIntegrationFreshSessionSeesCommittedState(t *testing.T) {
 		t.Fatalf("FreshSession: %v", err)
 	}
 	defer other.Destroy(ctx)
+	// Not always independent: while a rollback is armed anywhere on the device,
+	// rpcd hands every login the applying token. The invariant is that
+	// Shared() reports this accurately — a caller must never be told a session
+	// is independent when it is not.
 	if other.Session() == c.Session() {
-		t.Fatal("fresh session reused the token")
+		if !other.Shared() {
+			t.Fatal("got the parent's token but Shared() is false; callers " +
+				"would destroy the applying session believing it was theirs")
+		}
+		t.Log("a rollback is armed on this device, so the session is shared " +
+			"(expected; run integration tests with -p 1 to avoid the overlap)")
+	} else if other.Shared() {
+		t.Fatal("Shared() is true but the token differs")
 	}
 	var out struct {
 		Values map[string]json.RawMessage `json:"values"`

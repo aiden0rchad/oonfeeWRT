@@ -76,6 +76,10 @@ type Client struct {
 	// worse than the error it is papering over.
 	confirmWindow bool
 
+	// shared is set when rpcd handed this client its parent's token, which it
+	// does while a rollback is armed. Destroy refuses to act on it.
+	shared bool
+
 	nextID int
 }
 
@@ -177,15 +181,24 @@ func (c *Client) BeginConfirmWindow() (end func()) {
 	}
 }
 
-// FreshSession returns a second Client against the same device with its own
-// independent ubus session, sharing the certificate pin.
+// FreshSession returns a second Client against the same device, sharing the
+// certificate pin.
 //
-// This is not a convenience. rpcd scopes staged UCI deltas to the session
-// token, and a rollback restores /etc/config while leaving the applying
-// session's delta in place — so the session that applied a change reads back
-// the value it FAILED to set, indefinitely. Post-apply verification that does
-// not use a fresh session reports every failed apply as a success. Closing the
-// connection does not help; the token scopes the delta, not the socket.
+// Why it exists: rpcd scopes staged UCI deltas to the session token, and a
+// rollback restores /etc/config while leaving the applying session's delta in
+// place — so the session that applied a change reads back the value it FAILED
+// to set. Post-apply verification on the applying session reports every failed
+// apply as a success. Closing the connection does not help; the token scopes
+// the delta, not the socket.
+//
+// IMPORTANT — it is not always fresh. Measured on hardware: **while a rollback
+// is armed, rpcd returns the APPLYING session's token to any new login.** That
+// is deliberate on the device's part (it is how a controller that lost its
+// connection can still confirm), but it means an independent session is simply
+// unavailable inside the confirmation window. Check Shared() before treating
+// the result as independent, and note that Destroy is a no-op on a shared
+// session — destroying it would take the applying session with it and
+// guarantee the change reverts.
 func (c *Client) FreshSession(ctx context.Context) (*Client, error) {
 	c.mu.Lock()
 	opts := Options{
@@ -201,7 +214,23 @@ func (c *Client) FreshSession(ctx context.Context) (*Client, error) {
 	if err := other.Login(ctx, user, pass); err != nil {
 		return nil, fmt.Errorf("fresh session: %w", err)
 	}
+	if other.Session() == c.Session() {
+		// rpcd handed back the parent's token, which it does while a rollback
+		// is armed. Mark it so Destroy cannot cut the applying session.
+		other.mu.Lock()
+		other.shared = true
+		other.mu.Unlock()
+	}
 	return other, nil
+}
+
+// Shared reports that this Client's token is the same one its parent holds,
+// which rpcd does while a rollback is armed. A shared session cannot be used to
+// observe another session's staged delta — it IS that session.
+func (c *Client) Shared() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.shared
 }
 
 func hostFromURL(u string) string {
@@ -250,7 +279,17 @@ func (c *Client) Close() {
 
 // Destroy ends the ubus session server-side, then closes. Use for short-lived
 // verification sessions so tokens do not linger for their full 300s.
+//
+// It deliberately does nothing on a shared session (see FreshSession): while a
+// rollback is armed, rpcd hands new logins the applying session's token, so
+// destroying "the verification session" would destroy the one thing that can
+// still confirm — and the change would revert while the caller believed it was
+// tidying up. Measured: doing exactly that turned a healthy apply into a revert.
 func (c *Client) Destroy(ctx context.Context) {
+	if c.Shared() {
+		c.Close()
+		return
+	}
 	_ = c.call(ctx, "session", "destroy", struct{}{}, nil, false)
 	c.Close()
 }

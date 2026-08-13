@@ -803,6 +803,26 @@ Also measured, and worth carrying into the design:
   **status 6 from `uci.apply` means "an apply is already armed", not an
   authorization failure.** Retry after the window; do not surface it as a
   permissions error, and do not let it trip the ACL-error path.
+- **⚠️ While a rollback is armed, you cannot get a second session at all.**
+  Measured: with a timer running, `session.login` returns the **applying
+  session's token** to any caller, on any connection — six logins with no timer
+  armed gave six distinct tokens, but one armed timer made a fresh login return
+  the applier's. This is deliberate on the device's part (it is how a controller
+  that lost its connection can still confirm), and it has two sharp
+  consequences:
+  1. **A health check inside the window cannot use an independent session**, so
+     it must read *runtime* state — `network.interface`, `iwinfo`, `hostapd`, an
+     exec probe — and never `uci.get`, which is overlaid with the applying
+     session's own staged delta and would bless a change that is not really
+     applied.
+  2. **Destroying "the verification session" destroys the applying one.** Doing
+     exactly that turned a healthy apply into a revert: the applier's next
+     `uci.confirm` returned `-32002` and the device restored itself on schedule.
+     Any client-side session helper must refuse to destroy a session whose token
+     matches its parent's.
+
+  After the window resolves, logins return fresh tokens again — so revert
+  *verification* both can and must use a genuinely fresh session.
 - **⚠️ An armed rollback does NOT survive an rpcd restart.** Applied with a 45 s
   timer, then restarted rpcd mid-window: the change was still on disk 75 s later
   and never reverted. The timer lives only in the running rpcd process, so a

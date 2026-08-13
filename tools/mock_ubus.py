@@ -101,6 +101,7 @@ committed = {
     },
 }
 staged = {}          # session -> config -> [ (op, section, payload) ]
+dirty_configs = set()  # configs with foreign (LuCI/SSH) uncommitted edits
 rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
 lock = threading.RLock()
 
@@ -359,6 +360,18 @@ def handle_one(req):
 
     if obj == "session" and meth == "login":
         if args.get("password") == PASSWORD:
+            # While a rollback is armed, rpcd hands ANY new login the applying
+            # session's token rather than minting a fresh one. Measured on
+            # hardware, and it is deliberate: it is how a controller that lost
+            # its connection can still confirm. The consequence is sharp — an
+            # independent session is UNAVAILABLE inside the confirmation
+            # window, so a health check cannot get one, and destroying "the
+            # verification session" destroys the applying one and guarantees
+            # the change reverts.
+            owner = rollback.get("owner")
+            if owner in sessions:
+                return ok(rid, {"ubus_rpc_session": owner, "timeout": 300,
+                                "expires": 300})
             return ok(rid, {"ubus_rpc_session": new_session(), "timeout": 300,
                             "expires": 300})
         return err(rid, 6)
@@ -403,7 +416,30 @@ def handle_one(req):
             return err(rid, 4)
         if meth == "write":
             return ok(rid, {})
+        if meth == "list" and args.get("path") == "/tmp/.uci":
+            # The system savedir, where LuCI and the uci CLI stage their edits.
+            # rpcd scopes ITS deltas to a per-session dir, so uci.changes cannot
+            # see any of this — listing here is the only way PREFLIGHT can
+            # detect that a human is mid-edit. Stale zero-length files linger
+            # after a commit, so consumers must filter on size, and this fixture
+            # ships some so a naive presence check fails in CI.
+            entries = [{"name": n, "type": "file", "size": 0}
+                       for n in ("firewall", "rpcd", "wireless")
+                       if n not in dirty_configs]
+            entries += [{"name": n, "type": "file", "size": 44}
+                        for n in sorted(dirty_configs)]
+            return ok(rid, {"entries": entries})
+        if meth == "list":
+            return err(rid, 4)
         return err(rid, 8)
+
+    # Test-only hook: stand in for "a human is editing in LuCI right now".
+    # There is no CLI inside the mock, so tests need a way to dirty the system
+    # savedir. Real devices need no such hook.
+    if obj == "__test" and meth == "set_dirty":
+        dirty_configs.clear()
+        dirty_configs.update(args.get("configs") or [])
+        return ok(rid, {"dirty": sorted(dirty_configs)})
 
     if obj == "iwinfo":
         dev = args.get("device", "wlan0")
