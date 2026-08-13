@@ -16,10 +16,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // the pure-Go driver, per decision D3
 
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
@@ -37,6 +39,9 @@ type Daemon struct {
 
 	// applies tracks in-flight applies so shutdown can wait for them.
 	applies applyBarrier
+
+	mu        sync.Mutex
+	collector *collector.Collector
 
 	http *http.Server
 	ln   net.Listener
@@ -188,7 +193,13 @@ func (d *Daemon) shutdown() error {
 		d.http.Close()
 	}
 
-	// 2. Wait for in-flight applies. An apply past APPLY has a rollback armed on
+	// 2. Stop polling. Devices are left alone from here: an apply in flight is
+	//    the only thing that should still be talking to one.
+	if c := d.collectorRef(); c != nil {
+		c.Stop()
+	}
+
+	// 3. Wait for in-flight applies. An apply past APPLY has a rollback armed on
 	//    the device; that timer runs whether this process exists or not, so
 	//    exiting here would leave a healthy change to revert with nobody left to
 	//    confirm it. This is the one shutdown step allowed to take minutes.
@@ -203,7 +214,7 @@ func (d *Daemon) shutdown() error {
 		}
 	}
 
-	// 3. Checkpoint and close the database, then zero the keys. Keys last: a
+	// 4. Checkpoint and close the database, then zero the keys. Keys last: a
 	//    checkpoint that needed to read a credential would otherwise fail on a
 	//    closed keeper.
 	if d.Store != nil {
@@ -224,6 +235,9 @@ func (d *Daemon) shutdown() error {
 // error paths in Open and for tests; Serve's own shutdown is the real one.
 func (d *Daemon) Close() error {
 	var errs []error
+	if c := d.collectorRef(); c != nil {
+		c.Stop()
+	}
 	if d.http != nil {
 		errs = append(errs, d.http.Close())
 	}

@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/daemon"
 )
 
@@ -71,6 +72,9 @@ func run() error {
 	log.Info("oonfeewrtd starting", "version", version, "data_dir", cfg.DataDir)
 	d, err := daemon.Open(ctx, cfg, log)
 	if err != nil {
+		return err
+	}
+	if err := d.StartCollector(ctx, collector.Options{}); err != nil {
 		return err
 	}
 	if err := d.Serve(ctx); err != nil {

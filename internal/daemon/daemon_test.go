@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
@@ -351,7 +352,7 @@ func TestTrackApplyDetachesFromCallerCancellation(t *testing.T) {
 	ctx = context.WithValue(ctx, key{}, "carried")
 	cancel()
 
-	err := d.TrackApply(ctx, func(actx context.Context) error {
+	err := d.TrackApply(ctx, 0, func(actx context.Context) error {
 		if actx.Err() != nil {
 			t.Errorf("apply context is already cancelled: %v", actx.Err())
 		}
@@ -389,7 +390,7 @@ func TestShutdownWaitsForInFlightApply(t *testing.T) {
 	release := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		_ = d.TrackApply(context.Background(), func(context.Context) error {
+		_ = d.TrackApply(context.Background(), 0, func(context.Context) error {
 			close(finished)
 			<-release
 			return nil
@@ -437,7 +438,7 @@ func TestShutdownReportsAnApplyThatOutlastsTheBudget(t *testing.T) {
 	defer close(release)
 	started := make(chan struct{})
 	go func() {
-		_ = d.TrackApply(context.Background(), func(context.Context) error {
+		_ = d.TrackApply(context.Background(), 0, func(context.Context) error {
 			close(started)
 			<-release
 			return nil
@@ -456,5 +457,115 @@ func TestShutdownReportsAnApplyThatOutlastsTheBudget(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown never returned")
+	}
+}
+
+// The collector must skip devices that were never adopted. Polling one produces
+// a stream of authentication failures that reads like a broken device rather
+// than one nobody has set up yet.
+func TestCollectorSkipsUnadoptedDevices(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := Open(ctx, testConfig(t, "pass"), quietLogger())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	pending := &store.Device{MAC: "aa:bb:cc:00:00:01", Host: "192.0.2.1", Name: "pending"}
+	if err := d.Store.UpsertDevice(ctx, pending); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	if err := d.StartCollector(ctx, collector.Options{
+		Baseline: 50 * time.Millisecond, Log: quietLogger(),
+	}); err != nil {
+		t.Fatalf("StartCollector: %v", err)
+	}
+	if _, ok := d.collectorRef().Tier(pending.ID); ok {
+		t.Fatal("an un-adopted device was added to the poll loop")
+	}
+
+	// ...and an adopted one is picked up when it appears.
+	adopted := int64(1)
+	blob, err := d.Keys.SealCredential("aa:bb:cc:00:00:02", "oonfeewrt", "pw")
+	if err != nil {
+		t.Fatalf("SealCredential: %v", err)
+	}
+	live := &store.Device{MAC: "aa:bb:cc:00:00:02", Host: "127.0.0.1", Port: 1,
+		Name: "live", AdoptedAt: &adopted, CredEnc: blob}
+	if err := d.Store.UpsertDevice(ctx, live); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	d.Track(live)
+	if _, ok := d.collectorRef().Tier(live.ID); !ok {
+		t.Fatal("Track did not add the adopted device")
+	}
+
+	// It is unreachable — port 1 refuses immediately, which is the same fact as
+	// an offline device but arrives without waiting out a connect timeout. The
+	// sink should record it rather than stay silent.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := d.Store.RecentEvents(ctx, 20)
+		if err != nil {
+			t.Fatalf("RecentEvents: %v", err)
+		}
+		for _, e := range events {
+			if e.Event == "device.unreachable" {
+				d.Untrack(live.ID)
+				if _, ok := d.collectorRef().Tier(live.ID); ok {
+					t.Fatal("Untrack left the device in the poll loop")
+				}
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("an unreachable device produced no device.unreachable event")
+}
+
+// An apply must automatically stop the poll loop for that device: a read landing
+// between staged operations sees a config that is neither the old nor the new.
+func TestTrackApplyQuiescesTheDevice(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := Open(ctx, testConfig(t, "pass"), quietLogger())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	adopted := int64(1)
+	blob, _ := d.Keys.SealCredential("aa:bb:cc:00:00:03", "oonfeewrt", "pw")
+	dev := &store.Device{MAC: "aa:bb:cc:00:00:03", Host: "127.0.0.1", Port: 1,
+		Name: "dev", AdoptedAt: &adopted, CredEnc: blob}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	if err := d.StartCollector(ctx, collector.Options{
+		Baseline: 50 * time.Millisecond, Log: quietLogger(),
+	}); err != nil {
+		t.Fatalf("StartCollector: %v", err)
+	}
+
+	err = d.TrackApply(ctx, dev.ID, func(context.Context) error {
+		if n := d.applies.inFlight(); n != 1 {
+			t.Errorf("inFlight = %d during an apply, want 1", n)
+		}
+		if !d.collectorRef().Quiesced(dev.ID) {
+			t.Error("the device is still being polled during its own apply")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("TrackApply: %v", err)
+	}
+	if n := d.applies.inFlight(); n != 0 {
+		t.Errorf("inFlight = %d after the apply, want 0", n)
+	}
+	if d.collectorRef().Quiesced(dev.ID) {
+		t.Error("polling was not resumed after the apply finished")
 	}
 }

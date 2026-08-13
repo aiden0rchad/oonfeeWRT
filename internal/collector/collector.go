@@ -263,6 +263,20 @@ func (c *Collector) Quiesce(deviceID int64) (release func()) {
 	return p.addQuiesce()
 }
 
+// Quiesced reports that polling is suspended for a device, which the UI shows
+// as "paused during a configuration change" rather than as a gap in the data.
+func (c *Collector) Quiesced(deviceID int64) bool {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.quiesce > 0
+}
+
 // Tier reports how a device is currently being polled, for the UI.
 func (c *Collector) Tier(deviceID int64) (Tier, bool) {
 	c.mu.Lock()

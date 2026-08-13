@@ -83,9 +83,22 @@ func (b *applyBarrier) wait(d time.Duration) bool {
 //
 // The detached context still carries a deadline of ApplyDrain, so a wedged apply
 // cannot hold shutdown open indefinitely.
-func (d *Daemon) TrackApply(ctx context.Context, fn func(context.Context) error) error {
+//
+// deviceID quiesces that device's polling for the duration; pass 0 for work not
+// scoped to a single device.
+func (d *Daemon) TrackApply(ctx context.Context, deviceID int64, fn func(context.Context) error) error {
 	end := d.applies.begin()
 	defer end()
+
+	// DEVICE-BUDGET §4.6: never poll during an apply. Wiring it here rather
+	// than at each call site means an apply cannot forget — and forgetting
+	// would mean a read landing between staged operations, seeing a config that
+	// is neither the old one nor the new one.
+	if deviceID != 0 {
+		if c := d.collectorRef(); c != nil {
+			defer c.Quiesce(deviceID)()
+		}
+	}
 
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.Config.ApplyDrain)
 	defer cancel()

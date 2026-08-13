@@ -262,6 +262,22 @@ func (db *DB) SetCertFP(ctx context.Context, deviceID int64, fp string) error {
 	return nil
 }
 
+// SetLastSeen records that a device answered, and its current poll state.
+//
+// This is the one write the poll loop makes, and it is deliberately narrow: a
+// full UpsertDevice on every poll would rewrite the sealed credential and the
+// capability snapshot sixty times an hour for no reason, and any bug in the
+// caller would then be able to lose them.
+func (db *DB) SetLastSeen(ctx context.Context, deviceID int64, ts int64, pollState string) error {
+	_, err := db.sql.ExecContext(ctx,
+		`UPDATE devices SET last_seen=?, poll_state=? WHERE id=?`,
+		ts, pollState, deviceID)
+	if err != nil {
+		return fmt.Errorf("store: touch device %d: %w", deviceID, err)
+	}
+	return nil
+}
+
 // SetCapabilities stores a capability registry snapshot against a device.
 func (db *DB) SetCapabilities(ctx context.Context, deviceID int64, caps any, class string) error {
 	blob, err := json.Marshal(caps)
