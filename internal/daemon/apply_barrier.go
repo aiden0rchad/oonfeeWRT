@@ -1,0 +1,93 @@
+package daemon
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+// applyBarrier counts applies that are currently running, so shutdown can wait
+// for them rather than abandoning a device with a rollback timer armed.
+//
+// It is a counter and a broadcast rather than a sync.WaitGroup because Wait
+// needs a deadline: waiting forever turns a stuck apply into a container that
+// will not stop, and the supervisor's SIGKILL is a worse ending than a logged
+// timeout that names what was still running.
+type applyBarrier struct {
+	mu   sync.Mutex
+	n    int
+	idle chan struct{} // created lazily by wait, closed when n reaches zero
+}
+
+// begin registers an apply and returns the function that ends it. The returned
+// function is safe to call more than once, so it can be deferred and also called
+// on an early return path without double-counting.
+func (b *applyBarrier) begin() func() {
+	b.mu.Lock()
+	b.n++
+	b.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			b.mu.Lock()
+			b.n--
+			if b.n == 0 && b.idle != nil {
+				close(b.idle)
+				b.idle = nil
+			}
+			b.mu.Unlock()
+		})
+	}
+}
+
+func (b *applyBarrier) inFlight() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.n
+}
+
+// wait blocks until no applies are running or d elapses, reporting whether the
+// applies finished.
+func (b *applyBarrier) wait(d time.Duration) bool {
+	b.mu.Lock()
+	if b.n == 0 {
+		b.mu.Unlock()
+		return true
+	}
+	if b.idle == nil {
+		b.idle = make(chan struct{})
+	}
+	ch := b.idle
+	b.mu.Unlock()
+
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+// TrackApply runs fn as a counted apply, with a context deliberately detached
+// from the caller's cancellation.
+//
+// Detaching is the point. An apply that has reached the APPLY step has armed a
+// rollback on the device, and that timer expires whether this process is still
+// interested or not — so cancelling the work because an HTTP client hung up, or
+// because the daemon received SIGTERM, does not stop the change. It only removes
+// the one party who could confirm it, converting a healthy change into a revert
+// a minute later. Shutdown therefore waits for these instead of cancelling them.
+//
+// The detached context still carries a deadline of ApplyDrain, so a wedged apply
+// cannot hold shutdown open indefinitely.
+func (d *Daemon) TrackApply(ctx context.Context, fn func(context.Context) error) error {
+	end := d.applies.begin()
+	defer end()
+
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.Config.ApplyDrain)
+	defer cancel()
+	return fn(actx)
+}

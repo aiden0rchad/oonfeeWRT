@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -218,5 +220,68 @@ func TestSetCapabilitiesStoresSnapshot(t *testing.T) {
 	}
 	if got.CapsJSON == "" || got.CapsJSON == "{}" {
 		t.Errorf("capability snapshot not stored: %q", got.CapsJSON)
+	}
+}
+
+func TestCheckpointTruncatesWAL(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oonfee.db")
+	db, err := Open(ctx, driver, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	for i := range 50 {
+		if err := db.LogEvent(ctx, Event{
+			Category: "test", Severity: "info", Event: "fill",
+			Detail: map[string]any{"i": i},
+		}); err != nil {
+			t.Fatalf("LogEvent: %v", err)
+		}
+	}
+	if err := db.Checkpoint(ctx); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	// TRUNCATE means the WAL is emptied, not merely folded in. That is what
+	// makes copying the volume file a valid backup.
+	fi, err := os.Stat(path + "-wal")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat WAL: %v", err)
+	}
+	if err == nil && fi.Size() != 0 {
+		t.Fatalf("WAL is %d bytes after a TRUNCATE checkpoint, want 0", fi.Size())
+	}
+}
+
+// A pin that quietly replaces itself is not a pin, so the second write must be
+// refused rather than accepted.
+func TestSetCertFPIsTrustOnFirstUseOnly(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	d := &Device{MAC: "aa:bb:cc:dd:ee:ff", Host: "192.168.1.1", Name: "ap1", Scheme: "https"}
+	if err := db.UpsertDevice(ctx, d); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	if err := db.SetCertFP(ctx, d.ID, "aabb"); err != nil {
+		t.Fatalf("first SetCertFP: %v", err)
+	}
+	got, err := db.DeviceByMAC(ctx, d.MAC)
+	if err != nil {
+		t.Fatalf("DeviceByMAC: %v", err)
+	}
+	if got.CertFP != "aabb" {
+		t.Fatalf("CertFP = %q, want %q", got.CertFP, "aabb")
+	}
+	if err := db.SetCertFP(ctx, d.ID, "ccdd"); err == nil {
+		t.Fatal("SetCertFP silently replaced an existing pin")
+	}
+	got, err = db.DeviceByMAC(ctx, d.MAC)
+	if err != nil {
+		t.Fatalf("DeviceByMAC: %v", err)
+	}
+	if got.CertFP != "aabb" {
+		t.Fatalf("pin changed to %q despite the refusal", got.CertFP)
 	}
 }

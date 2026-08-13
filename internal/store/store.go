@@ -99,6 +99,22 @@ func (db *DB) migrate(ctx context.Context) error {
 // Close releases the database.
 func (db *DB) Close() error { return db.sql.Close() }
 
+// Checkpoint folds the write-ahead log back into the database file and
+// truncates it. Shutdown calls this so the volume can be copied or restored as
+// a single file, which is what the backup instructions in IMPLEMENTATION §11
+// tell an operator to do.
+//
+// TRUNCATE blocks on active readers rather than doing a partial job, so the
+// caller should run it after the serving paths have stopped. A busy database
+// returns SQLITE_BUSY here, which is a real failure to report: it means the WAL
+// still holds committed data that a naive file copy would miss.
+func (db *DB) Checkpoint(ctx context.Context) error {
+	if _, err := db.sql.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return fmt.Errorf("store: checkpoint WAL: %w", err)
+	}
+	return nil
+}
+
 // SQL exposes the handle for packages that need their own queries.
 func (db *DB) SQL() *sql.DB { return db.sql }
 
@@ -224,6 +240,26 @@ func scanDevice(s scanner) (*Device, error) {
 		return nil, err
 	}
 	return &d, nil
+}
+
+// SetCertFP records a trust-on-first-use certificate pin.
+//
+// It writes only when the column is still empty. A pin that silently updates
+// itself is not a pin: the whole value of TOFU is that the *second* certificate
+// is rejected, so an overwrite has to be a deliberate re-pin by an operator who
+// knows why the device's certificate changed, not a side effect of connecting.
+func (db *DB) SetCertFP(ctx context.Context, deviceID int64, fp string) error {
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE devices SET cert_fp=? WHERE id=? AND (cert_fp IS NULL OR cert_fp='')`,
+		fp, deviceID)
+	if err != nil {
+		return fmt.Errorf("store: pin certificate for device %d: %w", deviceID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: device %d already has a pinned certificate; "+
+			"re-pinning must be an explicit operator action", deviceID)
+	}
+	return nil
 }
 
 // SetCapabilities stores a capability registry snapshot against a device.
