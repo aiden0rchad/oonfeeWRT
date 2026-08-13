@@ -672,6 +672,19 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    `tx.retries`/`tx.failed`, so **`iw station dump` is not required at all** —
    don't grant it. Note the nesting: probing for a flat `tx_retries` finds
    nothing and wrongly concludes a process spawn is needed.
+
+   **A full Client Devices row is buildable from one batched request** —
+   measured at **100 ms** for 7 calls covering both radios: name and IP from
+   `luci-rpc.getHostHints` + `getDHCPLeases` (both joined cleanly on MAC),
+   signal/PHY-rate/retry-%/connected-time from `assoclist`, and 24 h volume
+   from `nlbw -c json`.
+
+   **But the per-station `noise` field is unstable on mwlwifi** — sampled at
+   3 s intervals it read −66, −95, −95, −58, −95, −70, a 37 dB swing. SNR
+   computed per sample would visibly flail, so smooth it or show RSSI alone.
+   This is the third mwlwifi entry on the quirk list in UI-SPEC §7, and the one
+   that best illustrates why presence-probing is insufficient: every individual
+   reading is well-formed and plausible.
 4. **JSON-RPC array batching works** on this uhttpd build — a batch of 3 was
    accepted and returned 3 responses.
 

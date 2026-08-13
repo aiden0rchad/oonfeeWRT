@@ -326,9 +326,22 @@ unsigned, so −95 dBm arrives as 161. Both would render as confident nonsense.
 So capability gating keys on a **driver/model quirk list** (matched on
 `system.board` plus driver), not on field presence. Any metric derived from a
 field on that list is treated exactly as unsupported: never rendered, never
-color-graded, never averaged into a composite score. The two known entries
-today are mwlwifi's `rx_time`/`tx_time`, and `noise` sourced from
-`iwinfo.survey` rather than `iwinfo.info`.
+color-graded, never averaged into a composite score. Three entries measured on
+mwlwifi so far:
+
+| Field | Defect | Consequence |
+|---|---|---|
+| `rx_time` / `tx_time` (survey) | uninitialised (~1.4e19) | interference and the airtime split are not computable |
+| `noise` from `iwinfo.survey` | reported **unsigned** (161 for −95) | read it from `iwinfo.info` instead |
+| `noise` per station (`assoclist`) | **unstable** — swung 37 dB between reads 3 s apart | **never compute per-sample SNR from it** |
+
+That last one is the reason presence-probing is not enough: the field is there,
+correctly typed, and plausible in any single sample. Only re-reading exposes it.
+Where the noise floor is unstable, show RSSI alone, or compute SNR from
+`signal_avg` against a smoothed noise floor — and never colour-grade a value
+that will visibly flail on the next refresh. `tools/probe.py` samples the noise
+floor four times and warns above a 6 dB spread, which is the check to port into
+the capability probe.
 
 Where absence would be confusing, replace rather than hide — a short inline note
 in the space the feature would have occupied ("This access point has no 6 GHz

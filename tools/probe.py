@@ -743,6 +743,35 @@ def probe_radios(ub, rep):
                              "" if present else "use `iw station dump` instead")
                 entry["station_fields"] = keys
                 entry["station_sample"] = st
+
+                # A field can be present and still unusable. mwlwifi reports a
+                # per-station noise floor that jumps tens of dB between reads,
+                # so an SNR column computed per sample flails visibly. Presence
+                # checks cannot catch this; only re-reading can.
+                noises = []
+                for _ in range(4):
+                    time.sleep(0.4)
+                    c2, a2 = ub.call("iwinfo", "assoclist", {"device": dev})
+                    if c2 != UBUS_OK:
+                        break
+                    for s2 in (a2 or {}).get("results", []):
+                        if s2.get("mac") == st.get("mac") and "noise" in s2:
+                            noises.append(s2["noise"])
+                if len(noises) >= 3:
+                    spread = max(noises) - min(noises)
+                    stable = spread <= 6
+                    rep.item(True if stable else None,
+                             "      noise floor stable across reads",
+                             f"spread {spread} dB over {len(noises)} reads"
+                             + ("" if stable else
+                                " — DO NOT compute per-sample SNR; smooth it "
+                                "or omit the column"))
+                    entry["noise_spread_db"] = spread
+                    if not stable:
+                        rep.warn(
+                            f"{dev}: per-station noise varies by {spread} dB "
+                            "between reads. Use signal_avg against a smoothed "
+                            "noise floor, or show RSSI without SNR.")
         else:
             rep.item(None, f"  assoclist ({dev})", UBUS_STATUS.get(code, code))
 
