@@ -823,6 +823,29 @@ Also measured, and worth carrying into the design:
   holding an uncommitted `uci.set`, that session reads the staged value while a
   concurrent session reads the committed one. Two controllers (or a controller
   and LuCI) can stage independently without seeing each other's work-in-progress.
+- **The headline product operation is validated end to end on real hardware.**
+  One session staged `option oonfeewrt '1'` onto *both* radios' `wifi-iface`
+  sections, applied once with rollback armed, health-checked from a **fresh**
+  session (tag present, both SSIDs on air), then confirmed through the
+  **applying** session. Both bands took the change together; the on-air SSIDs
+  never wavered. This is the README's "change it once, it lands on both bands,
+  with rollback" claim, exercised exactly as ARCHITECTURE §4 now specifies.
+- **Client disruption depends on *which* options changed, not on applying.**
+  Across that whole sequence — apply, confirm, a foreign `uci commit`, and a
+  `wifi reload` — both associated stations held `connected_time` of ~1896 s
+  unbroken, with no `AP-STA-DISCONNECTED` events. netifd reloads differentially,
+  so an apply touching only inert options (ownership tags, metadata, anything
+  not requiring a BSS restart) costs clients nothing. Changing the SSID, by
+  contrast, *was* observed restarting the BSS. **The UI should therefore warn
+  about client disruption per-option, not per-apply** — a blanket "this will
+  disconnect clients" banner on every change is both wrong and desensitising.
+- **Ownership drift and orphaning are both detectable by re-read.** A human
+  editing `ssid` inside a section we own left our `oonfeewrt` tag intact, so the
+  section still reads as ours with an unexpected value — detectable by comparing
+  against the rendered model. A human *deleting* our tag makes the section read
+  as foreign, which is the correct outcome: the reconciler must then leave it
+  alone rather than silently reclaim it. Both were verified, and the wireless
+  config was restored byte-identical (md5-verified) afterwards.
 - **Ownership tagging works as designed.** A `firewall` rule written with
   `option oonfeewrt '1'` keeps the option across commit, apply and an
   `/etc/init.d/firewall reload`; fw4 ignores the unknown option rather than

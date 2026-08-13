@@ -353,7 +353,53 @@ of being discovered screen by screen.
 
 ---
 
-## 8. Accessibility floor
+## 8. The apply flow
+
+The single most important interaction in the product, and the one with the most
+hardware-imposed constraints. Every rule below comes from a measured device
+behaviour recorded in IMPLEMENTATION §14 — none of it is stylistic.
+
+**Pending changes** accumulate in a bar showing a count and `Review | Apply`.
+Review shows the per-device diff (the "what will change on this device"
+preview), grouped by device, with sections we own visually distinct from foreign
+config we are leaving alone.
+
+**Warn per option, not per apply.** Applying is not inherently disruptive:
+measured, an apply touching only inert options left both associated clients
+connected for ~1896 s unbroken, while an SSID change restarted the BSS. So the
+diff marks *individual rows* as client-disrupting (SSID, encryption, channel,
+htmode, radio enable) and the Apply button summarises: "3 changes, 1 will
+briefly disconnect WiFi clients on Living Room AP." A blanket warning on every
+apply is both wrong and desensitising — users stop reading it, which is exactly
+when it matters.
+
+**During the window**, show a countdown tied to the device's rollback timer, and
+say plainly what happens if it runs out: *"If we can't confirm within 90 s this
+device reverts itself."* That is the honest description and it is reassuring
+rather than alarming, because it is a safety net, not a failure.
+
+**Three outcomes, not two.** The device's own timer means the failure space has
+a third state, and the UI must not collapse it:
+
+| Outcome | What happened | How it reads |
+|---|---|---|
+| **Applied** | health passed, confirm landed | green, normal |
+| **Reverted** | we declined to confirm, or couldn't; device restored itself | neutral, *not* an error — the safety net worked. Show why health failed |
+| **⚠️ Unknown** | confirm failed *and* the change is still present on re-read | the only alarming state. Offer "reverse this change" as an explicit action |
+
+That third row is not hypothetical: an rpcd restart inside the confirmation
+window destroys both the session that would confirm and the timer that would
+revert, leaving the change applied and unconfirmed. Never render that as
+"Applied".
+
+**Do not offer "retry" mid-window.** Confirm is bound to the session that
+applied, so a re-authentication inside the window guarantees the revert. If the
+controller loses that session, the correct UI is "reverting…", not a retry
+button that cannot work.
+
+---
+
+## 9. Accessibility floor
 
 - Every status/severity encoded by color also carries text or an icon.
 - Charts have a table view toggle.
