@@ -1,7 +1,8 @@
 # Where this project is
 
-Written 2026-08-13 as a handoff. Everything below is either committed or
-measured on real hardware; nothing here is aspiration.
+Written 2026-08-13 as a handoff, updated the same day when Phase 0 finished.
+Everything below is either committed or measured on real hardware; nothing here
+is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -11,12 +12,18 @@ Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
 The design is no longer a design. It was validated against a real
 **Linksys WRT3200ACM running OpenWrt 25.12.5**, which corrected several
-assumptions, and then **Phase 0's mechanisms were built in Go** against those
-findings. Nine packages, all tested; six of them verified against the device
-itself rather than only against the mock.
+assumptions, and then **Phase 0 was built in Go** against those findings.
+Eleven packages plus a daemon entrypoint, all tested; eight verified against the
+device itself rather than only against the mock.
 
-What remains for Phase 0 is wiring — a daemon entrypoint, a credential store,
-and the poll loop — not mechanisms.
+**Phase 0 is complete.** The whole path runs end to end against real hardware: a
+device credential sealed under an operator passphrase, stored in SQLite,
+unsealed at connect time, accepted by the device's rpcd, and a poll loop writing
+what it learns back to the database — with applies that arm a rollback, verify
+health, and confirm only if the device is really healthy.
+
+What is next is Phase 1: the read-only fleet view, which is an HTTP API and a UI
+over state the controller already collects.
 
 ---
 
@@ -45,6 +52,11 @@ OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=... \
 `-p 1` is **required**: packages otherwise run in parallel against one device,
 and one package's armed rollback makes another's login shared (see §4).
 
+The suite now includes `internal/collector` (a real poll under the scoped
+credential, which is where a missing ACL grant shows up) and `internal/daemon`
+(the sealed credential opening a real session, and the collector writing
+`last_seen` back to SQLite).
+
 ---
 
 ## 3. What is built
@@ -60,6 +72,10 @@ and one package's armed rollback makes another's login shared (see §4).
 | `internal/model` | Site model: networks, WLANs, AP groups | pure |
 | `internal/render` | Site model → per-device UCI, deterministic | pure |
 | `internal/reconcile` | Read → render → diff → apply → record | mock only |
+| `internal/secrets` | argon2id → XChaCha20-Poly1305 credential store | ✅ end to end |
+| `internal/collector` | The poll loop: two tiers, batching, backoff, quiesce | ✅ |
+| `internal/daemon` | Config, lifecycle, `/healthz`, shutdown, fleet wiring | ✅ |
+| `cmd/oonfeewrtd` | The entrypoint | ✅ runs |
 
 Also: `tools/probe.py` (hardware validation), `tools/mock_ubus.py` (the contract
 fixture — it reproduces the measured semantics, including the awkward ones),
@@ -123,41 +139,62 @@ for someone picking the work up.
   call refreshes it.
 - Zero flash writes under sustained polling. Software flow offload does **not**
   break per-client accounting.
+- **The two poll tiers are worth their complexity**, measured through the real
+  collector under the scoped credential, best of five, each one batched request:
+  **baseline 8 ms for 7 calls, focused 116 ms for 11.** A 14× difference for
+  four extra calls is the whole argument for fetching `iwinfo` only while
+  somebody is looking.
+- **The noise floor is a per-radio capability, and changing source does not
+  rescue it.** The documented advice was "`iwinfo.survey` reports noise
+  unsigned, so read it from `iwinfo.info`" — right about the encoding, silent
+  about trust. Over 20 samples the 2.4 GHz radio swung **42 dB through
+  `iwinfo.info` and 46 dB through `iwinfo.survey`**, while the 5 GHz radio on
+  the same driver held within 7 dB. Channel busy time does not explain it.
+  `Radio.NoiseStable` now gates it per radio, and the detector is asymmetric:
+  a disagreement proves the value moves, agreement proves nothing.
 
 ---
 
 ## 5. What to do next
 
-In dependency order.
+Phase 0's list is done. `internal/secrets`, `cmd/oonfeewrtd` and
+`internal/collector` are built, tested, and verified against the device.
 
-1. **`internal/secrets`** — seal the device credential adoption returns.
-   argon2id from an operator passphrase → chacha20poly1305, per
-   `IMPLEMENTATION.md` §10. `store.Device.CredEnc` is already the column.
-   Small, self-contained, no hardware needed.
+**Phase 1 — the read-only fleet view** (`ROADMAP.md`), in dependency order:
 
-2. **`cmd/oonfeewrtd`** — config from env (`OONFEE_DATA_DIR`, `OONFEE_LISTEN`,
-   `OONFEE_PASSPHRASE_FILE`), wiring, graceful shutdown. Nothing subtle; it is
-   the first place all the packages meet.
-
-3. **`internal/collector`** — the poll loop. This is where the measured budget
-   numbers matter: baseline 60 s / focused 5–10 s, batch each poll into one
-   request, and note that a 60 s poll **never** reuses a connection (20 s
-   keep-alive) but **never** needs a re-login (300 s session).
-
-4. **Then Phase 1** (read-only fleet view) per `ROADMAP.md`.
+1. **The HTTP API.** `/healthz` is the only endpoint today. Phase 1 needs the
+   inventory, per-device detail, client list and events, over the state the
+   collector already gathers. Two hooks are already in place and should be used
+   rather than reinvented: `Daemon.Focus(deviceID)` is what a device screen
+   holds open while it is being viewed, and `Daemon.TrackApply(ctx, deviceID,…)`
+   is how any write must be run — it counts the apply for shutdown *and*
+   quiesces polling for that device.
+2. **Authentication for it.** There is none yet, and `/healthz` is
+   unauthenticated on purpose (§11) — nothing else should be.
+3. **The telemetry pipeline.** The collector emits `Snapshot`s; the sink
+   currently records only `last_seen`, poll state and reachability transitions.
+   The in-RAM ring plus 5 m/1 h rollups from `IMPLEMENTATION.md` §3 is the piece
+   that turns snapshots into graphs. Note the units traps are already encoded on
+   the snapshot types — `Airtime.UtilizationPercent`, `Survey.NoiseDBm`,
+   `Survey.BusyPercent` — so derive through those rather than the raw fields.
+4. **The UI**, per `UI-SPEC.md`.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so far
   comes from the comfortable class — TLS alone doubled poll CPU there.
 - Hardware flow offload (mvebu has none), so the README's accounting tradeoff
   remains scoped to hardware offload and untested.
-- A second device, for genuine fleet behaviour.
+- A second device, for genuine fleet behaviour. The stagger, the per-device
+  backoff and the "ten devices at 60 s is one request every 6 s" rule are all
+  unit-tested and none of them has met a second real router.
 
 **Known gaps worth closing cheaply:**
 - `internal/model` has no tests of its own (it is exercised through `render`).
-- `store`, `adoption`, `reconcile` are mock-verified only; an integration test
-  for adoption against the real device would be worth having, but it writes a
-  real login, so it needs a deliberate decision.
+- `store`, `adoption` and `reconcile` are mock-verified only. An integration
+  test for adoption against the real device would be worth having, but it writes
+  a real login, so it needs a deliberate decision.
+- The collector's sink drops everything except reachability. That is correct for
+  Phase 0 and is the first thing Phase 1 replaces.
 
 ---
 
@@ -181,6 +218,18 @@ written and believed.
   "divergence" that did not exist.
 - **Mock-green is not hardware-green.** The mock passed throughout while real
   hardware exposed the shared-session bug that reverted healthy changes.
+- **A fix for one defect is not a fix for the next one in the same field.**
+  "`iwinfo.survey` reports noise unsigned, so read it from `iwinfo.info`" was
+  written up as settled and repeated in four documents. It settles the encoding
+  and says nothing about whether the value can be trusted — which, on the 2.4
+  GHz radio, it cannot, from either source. The advice was not wrong; it was
+  answering a different question than the one a reader would use it for.
+- **Say what a check proves, not what it suggests.** The noise-stability
+  detector fires on a disagreement and stays silent on agreement, so silence is
+  not evidence. On one hardware run the survey pair agreed while the
+  `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
+  means "not caught misbehaving", and the code, the docs and the field name all
+  say so, because a future reader will otherwise round it to "verified".
 
 ---
 
@@ -194,6 +243,24 @@ written and believed.
 - The device credential lives in the session scratchpad. If lost, delete
   `rpcd.oonfeewrt` on the device and re-run adoption, or regenerate a `$6$` hash
   with `internal/crypt` and write it into `/etc/config/rpcd`.
+- Running the daemon from a checkout:
+
+  ```bash
+  go run ./cmd/oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080
+  ```
+
+  It prompts for an operator passphrase on a terminal (twice on first run,
+  because a typo there is a keyring nobody can open), or reads one from a mode
+  0600 file given by `-passphrase-file` / `OONFEE_PASSPHRASE_FILE`. It refuses a
+  passphrase in `OONFEE_PASSPHRASE` — env is readable from `/proc`, inherited by
+  children, and printed by `docker inspect`. The data directory is created 0700
+  and holds `keyring.json` plus `oonfeewrt.db`.
+
+- Adoption has no CLI yet, so seeding a device by hand means sealing its
+  credential with `Keeper.SealCredential(mac, user, pass)` and writing a
+  `store.Device` with `AdoptedAt` set. `internal/daemon/integration_test.go`
+  does exactly that and is the shortest working example.
+
 - `docs/IMPLEMENTATION.md` §14 is the authoritative record of measured
   behaviour. When code and docs disagree, the measurement wins — and if neither
   matches the device, re-measure before changing either.
