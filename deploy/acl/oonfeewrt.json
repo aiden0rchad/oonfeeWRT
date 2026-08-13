@@ -1,6 +1,6 @@
 {
 	"oonfeewrt": {
-		"description": "oonfeeWRT controller — read device state and write owned UCI sections",
+		"description": "oonfeeWRT controller — read device state and write owned UCI sections. Two rpcd path rules govern the file map below, both verified on hardware: paths are CANONICALISED before matching, so a grant on a symlink tree (/sys/class/net/*) never fires; and '*' crosses '/', so a pattern like /sys/devices/* grants an entire subtree. Prefer ubus objects over file grants wherever the data exists in both.",
 
 		"read": {
 			"ubus": {
@@ -22,8 +22,6 @@
 				"/proc/stat": [ "read" ],
 				"/proc/meminfo": [ "read" ],
 				"/proc/loadavg": [ "read" ],
-				"/sys/class/net": [ "list" ],
-				"/sys/class/net/*": [ "read", "list", "stat" ],
 				"/usr/sbin/nft --terse --json list ruleset": [ "exec" ],
 				"/sbin/ip -[46] -j neigh show": [ "exec" ],
 				"/sbin/ip -[46] -j route show table all": [ "exec" ],
@@ -36,7 +34,8 @@
 				"/usr/sbin/lldpcli show neighbors -f json": [ "exec" ],
 				"/usr/bin/apk list --installed": [ "exec" ],
 				"/bin/opkg list-installed": [ "exec" ],
-				"/bin/df -k /overlay": [ "exec" ]
+				"/bin/df -k /overlay": [ "exec" ],
+				"/usr/sbin/nlbw -c json -g *": [ "exec" ]
 			}
 		},
 
@@ -47,7 +46,10 @@
 				"network.wireless": [ "up", "down" ],
 				"file": [ "exec" ]
 			},
-			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ]
+			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ],
+			"file": {
+				"/usr/sbin/nlbw -c commit": [ "exec" ]
+			}
 		}
 	},
 

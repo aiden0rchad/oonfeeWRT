@@ -478,6 +478,41 @@ hand-picked subset (~60 icons), not an icon-font dependency.
     names is unreachable no matter who authenticates. Stock OpenWrt grants
     **zero** access to `uci.configs`, `uci.rollback` and `iwinfo.devices` — all
     three are ours to grant.
+  - `file.exec` resolves the command to its **absolute path before matching**,
+    so a caller may pass a bare name (`iw dev`) and still match an absolute
+    grant (`/usr/sbin/iw dev`) — but a *grant* written as a bare name matches
+    nothing.
+  - File paths are **canonicalised before matching**, and `*` **crosses `/`**.
+    Together these make file grants behave the opposite of how they read: a
+    grant on `/sys/class/net/*` never fires (those entries are symlinks into
+    `/sys/devices`), while widening it to `/sys/devices/*` hands over that
+    entire subtree. Prefer a ubus object to a file grant wherever the data
+    exists in both — DSA presence, for instance, comes from
+    `luci-rpc.getNetworkDevices` (`devtype: "dsa"`), which the poll already
+    fetches, so it needs no filesystem grant at all.
+
+**Verified end to end 2026-08-13** with a real dedicated login
+(`rpcd.oonfeewrt`, SHA-512 crypt password, `list read/write 'oonfeewrt'`): the
+session carries the `oonfeewrt` access-group *alone* (root's `*` carries ~20),
+every call the controller makes succeeds, and every out-of-scope call is
+refused — arbitrary shell, the `/bin/busybox <applet>` multicall escape,
+`/etc/shadow`, rewriting root's password, `rc.init`, `system.reboot`, and
+`luci.getConntrackList`. Test a candidate ACL against both halves: sufficient
+*and* minimal. Testing as root proves neither, and will mask a broken grant,
+because root's wildcard silently supplies what the file forgot.
+
+**Package installation is deliberately outside the controller credential.** The
+ACL grants `apk list --installed` (capability discovery) but not `apk add`, and
+the scoped login is refused it — verified. This is a real constraint on the
+tier-2 opt-in flow in DEVICE-BUDGET §5, not an oversight: a package's install
+scripts run as root, so `apk add *` is indistinguishable from arbitrary root
+code execution, in the one file we call the blast radius. The controller may
+therefore *detect* that `nlbwmon`/`lldpd`/`usteer` are missing and *offer* the
+install, but the install itself must be authorised with the operator credential
+rather than performed with the controller's own — the same split that
+un-adoption needs. Anything that widens the device's attack surface should cost
+an operator credential; anything that only reads or reconciles owned UCI should
+not.
 - Audit: every changeset stores author, timestamp, full diff, per-device
   outcome. Every login and failed login is an event.
 - No default credentials anywhere. First run generates the admin account
@@ -663,3 +698,20 @@ Also measured, and worth carrying into the design:
   `NOT_FOUND` (4). Anything creating a new UCI config must create the file
   first; this is why the probe's scratch config needs `touch
   /etc/config/oonfeewrt_probe` as a prep step.
+- **`uci.rollback` reverts immediately**, without waiting out the timer — the
+  right primitive behind a "revert now" control, and worth preferring to a long
+  stall when the operator has already decided. It is **session-bound exactly
+  like `uci.confirm`**: a second session calling it gets `PERMISSION_DENIED` (6)
+  and the change stays applied until its own timer expires. So the applying
+  session is the only party that can resolve an armed apply *either way*.
+- **Staged deltas are session-private**, confirmed directly: with one session
+  holding an uncommitted `uci.set`, that session reads the staged value while a
+  concurrent session reads the committed one. Two controllers (or a controller
+  and LuCI) can stage independently without seeing each other's work-in-progress.
+- **Ownership tagging works as designed.** A `firewall` rule written with
+  `option oonfeewrt '1'` keeps the option across commit, apply and an
+  `/etc/init.d/firewall reload`; fw4 ignores the unknown option rather than
+  erroring. Reading the config back cleanly partitions 1 owned section from 13
+  foreign ones, and deleting only the owned section left the section count
+  unchanged at 87. The coexistence rule in the README is implementable exactly
+  as stated.

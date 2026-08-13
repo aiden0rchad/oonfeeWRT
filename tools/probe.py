@@ -786,35 +786,30 @@ def probe_switch_and_firewall(ub, rep):
     # because the ACL blocked the check deletes a screen from a device that
     # supports it, so an unreachable probe records None, never False.
     #
-    # Both checks use file.stat rather than file.exec: a stat grant is a single
-    # narrow path, where the exec equivalent (`sh -c ls …`) is arbitrary code
-    # execution in the one file the docs call the blast radius.
+    # Neither check touches the filesystem. luci-rpc.getNetworkDevices already
+    # rides in the normal poll and tags DSA user ports with devtype "dsa", and
+    # nft is detected by running the one nft command the ACL already grants.
+    # The /sys route looks narrower but is not: rpcd canonicalises paths, so a
+    # /sys/class/net/* grant silently never matches (those are symlinks into
+    # /sys/devices), and widening it to /sys/devices/* hands over a subtree
+    # because '*' crosses '/'.
     dsa = None
-    code, entries = ub.call("file", "list", {"path": "/sys/class/net"})
-    if code == UBUS_OK:
-        ifaces = [e.get("name") for e in (entries or {}).get("entries", [])]
-        dsa = False
-        for name in ifaces:
-            st, _ = ub.call("file", "stat", {"path": f"/sys/class/net/{name}/dsa"})
-            if st == UBUS_OK:
-                dsa = True
-                break
+    code, devs = ub.call("luci-rpc", "getNetworkDevices")
+    if code == UBUS_OK and isinstance(devs, dict):
+        dsa = any((d or {}).get("devtype") == "dsa" for d in devs.values())
     rep.item(dsa, "DSA switch present",
              "per-port stats available" if dsa else
              "no DSA — hide the Ports screen on this device" if dsa is False
-             else "NOT OBSERVABLE — file.list denied, capability unknown")
+             else "NOT OBSERVABLE — luci-rpc denied, capability unknown")
     rep.data["dsa"] = dsa
 
-    fw4 = None
-    code, _ = ub.call("file", "stat", {"path": "/usr/sbin/nft"})
-    if code == UBUS_OK:
-        fw4 = True
-    elif code in (UBUS_STATUS_NOT_FOUND, UBUS_STATUS_NO_DATA):
-        fw4 = False
+    ok, r = ub.exec_status("/usr/sbin/nft",
+                           ["--terse", "--json", "list", "ruleset"])
+    fw4 = (r or {}).get("code") == 0 if ok else None
     rep.item(fw4, "firewall4 / nftables",
              "zone model maps cleanly" if fw4 else
              "legacy iptables path" if fw4 is False
-             else "NOT OBSERVABLE — file.stat denied, capability unknown")
+             else "NOT OBSERVABLE — file.exec denied, capability unknown")
     rep.data["firewall4"] = fw4
 
     # Flow offloading — the tradeoff from DEVICE-BUDGET section 3.3
