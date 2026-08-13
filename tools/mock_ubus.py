@@ -201,6 +201,7 @@ staged = {}          # session -> config -> [ (op, section, payload) ]
 dirty_configs = set()  # configs with foreign (LuCI/SSH) uncommitted edits
 written_files = {}     # path -> bytes, so adoption's footprint is assertable
 reject_logins = set()  # test-only fault injection: usernames to refuse
+acl_gaps = set()       # (object, method) pairs rpcd refuses to proxy at all
 rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
 lock = threading.RLock()
 
@@ -410,6 +411,15 @@ def denied(rid):
 def exec_cmd(rid, cmd, params):
     def out(code, stdout):
         return ok(rid, {"code": code, "stdout": stdout, "stderr": ""})
+    # rpcd resolves a command to its ABSOLUTE PATH before matching the ACL, so
+    # callers legitimately pass either form. Compare on the basename.
+    cmd = (cmd or "").rsplit("/", 1)[-1]
+    if cmd == "nft":
+        return out(0, '{"nftables":[{"metainfo":{"version":"1.1.6"}}]}')
+    if cmd == "nlbw":
+        return out(0, '{"columns":["mac","conns","rx_bytes","rx_pkts",'
+                      '"tx_bytes","tx_pkts"],"data":['
+                      '["aa:bb:cc:11:22:33",4,25488470,3412,304176,4173]]}')
     if cmd == "true":
         return out(0, "")
     if cmd == "which":
@@ -480,6 +490,13 @@ def handle_one(req):
         return err(rid, 6)
     if sess not in sessions:
         return denied(rid)  # dead session -> JSON-RPC -32002, not status 6
+
+    # An object+method in no granted access-group: rpcd refuses to PROXY, so
+    # this is -32002 with a perfectly valid session. That is the permanent half
+    # of the denial contract, and without it a client's "one re-login then give
+    # up" policy is never exercised.
+    if (obj, meth) in acl_gaps or (obj, "*") in acl_gaps:
+        return denied(rid)
 
     if obj == "session" and meth == "destroy":
         # Really invalidate it. Returning OK while leaving the token usable
@@ -554,6 +571,11 @@ def handle_one(req):
     # Test-only hook: stand in for "a human is editing in LuCI right now".
     # There is no CLI inside the mock, so tests need a way to dirty the system
     # savedir. Real devices need no such hook.
+    if obj == "__test" and meth == "set_acl_gap":
+        acl_gaps.clear()
+        for pair in args.get("pairs") or []:
+            acl_gaps.add((pair.get("object"), pair.get("method", "*")))
+        return ok(rid, {"gaps": sorted(f"{o}.{m}" for o, m in acl_gaps)})
     if obj == "__test" and meth == "reject_login":
         # Stands in for anything that leaves a freshly written login unusable —
         # a botched hash, a config that did not land. Adoption must notice.
@@ -678,6 +700,18 @@ def handle_one(req):
                              "name": "roland-laptop"},
                             "AA:BB:CC:44:55:66":
                             {"ipaddrs": ["192.168.1.131"], "name": "iot-plug"}})
+        if meth == "getNetworkDevices":
+            # DSA user ports carry devtype "dsa" with the conduit as parent —
+            # this is how the controller detects a switch without any
+            # filesystem grant.
+            devs = {"br-lan": {"devtype": "bridge"},
+                    "eth0": {"devtype": "ethernet"},
+                    "wan": {"devtype": "dsa", "parent": "eth0"}}
+            for i in range(1, 5):
+                devs[f"lan{i}"] = {"devtype": "dsa", "parent": "eth0"}
+            for w in ("wlan0", "wlan1"):
+                devs[w] = {"devtype": "wlan"}
+            return ok(rid, devs)
         if meth == "getDHCPLeases":
             return ok(rid, {"dhcp_leases": [
                 {"macaddr": "AA:BB:CC:11:22:33", "ipaddr": "192.168.1.130",
@@ -745,6 +779,12 @@ def handle_uci(rid, sid, meth, args):
         commit_config(sid, config)
         return ok(rid, {})
     if meth == "apply":
+        owner = rollback.get("owner")
+        if owner is not None and owner != sid and rollback.get("deadline", 0) > time.time():
+            # Measured: rpcd refuses a second armed apply while one is pending,
+            # with status 6 — which here means "an apply is already armed", NOT
+            # an authorization failure. The existing timer is left alone.
+            return err(rid, 6)
         apply_all(sid, bool(args.get("rollback")),
                   int(args.get("timeout", 10)))
         return ok(rid, {})
