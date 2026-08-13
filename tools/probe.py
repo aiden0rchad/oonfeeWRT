@@ -775,6 +775,32 @@ def probe_radios(ub, rep):
         else:
             rep.item(None, f"  assoclist ({dev})", UBUS_STATUS.get(code, code))
 
+        # Cross-source presence check. These two were measured disagreeing for
+        # 131 s continuously on real hardware, with hostapd's event log
+        # bracketing the window — i.e. iwinfo was the one under-reporting, most
+        # likely for a power-saving station. Which source to trust is still
+        # open, so report the divergence rather than pick a winner.
+        code_h, hc = ub.call(f"hostapd.{dev}", "get_clients")
+        if code_h == UBUS_OK and code == UBUS_OK:
+            iw_macs = {s.get("mac", "").lower()
+                       for s in (al or {}).get("results", [])}
+            ha_macs = {m.lower() for m in (hc or {}).get("clients", {})}
+            ghosts = ha_macs - iw_macs
+            missing = iw_macs - ha_macs
+            agree = not ghosts and not missing
+            rep.item(True if agree else None,
+                     f"  hostapd/iwinfo agree on who is connected ({dev})",
+                     "both sources list the same stations" if agree else
+                     f"{len(ghosts)} in hostapd only, {len(missing)} in iwinfo "
+                     "only — sources disagree; cross-check before trusting "
+                     "either as the client list")
+            entry["presence_ghosts"] = sorted(ghosts)
+            if ghosts:
+                rep.warn(
+                    f"{dev}: hostapd reports {len(ghosts)} station(s) that "
+                    "iwinfo does not. Do not source the client list from one "
+                    "of these alone — see ARCHITECTURE section 5.")
+
         code, sv = ub.call("iwinfo", "survey", {"device": dev})
         rep.item(True if code == UBUS_OK else None, f"  iwinfo.survey ({dev})",
                  "native survey (cheap — no process spawn)" if code == UBUS_OK

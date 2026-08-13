@@ -101,9 +101,17 @@ data via a spawned `iw`.
 
   An 11× reduction, on the class where the budget is *comfortable* — so on class
   C, where every one of those driver calls is worse, this is the difference
-  between the focused tier being affordable and not. `iwinfo` is still required
-  for noise (signed), txpower, country and hwmodes, all of which are static or
-  near-static and belong on the slow tier.
+  between the focused tier being affordable and not.
+
+  **Take the radio-level win; treat the client-level one as unproven.**
+  `hostapd.get_status` is a safe substitute for `iwinfo.info` and is where most
+  of the saving is. `hostapd.get_clients` is *not* yet a safe substitute for
+  `iwinfo.assoclist`: the two were measured disagreeing about who was connected
+  for 131 s continuously (ARCHITECTURE §5, unresolved), and `assoclist` carries
+  row fields hostapd lacks anyway. Budget for `iwinfo.assoclist` at ~30 ms per
+  radio on the focused tier until that is settled. `iwinfo` also remains required
+  for noise (signed), txpower, country and hwmodes, all near-static and
+  belonging on the slow tier.
 - **Batch ubus calls into one HTTP request** where the JSON-RPC batch form is
   supported **[verify on target release]** — one round trip, one TLS record,
   many calls. This is the single biggest cheap win available.
