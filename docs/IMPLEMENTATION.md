@@ -716,6 +716,15 @@ Also measured, and worth carrying into the design:
   like `uci.confirm`**: a second session calling it gets `PERMISSION_DENIED` (6)
   and the change stays applied until its own timer expires. So the applying
   session is the only party that can resolve an armed apply *either way*.
+- **Two independent timeouts, and confusing them costs a re-login every poll.**
+  The uhttpd TCP keep-alive is **20 s**; the ubus session idle timer is **300 s**
+  and is *refreshed by any call*. Measured directly: a session called once every
+  60 s stayed valid through t+360 s, while a session left untouched was dead at
+  t+360 s with a JSON-RPC `-32002`. So at the 60 s baseline cadence the
+  controller pays a fresh TCP connection every poll but **never** needs to
+  re-authenticate — the token outlives the socket by 15×. Only a device polled
+  more slowly than 300 s, or one quiesced during someone else's apply, needs a
+  re-login on the next contact.
 - **An rpcd restart destroys every session.** Anything that reinstalls the ACL
   file or edits `/etc/config/rpcd` invalidates the controller's token, so
   adoption and ACL updates must expect to re-login immediately afterwards — and
