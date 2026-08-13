@@ -77,6 +77,7 @@ func run() error {
 	if err := d.StartCollector(ctx, collector.Options{}); err != nil {
 		return err
 	}
+	d.StartMaintenance(ctx)
 	if err := d.Serve(ctx); err != nil {
 		return err
 	}

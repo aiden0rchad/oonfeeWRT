@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -142,6 +144,10 @@ func (d *Daemon) sink() collector.Sink {
 			d.Log.Error("could not record last_seen", "device", s.MAC, "err", err)
 		}
 
+		// Into the ring. Nothing reaches the database here: raw samples are
+		// drained on the five-minute tick, in one transaction (decision D4).
+		d.Samples.Observe(ctx, s)
+
 		// A firmware change invalidates the capability snapshot: a new build can
 		// add or remove ubus objects, and rendering against a stale registry is
 		// how a screen offers a control the device no longer has.
@@ -165,4 +171,61 @@ func (d *Daemon) sink() collector.Sink {
 				"permanent", deg.Permanent)
 		}
 	})
+}
+
+// StartMaintenance begins the telemetry tick: drain the ring into rollups, fold
+// the hourly ladder, prune to retention.
+//
+// Separate from StartCollector so a caller can poll without persisting — which
+// the integration tests do, and which is the honest split anyway: collecting and
+// keeping are different decisions.
+func (d *Daemon) StartMaintenance(ctx context.Context) {
+	m := telemetry.NewMaintainer(d.Store, d.Samples, d.Log)
+	if d.api != nil {
+		// Idle sessions and lapsed login lockouts expire on the same cadence.
+		// They want a periodic sweep, not a timer each.
+		m.AfterTick = d.api.Sweep
+	}
+	done := make(chan struct{})
+
+	// Its own cancellation, derived from the caller's. Shutdown must be able to
+	// trigger the final flush directly rather than relying on whoever owns ctx
+	// to have cancelled it first — Close is called on paths where nobody has.
+	mctx, cancel := context.WithCancel(ctx)
+
+	d.mu.Lock()
+	if d.maint != nil {
+		d.mu.Unlock()
+		cancel()
+		return
+	}
+	d.maint, d.maintDone, d.maintStop = m, done, cancel
+	d.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		m.Run(mctx)
+	}()
+	d.Log.Info("telemetry maintenance started", "interval", m.Interval)
+}
+
+// stopMaintainer runs the final flush and waits for it.
+//
+// Waiting is the point: Run performs one last drain when its context is
+// cancelled, and returning before that lands would defeat the whole reason for
+// having it.
+func (d *Daemon) stopMaintainer() {
+	d.mu.Lock()
+	m, done, cancel := d.maint, d.maintDone, d.maintStop
+	d.maint, d.maintDone, d.maintStop = nil, nil, nil
+	d.mu.Unlock()
+	if m == nil {
+		return
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		d.Log.Error("the final telemetry flush did not finish; this window is lost")
+	}
 }

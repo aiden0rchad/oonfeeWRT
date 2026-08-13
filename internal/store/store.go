@@ -204,6 +204,12 @@ func (db *DB) DeviceByMAC(ctx context.Context, mac string) (*Device, error) {
 	return scanDevice(row)
 }
 
+// DeviceByID looks a device up by its row id, which is what URLs carry.
+func (db *DB) DeviceByID(ctx context.Context, id int64) (*Device, error) {
+	row := db.sql.QueryRowContext(ctx, deviceCols+` WHERE id=?`, id)
+	return scanDevice(row)
+}
+
 // Devices lists every known device, pending ones included.
 func (db *DB) Devices(ctx context.Context) ([]*Device, error) {
 	rows, err := db.sql.QueryContext(ctx, deviceCols+` ORDER BY name, mac`)

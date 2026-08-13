@@ -2,17 +2,40 @@ package daemon
 
 import (
 	"net/http"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 )
 
-// routes builds the HTTP surface.
-//
-// Phase 0 serves exactly one endpoint. The API and the UI arrive in Phase 1;
-// what has to exist now is the thing the container orchestrator polls, because a
-// daemon with no health endpoint is one a supervisor cannot tell from a hung one.
+// routes builds the HTTP surface: the health endpoint the orchestrator polls,
+// and the Phase 1 API under /api/v1.
 func (d *Daemon) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", d.healthz)
+
+	d.api = api.New(d.Store, fleetAdapter{d}, d.Log)
+	mux.Handle("/api/v1/", d.api.Routes())
 	return mux
+}
+
+// fleetAdapter exposes the collector to the API without handing it the whole
+// daemon. The API can then be tested against a stub rather than against a
+// keyring, a listener and a router.
+type fleetAdapter struct{ d *Daemon }
+
+func (f fleetAdapter) Focus(deviceID int64) func() { return f.d.Focus(deviceID) }
+
+func (f fleetAdapter) Tier(deviceID int64) (collector.Tier, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return "", false
+	}
+	return c.Tier(deviceID)
+}
+
+func (f fleetAdapter) Quiesced(deviceID int64) bool {
+	c := f.d.collectorRef()
+	return c != nil && c.Quiesced(deviceID)
 }
 
 // healthz reports liveness: unauthenticated, and it says nothing about the

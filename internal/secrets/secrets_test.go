@@ -497,3 +497,98 @@ func TestConcurrentUse(t *testing.T) {
 		}
 	}
 }
+
+// ---- operator passwords ----
+
+func TestPasswordRoundTrip(t *testing.T) {
+	h, err := HashPassword([]byte("correct horse"), cheap)
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if !strings.HasPrefix(h, "$argon2id$v=19$") {
+		t.Fatalf("hash is not in PHC format: %q", h)
+	}
+	if strings.Contains(h, "correct horse") {
+		t.Fatal("the hash contains the password")
+	}
+	if err := VerifyPassword([]byte("correct horse"), h); err != nil {
+		t.Fatalf("VerifyPassword on the right password: %v", err)
+	}
+	if err := VerifyPassword([]byte("wrong horse"), h); !errors.Is(err, ErrBadPassword) {
+		t.Fatalf("VerifyPassword on a wrong password: got %v, want ErrBadPassword", err)
+	}
+	if err := VerifyPassword(nil, h); err == nil {
+		t.Fatal("an empty password verified")
+	}
+}
+
+// Two hashes of one password must differ, or the store leaks which operators
+// share a password.
+func TestPasswordSaltIsFresh(t *testing.T) {
+	a, err := HashPassword([]byte("same"), cheap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := HashPassword([]byte("same"), cheap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("two hashes of the same password are identical")
+	}
+	// Both still verify: the salt travels inside the hash.
+	if err := VerifyPassword([]byte("same"), a); err != nil {
+		t.Error(err)
+	}
+	if err := VerifyPassword([]byte("same"), b); err != nil {
+		t.Error(err)
+	}
+}
+
+// The parameters travel with the hash, so raising the cost later must not lock
+// existing operators out.
+func TestPasswordVerifiesUnderItsOwnParameters(t *testing.T) {
+	old, err := HashPassword([]byte("pw"), Params{Time: 1, MemoryKiB: 64, Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyPassword([]byte("pw"), old); err != nil {
+		t.Fatalf("a hash made with weaker parameters no longer verifies: %v", err)
+	}
+	stronger := Params{Time: 3, MemoryKiB: 256, Threads: 2}
+	if !NeedsRehash(old, stronger) {
+		t.Error("NeedsRehash did not flag a hash weaker than the current policy")
+	}
+	fresh, err := HashPassword([]byte("pw"), stronger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if NeedsRehash(fresh, stronger) {
+		t.Error("NeedsRehash flagged a hash made with the current policy")
+	}
+}
+
+// A corrupted row must be an error, never a panic — argon2 panics outright on
+// time or threads of zero.
+func TestMalformedPasswordHashIsRejected(t *testing.T) {
+	for _, tc := range []struct{ name, hash string }{
+		{"empty", ""},
+		{"not phc", "hunter2"},
+		{"wrong algorithm", "$argon2i$v=19$m=64,t=1,p=1$YWJjZGVmZ2hpamtsbW5vcA$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"future version", "$argon2id$v=99$m=64,t=1,p=1$YWJjZGVmZ2hpamtsbW5vcA$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"zero time", "$argon2id$v=19$m=64,t=0,p=1$YWJjZGVmZ2hpamtsbW5vcA$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"zero threads", "$argon2id$v=19$m=64,t=1,p=0$YWJjZGVmZ2hpamtsbW5vcA$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"absurd memory", "$argon2id$v=19$m=4294967295,t=1,p=1$YWJjZGVmZ2hpamtsbW5vcA$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"short salt", "$argon2id$v=19$m=64,t=1,p=1$YWJj$YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWY"},
+		{"missing hash", "$argon2id$v=19$m=64,t=1,p=1$YWJjZGVmZ2hpamtsbW5vcA$"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := VerifyPassword([]byte("pw"), tc.hash); err == nil {
+				t.Fatal("VerifyPassword accepted a malformed hash")
+			}
+			if !NeedsRehash(tc.hash, DefaultParams()) {
+				t.Error("NeedsRehash did not flag an unparseable hash")
+			}
+		})
+	}
+}

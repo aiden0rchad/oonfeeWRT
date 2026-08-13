@@ -21,9 +21,11 @@ import (
 
 	_ "modernc.org/sqlite" // the pure-Go driver, per decision D3
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
 )
 
 // driverName is the SQLite driver registered by the blank import above. store
@@ -40,8 +42,19 @@ type Daemon struct {
 	// applies tracks in-flight applies so shutdown can wait for them.
 	applies applyBarrier
 
+	// Samples is the in-RAM telemetry ring. It exists from Open so that a
+	// device polled before the maintainer starts is still recorded.
+	Samples *telemetry.Store
+
+	// api is built in routes(), which Open calls; it is kept so the maintenance
+	// tick can sweep expired sessions.
+	api *api.Server
+
 	mu        sync.Mutex
 	collector *collector.Collector
+	maint     *telemetry.Maintainer
+	maintDone chan struct{}
+	maintStop context.CancelFunc
 
 	http *http.Server
 	ln   net.Listener
@@ -71,7 +84,8 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 		return nil, fmt.Errorf("daemon: listen on %s: %w", cfg.Listen, err)
 	}
 
-	d := &Daemon{Config: cfg, Log: log, ln: ln}
+	d := &Daemon{Config: cfg, Log: log, ln: ln,
+		Samples: telemetry.New(telemetry.Options{})}
 	if err := d.openKeyring(cfg); err != nil {
 		ln.Close()
 		return nil, err
@@ -199,7 +213,13 @@ func (d *Daemon) shutdown() error {
 		c.Stop()
 	}
 
-	// 3. Wait for in-flight applies. An apply past APPLY has a rollback armed on
+	// 3. Flush telemetry. After the collector has stopped, so nothing is still
+	//    arriving, and before the database closes, so there is somewhere to put
+	//    it. Skipping this loses up to five minutes of every series on every
+	//    restart — a visible notch in every graph of a fleet that gets updated.
+	d.stopMaintainer()
+
+	// 4. Wait for in-flight applies. An apply past APPLY has a rollback armed on
 	//    the device; that timer runs whether this process exists or not, so
 	//    exiting here would leave a healthy change to revert with nobody left to
 	//    confirm it. This is the one shutdown step allowed to take minutes.
@@ -214,7 +234,7 @@ func (d *Daemon) shutdown() error {
 		}
 	}
 
-	// 4. Checkpoint and close the database, then zero the keys. Keys last: a
+	// 5. Checkpoint and close the database, then zero the keys. Keys last: a
 	//    checkpoint that needed to read a credential would otherwise fail on a
 	//    closed keeper.
 	if d.Store != nil {
@@ -238,6 +258,7 @@ func (d *Daemon) Close() error {
 	if c := d.collectorRef(); c != nil {
 		c.Stop()
 	}
+	d.stopMaintainer()
 	if d.http != nil {
 		errs = append(errs, d.http.Close())
 	}

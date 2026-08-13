@@ -9,6 +9,18 @@ CREATE TABLE IF NOT EXISTS schema_version (
   applied_at INTEGER NOT NULL
 );
 
+-- ===== operators =====
+-- Who may open the UI. Distinct from a device credential in every way that
+-- matters: this hash is argon2id (internal/secrets), not the SHA-512 crypt that
+-- rpcd's on-device format forces, because nothing here has to run on a router.
+CREATE TABLE IF NOT EXISTS admins (
+  id         INTEGER PRIMARY KEY,
+  username   TEXT NOT NULL UNIQUE,
+  pass_hash  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_login INTEGER
+);
+
 -- ===== inventory =====
 CREATE TABLE IF NOT EXISTS devices (
   id           INTEGER PRIMARY KEY,
@@ -114,6 +126,11 @@ CREATE TABLE IF NOT EXISTS rollup_1h (
   avg REAL, min REAL, max REAL, cnt INTEGER NOT NULL,
   PRIMARY KEY (series_id, ts)
 ) WITHOUT ROWID;
+-- The primary key serves reads (one series over a range). Maintenance goes the
+-- other way — every series within a time range — so retention pruning and the
+-- 5m->1h fold would otherwise scan the whole table every five minutes.
+CREATE INDEX IF NOT EXISTS rollup_5m_ts ON rollup_5m(ts);
+CREATE INDEX IF NOT EXISTS rollup_1h_ts ON rollup_1h(ts);
 
 -- ===== events =====
 CREATE TABLE IF NOT EXISTS events (
