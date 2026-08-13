@@ -4,18 +4,17 @@
 
 		"read": {
 			"ubus": {
+				"session": [ "access", "destroy" ],
 				"uci": [ "configs", "get", "changes" ],
 				"system": [ "board", "info" ],
 				"file": [ "read", "stat", "list", "exec" ],
 				"iwinfo": [ "devices", "info", "assoclist", "freqlist", "txpowerlist", "countrylist", "survey", "scan" ],
 				"network": [ "get_proto_handlers" ],
 				"network.interface": [ "dump", "status" ],
+				"network.interface.*": [ "status" ],
 				"network.device": [ "status" ],
-				"network.wireless": [ "status" ],
 				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
-				"luci": [ "getFeatures", "getConntrackList", "getRealtimeStats" ],
-				"dhcp": [ "ipv4leases", "ipv6leases" ],
-				"service": [ "list" ],
+				"luci": [ "getFeatures" ],
 				"log": [ "read" ]
 			},
 			"uci": [ "network", "wireless", "firewall", "dhcp", "system", "luci", "uhttpd", "dropbear" ],
@@ -23,13 +22,21 @@
 				"/proc/stat": [ "read" ],
 				"/proc/meminfo": [ "read" ],
 				"/proc/loadavg": [ "read" ],
-				"/sys/class/net/*": [ "read", "list" ],
+				"/sys/class/net": [ "list" ],
+				"/sys/class/net/*": [ "read", "list", "stat" ],
 				"/usr/sbin/nft --terse --json list ruleset": [ "exec" ],
 				"/sbin/ip -[46] -j neigh show": [ "exec" ],
 				"/sbin/ip -[46] -j route show table all": [ "exec" ],
 				"/sbin/ip -[46] -j addr show": [ "exec" ],
 				"/usr/sbin/iw dev": [ "exec" ],
-				"/usr/sbin/iw phy": [ "exec" ]
+				"/usr/sbin/iw dev * station dump": [ "exec" ],
+				"/usr/sbin/iw dev * survey dump": [ "exec" ],
+				"/usr/sbin/ethtool -S *": [ "exec" ],
+				"/usr/sbin/bridge -j fdb show": [ "exec" ],
+				"/usr/sbin/lldpcli show neighbors -f json": [ "exec" ],
+				"/usr/bin/apk list --installed": [ "exec" ],
+				"/bin/opkg list-installed": [ "exec" ],
+				"/bin/df -k /overlay": [ "exec" ]
 			}
 		},
 
@@ -45,13 +52,19 @@
 	},
 
 	"oonfeewrt-probe": {
-		"description": "tools/probe.py scratch config only — do NOT ship this group to production devices",
+		"description": "tools/probe.py ONLY — capability discovery + scratch config. Never ship this group to a production device.",
 
 		"read": {
 			"ubus": {
-				"uci": [ "configs", "get", "changes" ]
+				"uci": [ "configs", "get", "changes" ],
+				"file": [ "read", "stat", "list", "exec" ]
 			},
-			"uci": [ "oonfeewrt_probe", "oonfeewrt_probe2" ]
+			"uci": [ "oonfeewrt_probe", "oonfeewrt_probe2" ],
+			"file": {
+				"/bin/true": [ "exec" ],
+				"/usr/bin/which *": [ "exec" ],
+				"/usr/bin/env true": [ "exec" ]
+			}
 		},
 
 		"write": {

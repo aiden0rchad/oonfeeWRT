@@ -104,8 +104,9 @@ feature is absent and everything else works.
 | UniFi element | OpenWrt source | Verdict |
 |---|---|---|
 | Table: Band, Channel, Ch. Width, TX Power, Clients, Avg. Signal, 24h data, Avg. Interference, Avg. Airtime, Avg. TX Retries, Uplink, Model | `iwinfo`, `iw survey dump`, `iw station dump`, TSDB | 🟢 **This screen is fully achievable and is one of the strongest arguments for the project** |
-| Avg. Interference % | `(busy_time − rx_time − tx_time) / active_time` from survey dump | 🟢 |
-| Avg. Airtime % | `(rx_time + tx_time) / active_time` | 🟢 |
+| Channel utilization % | `busy_time / active_time` from `iwinfo.survey` | 🟢 The portable airtime metric — both fields verified good on mwlwifi |
+| Avg. Interference % | `(busy_time − rx_time − tx_time) / active_time` | 🟠 **Capability-gated.** Needs `rx_time`/`tx_time`, which mwlwifi returns uninitialised (a garbage u64). Not computable on the class-A reference device |
+| Avg. Airtime % | `(rx_time + tx_time) / active_time` | 🟠 Same dependency, same gate. Where rx/tx are unusable, show channel utilization instead — never fabricate the split |
 | Avg. TX Retries % | `tx retries / tx packets` from station dump | 🟢 |
 | Channel Plan visualization (In Use / Enabled / DFS / Not available / Excluded) | `iwinfo.freqlist` + regulatory domain + our exclusion model | 🟢 |
 | **Channel AI View** (auto channel selection heatmap) | 🔴 as branded. Substitute: our own channel scoring from survey + scan data → "Suggested Channels". The underlying math (least-congested selection weighted by neighbor RSSI) is not hard; the branding is theirs |

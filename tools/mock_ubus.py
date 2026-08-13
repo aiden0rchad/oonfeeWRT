@@ -19,9 +19,14 @@ What it models faithfully (because the design depends on it):
     exactly like real rpcd, and exactly the bug class the probe exists to catch.
   * JSON-RPC batching (array bodies).
   * WRT3200ACM identity: mvebu/cortexa9, 512 MB RAM, DSA switch, dual radios.
-  * The mwlwifi gap: `iwinfo.survey` is NOT_SUPPORTED and `iw survey dump`
-    returns no "busy time" line — so capability gating gets exercised in CI
-    instead of discovered in the field.
+  * Per-session state, as measured on hardware: each login gets its own token,
+    staged UCI deltas are scoped to it, and `uci.confirm` is refused to any
+    session other than the one that applied — without cancelling the timer.
+    After a rollback the applying session still reads the value it failed to
+    set, while a fresh session reads the reverted one.
+  * mwlwifi's real survey quirks: `iwinfo.survey` works, but reports `noise`
+    unsigned and leaves rx_time/tx_time uninitialised, so airtime is
+    computable and interference is not.
 
 What it does not model: timing realism, wireless reload behavior, hostapd
 events, or multiple devices (run several instances on different ports for a
@@ -32,12 +37,25 @@ import argparse
 import copy
 import http.server
 import json
+import secrets
 import socketserver
 import threading
 import time
 
-SESSION = "a" * 32
 PASSWORD = "good"
+
+# Every login gets its own token. A single shared constant would make the two
+# session-scoped behaviours real rpcd has — confirm is bound to the applying
+# session, and staged deltas are keyed by token — impossible to reproduce, so
+# an apply engine that reconnects before confirming would pass CI and then
+# silently revert on hardware.
+sessions = set()
+
+
+def new_session():
+    sid = secrets.token_hex(16)
+    sessions.add(sid)
+    return sid
 
 # --------------------------------------------------------------------------
 # UCI state: committed[config][section] = {".type":…, opts…}; staged deltas
@@ -50,6 +68,10 @@ committed = {
                 "device": "br-lan"},
         "wan": {".type": "interface", "proto": "dhcp", "device": "wan"},
     },
+    # Present but empty, standing in for the `touch /etc/config/…` the probe
+    # requires on a real device: uci.add returns NOT_FOUND without it.
+    "oonfeewrt_probe": {},
+    "oonfeewrt_probe2": {},
     "wireless": {
         "radio0": {".type": "wifi-device", "type": "mac80211", "band": "5g",
                    "channel": "36", "htmode": "VHT80"},
@@ -78,18 +100,43 @@ committed = {
                  "ubus_prefix": "/ubus"},
     },
 }
-staged = {}          # config -> [ (op, section, payload) ]
-rollback = {}        # {"snapshot": deep copy, "deadline": ts} when armed
+staged = {}          # session -> config -> [ (op, section, payload) ]
+rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
 lock = threading.RLock()
 
 
-def stage(config, op, section, payload):
-    staged.setdefault(config, []).append((op, section, payload))
+def stage(sid, config, op, section, payload):
+    staged.setdefault(sid, {}).setdefault(config, []).append(
+        (op, section, payload))
 
 
-def commit_config(config):
+def effective(sid, config):
+    """committed state with this session's staged delta laid over it.
+
+    rpcd scopes staged deltas to the session token, and uci.get reads through
+    them. Reading `committed` alone would mean a session never sees its own
+    uncommitted writes — and, after a rollback, would hide the fact that the
+    applying session still reads the value it failed to set.
+    """
+    cfg = copy.deepcopy(committed.get(config)) if config in committed else None
+    for op, section, payload in staged.get(sid, {}).get(config, []):
+        if cfg is None:
+            cfg = {}
+        if op == "add":
+            sec = {".type": payload["type"]}
+            sec.update(payload.get("values", {}))
+            cfg[section] = sec
+        elif op == "set":
+            cfg.setdefault(section, {".type": "unknown"}).update(
+                payload.get("values", {}))
+        elif op == "delete":
+            cfg.pop(section, None)
+    return cfg
+
+
+def commit_config(sid, config):
     """Apply one config's staged delta to committed state."""
-    for op, section, payload in staged.pop(config, []):
+    for op, section, payload in staged.get(sid, {}).pop(config, []):
         cfg = committed.setdefault(config, {})
         if op == "add":
             sec = {".type": payload["type"]}
@@ -102,17 +149,35 @@ def commit_config(config):
             cfg.pop(section, None)
 
 
-def apply_all(rb, timeout):
-    """uci.apply: commit ALL staged deltas; optionally arm rollback."""
+def apply_all(sid, rb, timeout):
+    """uci.apply: commit this session's staged deltas; optionally arm rollback.
+
+    One transaction across every staged config — real rpcd commits and reverts
+    them all together, so a per-config apply loop would model something the
+    device cannot do.
+    """
     if rb:
         rollback["snapshot"] = copy.deepcopy(committed)
+        rollback["staged_snapshot"] = copy.deepcopy(staged.get(sid, {}))
+        rollback["owner"] = sid
         rollback["deadline"] = time.time() + timeout
-    for config in list(staged.keys()):
-        commit_config(config)
+    for config in list(staged.get(sid, {}).keys()):
+        commit_config(sid, config)
 
 
-def confirm():
+def confirm(sid):
+    """Only the session that applied may confirm. Returns True on success.
+
+    A wrong-session confirm must NOT cancel the timer: on hardware it is
+    refused and the change still reverts, which is precisely the case a
+    reconnect-then-confirm controller gets wrong.
+    """
+    if not rollback:
+        return False
+    if rollback.get("owner") != sid:
+        return None          # denied, timer left running
     rollback.clear()
+    return True
 
 
 def rollback_watchdog():
@@ -123,8 +188,15 @@ def rollback_watchdog():
             dl = rollback.get("deadline")
             if dl and time.time() > dl:
                 committed = copy.deepcopy(rollback["snapshot"])
+                # Restore the applier's delta too. rpcd reverts /etc/config
+                # but the applying session's staged change comes back with it,
+                # so that session keeps reading the value it failed to set
+                # while a fresh session sees the reverted one.
+                owner = rollback.get("owner")
+                if owner is not None:
+                    staged[owner] = copy.deepcopy(
+                        rollback.get("staged_snapshot") or {})
                 rollback.clear()
-                staged.clear()
 
 
 # --------------------------------------------------------------------------
@@ -139,8 +211,8 @@ OBJECTS = {
     "system": {"board": {}, "info": {}, "reboot": {}},
     "file": {"read": {}, "write": {}, "exec": {}, "list": {}, "stat": {}},
     "iwinfo": {m: {} for m in ("devices", "info", "assoclist", "freqlist",
-                               "txpowerlist", "scan", "countrylist")},
-    # note: no "survey" method — mwlwifi
+                               "txpowerlist", "scan", "countrylist",
+                               "survey")},
     "network": {"reload": {}, "restart": {}},
     "network.interface": {"dump": {}},
     "network.device": {"status": {}},
@@ -244,10 +316,10 @@ def handle_one(req):
 
     if obj == "session" and meth == "login":
         if args.get("password") == PASSWORD:
-            return ok(rid, {"ubus_rpc_session": SESSION, "timeout": 300,
+            return ok(rid, {"ubus_rpc_session": new_session(), "timeout": 300,
                             "expires": 300})
         return err(rid, 6)
-    if sess != SESSION:
+    if sess not in sessions:
         return err(rid, 6)  # PERMISSION_DENIED
 
     if obj == "system" and meth == "board":
@@ -279,10 +351,10 @@ def handle_one(req):
         return err(rid, 8)
 
     if obj == "iwinfo":
+        dev = args.get("device", "wlan0")
         if meth == "devices":
             return ok(rid, {"devices": ["wlan0", "wlan1"]})
         if meth == "info":
-            dev = args.get("device", "wlan0")
             g5 = dev == "wlan0"
             return ok(rid, {"phy": "phy0" if g5 else "phy1",
                             "ssid": "OpenWrt", "mode": "Master",
@@ -300,7 +372,18 @@ def handle_one(req):
                 {"channel": 52, "mhz": 5260, "restricted": True}]})
         if meth == "txpowerlist":
             return ok(rid, {"results": [{"dbm": 23, "mw": 200, "active": True}]})
-        return err(rid, 8)  # survey and others: NOT_SUPPORTED (mwlwifi)
+        if meth == "survey":
+            # mwlwifi really does serve this natively. Two measured traps are
+            # reproduced deliberately: `noise` comes back UNSIGNED here (161
+            # for -95) while iwinfo.info reports it signed, and rx_time/tx_time
+            # are uninitialised garbage. Only busy_time/active_time are usable,
+            # so channel utilisation is computable but interference is not.
+            return ok(rid, {"results": [{
+                "mhz": 5180 if dev == "wlan0" else 2437,
+                "noise": 161,
+                "active_time": 19849, "busy_time": 495, "busy_time_ext": 0,
+                "rx_time": 13869070124637487105, "tx_time": 0}]})
+        return err(rid, 8)  # NOT_SUPPORTED
 
     if obj == "network.interface" and meth == "dump":
         return ok(rid, {"interface": [
@@ -345,19 +428,23 @@ def handle_one(req):
 
     if obj == "uci":
         with lock:
-            return handle_uci(rid, meth, args)
+            return handle_uci(rid, sess, meth, args)
 
     if obj in OBJECTS and meth in OBJECTS.get(obj, {}):
         return ok(rid, {})
     return err(rid, 4)  # NOT_FOUND
 
 
-def handle_uci(rid, meth, args):
+def handle_uci(rid, sid, meth, args):
     config = args.get("config")
+    # uci.add will not create a config file that does not exist — it returns
+    # NOT_FOUND, which is why the scratch configs must be touched first.
+    if meth in ("add", "set", "delete") and config not in committed:
+        return err(rid, 4)
     if meth == "configs":
         return ok(rid, {"configs": sorted(committed.keys())})
     if meth == "get":
-        cfg = committed.get(config)
+        cfg = effective(sid, config)
         if cfg is None:
             return err(rid, 4)
         section, option = args.get("section"), args.get("option")
@@ -370,35 +457,39 @@ def handle_uci(rid, meth, args):
         return ok(rid, {"values": cfg})
     if meth == "add":
         name = args.get("name") or f"cfg{int(time.time()*1000) % 100000:05x}"
-        stage(config, "add", name, {"type": args.get("type"),
-                                    "values": args.get("values", {})})
+        stage(sid, config, "add", name, {"type": args.get("type"),
+                                         "values": args.get("values", {})})
         return ok(rid, {"section": name})
     if meth == "set":
-        stage(config, "set", args.get("section"),
+        stage(sid, config, "set", args.get("section"),
               {"values": args.get("values", {})})
         return ok(rid, {})
     if meth == "delete":
-        stage(config, "delete", args.get("section"), {})
+        stage(sid, config, "delete", args.get("section"), {})
         return ok(rid, {})
     if meth == "changes":
+        mine = staged.get(sid, {})
         if config:
             ch = [[op, s] + ([json.dumps(pl)] if pl else [])
-                  for op, s, pl in staged.get(config, [])]
+                  for op, s, pl in mine.get(config, [])]
             return ok(rid, {"changes": ch})
         return ok(rid, {"changes": {c: [[op, s] for op, s, _ in items]
-                                    for c, items in staged.items()}})
+                                    for c, items in mine.items()}})
     if meth == "revert":
-        staged.pop(config, None)
+        staged.get(sid, {}).pop(config, None)
         return ok(rid, {})
     if meth == "commit":
-        commit_config(config)
+        commit_config(sid, config)
         return ok(rid, {})
     if meth == "apply":
-        apply_all(bool(args.get("rollback")), int(args.get("timeout", 10)))
+        apply_all(sid, bool(args.get("rollback")),
+                  int(args.get("timeout", 10)))
         return ok(rid, {})
     if meth == "confirm":
-        confirm()
-        return ok(rid, {})
+        res = confirm(sid)
+        if res is None:
+            return err(rid, 6)   # wrong session; timer keeps running
+        return ok(rid, {}) if res else err(rid, 5)
     if meth == "rollback":
         dl = rollback.get("deadline")
         if dl:

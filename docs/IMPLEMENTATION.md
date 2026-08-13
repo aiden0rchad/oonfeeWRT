@@ -602,8 +602,10 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
 3. **mwlwifi does provide survey data** — the design's assumption that it
    doesn't is wrong. `iwinfo.survey` works natively on both radios (no
    `file.exec`, no process spawn) and returns `active_time` + `busy_time`, so
-   the Radios screen's interference and airtime columns **are** computable on
-   this hardware. Two traps: `rx_time`/`tx_time` are present but uninitialised
+   **channel utilization** (busy/active) is computable on this hardware. That is
+   *not* the same as the interference and airtime columns: both need
+   `rx_time`/`tx_time` and so stay capability-gated — see PARITY-MATRIX, where
+   they are 🟠 rather than 🟢. Two traps: `rx_time`/`tx_time` are uninitialised
    (`iw` shows a garbage u64, ~1.4e19), and `iwinfo.survey` reports `noise`
    **unsigned** (161) while `iwinfo.info` reports it correctly signed (−95) —
    always take noise from `iwinfo.info`. Still open: the `iwinfo.assoclist`
@@ -622,9 +624,41 @@ Also measured, and worth carrying into the design:
   second session. (Closing the TCP connection is not enough — the session token,
   not the connection, scopes the delta.)
 - **Transport is not a bottleneck on class A**: 1.2 ms keep-alive vs 1.7 ms
-  fresh-connection, so ~0.5 ms setup overhead over plain HTTP. TLS handshake
-  cost is still unmeasured. Device CPU during a focused poll was ~0.5 %
-  whole-device.
+  fresh-connection over plain HTTP. TLS adds ~15 ms per handshake (TLS 1.3,
+  and OpenWrt 25.12 already ships an **ECDSA P-256** cert, so the "consider
+  ECDSA" note in ARCHITECTURE is already satisfied) — far under the 120 ms
+  threshold that would force persistent connections. The cert is self-signed
+  (`CN=OpenWrt`), so the controller must pin it, not chain-validate, and must
+  expect it to change on reflash.
+- **uhttpd's idle keep-alive is exactly 20 s** (survives 19 s, dropped at 21 s).
+  The focused tier at 5–10 s therefore reuses connections; the 60 s baseline
+  tier **never** does, and pays a full handshake every poll. Budget accordingly
+  rather than assuming keep-alive helps everywhere.
+- **JSON-RPC batching scales far past what the design needs**: 550 calls in one
+  request (65 KB) were accepted, with per-call cost flat at ~0.5 ms from ~10
+  calls upward. Chunk on request bytes, not call count.
+- **Software flow offloading does NOT break per-client accounting.** Measured
+  with the flowtable active and a flow confirmed in the fast path
+  (`[OFFLOAD]`): conntrack byte counters stayed complete (102 % of transferred
+  bytes, the excess being headers and the reverse direction) both with and
+  without offload, on kernel 6.12 + nftables flowtables. The tradeoff in the
+  README applies to **hardware** offload, which mvebu does not implement — so
+  it remains untested and must be scoped to class B/C rather than stated
+  generally. Note also `nf_conntrack_acct` is already `1` by default.
+- **`network.wireless status` is unreachable over rpcd.** It works on the local
+  ubus socket but returns `INVALID_ARGUMENT` (2) through `/ubus` at any
+  argument, because rpcd injects `ubus_rpc_session` into the args and netifd's
+  strict policy rejects the unknown field. Radio state must come from
+  `uci get wireless` + `iwinfo` + `hostapd.*`. Treat this as a *class* of
+  hazard: any ubus method with a strict policy is unreachable via rpcd.
+- **`dhcp.ipv4leases` does not exist on this build** — the `dhcp` object exposes
+  only `ipv6leases`, `ipv6ra` and `add_lease`. Use `luci-rpc.getDHCPLeases`,
+  which returns both families.
+- **Device CPU is not the constraint on class A**: 0.65 % idle, 0.72 % with a
+  full 13-call focused poll every 5 s, 9.8 % only when polling back-to-back with
+  no delay. **Zero flash writes** were observed across sustained polling
+  (`/overlay` used and mtd/ubi write counters both unchanged), so the
+  zero-write claim holds.
 - **`uci.add` cannot create a config that does not exist** — it returns
   `NOT_FOUND` (4). Anything creating a new UCI config must create the file
   first; this is why the probe's scratch config needs `touch

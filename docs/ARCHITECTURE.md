@@ -138,7 +138,13 @@ OpenWrt's `rpcd` already exposes ubus as JSON-RPC over HTTP at `/ubus`, served b
   ```
 - Auth: `POST /ubus` calling `session.login` with `{username, password}` returns
   a `ubus_rpc_session` token. Every subsequent call carries it as the first
-  JSON-RPC parameter. Sessions expire; the controller refreshes on `Access denied`.
+  JSON-RPC parameter. Sessions expire (300 s idle); the controller refreshes on
+  a ubus `PERMISSION_DENIED` (6) — **except during a confirmation window, where
+  a refresh is an unrecoverable abort, not a retry.** See §4.
+  Distinguish the two denial channels: an expired session returns ubus status
+  **6 inside a successful JSON-RPC response**, whereas an ACL denial returns a
+  JSON-RPC **error −32002**. Only the former is worth retrying; re-logging in on
+  −32002 retries a permanent authorization failure forever.
 - Authorization: JSON files in `/usr/share/rpcd/acl.d/`. oonfeeWRT ships
   `/usr/share/rpcd/acl.d/oonfeewrt.json` granting exactly the objects/methods it
   needs to a dedicated `oonfeewrt` user — **not** root, and not the full LuCI ACL.
@@ -245,9 +251,34 @@ stop — do not silently win.
            a manual commit leaves nothing staged, the snapshot equals the
            new state, and rollback silently protects nothing.
      c. controller *repeatedly* polls uci.confirm until it succeeds or the timer expires
+        — **always on the same session token that issued the apply**
      d. success → rollback timer cancelled | failure → device self-reverts
-5. Record applied hash + audit entry
+5. Record applied hash + audit entry, reading state from a *fresh* session
 ```
+
+**Two session rules, both measured on hardware, both easy to get wrong:**
+
+1. **`uci.confirm` is bound to the session that applied.** A second authorized
+   session calling confirm gets `PERMISSION_DENIED` (6) and the change reverts
+   anyway. So the confirm poll must hold the applying token for the whole
+   window: reconnecting is fine, re-authenticating is fatal. If the token is
+   lost mid-window the apply *will* revert — treat that as an abort and report
+   it, rather than retrying into a false success. (This is the correct safety
+   behaviour, but it means a controller restart inside the window cannot be
+   recovered unless the token itself was persisted.)
+2. **A session cannot observe its own rollback.** When the timer fires, rpcd
+   restores `/etc/config` but the applying session's staged delta comes back
+   with it, and session-scoped `uci.get` reads through that delta — so the
+   applying session still returns the value it *failed* to set, indefinitely.
+   Closing the TCP connection does not clear it; the token scopes the delta, not
+   the connection. Verify every outcome from a second session, or from non-uci
+   state (`network.interface`, `iwinfo`).
+
+Two further apply-path facts: `uci.apply` is a **single all-or-nothing
+transaction across every staged config**, so the ordering list below is a
+staging order, not a sequence of independently gated applies; and `uci.add`
+returns `NOT_FOUND` (4) rather than creating a config file that does not exist,
+so a genuinely new config must be created on disk first.
 
 > This ordering was initially specified wrong in this document (commit before
 > apply) and caught in review. The staged-not-committed distinction is the whole
@@ -343,7 +374,7 @@ explicit user-triggered "RF Scan", exactly as UniFi does.
 | Metric | Source | Notes |
 |---|---|---|
 | Per-client RSSI, PHY rate, TX retries, connected time | `iw dev <dev> station dump` via `file.exec`, or `hostapd.<iface>` ubus | `iw` is richer; hostapd's ubus is cheaper. Prefer `iw` for the Radios screen's retry/airtime columns. |
-| Channel utilization / interference | `iw dev <dev> survey dump` (busy/active/rx/tx time) | Interference % ≈ (busy − rx − tx) / active. This is how you fill UniFi's "Avg. Interference" column. |
+| Channel utilization / interference | **`iwinfo.survey`** (native ubus; `iw dev <dev> survey dump` only as fallback) | Utilization = busy / active — verified good on mwlwifi. Interference ≈ (busy − rx − tx) / active needs `rx_time`/`tx_time`, which mwlwifi leaves uninitialised, so that column is capability-gated. Take `noise` from `iwinfo.info`: `iwinfo.survey` reports it **unsigned** (161 for −95). |
 | Per-client bandwidth + 24h usage | `nlbwmon` | Purpose-built netlink accounting with its own retention DB. The right answer; don't parse conntrack yourself. |
 | Per-interface throughput | `network.device` status counters, or `/proc/net/dev` | Delta between polls. |
 | Per-port switch stats | `ethtool -S` on DSA ports; `bridge fdb` | Hardware-dependent. |
@@ -362,7 +393,10 @@ of ours on the device.
 **Prefer native ubus objects over `file.exec` wherever the data exists in both.**
 A ubus call is IPC; `file.exec` forks and execs a binary, which is a real cost on
 an 880 MHz MIPS core when done per-radio per-interval. Reserve `file.exec` for
-data with no ubus equivalent — channel survey, LLDP — and only at the slow rate.
+data with no ubus equivalent — LLDP, `ethtool -S` — and only at the slow rate.
+Channel survey is **not** such a case: `iwinfo.survey` is native ubus (measured
+on mwlwifi), so it belongs in the focused tier at ordinary IPC cost, with
+`iw survey dump` kept only as a fallback for drivers that lack it.
 
 **Two of these carry a warning on constrained hardware:**
 

@@ -84,8 +84,14 @@ data via a spawned `iw`.
 - **Prefer native ubus objects over `file.exec` wherever the data exists there.**
   `iwinfo`, `network.device`, `system.info`, `luci-rpc.getHostHints` cost no
   process spawn.
-- Use `file.exec` only for data with no ubus equivalent (channel survey, LLDP
-  neighbours), and at the slow-loop interval, never the fast one.
+- Use `file.exec` only for data with no ubus equivalent (LLDP neighbours,
+  `ethtool -S`), and at the slow-loop interval, never the fast one. Channel
+  survey is *not* one of these — `iwinfo.survey` is native ubus.
+- **Measured, class A:** the six `iwinfo` calls dominate a focused poll.
+  Non-wifi calls total 15.8 ms for seven calls; adding two `info`, two
+  `assoclist` and two `survey` takes the same batch to 194 ms. `iwinfo.info` is
+  near-static (channel, txpower, country, hwmodes) — caching it alone cuts the
+  poll to 125 ms. Batching amortises transport, not this; it is driver time.
 - **Batch ubus calls into one HTTP request** where the JSON-RPC batch form is
   supported **[verify on target release]** — one round trip, one TLS record,
   many calls. This is the single biggest cheap win available.
@@ -167,7 +173,7 @@ What each screen actually costs on class C. Use this to decide what ships.
 | Interface throughput | 0 | `network.device` counters | negligible | **on** |
 | WiFi config read/write | 0 | `uci` | negligible | **on** |
 | Firewall / VLAN / DHCP config | 0 | `uci` | negligible | **on** |
-| Channel survey / interference / airtime | 0 | `iw survey dump` via `file.exec` | one spawn per radio, slow loop only | **on (slow)** |
+| Channel survey / utilization | 0 | `iwinfo.survey` (native ubus) | ~29 ms per radio, no spawn — focused loop is fine | **on** |
 | Topology / LLDP neighbours | 2 | `lldpd` | small daemon, low duty cycle | opt-in |
 | Per-client bandwidth + 24h usage | 2 | `nlbwmon` | **conflicts with flow offload — see §3.3** | **off** |
 | Long-term interface totals | 2 | `vnstat` | small, but writes to disk — force `/tmp` | opt-in |
@@ -184,9 +190,13 @@ What each screen actually costs on class C. Use this to decide what ships.
 **Class A (WRT3200ACM).** Resources are not your problem — 512 MB RAM and 256 MB
 NAND are luxurious by OpenWrt standards. Two other things are:
 
-- The `mwlwifi` driver has a long history of instability and its station/survey
-  statistics may be unreliable or incomplete. Treat WiFi telemetry from this
-  platform as best-effort and validate before trusting the numbers you display.
+- The `mwlwifi` driver's telemetry is **partly** unreliable, and the split is
+  now measured rather than assumed. Good: `iwinfo.survey` works natively and its
+  `active_time`/`busy_time` are sound, so channel utilization is trustworthy.
+  Bad: `rx_time`/`tx_time` come back uninitialised (a ~1.4e19 u64), and
+  `iwinfo.survey` reports `noise` **unsigned** (161 where the true value is
+  −95) while `iwinfo.info` reports it correctly signed. Take noise from
+  `iwinfo.info`, and capability-gate anything needing rx/tx time.
   Showing confidently wrong data is worse than showing none.
 - It has **dual firmware partitions**, which makes UniFi's per-device "Revert"
   button genuinely implementable here — one of the few places we can match a

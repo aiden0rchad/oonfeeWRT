@@ -135,11 +135,15 @@ Zero new daemons by default. Everything beyond stock is opt-in per device with
 its cost stated. Collection is demand-driven: baseline ~60s always, focused
 5–10s only while someone is looking. See [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md).
 
-**The one tradeoff you can't engineer away:** per-client bandwidth accounting
-requires connection accounting, which conflicts with the flow offloading that
-lets MT7621 route at gigabit. We never change offload settings silently — we
-state the tradeoff and let the user choose. Default: leave it alone, accounting
-off.
+**The one tradeoff you can't engineer away** — now narrower than we thought.
+Per-client bandwidth accounting needs connection accounting, which *hardware*
+flow offloading bypasses on the MT7621-class parts that need it to route at
+gigabit. **Software** offloading does not: measured on kernel 6.12 with an
+nftables flowtable and a flow confirmed in the fast path, conntrack byte
+counters stayed complete. So the conflict is real only where hardware offload
+is, and remains untested there. Either way we never change offload settings
+silently — we state the tradeoff and let the user choose. Default: leave it
+alone, accounting off.
 
 ---
 

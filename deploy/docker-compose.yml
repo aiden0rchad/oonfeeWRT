@@ -28,6 +28,10 @@ services:
 
     volumes:
       - oonfee-data:/data           # SQLite DB, config, cert, backups
+      # Bind mounts keep the host's uid/gid, so a correctly-secured 0600 secret
+      # owned by your account is unreadable by the container's uid 65532 and
+      # argon2id key derivation fails at startup. Before first run:
+      #     chown 65532 deploy/passphrase && chmod 600 deploy/passphrase
       - ./passphrase:/run/secrets/oonfee-passphrase:ro   # credential-store key
 
     environment:
@@ -36,7 +40,8 @@ services:
       # Secrets come from files, never env values (IMPLEMENTATION §11):
       OONFEE_PASSPHRASE_FILE: /run/secrets/oonfee-passphrase
 
-    # /data ownership must match the image's non-root user (65532).
+    # Matches the image's non-root user. Note this only sets the process uid —
+    # it does not chown anything; the image ships /data already owned by 65532.
     user: "65532:65532"
 
     healthcheck:

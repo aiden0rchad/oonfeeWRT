@@ -46,6 +46,8 @@ NULL_SESSION = "00000000000000000000000000000000"
 # ubus status codes
 UBUS_OK = 0
 UBUS_STATUS_DENIED = 6
+UBUS_STATUS_NOT_FOUND = 4
+UBUS_STATUS_NO_DATA = 5
 UBUS_STATUS = {
     0: "OK", 1: "INVALID_COMMAND", 2: "INVALID_ARGUMENT", 3: "METHOD_NOT_FOUND",
     4: "NOT_FOUND", 5: "NO_DATA", 6: "PERMISSION_DENIED", 7: "TIMEOUT",
@@ -415,7 +417,10 @@ def probe_identity(ub, rep):
         "kernel": board.get("kernel"),
         "openwrt_release": rel.get("description") or rel.get("version"),
         "target": rel.get("target"),
-        "arch": board.get("rootfs_type"),
+        # No package architecture here: system.board does not expose it (it
+        # lives in /etc/openwrt_release as DISTRIB_ARCH). `target` is the
+        # closest thing this call offers, so don't invent an `arch` row.
+        "rootfs_type": board.get("rootfs_type"),
     }
     for k, v in fields.items():
         if v:
@@ -749,22 +754,30 @@ def probe_radios(ub, rep):
                          "iwinfo.info, never from iwinfo.survey.")
         rep.data["radios"][dev] = entry
 
-    # The interference/airtime columns depend on this.
-    if ub.exec_("which", ["iw"], ):
-        r = ub.exec_("iw", ["dev"]) or {}
-        phys = re.findall(r"Interface\s+(\S+)", r.get("stdout") or "")
-        if phys:
-            r = ub.exec_("iw", ["dev", phys[0], "survey", "dump"]) or {}
-            out = r.get("stdout") or ""
-            has_busy = "busy time" in out
-            rep.line()
-            # Absence is a driver capability fact (mwlwifi is known for this),
-            # not a probe failure — the design capability-gates those columns.
-            rep.item(True if has_busy else None,
-                     "iw survey dump provides busy/active time",
-                     "interference + airtime computable" if has_busy
-                     else "driver gap (expected on mwlwifi) — omit those columns")
-            rep.data["survey_dump_usable"] = has_busy
+    # `iw survey dump` is only a FALLBACK for drivers with no native
+    # iwinfo.survey. It must never overwrite a native answer: the fallback can
+    # only ever equal or understate it, and a denied file.exec would otherwise
+    # be recorded as "this driver has no airtime data".
+    if rep.data.get("survey_dump_usable"):
+        return
+    ok, r = ub.exec_status("iw", ["dev"])
+    if not ok:
+        return
+    phys = re.findall(r"Interface\s+(\S+)", (r or {}).get("stdout") or "")
+    if not phys:
+        return
+    ok, r = ub.exec_status("iw", ["dev", phys[0], "survey", "dump"])
+    if not ok:
+        return
+    has_busy = "busy time" in ((r or {}).get("stdout") or "")
+    rep.line()
+    # Absence is a driver capability fact, not a probe failure — the design
+    # capability-gates those columns.
+    rep.item(True if has_busy else None,
+             "iw survey dump provides busy/active time",
+             "interference + airtime computable" if has_busy
+             else "driver gap — omit those columns")
+    rep.data["survey_dump_usable"] = has_busy
 
 
 def probe_switch_and_firewall(ub, rep):
@@ -772,21 +785,36 @@ def probe_switch_and_firewall(ub, rep):
     # Absence and unreachability are different answers. Reporting "no DSA"
     # because the ACL blocked the check deletes a screen from a device that
     # supports it, so an unreachable probe records None, never False.
-    ok, r = ub.exec_status(
-        "sh", ["-c", "ls -d /sys/class/net/*/dsa 2>/dev/null | head -5"])
-    dsa = bool((r or {}).get("stdout", "").strip()) if ok else None
+    #
+    # Both checks use file.stat rather than file.exec: a stat grant is a single
+    # narrow path, where the exec equivalent (`sh -c ls …`) is arbitrary code
+    # execution in the one file the docs call the blast radius.
+    dsa = None
+    code, entries = ub.call("file", "list", {"path": "/sys/class/net"})
+    if code == UBUS_OK:
+        ifaces = [e.get("name") for e in (entries or {}).get("entries", [])]
+        dsa = False
+        for name in ifaces:
+            st, _ = ub.call("file", "stat", {"path": f"/sys/class/net/{name}/dsa"})
+            if st == UBUS_OK:
+                dsa = True
+                break
     rep.item(dsa, "DSA switch present",
              "per-port stats available" if dsa else
              "no DSA — hide the Ports screen on this device" if dsa is False
-             else "NOT OBSERVABLE — file.exec denied, capability unknown")
+             else "NOT OBSERVABLE — file.list denied, capability unknown")
     rep.data["dsa"] = dsa
 
-    ok, r = ub.exec_status("which", ["nft"])
-    fw4 = bool(((r or {}).get("stdout") or "").strip()) if ok else None
+    fw4 = None
+    code, _ = ub.call("file", "stat", {"path": "/usr/sbin/nft"})
+    if code == UBUS_OK:
+        fw4 = True
+    elif code in (UBUS_STATUS_NOT_FOUND, UBUS_STATUS_NO_DATA):
+        fw4 = False
     rep.item(fw4, "firewall4 / nftables",
              "zone model maps cleanly" if fw4 else
              "legacy iptables path" if fw4 is False
-             else "NOT OBSERVABLE — file.exec denied, capability unknown")
+             else "NOT OBSERVABLE — file.stat denied, capability unknown")
     rep.data["firewall4"] = fw4
 
     # Flow offloading — the tradeoff from DEVICE-BUDGET section 3.3
@@ -991,7 +1019,7 @@ def verdict(rep):
 
     ovh = d.get("ms_connection_overhead")
     if ovh is not None:
-        out(f"  * TRANSPORT: connection setup costs {ovh:.0f} ms.", )
+        out(f"  * TRANSPORT: connection setup costs {ovh:.1f} ms.", )
         if ovh > 120:
             out("    Persistent connections are mandatory. Consider ECDSA certs")
             out("    and consider plain HTTP on an isolated management VLAN.")
@@ -1013,8 +1041,10 @@ def verdict(rep):
     out()
 
     if d.get("survey_dump_usable"):
-        out("  * RADIOS SCREEN: survey data available — interference and airtime")
-        out("    columns are computable. This screen is fully buildable here.")
+        out("  * RADIOS SCREEN: survey data available — channel utilization")
+        out("    (busy/active) is computable. Interference and the airtime")
+        out("    split additionally need rx_time/tx_time; capability-gate them")
+        out("    per driver rather than assuming this screen is complete.")
     elif d.get("survey_dump_usable") is None:
         out("  * RADIOS SCREEN: UNDETERMINED — could not observe survey data.")
         out("    Do not cut the columns on this evidence; re-probe with radios")
