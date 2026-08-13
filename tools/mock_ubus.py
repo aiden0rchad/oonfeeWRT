@@ -228,8 +228,10 @@ def effective(sid, config):
             sec.update(payload.get("values", {}))
             cfg[section] = sec
         elif op == "set":
-            cfg.setdefault(section, {".type": "unknown"}).update(
-                payload.get("values", {}))
+            sec = cfg.setdefault(section, {".type": payload.get("type") or "unknown"})
+            if payload.get("type"):
+                sec[".type"] = payload["type"]
+            sec.update(payload.get("values", {}))
         elif op == "delete":
             cfg.pop(section, None)
     return cfg
@@ -244,8 +246,10 @@ def commit_config(sid, config):
             sec.update(payload.get("values", {}))
             cfg[section] = sec
         elif op == "set":
-            cfg.setdefault(section, {".type": "unknown"}).update(
-                payload.get("values", {}))
+            sec = cfg.setdefault(section, {".type": payload.get("type") or "unknown"})
+            if payload.get("type"):
+                sec[".type"] = payload["type"]
+            sec.update(payload.get("values", {}))
         elif op == "delete":
             cfg.pop(section, None)
 
@@ -759,7 +763,7 @@ def handle_uci(rid, sid, meth, args):
         return ok(rid, {"section": name})
     if meth == "set":
         stage(sid, config, "set", args.get("section"),
-              {"values": args.get("values", {})})
+              {"values": args.get("values", {}), "type": args.get("type")})
         return ok(rid, {})
     if meth == "delete":
         stage(sid, config, "delete", args.get("section"), {})
