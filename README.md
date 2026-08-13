@@ -155,3 +155,30 @@ for display and never touched. Conflicts are surfaced loudly, never resolved
 silently.
 
 You are a guest on someone else's router. Act like one.
+
+---
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+That choice has a practical consequence worth stating, because it decides what
+this project may borrow from:
+
+| Source | License | Usable here |
+|---|---|---|
+| **LuCI** — drives the same rpcd/ubus API we do | Apache-2.0 | ✅ Compatible. Attribute in `NOTICE` |
+| `rpcd`, `uhttpd` interfaces | ISC | ✅ Permissive |
+| **GL.iNet firmware and packages** | GPL-2.0 | ❌ Incompatible with Apache-2.0 |
+
+This lands the right way round. LuCI is both the legally compatible option and
+the technically relevant one — it is the only widely-deployed client that talks
+to `rpcd` over HTTP the way a controller must, so its handling of sessions,
+batching and ACLs is grounded in the same constraints we measured.
+
+Vendor firmware, GL.iNet's included, is the opposite on both counts: licensed
+incompatibly, and architecturally inverted — it runs **on** the router, as root,
+over the local ubus socket, managing one device. Almost none of the behaviour
+this project had to discover (session-bound confirm, the two denial channels,
+ACL scoping, the armed-window token) is visible from that position, so there is
+little there to learn from even setting the license aside.

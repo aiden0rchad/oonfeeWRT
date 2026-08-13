@@ -1,0 +1,21 @@
+oonfeeWRT
+Copyright 2026 The oonfeeWRT Authors
+
+This product includes software developed by The oonfeeWRT Authors.
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+---
+
+Third-party components
+
+At present oonfeeWRT contains no third-party source. This file exists so that
+any future inclusion is attributed here rather than discovered later.
+
+Runtime dependencies (fetched, not vendored) are listed in go.mod. Notably
+modernc.org/sqlite and its transitive dependencies, which are BSD-3-Clause.
+
+Nothing in this repository is copied from OpenWrt, LuCI, or any vendor
+firmware. Where the documentation quotes ACL fragments or ubus method names,
+those are interface facts about the system being managed — the shape of an API
+we call — not copied implementation.
