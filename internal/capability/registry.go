@@ -116,6 +116,18 @@ type Radio struct {
 	HWModes     []string
 	Hardware    string
 	SurveyUsest State // channel utilization from busy/active
+
+	// NoiseStable is whether this radio's noise floor survives re-reading.
+	//
+	// Per radio, not per device: on the reference WRT3200ACM the 5 GHz radio is
+	// steady within a few dB while the 2.4 GHz radio swings 40+, on the same
+	// driver. Gating device-wide would throw away a good reading to punish a
+	// bad one.
+	//
+	// Absent means caught moving. Present means NOT caught moving in two
+	// samples, which is weaker than "verified stable" and must not be read as
+	// a guarantee.
+	NoiseStable State
 }
 
 // Registry is the answer for one device. It is persisted per device and is what

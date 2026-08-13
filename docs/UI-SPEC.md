@@ -326,22 +326,42 @@ unsigned, so −95 dBm arrives as 161. Both would render as confident nonsense.
 So capability gating keys on a **driver/model quirk list** (matched on
 `system.board` plus driver), not on field presence. Any metric derived from a
 field on that list is treated exactly as unsupported: never rendered, never
-color-graded, never averaged into a composite score. Three entries measured on
+color-graded, never averaged into a composite score. Four entries measured on
 mwlwifi so far:
 
 | Field | Defect | Consequence |
 |---|---|---|
 | `rx_time` / `tx_time` (survey) | uninitialised (~1.4e19) | interference and the airtime split are not computable |
-| `noise` from `iwinfo.survey` | reported **unsigned** (161 for −95) | read it from `iwinfo.info` instead |
+| `noise` from `iwinfo.survey` | reported **unsigned** (161 for −95) | `iwinfo.info` reports it signed — but that fixes the encoding only, see the next row |
 | `noise` per station (`assoclist`) | **unstable** — swung 37 dB between reads 3 s apart | **never compute per-sample SNR from it** |
+| `noise` per radio, from **both** `iwinfo.survey` and `iwinfo.info` | **unstable on the 2.4 GHz radio** — 42 dB (info) and 46 dB (survey) spread over 20 samples ~0.35 s apart, while the 5 GHz radio on the same driver held within 7 dB | the noise floor is a **per-radio** capability. Where it is unstable, show utilization or RSSI, never a noise figure or an SNR |
 
 That last one is the reason presence-probing is not enough: the field is there,
 correctly typed, and plausible in any single sample. Only re-reading exposes it.
 Where the noise floor is unstable, show RSSI alone, or compute SNR from
 `signal_avg` against a smoothed noise floor — and never colour-grade a value
 that will visibly flail on the next refresh. `tools/probe.py` samples the noise
-floor four times and warns above a 6 dB spread, which is the check to port into
-the capability probe.
+floor four times and warns above a 6 dB spread; that check is now **ported into
+the capability probe**, which re-reads both sources and records the result per
+radio as `Radio.NoiseStable`.
+
+Two corrections that came out of porting it, both measured 2026-08-13:
+
+- **Switching source does not help.** The advice above — read `noise` from
+  `iwinfo.info` because `iwinfo.survey` reports it unsigned — is right about the
+  encoding and says nothing about trust. On the reference device the 2.4 GHz
+  radio swung 42 dB through `iwinfo.info` and 46 dB through `iwinfo.survey`. The
+  instability belongs to the radio, not to the method.
+- **It is per radio, not per device.** The 5 GHz radio on the very same driver
+  and the very same device was steady within 7 dB. Gating device-wide would
+  discard a perfectly good reading to punish a bad one.
+
+The detector is deliberately **asymmetric**, and anything consuming it must read
+it that way: two samples disagreeing proves the value moves, but two samples
+agreeing proves nothing. `NoiseStable == Present` means "not caught
+misbehaving", never "verified stable". On one hardware run the survey pair
+agreed while the `iwinfo.info` pair jumped 45 dB — the same radio, the same
+minute.
 
 Where absence would be confusing, replace rather than hide — a short inline note
 in the space the feature would have occupied ("This access point has no 6 GHz

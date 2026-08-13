@@ -705,6 +705,43 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    reading is well-formed and plausible.
 4. **JSON-RPC array batching works** on this uhttpd build — a batch of 3 was
    accepted and returned 3 responses.
+5. **The noise floor is a per-radio capability, and switching source does not
+   rescue it.** Measured 2026-08-13 over 20 samples ~0.35 s apart, on one device
+   running one driver:
+
+   | Radio | `iwinfo.info` spread | `iwinfo.survey` spread |
+   |---|---|---|
+   | 5 GHz (`phy0-ap0`) | 7 dB | 5 dB |
+   | 2.4 GHz (`phy1-ap0`) | **42 dB** | **46 dB** |
+
+   The 2.4 GHz value sat at −95 dBm and jumped to −49…−71 dBm sporadically.
+   Channel busy time does not explain it: busy averaged 82 % during the
+   excursions against 76 % otherwise, with the two ranges fully overlapping. So
+   the earlier advice — "`iwinfo.survey` reports noise unsigned, read it from
+   `iwinfo.info` instead" — is correct about the encoding and silent about
+   trust, which is the part that matters for rendering. Whether the excursions
+   are a driver defect or real bursts on a congested band is unsettled and does
+   not change the conclusion.
+
+   `capability.checkNoiseStability` re-reads both sources and records
+   `Radio.NoiseStable` per radio. It is **asymmetric**: a disagreement proves
+   the value moves, agreement proves nothing. On one hardware run the survey
+   pair agreed while the `iwinfo.info` pair jumped 45 dB, same radio, same
+   minute — so `Present` means "not caught misbehaving", never "verified
+   stable".
+6. **The two poll tiers are worth the complexity — measured through the real
+   collector, under the scoped credential.** Best of five polls each, both
+   batched into a single request:
+
+   | Tier | Calls | Wall time |
+   |---|---|---|
+   | Baseline (`system.info`, `network.device`, `hostapd.*`) | 7 | **8 ms** |
+   | Focused (adds `iwinfo.assoclist` + `iwinfo.survey` per radio) | 11 | **116 ms** |
+
+   A 14× difference for four extra calls, which is the whole argument for
+   polling `iwinfo` only while somebody is looking. It also confirms the cheap
+   sources: two radios' worth of SSID, channel, client count and BSS load cost
+   single-digit milliseconds through `hostapd.<iface>`.
 
 Also measured, and worth carrying into the design:
 

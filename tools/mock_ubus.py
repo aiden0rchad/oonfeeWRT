@@ -203,6 +203,8 @@ written_files = {}     # path -> bytes, so adoption's footprint is assertable
 reject_logins = set()  # test-only fault injection: usernames to refuse
 acl_gaps = set()       # (object, method) pairs rpcd refuses to proxy at all
 rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
+survey_calls = 0     # drives the reproduced mwlwifi survey-noise instability
+info_calls = 0       # ditto for iwinfo.info, which is just as unstable
 lock = threading.RLock()
 
 
@@ -600,12 +602,24 @@ def handle_one(req):
             return ok(rid, {"devices": ["wlan0", "wlan1"]})
         if meth == "info":
             g5 = dev == "wlan0"
+            # The 2.4 GHz radio's noise floor is unstable here too. Measured
+            # 2026-08-13 over 20 samples: iwinfo.info spread 42 dB and
+            # iwinfo.survey 46 dB on the SAME radio, while the 5 GHz radio held
+            # within 7 dB on both. So the instability belongs to the radio, not
+            # to the method, and "read noise from iwinfo.info instead" fixes
+            # only the unsigned encoding. Alternating (rather than reproducing
+            # the real ~1-in-4 rate) keeps a two-sample check deterministic.
+            global info_calls
+            info_calls += 1
+            noise = -92
+            if not g5 and info_calls % 2 == 0:
+                noise = -58
             return ok(rid, {"phy": "phy0" if g5 else "phy1",
                             "ssid": "OpenWrt", "mode": "Master",
                             "channel": 36 if g5 else 6,
                             "frequency": 5180 if g5 else 2437,
                             "txpower": 23, "quality": 60, "quality_max": 70,
-                            "signal": -54, "noise": -92,
+                            "signal": -54, "noise": noise,
                             "country": "US", "hwmodes": ["ac", "n"],
                             "hardware": {"name": "Marvell 88W8964"}})
         if meth == "assoclist":
@@ -617,14 +631,32 @@ def handle_one(req):
         if meth == "txpowerlist":
             return ok(rid, {"results": [{"dbm": 23, "mw": 200, "active": True}]})
         if meth == "survey":
-            # mwlwifi really does serve this natively. Two measured traps are
+            # mwlwifi really does serve this natively. Three measured traps are
             # reproduced deliberately: `noise` comes back UNSIGNED here (161
-            # for -95) while iwinfo.info reports it signed, and rx_time/tx_time
-            # are uninitialised garbage. Only busy_time/active_time are usable,
-            # so channel utilisation is computable but interference is not.
+            # for -95) while iwinfo.info reports it signed; rx_time/tx_time are
+            # uninitialised garbage that also OVERFLOWS int64, so a consumer
+            # decoding them as signed loses the whole object including the
+            # usable fields; and the noise reading itself is unstable.
+            #
+            # The instability is measured, not invented: on 2026-08-13 the 2.4
+            # GHz radio sat at -95 dBm and jumped to -70 dBm sporadically, a 25
+            # dB spread over 12 samples, while the 5 GHz radio on the same
+            # driver stayed within 2 dB. Channel busy time did not explain the
+            # excursions. The fixture ALTERNATES on the 2.4 GHz radio rather
+            # than reproducing the real ~1-in-4 rate, because the property under
+            # test is "two consecutive reads disagree" and alternation makes
+            # that deterministic no matter what else has called survey first —
+            # a random or modulo-3 fixture would depend on the mock's shared
+            # call counter and flake.
+            global survey_calls
+            survey_calls += 1
+            g5 = dev == "wlan0"
+            noise = 161
+            if not g5 and survey_calls % 2 == 0:
+                noise = 186  # -70 dBm
             return ok(rid, {"results": [{
-                "mhz": 5180 if dev == "wlan0" else 2437,
-                "noise": 161,
+                "mhz": 5180 if g5 else 2437,
+                "noise": noise,
                 "active_time": 19849, "busy_time": 495, "busy_time_ext": 0,
                 "rx_time": 13869070124637487105, "tx_time": 0}]})
         return err(rid, 8)  # NOT_SUPPORTED

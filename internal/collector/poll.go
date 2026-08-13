@@ -1,0 +1,308 @@
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
+)
+
+// loadScale is the fixed-point divisor system.info uses for load averages.
+const loadScale = 65536.0
+
+// call is one invocation plus what to do with its result. Keeping the two
+// together is what lets the whole poll be assembled, sent as a single batch,
+// and decoded positionally without an index-to-meaning table to get wrong.
+type call struct {
+	inv    ubus.Invocation
+	decode func(json.RawMessage, *Snapshot) error
+
+	// optional marks a call whose failure degrades the snapshot rather than
+	// meaning the device is unreachable.
+	optional bool
+}
+
+// poll performs one complete poll in a single HTTP round trip.
+//
+// One request, not one per metric. Measured on class A: batching is flat at
+// ~0.5 ms per call from ten calls up, and a 60 s baseline poll never reuses its
+// connection anyway (uhttpd's keep-alive is 20 s), so every call it does not
+// batch costs another handshake.
+func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier, ifaces []string) Snapshot {
+	snap := Snapshot{
+		DeviceID: p.target.DeviceID,
+		MAC:      p.target.MAC,
+		Name:     p.target.Name,
+		Tier:     tier,
+		At:       p.c.now(),
+	}
+	calls := p.buildCalls(tier, ifaces)
+	invs := make([]ubus.Invocation, len(calls))
+	for i, c := range calls {
+		invs[i] = c.inv
+	}
+
+	start := p.c.now()
+	results, err := c.Batch(ctx, invs)
+	snap.Duration = p.c.now().Sub(start)
+	if err != nil {
+		snap.Err = err
+		return snap
+	}
+	if len(results) != len(calls) {
+		// A batch that returns the wrong number of results cannot be matched to
+		// its requests, and guessing the alignment would silently file one
+		// object's data under another's name.
+		snap.Err = fmt.Errorf("collector: device returned %d results for %d calls",
+			len(results), len(calls))
+		return snap
+	}
+
+	for i, res := range results {
+		spec := calls[i]
+		if res.Err != nil {
+			d := Degradation{
+				Object: spec.inv.Object, Method: spec.inv.Method,
+				Status: res.Status, Err: res.Err.Error(),
+				Permanent: ubus.IsPermanent(res.Err),
+			}
+			if !spec.optional {
+				// A required call failing means we did not really reach the
+				// device in any useful sense; say so rather than emitting a
+				// snapshot full of zeroes.
+				snap.Err = fmt.Errorf("collector: %s: %w", d, res.Err)
+				snap.Degraded = append(snap.Degraded, d)
+				return snap
+			}
+			snap.Degraded = append(snap.Degraded, d)
+			continue
+		}
+		if err := spec.decode(res.Data, &snap); err != nil {
+			snap.Degraded = append(snap.Degraded, Degradation{
+				Object: spec.inv.Object, Method: spec.inv.Method,
+				Err: fmt.Sprintf("decode: %v", err),
+			})
+		}
+	}
+	return snap
+}
+
+// buildCalls assembles the request set for a tier.
+//
+// The split between tiers is the budget. Baseline reads only what is cheap and
+// what needs unbroken history; everything driver-expensive waits until somebody
+// is actually looking. Measured: iwinfo is ~92% of a focused poll (194 ms vs
+// 15.8 ms without it), and hostapd answers the per-AP questions ~30× faster.
+func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
+	calls := []call{
+		{inv: ubus.Invocation{Object: "system", Method: "info"}, decode: decodeInfo},
+		{
+			inv:      ubus.Invocation{Object: "network.device", Method: "status"},
+			decode:   decodeNetDevices,
+			optional: true,
+		},
+	}
+	if p.needBoard() {
+		calls = append(calls, call{
+			inv:      ubus.Invocation{Object: "system", Method: "board"},
+			decode:   decodeBoard,
+			optional: true,
+		})
+	}
+	for _, iface := range ifaces {
+		obj := "hostapd." + iface
+		calls = append(calls,
+			call{
+				inv:      ubus.Invocation{Object: obj, Method: "get_status"},
+				decode:   decodeAPStatus(iface),
+				optional: true,
+			},
+			call{
+				inv:      ubus.Invocation{Object: obj, Method: "get_clients"},
+				decode:   decodeAPClients(iface),
+				optional: true,
+			},
+		)
+	}
+	if tier != Focused {
+		return calls
+	}
+	for _, iface := range ifaces {
+		calls = append(calls,
+			call{
+				inv: ubus.Invocation{Object: "iwinfo", Method: "assoclist",
+					Args: map[string]any{"device": iface}},
+				decode:   decodeAssoclist(iface),
+				optional: true,
+			},
+			call{
+				inv: ubus.Invocation{Object: "iwinfo", Method: "survey",
+					Args: map[string]any{"device": iface}},
+				decode:   decodeSurvey(iface),
+				optional: true,
+			})
+	}
+	return calls
+}
+
+// system.info is the one required call. If it fails the device is not usefully
+// reachable, and nothing else in the snapshot would mean anything.
+func decodeInfo(raw json.RawMessage, s *Snapshot) error {
+	var v struct {
+		Uptime int64   `json:"uptime"`
+		Load   []int64 `json:"load"`
+		Memory Memory  `json:"memory"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	s.Uptime = v.Uptime
+	s.Memory = v.Memory
+	for i := 0; i < len(v.Load) && i < 3; i++ {
+		s.Load[i] = float64(v.Load[i]) / loadScale
+	}
+	return nil
+}
+
+func decodeBoard(raw json.RawMessage, s *Snapshot) error {
+	var b Board
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return err
+	}
+	s.Board = &b
+	return nil
+}
+
+func decodeNetDevices(raw json.RawMessage, s *Snapshot) error {
+	var v map[string]Interface
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	s.Interfaces = v
+	return nil
+}
+
+func decodeAPStatus(iface string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		var v struct {
+			SSID    string   `json:"ssid"`
+			BSSID   string   `json:"bssid"`
+			Channel int      `json:"channel"`
+			Freq    int      `json:"freq"`
+			Airtime *Airtime `json:"airtime"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		ap := s.ap(iface)
+		ap.SSID, ap.BSSID, ap.Channel, ap.Freq = v.SSID, v.BSSID, v.Channel, v.Freq
+		ap.Airtime = v.Airtime
+		return nil
+	}
+}
+
+func decodeAPClients(iface string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		var v struct {
+			Clients map[string]json.RawMessage `json:"clients"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		n := len(v.Clients)
+		s.ap(iface).Clients = &n
+		return nil
+	}
+}
+
+func decodeAssoclist(iface string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		var v struct {
+			Results []Station `json:"results"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		for i := range v.Results {
+			v.Results[i].Iface = iface
+		}
+		s.Stations = append(s.Stations, v.Results...)
+		return nil
+	}
+}
+
+func decodeSurvey(iface string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		var v struct {
+			Results []Survey `json:"results"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		for i := range v.Results {
+			v.Results[i].Iface = iface
+			s.Surveys = append(s.Surveys, v.Results[i])
+		}
+		return nil
+	}
+}
+
+// ap returns the AP entry for an interface, creating it in place so the two
+// hostapd calls can each fill in their half.
+func (s *Snapshot) ap(iface string) *AP {
+	for i := range s.APs {
+		if s.APs[i].Iface == iface {
+			return &s.APs[i]
+		}
+	}
+	s.APs = append(s.APs, AP{Iface: iface})
+	return &s.APs[len(s.APs)-1]
+}
+
+// ClientCount totals associated clients across APs, reporting whether the total
+// is trustworthy.
+//
+// It is not trustworthy if any AP's count is missing: summing the ones that
+// answered would draw a dip in the client-count graph that means "one radio did
+// not reply", which is precisely the reading nobody would interpret correctly.
+func (s *Snapshot) ClientCount() (int, bool) {
+	total := 0
+	for _, ap := range s.APs {
+		if ap.Clients == nil {
+			return 0, false
+		}
+		total += *ap.Clients
+	}
+	return total, len(s.APs) > 0
+}
+
+// discoverIfaces lists the wireless interfaces to poll.
+//
+// Kept out of the hot batch and refreshed rarely: it changes only when the
+// radios are reconfigured, and asking every minute would add a call to every
+// poll for an answer that is almost always the same one.
+func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, error) {
+	var v struct {
+		Devices []string `json:"devices"`
+	}
+	if err := c.Call(ctx, "iwinfo", "devices", nil, &v); err != nil {
+		return nil, err
+	}
+	return v.Devices, nil
+}
+
+// needBoard reports whether this poll should re-read the firmware identity.
+//
+// Rarely, but not never: the board is static until somebody flashes the device,
+// and re-reading is the only way that gets noticed.
+func (p *poller) needBoard() bool {
+	return p.boardAt.IsZero() || p.c.now().Sub(p.boardAt) >= rediscoverInterval
+}
+
+// rediscoverInterval governs the two facts that change only when a human
+// changes them: the firmware identity and the list of radios. Asking for either
+// every minute would add calls to every poll for an answer that is almost always
+// the one we already have.
+const rediscoverInterval = 15 * time.Minute

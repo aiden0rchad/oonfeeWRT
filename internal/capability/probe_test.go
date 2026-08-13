@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,5 +197,80 @@ func TestUnobservableFeaturesAreReportedForTheOperator(t *testing.T) {
 	}
 	if len(r.Notes) == 0 {
 		t.Error("the operator needs a note saying which grant is missing")
+	}
+}
+
+// Survey noise is not merely reported unsigned — on mwlwifi it moves. Measured
+// 2026-08-13: the 2.4 GHz radio sat at -95 dBm and jumped to -70 dBm, a 25 dB
+// spread, while the 5 GHz radio on the same driver held within 2 dB, and
+// channel busy time did not explain the difference. Anything deriving a noise
+// floor or an SNR from one sample is guessing.
+func TestProbeRecordsUnstableSurveyNoise(t *testing.T) {
+	r, err := Probe(context.Background(), dial(t))
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	// Two separate facts about one field: how to decode it, and whether one
+	// read of it means anything. Both must survive — the registry dedupes by
+	// source+field, so they carry different field names on purpose.
+	if !r.HasQuirk("iwinfo.survey", "noise") {
+		t.Errorf("the unsigned-encoding quirk was lost; quirks: %v", r.Quirks)
+	}
+	if !r.HasQuirk("iwinfo.survey", "noise:stability") {
+		t.Fatalf("no survey noise instability quirk recorded; quirks: %v", r.Quirks)
+	}
+	var reason string
+	for _, q := range r.Quirks {
+		if q.Source == "iwinfo.survey" && q.Field == "noise:stability" {
+			reason = q.Reason
+		}
+	}
+	if !strings.Contains(reason, "dB between consecutive reads") {
+		t.Errorf("the instability quirk does not say what moved; got %q", reason)
+	}
+}
+
+// Firing proves instability; two samples agreeing proves nothing. The detector
+// must not be read backwards, so the threshold has to sit above ordinary jitter
+// — measured at 2 dB on a healthy radio.
+func TestNoiseJumpThresholdIsAboveNormalJitter(t *testing.T) {
+	if noiseJumpDB <= 2 {
+		t.Fatalf("noiseJumpDB = %d, at or below the 2 dB jitter measured on a "+
+			"stable radio; every device would be flagged", noiseJumpDB)
+	}
+	if got := noiseDBm(161); got != -95 {
+		t.Errorf("noiseDBm(161) = %d, want -95", got)
+	}
+	if got := noiseDBm(-95); got != -95 {
+		t.Errorf("noiseDBm(-95) = %d, want -95", got)
+	}
+}
+
+// The instability belongs to the radio, not to the method. Measured 2026-08-13
+// over 20 samples: iwinfo.info spread 42 dB and iwinfo.survey 46 dB on the same
+// 2.4 GHz radio, while the 5 GHz radio on the same driver held within 7 dB on
+// both. So it is recorded per radio — gating the device would throw away a good
+// 5 GHz reading to punish a bad 2.4 GHz one — and switching source is not a fix.
+func TestNoiseStabilityIsPerRadioAndPerSource(t *testing.T) {
+	r, err := Probe(context.Background(), dial(t))
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if !r.HasQuirk("iwinfo.info", "noise:stability") {
+		t.Errorf("iwinfo.info's noise was not checked for stability; quirks: %v", r.Quirks)
+	}
+
+	byDev := map[string]State{}
+	for _, radio := range r.Radios {
+		byDev[radio.Device] = radio.NoiseStable
+	}
+	if len(byDev) < 2 {
+		t.Fatalf("expected two radios, got %v", byDev)
+	}
+	if got := byDev["wlan0"]; got != Present {
+		t.Errorf("wlan0 (steady in the fixture) NoiseStable = %v, want Present", got)
+	}
+	if got := byDev["wlan1"]; got != Absent {
+		t.Errorf("wlan1 (swinging in the fixture) NoiseStable = %v, want Absent", got)
 	}
 }

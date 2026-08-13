@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -209,17 +210,8 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	for _, dev := range devs.Devices {
 		radio := Radio{Device: dev, SurveyUsest: Absent}
 
-		var info struct {
-			Phy       string   `json:"phy"`
-			Channel   int      `json:"channel"`
-			Frequency int      `json:"frequency"`
-			HWModes   []string `json:"hwmodes"`
-			Noise     int      `json:"noise"`
-			Hardware  struct {
-				Name string `json:"name"`
-			} `json:"hardware"`
-		}
-		if err := c.Call(ctx, "iwinfo", "info", map[string]any{"device": dev}, &info); err == nil {
+		info, infoErr := readInfo(ctx, c, dev)
+		if infoErr == nil {
 			radio.Phy, radio.Channel = info.Phy, info.Channel
 			radio.Frequency, radio.HWModes = info.Frequency, info.HWModes
 			radio.Hardware = info.Hardware.Name
@@ -248,14 +240,23 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			}
 			if first.Noise > 0 {
 				r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "noise",
-					Reason: "reported unsigned (161 for -95); take noise from iwinfo.info"})
+					Reason: "reported unsigned (161 for -95); iwinfo.info reports " +
+						"the same quantity signed — but see noise:stability, " +
+						"switching source fixes only the encoding"})
 			}
-			if first.RxTime > 1<<40 || first.TxTime > 1<<40 {
+			absurdTimers := first.RxTime > 1<<40 || first.TxTime > 1<<40
+			if absurdTimers {
 				r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "rx_time/tx_time",
 					Reason: "uninitialised on this driver (absurd u64); the airtime split is not computable"})
-			} else {
-				time.Sleep(surveySampleGap)
-				second, err2 := readSurvey(ctx, c, dev)
+			}
+
+			// The second sample is taken either way, because it answers two
+			// questions and only one of them depends on the timers.
+			time.Sleep(surveySampleGap)
+			second, err2 := readSurvey(ctx, c, dev)
+			radio.NoiseStable = checkNoiseStability(ctx, c, r, dev,
+				info, infoErr, first, second, err2)
+			if !absurdTimers {
 				switch {
 				case err2 != nil:
 					// leave splitOK as-is; we could not tell
@@ -370,4 +371,108 @@ func isDenied(err error) bool {
 		return se.Status == ubus.StatusPermissionDenied
 	}
 	return false
+}
+
+// noiseJumpDB is the swing between two consecutive survey reads that marks the
+// noise floor as untrustworthy. Measured spread on a healthy 5 GHz radio was
+// 2 dB, so this is comfortably above normal jitter and well below the 25 dB
+// excursions the 2.4 GHz radio produced.
+const noiseJumpDB = 6
+
+// noiseDBm normalises iwinfo.survey's noise field, which is reported UNSIGNED
+// here while iwinfo.info reports the same quantity signed: 161 means -95.
+func noiseDBm(n int) int {
+	if n > 0 {
+		return n - 256
+	}
+	return n
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+type radioInfo struct {
+	Phy       string   `json:"phy"`
+	Channel   int      `json:"channel"`
+	Frequency int      `json:"frequency"`
+	HWModes   []string `json:"hwmodes"`
+	Noise     int      `json:"noise"`
+	Hardware  struct {
+		Name string `json:"name"`
+	} `json:"hardware"`
+}
+
+func readInfo(ctx context.Context, c *ubus.Client, dev string) (radioInfo, error) {
+	var info radioInfo
+	err := c.Call(ctx, "iwinfo", "info", map[string]any{"device": dev}, &info)
+	return info, err
+}
+
+// checkNoiseStability decides whether this radio's noise floor means anything.
+//
+// It checks BOTH sources, which is the correction to an earlier belief. The
+// documented advice was "iwinfo.survey reports noise unsigned, so read it from
+// iwinfo.info instead" — true, and it fixes the encoding. It does not fix
+// trustworthiness. Measured 2026-08-13 over 20 samples ~0.35 s apart:
+//
+//	5 GHz radio:   iwinfo.info  7 dB spread   iwinfo.survey  5 dB spread
+//	2.4 GHz radio: iwinfo.info 42 dB spread   iwinfo.survey 46 dB spread
+//
+// The instability belongs to the radio, not to the method, so switching source
+// buys nothing. Both radios run the same driver on the same device, which is
+// also why this is recorded per radio: gating the whole device would suppress a
+// perfectly good 5 GHz noise floor.
+//
+// Whether the excursions are a driver defect or genuine bursts on a congested
+// band is not settled here — channel busy time did not explain them, but 2.4 GHz
+// was uniformly busy. It does not change the conclusion: one reading is not a
+// noise floor.
+//
+// The detector is asymmetric. Firing proves the value moves; two samples
+// agreeing proves nothing, so Present here means "not caught misbehaving", never
+// "verified stable".
+func checkNoiseStability(ctx context.Context, c *ubus.Client, r *Registry, dev string,
+	info radioInfo, infoErr error, first, second surveyRow, surveyErr error) State {
+
+	stable := Unknown
+	unstable := false
+
+	if surveyErr == nil {
+		if jump := abs(noiseDBm(first.Noise) - noiseDBm(second.Noise)); jump >= noiseJumpDB {
+			unstable = true
+			// Its own field name: the registry dedupes by source+field, and the
+			// encoding quirk and this one are different facts about one value.
+			// Sharing a key would let whichever fired first discard the other.
+			r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "noise:stability",
+				Reason: fmt.Sprintf("moved %d dB between consecutive reads on %s; "+
+					"smooth over several samples or show utilization alone", jump, dev)})
+		} else {
+			stable = Present
+		}
+	}
+
+	// The same question of the other source, because "read it from iwinfo.info"
+	// is the advice this check exists to qualify.
+	if infoErr == nil {
+		if again, err := readInfo(ctx, c, dev); err == nil {
+			if jump := abs(noiseDBm(info.Noise) - noiseDBm(again.Noise)); jump >= noiseJumpDB {
+				unstable = true
+				r.AddQuirk(Quirk{Source: "iwinfo.info", Field: "noise:stability",
+					Reason: fmt.Sprintf("moved %d dB between consecutive reads on %s; "+
+						"switching away from iwinfo.survey fixes the sign, not this", jump, dev)})
+			} else if stable == Unknown {
+				stable = Present
+			}
+		}
+	}
+
+	if unstable {
+		r.Note("%s: noise floor is unstable; show RSSI or utilization rather than SNR", dev)
+		return Absent
+	}
+	return stable
 }
