@@ -217,6 +217,14 @@ OBJECTS = {
     "network.interface": {"dump": {}},
     "network.device": {"status": {}},
     "network.wireless": {"status": {}},
+    # hostapd is the cheap source the architecture now prefers over iwinfo for
+    # per-AP status and client lists (1 ms vs ~30 ms measured on class A).
+    "hostapd.wlan0": {m: {} for m in ("get_status", "get_clients",
+                                      "get_features", "list_bans",
+                                      "del_client")},
+    "hostapd.wlan1": {m: {} for m in ("get_status", "get_clients",
+                                      "get_features", "list_bans",
+                                      "del_client")},
     "luci-rpc": {m: {} for m in ("getNetworkDevices", "getWirelessDevices",
                                  "getHostHints", "getDHCPLeases",
                                  "getBoardJSON")},
@@ -260,7 +268,25 @@ def ok(rid, data=None):
 
 
 def err(rid, code):
+    """A ubus status inside a successful JSON-RPC response.
+
+    This is how a *proxied* call fails: the session was fine and the object
+    handler refused the target. Status 6 here is permanent — re-authenticating
+    changes nothing.
+    """
     return {"jsonrpc": "2.0", "id": rid, "result": [code]}
+
+
+def denied(rid):
+    """A JSON-RPC error, which is how rpcd refuses to proxy a call at all.
+
+    Real rpcd returns -32002 for BOTH an invalid/expired session and an
+    object+method in no granted access-group. Returning status 6 for a dead
+    session instead — as this mock used to — teaches a client never to
+    re-login on expiry, because status 6 is the code it must NOT retry.
+    """
+    return {"jsonrpc": "2.0", "id": rid,
+            "error": {"code": -32002, "message": "Access denied"}}
 
 
 def exec_cmd(rid, cmd, params):
@@ -320,7 +346,7 @@ def handle_one(req):
                             "expires": 300})
         return err(rid, 6)
     if sess not in sessions:
-        return err(rid, 6)  # PERMISSION_DENIED
+        return denied(rid)  # dead session -> JSON-RPC -32002, not status 6
 
     if obj == "system" and meth == "board":
         return ok(rid, {
@@ -398,6 +424,29 @@ def handle_one(req):
                                    "macaddr": "60:38:e0:aa:bb:cc",
                                    "statistics": {"rx_bytes": 123456789,
                                                   "tx_bytes": 987654321}}})
+    if obj.startswith("hostapd."):
+        g5 = obj.endswith("wlan0")
+        if meth == "get_status":
+            # `utilization` is the 802.11 BSS-Load 0-255 scale, NOT a percent —
+            # 172 is ~67%. Anything rendering it as a percentage is wrong, so
+            # the fixture reports it the way hardware does.
+            return ok(rid, {"phy": "phy0" if g5 else "phy1",
+                            "ssid": "OpenWrt", "bssid": "30:23:03:db:be:42",
+                            "channel": 36 if g5 else 6,
+                            "freq": 5180 if g5 else 2437,
+                            "driver": "nl80211", "status": "ENABLED",
+                            "airtime": {"time": 2132274, "time_busy": 1534433,
+                                        "utilization": 172}})
+        if meth == "get_clients":
+            return ok(rid, {"freq": 5180 if g5 else 2437, "clients": {}})
+        if meth == "list_bans":
+            return ok(rid, {"bans": []})
+        if meth == "get_features":
+            return ok(rid, {"ht": True, "vht": g5, "he": False})
+        if meth == "del_client":
+            return ok(rid, {})
+        return err(rid, 3)
+
     if obj == "network.wireless" and meth == "status":
         return ok(rid, {"radio0": {"up": True, "config": {"channel": "36"},
                                    "interfaces": [{"ifname": "wlan0",
