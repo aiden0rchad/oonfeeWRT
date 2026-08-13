@@ -1,0 +1,15 @@
+# Credential-store key referenced by deploy/docker-compose.yml — never commit
+passphrase
+*.key
+*.pem
+
+# Probe output: contains a full inventory of a real device
+report.json
+probe-*.json
+
+# Controller runtime state
+data/
+
+__pycache__/
+*.pyc
+.DS_Store

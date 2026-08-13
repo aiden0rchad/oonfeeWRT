@@ -1,0 +1,54 @@
+# oonfeeWRT controller — self-hosted, Omada-style.
+#
+#   docker compose up -d
+#   open http://<this-host>:8080
+#
+# NETWORKING — pick one, understand the tradeoff (ARCHITECTURE, deployment):
+#
+#   network_mode: host   (default below, Linux only)
+#     Full discovery: subnet TCP probe + ARP + mDNS. The controller sees the
+#     LAN the way a program on the host does. Ports are bound directly on the
+#     host (8080/8443) — no `ports:` mapping is used or needed.
+#
+#   bridge + ports mapping   (comment host mode out, uncomment `ports:`)
+#     Works everywhere including Docker Desktop. Subnet TCP probing still
+#     works (it's plain L3); ARP/mDNS discovery does not cross the bridge —
+#     adopt devices by IP, which the UI treats as a first-class path.
+
+services:
+  oonfeewrt:
+    image: oonfeewrt:dev            # built via deploy/Dockerfile
+    container_name: oonfeewrt
+    restart: unless-stopped
+
+    network_mode: host              # Linux: full discovery (recommended)
+    # ports:                        # bridge-mode alternative:
+    #   - "8080:8080"
+    #   - "8443:8443"
+
+    volumes:
+      - oonfee-data:/data           # SQLite DB, config, cert, backups
+      - ./passphrase:/run/secrets/oonfee-passphrase:ro   # credential-store key
+
+    environment:
+      OONFEE_DATA_DIR: /data
+      OONFEE_LISTEN: ":8080"
+      # Secrets come from files, never env values (IMPLEMENTATION §11):
+      OONFEE_PASSPHRASE_FILE: /run/secrets/oonfee-passphrase
+
+    # /data ownership must match the image's non-root user (65532).
+    user: "65532:65532"
+
+    healthcheck:
+      test: ["CMD", "/oonfeewrtd", "-healthcheck"]   # hits /healthz internally
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+    # Give SIGTERM room to finish an in-flight apply/confirm cycle before the
+    # container is killed — never orphan a device with a rollback timer running
+    # (IMPLEMENTATION §11, graceful shutdown).
+    stop_grace_period: 150s
+
+volumes:
+  oonfee-data:

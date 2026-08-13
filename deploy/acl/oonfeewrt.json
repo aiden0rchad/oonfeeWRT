@@ -1,0 +1,64 @@
+{
+	"oonfeewrt": {
+		"description": "oonfeeWRT controller — read device state and write owned UCI sections",
+
+		"read": {
+			"ubus": {
+				"uci": [ "configs", "get", "changes" ],
+				"system": [ "board", "info" ],
+				"file": [ "read", "stat", "list", "exec" ],
+				"iwinfo": [ "devices", "info", "assoclist", "freqlist", "txpowerlist", "countrylist", "survey", "scan" ],
+				"network": [ "get_proto_handlers" ],
+				"network.interface": [ "dump", "status" ],
+				"network.device": [ "status" ],
+				"network.wireless": [ "status" ],
+				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
+				"luci": [ "getFeatures", "getConntrackList", "getRealtimeStats" ],
+				"dhcp": [ "ipv4leases", "ipv6leases" ],
+				"service": [ "list" ],
+				"log": [ "read" ]
+			},
+			"uci": [ "network", "wireless", "firewall", "dhcp", "system", "luci", "uhttpd", "dropbear" ],
+			"file": {
+				"/proc/stat": [ "read" ],
+				"/proc/meminfo": [ "read" ],
+				"/proc/loadavg": [ "read" ],
+				"/sys/class/net/*": [ "read", "list" ],
+				"/usr/sbin/nft --terse --json list ruleset": [ "exec" ],
+				"/sbin/ip -[46] -j neigh show": [ "exec" ],
+				"/sbin/ip -[46] -j route show table all": [ "exec" ],
+				"/sbin/ip -[46] -j addr show": [ "exec" ],
+				"/usr/sbin/iw dev": [ "exec" ],
+				"/usr/sbin/iw phy": [ "exec" ]
+			}
+		},
+
+		"write": {
+			"ubus": {
+				"uci": [ "add", "set", "delete", "rename", "order", "revert", "commit", "apply", "confirm", "rollback" ],
+				"network": [ "reload" ],
+				"network.wireless": [ "up", "down" ],
+				"file": [ "exec" ]
+			},
+			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ]
+		}
+	},
+
+	"oonfeewrt-probe": {
+		"description": "tools/probe.py scratch config only — do NOT ship this group to production devices",
+
+		"read": {
+			"ubus": {
+				"uci": [ "configs", "get", "changes" ]
+			},
+			"uci": [ "oonfeewrt_probe", "oonfeewrt_probe2" ]
+		},
+
+		"write": {
+			"ubus": {
+				"uci": [ "add", "set", "delete", "revert", "commit", "apply", "confirm", "rollback" ]
+			},
+			"uci": [ "oonfeewrt_probe", "oonfeewrt_probe2" ]
+		}
+	}
+}
