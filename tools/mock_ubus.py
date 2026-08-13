@@ -365,6 +365,18 @@ def handle_one(req):
     if sess not in sessions:
         return denied(rid)  # dead session -> JSON-RPC -32002, not status 6
 
+    if obj == "session" and meth == "destroy":
+        # Really invalidate it. Returning OK while leaving the token usable
+        # would hide the -32002 path entirely, which is the one a client must
+        # recover from with exactly one re-login.
+        sessions.discard(sess)
+        staged.pop(sess, None)
+        return ok(rid)
+    if obj == "session" and meth == "access":
+        return ok(rid, {"access": True})
+    if obj == "session" and meth == "list":
+        return ok(rid, {"ubus_rpc_session": sess, "timeout": 300, "expires": 300})
+
     if obj == "system" and meth == "board":
         return ok(rid, {
             "kernel": "6.6.52", "hostname": "wrt3200acm",

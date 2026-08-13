@@ -13,3 +13,7 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Go
+*.test
+/oonfeewrtd
