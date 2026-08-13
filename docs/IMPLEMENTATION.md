@@ -655,9 +655,23 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    they are 🟠 rather than 🟢. Two traps: `rx_time`/`tx_time` are uninitialised
    (`iw` shows a garbage u64, ~1.4e19), and `iwinfo.survey` reports `noise`
    **unsigned** (161) while `iwinfo.info` reports it correctly signed (−95) —
-   always take noise from `iwinfo.info`. Still open: the `iwinfo.assoclist`
-   field surface, which needs an associated client to enumerate; with zero
-   stations it returns `{"results": []}`.
+   always take noise from `iwinfo.info`. **The `iwinfo.assoclist` field surface
+   is now captured** against two real associated stations — 21 keys, with the
+   per-direction counters **nested** rather than flat:
+
+   ```
+   mac, signal, signal_avg, noise, inactive, connected_time, thr,
+   authorized, authenticated, preamble, wme, mfp, tdls, mesh *,
+   rx: {packets, bytes, rate, mcs, mhz, ht, vht, he, eht, short_gi,
+        40mhz, drop_misc}
+   tx: {packets, bytes, rate, mcs, mhz, ht, vht, he, eht, short_gi,
+        40mhz, retries, failed}
+   ```
+
+   Everything the Radios and Client Devices columns need is here, including
+   `tx.retries`/`tx.failed`, so **`iw station dump` is not required at all** —
+   don't grant it. Note the nesting: probing for a flat `tx_retries` finds
+   nothing and wrongly concludes a process spawn is needed.
 4. **JSON-RPC array batching works** on this uhttpd build — a batch of 3 was
    accepted and returned 3 responses.
 

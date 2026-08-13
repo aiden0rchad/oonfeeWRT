@@ -108,10 +108,9 @@ The screens that make people *enjoy* the tool.
 - Survey/station-dump derived metrics: **channel utilization** (portable — the
   one that works everywhere measured so far) and TX retries; interference and
   the airtime split only where the driver reports usable `rx_time`/`tx_time`,
-  which mwlwifi does not. Acceptance also requires capturing the
-  `iwinfo.assoclist` field surface against a **real associated station** before
-  the Radios screen's per-client columns are specified — it has never been seen
-  with a client connected.
+  which mwlwifi does not. The `iwinfo.assoclist` field surface is now captured
+  against real associated stations (IMPLEMENTATION §14.3), so the per-client
+  columns can be specified from measured fields rather than assumed ones.
 - The Experience score, with its components exposed on hover. It must not
   include a capability-gated component, or the score means different things on
   different hardware.

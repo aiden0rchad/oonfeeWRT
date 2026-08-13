@@ -715,27 +715,34 @@ def probe_radios(ub, rep):
                 keys = sorted(st.keys())
                 rep.line(f"      station fields: {', '.join(keys)}")
 
-                def has_rate(direction):
-                    # iwinfo returns nested {"rx":{"rate":…}} / {"tx":{"rate":…}};
-                    # some builds flatten to rx_rate/tx_rate. Accept both.
+                def has_field(direction, field):
+                    """iwinfo nests per-direction counters as {"tx":{"retries":…}};
+                    some builds flatten them to tx_retries. Accept both, or the
+                    report claims data is missing while it sits one level down —
+                    which pushes the design to spawn `iw station dump` for
+                    counters it already has."""
                     nested = isinstance(st.get(direction), dict) and \
-                        "rate" in st[direction]
-                    return nested or f"{direction}_rate" in st
+                        field in st[direction]
+                    return nested or f"{direction}_{field}" in st
 
-                # These drive the Radios screen's headline columns. iwinfo
-                # commonly lacks the retry counters — that's expected, and is
-                # exactly why the design falls back to `iw station dump`.
-                for need in ("signal", "noise", "inactive"):
+                def has_rate(direction):
+                    return has_field(direction, "rate")
+
+                # These drive the Radios and Client Devices columns.
+                for need in ("signal", "signal_avg", "noise", "inactive",
+                             "connected_time"):
                     rep.item(need in st, f"      field '{need}'")
                 rep.item(has_rate("rx"), "      rx rate (nested or flat)")
                 rep.item(has_rate("tx"), "      tx rate (nested or flat)")
-                for need in ("tx_retries", "tx_failed",
-                             "tx_packets", "rx_packets"):
-                    rep.item(True if need in st else None,
-                             f"      field '{need}'",
-                             "" if need in st
-                             else "use `iw station dump` instead")
+                for direction, field in (("tx", "retries"), ("tx", "failed"),
+                                         ("tx", "packets"), ("rx", "packets"),
+                                         ("tx", "bytes"), ("rx", "bytes")):
+                    present = has_field(direction, field)
+                    rep.item(True if present else None,
+                             f"      field '{direction}.{field}'",
+                             "" if present else "use `iw station dump` instead")
                 entry["station_fields"] = keys
+                entry["station_sample"] = st
         else:
             rep.item(None, f"  assoclist ({dev})", UBUS_STATUS.get(code, code))
 

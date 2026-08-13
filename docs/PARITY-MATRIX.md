@@ -107,7 +107,7 @@ feature is absent and everything else works.
 | Channel utilization % | `busy_time / active_time` from `iwinfo.survey` | 🟢 The portable airtime metric — both fields verified good on mwlwifi |
 | Avg. Interference % | `(busy_time − rx_time − tx_time) / active_time` | 🟠 **Capability-gated.** Needs `rx_time`/`tx_time`, which mwlwifi returns uninitialised (a garbage u64). Not computable on the class-A reference device |
 | Avg. Airtime % | `(rx_time + tx_time) / active_time` | 🟠 Same dependency, same gate. Where rx/tx are unusable, show channel utilization instead — never fabricate the split |
-| Avg. TX Retries % | `tx retries / tx packets` from station dump | 🟢 |
+| Avg. TX Retries % | `tx.retries / tx.packets` from **`iwinfo.assoclist`** | 🟢 Confirmed against real associated stations — the counters are nested inside `tx`, and no `iw station dump` spawn is needed |
 | Channel Plan visualization (In Use / Enabled / DFS / Not available / Excluded) | `iwinfo.freqlist` + regulatory domain + our exclusion model | 🟢 |
 | **Channel AI View** (auto channel selection heatmap) | 🔴 as branded. Substitute: our own channel scoring from survey + scan data → "Suggested Channels". The underlying math (least-congested selection weighted by neighbor RSSI) is not hard; the branding is theirs |
 | RF scan / spectrum sub-tabs | `iw scan` (user-triggered only) | 🟡 disruptive on serving radios — must be explicit and warned |

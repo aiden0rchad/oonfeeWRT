@@ -251,15 +251,32 @@ firewall4 - 2024.10.1
 nftables - 1.0.9
 umdns - 2024.3"""
 
-ASSOC = [{"mac": "AA:BB:CC:11:22:33", "signal": -54, "noise": -92,
-          "inactive": 800,
-          "rx": {"rate": 585000, "mcs": 7, "40mhz": False},
-          "tx": {"rate": 866700, "mcs": 9, "vht": True, "mhz": 80},
-          "tx_packets": 120433, "rx_packets": 90211},
-         {"mac": "AA:BB:CC:44:55:66", "signal": -67, "noise": -92,
-          "inactive": 120,
-          "rx": {"rate": 130000}, "tx": {"rate": 195000},
-          "tx_packets": 5522, "rx_packets": 4210}]
+# Shape captured from real associated stations on mwlwifi. The per-direction
+# counters are NESTED — retries/failed/packets/bytes live inside rx/tx, not as
+# flat tx_retries/rx_packets keys. Anything probing for the flat form concludes
+# the data is missing and reaches for `iw station dump`, which is a process
+# spawn the budget forbids on the fast loop.
+ASSOC = [{"mac": "AA:BB:CC:11:22:33", "signal": -48, "signal_avg": -47,
+          "noise": -95, "inactive": 100, "connected_time": 53, "thr": 129640,
+          "authorized": True, "authenticated": True, "preamble": "short",
+          "wme": True, "mfp": False, "tdls": False,
+          "rx": {"packets": 1298, "bytes": 315537, "rate": 144400, "mcs": 15,
+                 "mhz": 20, "ht": True, "vht": False, "he": False,
+                 "eht": False, "short_gi": True, "40mhz": False,
+                 "drop_misc": 0},
+          "tx": {"packets": 1184, "bytes": 747875, "rate": 144400, "mcs": 15,
+                 "mhz": 20, "ht": True, "vht": False, "he": False,
+                 "eht": False, "short_gi": True, "40mhz": False,
+                 "retries": 0, "failed": 0}},
+         {"mac": "AA:BB:CC:44:55:66", "signal": -67, "signal_avg": -66,
+          "noise": -95, "inactive": 120, "connected_time": 900, "thr": 58500,
+          "authorized": True, "authenticated": True, "preamble": "short",
+          "wme": True, "mfp": False, "tdls": False,
+          "rx": {"packets": 4210, "bytes": 512000, "rate": 130000, "mcs": 7,
+                 "mhz": 20, "ht": True, "short_gi": True, "drop_misc": 0},
+          "tx": {"packets": 5522, "bytes": 980000, "rate": 195000, "mcs": 9,
+                 "mhz": 40, "ht": True, "short_gi": True,
+                 "retries": 214, "failed": 3}}]
 
 
 def ok(rid, data=None):
@@ -438,7 +455,29 @@ def handle_one(req):
                             "airtime": {"time": 2132274, "time_busy": 1534433,
                                         "utilization": 172}})
         if meth == "get_clients":
-            return ok(rid, {"freq": 5180 if g5 else 2437, "clients": {}})
+            # Byte/packet counters agree exactly with iwinfo.assoclist (verified
+            # per-MAC on hardware), so this is a trustworthy cheap source for
+            # volume. But `rate` here is 100x iwinfo's kbit/s value, and
+            # per-client `airtime` is zero on mwlwifi — both reproduced so a
+            # consumer that mixes the two units, or plots airtime, fails in CI.
+            clients = {}
+            for st in ASSOC:
+                clients[st["mac"].lower()] = {
+                    "auth": True, "assoc": True, "authorized": True,
+                    "preauth": False, "wds": False, "wmm": True,
+                    "ht": st["rx"].get("ht", True), "vht": False, "he": False,
+                    "wps": False, "mfp": False, "mbo": False,
+                    "rrm": [0, 0, 0, 0, 0], "extended_capabilities": [],
+                    "aid": 1 + len(clients),
+                    "bytes": {"rx": st["rx"]["bytes"], "tx": st["tx"]["bytes"]},
+                    "airtime": {"rx": 0, "tx": 0},
+                    "packets": {"rx": st["rx"]["packets"],
+                                "tx": st["tx"]["packets"]},
+                    "rate": {"rx": st["rx"]["rate"] * 100,
+                             "tx": st["tx"]["rate"] * 100},
+                    "signal": st["signal"], "capabilities": {},
+                }
+            return ok(rid, {"freq": 5180 if g5 else 2437, "clients": clients})
         if meth == "list_bans":
             return ok(rid, {"bans": []})
         if meth == "get_features":
