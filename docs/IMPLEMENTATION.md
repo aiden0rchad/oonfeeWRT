@@ -360,13 +360,31 @@ IDLE → RENDER → PREFLIGHT → STAGE → APPLY → CONFIRM_POLL → HEALTH �
 | State | Action | Exit |
 |---|---|---|
 | RENDER | render + diff; empty diff → skip device | PREFLIGHT |
-| PREFLIGHT | quiesce collector for device; check session; snapshot `uci.changes` is empty (a dirty delta from LuCI/SSH → abort with "unsaved changes on device" conflict); if the change touches the path the controller manages this device through, require the UI's explicit traversal acknowledgment flag | STAGE |
+| PREFLIGHT | quiesce collector for device; check session; **detect a foreign dirty delta by listing `/tmp/.uci` and treating any entry with `size > 0` as a config with unsaved LuCI/SSH edits** → abort with "unsaved changes on device". **`uci.changes` cannot do this** — see the note below. If the change touches the path the controller manages this device through, require the UI's explicit traversal acknowledgment flag | STAGE |
 | STAGE | issue staged `uci.add/set/delete` batch; verify with `uci.changes` that the delta matches the plan exactly | APPLY |
 | APPLY | `uci.apply {rollback:true, timeout:T}` — T = 90 s default, per-device override from caps. **Status 0 means "applied", never "healthy": an apply that killed dnsmasq still returns 0** | HEALTH |
 | HEALTH | **runs before confirm, while the rollback timer is still armed** — if it fails, do nothing and let the device revert itself. Expected interfaces up (`network.interface dump`), expected SSIDs present via `iwinfo` + `hostapd.<iface> get_status` (**not** `network.wireless status` — unreachable via rpcd, see §14), gateway reachable if role=ap. Read all of it on a **fresh session**: the applying session's staged delta masks a revert | CONFIRM_POLL |
 | CONFIRM_POLL | poll `uci.confirm` every 3 s **on the applying session token** — reconnecting the socket is fine, re-authenticating is fatal, and a token refresh here is an unrecoverable abort. Stop on success or T expiry | CONFIRMED (write `owned_sections`, audit, resume collector) |
 | AWAIT_REVERT | confirm never landed: wait T + grace (15 s), touching nothing | VERIFY_REVERTED |
-| VERIFY_REVERTED | reconnect; `uci get` spot-checks match pre-apply snapshot; emit event either way | FAILED |
+| VERIFY_REVERTED | **log in afresh** (the applying session's staged delta masks a revert) and compare against the pre-apply snapshot. **Do not assume the device reverted** — if rpcd restarted inside the window the timer was lost and the change is permanent. If the change is still present, reverse it by applying the previous model. Emit an event either way | FAILED |
+
+> **`uci.changes` is blind to LuCI and SSH edits.** rpcd scopes staged deltas to
+> a per-session savedir (`/var/run/rpcd/uci-<sid>`), while the `uci` CLI and LuCI
+> use the system one (`/tmp/.uci`). Measured: with the CLI holding
+> `marker='OPERATOR_WIP'` staged, the controller's `uci.changes` returned `{}`.
+> The PREFLIGHT gate as originally specified therefore could never fire for the
+> case it existed to catch. Listing `/tmp/.uci` restores it — entries are named
+> for the dirty config, and the size filter matters because stale zero-length
+> files linger there indefinitely (three were present on a device with exactly
+> one real pending change).
+>
+> The good news, also measured: because the savedirs are separate, **our apply
+> does not commit their staged work.** With their `OPERATOR_WIP` pending, our
+> apply+confirm landed only our own option and left theirs untouched and still
+> staged. So the risk is not data loss on our side — it is that the operator can
+> later run `uci commit` in LuCI and land their edit on top of our applied
+> config without us knowing. Treat that as a reconciliation problem: re-read
+> owned sections after the fact and surface drift, per the ownership rule.
 
 Hard rules: HEALTH gates CONFIRM, so the ordinary failure path costs nothing —
 the engine simply declines to confirm and the device reverts itself, which is
@@ -752,6 +770,26 @@ Also measured, and worth carrying into the design:
   re-authenticate — the token outlives the socket by 15×. Only a device polled
   more slowly than 300 s, or one quiesced during someone else's apply, needs a
   re-login on the next contact.
+- **`uci.apply` is globally serialised, and refuses a second armed apply with
+  status `6`.** With one session's rollback timer running, a *different*
+  session's `uci.apply {rollback:true}` returned `PERMISSION_DENIED` and did
+  nothing; the first session's change then reverted normally on its own timer.
+  Good news for safety — two controllers, or a controller and LuCI, cannot
+  clobber each other's rollback snapshot. But note the ambiguity it creates:
+  **status 6 from `uci.apply` means "an apply is already armed", not an
+  authorization failure.** Retry after the window; do not surface it as a
+  permissions error, and do not let it trip the ACL-error path.
+- **⚠️ An armed rollback does NOT survive an rpcd restart.** Applied with a 45 s
+  timer, then restarted rpcd mid-window: the change was still on disk 75 s later
+  and never reverted. The timer lives only in the running rpcd process, so a
+  restart — or a crash, or an ACL reinstall — **silently converts "unconfirmed,
+  will revert" into "permanently applied"**. Combined with the fact that an rpcd
+  restart also destroys every session, a restart inside the confirmation window
+  is doubly bad: the controller loses the ability to confirm *and* the device
+  loses the ability to revert, yet the change stays. The engine must therefore
+  treat "confirm failed" as *"state unknown"* rather than *"reverted"*: re-read
+  from a fresh session and, if the change is still present, actively reverse it
+  by applying the previous model. Never assume the device cleaned up for you.
 - **An rpcd restart destroys every session.** Anything that reinstalls the ACL
   file or edits `/etc/config/rpcd` invalidates the controller's token, so
   adoption and ACL updates must expect to re-login immediately afterwards — and

@@ -23,6 +23,7 @@
 				"/proc/stat": [ "read" ],
 				"/proc/meminfo": [ "read" ],
 				"/proc/loadavg": [ "read" ],
+				"/tmp/.uci": [ "list" ],
 				"/usr/sbin/nft --terse --json list ruleset": [ "exec" ],
 				"/sbin/ip -[46] -j neigh show": [ "exec" ],
 				"/sbin/ip -[46] -j route show table all": [ "exec" ],
