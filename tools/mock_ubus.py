@@ -35,6 +35,7 @@ fleet).
 
 import argparse
 import copy
+import hashlib
 import http.server
 import json
 import secrets
@@ -43,6 +44,91 @@ import threading
 import time
 
 PASSWORD = "good"
+
+# --------------------------------------------------------------------------
+# SHA-512 crypt ($6$), so logins are verified the way rpcd verifies them.
+#
+# rpcd treats a non-"$p$" password field as a crypt hash and compares
+# crypt(input, stored) == stored. Measured on hardware: a PLAINTEXT value there
+# never matches — the correct and an incorrect password are both rejected — so
+# this fixture must reject it too, or adoption would appear to work with a
+# password format the device silently refuses.
+# --------------------------------------------------------------------------
+
+_B64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_PERM = [(0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4),
+         (47, 5, 26), (6, 27, 48), (28, 49, 7), (50, 8, 29), (9, 30, 51),
+         (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13), (56, 14, 35),
+         (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19),
+         (62, 20, 41)]
+
+
+def _b64_24(b2, b1, b0, n):
+    w = (b2 << 16) | (b1 << 8) | b0
+    out = ""
+    for _ in range(n):
+        out += _B64[w & 0x3F]
+        w >>= 6
+    return out
+
+
+def sha512_crypt(password, salt, rounds=5000):
+    pw, sl = password.encode(), salt.encode()[:16]
+    b = hashlib.sha512(pw + sl + pw).digest()
+    a = hashlib.sha512()
+    a.update(pw + sl)
+    i = len(pw)
+    while i > 0:
+        a.update(b if i > 64 else b[:i])
+        i -= 64
+    i = len(pw)
+    while i > 0:
+        a.update(b if i % 2 else pw)
+        i >>= 1
+    a = a.digest()
+    dp = hashlib.sha512(pw * len(pw)).digest()
+    p = (dp * (len(pw) // 64 + 1))[:len(pw)]
+    ds = hashlib.sha512(sl * (16 + a[0])).digest()
+    sq = (ds * (len(sl) // 64 + 1))[:len(sl)]
+    prev = a
+    for i in range(rounds):
+        h = hashlib.sha512()
+        h.update(p if i % 2 else prev)
+        if i % 3:
+            h.update(sq)
+        if i % 7:
+            h.update(p)
+        h.update(prev if i % 2 else p)
+        prev = h.digest()
+    out = "".join(_b64_24(prev[x], prev[y], prev[z], 4) for x, y, z in _PERM)
+    out += _b64_24(0, 0, prev[63], 2)
+    prefix = "$6$" + (f"rounds={rounds}$" if rounds != 5000 else "")
+    return prefix + salt[:16] + "$" + out
+
+
+def check_login(username, password):
+    """Verify against the rpcd config exactly as rpcd would."""
+    for sec in committed.get("rpcd", {}).values():
+        if sec.get(".type") != "login" and "username" not in sec:
+            continue
+        if sec.get("username") != username:
+            continue
+        stored = sec.get("password", "")
+        if stored.startswith("$p$"):
+            # "look the user up in /etc/shadow" — stand in with the fixture
+            # password so existing tests keep working.
+            return password == PASSWORD
+        if stored.startswith("$6$"):
+            rest = stored[3:]
+            rounds = 5000
+            if rest.startswith("rounds="):
+                end = rest.index("$")
+                rounds = int(rest[len("rounds="):end])
+                rest = rest[end + 1:]
+            salt = rest.split("$", 1)[0]
+            return sha512_crypt(password, salt, rounds) == stored
+        return False  # plaintext never matches, as measured
+    return False
 
 # Every login gets its own token. A single shared constant would make the two
 # session-scoped behaviours real rpcd has — confirm is bound to the applying
@@ -99,9 +185,22 @@ committed = {
         "main": {".type": "uhttpd", "listen_http": "0.0.0.0:80",
                  "ubus_prefix": "/ubus"},
     },
+    # Present on every real device, and adoption writes its login here. The
+    # root entry uses `$p$root`, meaning "look this user up in /etc/shadow";
+    # anything else in that field is treated as a crypt hash, and a plaintext
+    # value simply never matches (measured: rpcd rejects both the correct and
+    # an incorrect password).
+    "rpcd": {
+        "@rpcd[0]": {".type": "rpcd", "socket": "/var/run/ubus/ubus.sock",
+                     "timeout": "30"},
+        "@login[0]": {".type": "login", "username": "root",
+                      "password": "$p$root", "read": "*", "write": "*"},
+    },
 }
 staged = {}          # session -> config -> [ (op, section, payload) ]
 dirty_configs = set()  # configs with foreign (LuCI/SSH) uncommitted edits
+written_files = {}     # path -> bytes, so adoption's footprint is assertable
+reject_logins = set()  # test-only fault injection: usernames to refuse
 rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
 lock = threading.RLock()
 
@@ -210,7 +309,8 @@ OBJECTS = {
                             "changes", "revert", "commit", "apply",
                             "confirm", "rollback")},
     "system": {"board": {}, "info": {}, "reboot": {}},
-    "file": {"read": {}, "write": {}, "exec": {}, "list": {}, "stat": {}},
+    "file": {"read": {}, "write": {}, "exec": {}, "list": {}, "stat": {},
+             "remove": {}},
     "iwinfo": {m: {} for m in ("devices", "info", "assoclist", "freqlist",
                                "txpowerlist", "scan", "countrylist",
                                "survey")},
@@ -359,7 +459,10 @@ def handle_one(req):
     args = args or {}
 
     if obj == "session" and meth == "login":
-        if args.get("password") == PASSWORD:
+        if args.get("username") in reject_logins:
+            return err(rid, 6)   # injected fault, see __test.reject_login
+        if args.get("username") == "root" and args.get("password") == PASSWORD \
+                or check_login(args.get("username"), args.get("password", "")):
             # While a rollback is armed, rpcd hands ANY new login the applying
             # session's token rather than minting a fresh one. Measured on
             # hardware, and it is deliberate: it is how a controller that lost
@@ -415,7 +518,22 @@ def handle_one(req):
                                         f"{t % 900000} 0 0 0 0\n"})
             return err(rid, 4)
         if meth == "write":
+            data = args.get("data") or ""
+            if args.get("base64"):
+                import base64 as _b64
+                try:
+                    data = _b64.b64decode(data).decode()
+                except Exception:
+                    pass
+            written_files[args.get("path")] = data
             return ok(rid, {})
+        if meth == "remove":
+            # NOT_FOUND on an absent path: during un-adopt that means "already
+            # gone", which is success, and the caller distinguishes them.
+            if args.get("path") in written_files:
+                del written_files[args.get("path")]
+                return ok(rid, {})
+            return err(rid, 4)
         if meth == "list" and args.get("path") == "/tmp/.uci":
             # The system savedir, where LuCI and the uci CLI stage their edits.
             # rpcd scopes ITS deltas to a per-session dir, so uci.changes cannot
@@ -436,6 +554,15 @@ def handle_one(req):
     # Test-only hook: stand in for "a human is editing in LuCI right now".
     # There is no CLI inside the mock, so tests need a way to dirty the system
     # savedir. Real devices need no such hook.
+    if obj == "__test" and meth == "reject_login":
+        # Stands in for anything that leaves a freshly written login unusable —
+        # a botched hash, a config that did not land. Adoption must notice.
+        reject_logins.clear()
+        reject_logins.update(args.get("usernames") or [])
+        return ok(rid, {"rejecting": sorted(reject_logins)})
+    if obj == "__test" and meth == "written":
+        return ok(rid, {"paths": sorted(written_files),
+                        "content": written_files.get(args.get("path"), "")})
     if obj == "__test" and meth == "set_dirty":
         dirty_configs.clear()
         dirty_configs.update(args.get("configs") or [])
