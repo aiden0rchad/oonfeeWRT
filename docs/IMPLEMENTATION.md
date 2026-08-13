@@ -722,6 +722,14 @@ Also measured, and worth carrying into the design:
   threshold that would force persistent connections. The cert is self-signed
   (`CN=OpenWrt`), so the controller must pin it, not chain-validate, and must
   expect it to change on reflash.
+- **The full probe passes over HTTPS**, write-tests included, so nothing in the
+  design depends on plain HTTP. Measured on class A: keep-alive request 1.3 ms
+  vs fresh connection 17.1 ms, i.e. **15.8 ms of TLS setup per new connection**,
+  and device CPU during a focused poll rises from ~0.75 % to **1.18 %**. TLS
+  roughly doubles the poll's CPU cost on hardware that has cycles to spare —
+  which is the concrete argument behind DEVICE-BUDGET §3.1 for class C, where
+  there is no crypto acceleration. Cert: TLS 1.3, `TLS_AES_256_GCM_SHA384`,
+  DER SHA-256 recorded in the JSON report for TOFU pinning.
 - **uhttpd's idle keep-alive is exactly 20 s** (survives 19 s, dropped at 21 s).
   The focused tier at 5–10 s therefore reuses connections; the 60 s baseline
   tier **never** does, and pays a full handshake every poll. Budget accordingly

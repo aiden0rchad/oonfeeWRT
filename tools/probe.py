@@ -563,6 +563,11 @@ def probe_tls_cost(ub, rep, iterations=8):
         rep.line(f"  connection setup overhead: {overhead:.1f} ms per request")
         if ub.scheme == "https":
             rep.line(f"  TLS: {ub.cert_info}")
+            # Persist it: the DER sha256 is the value adoption pins (TOFU,
+            # ARCHITECTURE §6), and the JSON report is what gets diffed across
+            # devices and across firmware upgrades. Printing it alone means the
+            # one field the trust model depends on is the one you cannot diff.
+            rep.data["tls"] = ub.cert_info
             if overhead > 120:
                 rep.warn(f"TLS handshake costs {overhead:.0f} ms. Persistent "
                          "connections are mandatory, not an optimisation. "
