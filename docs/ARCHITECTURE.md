@@ -138,13 +138,26 @@ OpenWrt's `rpcd` already exposes ubus as JSON-RPC over HTTP at `/ubus`, served b
   ```
 - Auth: `POST /ubus` calling `session.login` with `{username, password}` returns
   a `ubus_rpc_session` token. Every subsequent call carries it as the first
-  JSON-RPC parameter. Sessions expire (300 s idle); the controller refreshes on
-  a ubus `PERMISSION_DENIED` (6) — **except during a confirmation window, where
-  a refresh is an unrecoverable abort, not a retry.** See §4.
-  Distinguish the two denial channels: an expired session returns ubus status
-  **6 inside a successful JSON-RPC response**, whereas an ACL denial returns a
-  JSON-RPC **error −32002**. Only the former is worth retrying; re-logging in on
-  −32002 retries a permanent authorization failure forever.
+  JSON-RPC parameter. Sessions expire (300 s idle).
+
+  **The two denial channels do not split the way you would expect** — measured
+  directly, because guessing it wrong inverts the whole retry policy:
+
+  | What happened | How it arrives |
+  |---|---|
+  | Call succeeded | ubus status `0` in a 200 |
+  | Session valid, but the **target** is not permitted (a uci config name, a file path) | ubus status **`6`** in a 200 |
+  | Session invalid, expired or destroyed | JSON-RPC **error `−32002`** |
+  | Session valid, but the **object+method** is in no granted access-group | JSON-RPC **error `−32002`** |
+
+  So status `6` is always permanent — the session is fine and re-authenticating
+  changes nothing. And `−32002` is **ambiguous**: it means rpcd's ACL layer
+  refused to proxy the call at all, which covers both a dead session and a
+  method the ACL never granted. Disambiguate with exactly **one** re-login: if
+  the retried call still returns `−32002`, it is a permanent ACL gap, so log it
+  as a capability error and stop. Never retry status `6`, and never loop on
+  `−32002`. **Neither retry is permitted during a confirmation window**, where a
+  token refresh is an unrecoverable abort — see §4.
 - Authorization: JSON files in `/usr/share/rpcd/acl.d/`. oonfeeWRT ships
   `/usr/share/rpcd/acl.d/oonfeewrt.json` granting exactly the objects/methods it
   needs to a dedicated `oonfeewrt` user — **not** root, and not the full LuCI ACL.
@@ -255,6 +268,18 @@ stop — do not silently win.
      d. success → rollback timer cancelled | failure → device self-reverts
 5. Record applied hash + audit entry, reading state from a *fresh* session
 ```
+
+**`uci.apply` returns success even when the config it applied kills a service.**
+Measured: an invalid `dnsmasq` port applied cleanly (`status 0`) while dnsmasq
+died and DNS stopped resolving for the whole LAN. A controller that treats the
+apply status as a health signal will confirm that config and make the outage
+permanent. **Step (c) must be gated on an independent post-apply health check,
+not on the status code** — re-read the affected service's real state
+(`service.list`, an `iwinfo` call, a resolve, an interface status) and confirm
+only if it is actually healthy. Rollback does recover from this: the same test
+saw the config revert at t+38s and dnsmasq come back healthy at t+50s. Note the
+lag — the service is not usable the instant the config reverts, so a verifier
+that samples too eagerly will misread a successful rollback as a failed one.
 
 **Two session rules, both measured on hardware, both easy to get wrong:**
 
@@ -373,7 +398,8 @@ explicit user-triggered "RF Scan", exactly as UniFi does.
 
 | Metric | Source | Notes |
 |---|---|---|
-| Per-client RSSI, PHY rate, TX retries, connected time | `iw dev <dev> station dump` via `file.exec`, or `hostapd.<iface>` ubus | `iw` is richer; hostapd's ubus is cheaper. Prefer `iw` for the Radios screen's retry/airtime columns. |
+| Per-client RSSI, PHY rate, TX retries, connected time | **`hostapd.<iface> get_clients`** first; `iwinfo.assoclist` next; `iw dev <dev> station dump` via `file.exec` only as a last-resort fallback, and never on the focused loop | Measured on class A: `hostapd.get_clients` **1.0 ms** vs `iwinfo.assoclist` **29.2 ms** — 29× cheaper for the same job. `iw` is richer but forks a process, which DEVICE-BUDGET §3.2 forbids at the fast rate. |
+| Per-AP channel, SSID, BSSID, airtime | **`hostapd.<iface> get_status`** | **1.0 ms** vs `iwinfo.info` at **35.7 ms**. Carries `airtime: {time, time_busy, utilization}`, so channel utilization needs no survey call at all on the fast loop. Two traps: `utilization` is the 802.11 BSS-Load **0–255** scale, not a percent (172 ≈ 67.5%, which matched a counter-delta of 68.9%), and the counters refresh on hostapd's own cadence — a sample 5 s apart was observed unchanged while `iwinfo.survey` kept advancing. Use it for the fast tier and reconcile against `iwinfo.survey` on the slow one. |
 | Channel utilization / interference | **`iwinfo.survey`** (native ubus; `iw dev <dev> survey dump` only as fallback) | Utilization = busy / active — verified good on mwlwifi. Interference ≈ (busy − rx − tx) / active needs `rx_time`/`tx_time`, which mwlwifi leaves uninitialised, so that column is capability-gated. Take `noise` from `iwinfo.info`: `iwinfo.survey` reports it **unsigned** (161 for −95). |
 | Per-client bandwidth + 24h usage | `nlbwmon` via `nlbw -c json -g mac` (**no ubus object — CLI only**) | Purpose-built netlink accounting with its own retention DB. The right answer; don't parse conntrack yourself. Three things measured on install: `commit_interval` defaults to **24h**, so a read returns zeroes until `nlbw -c commit` runs — the controller must commit before reading, which is a *write* grant; and nlbwmon warns at startup that its netlink receive buffer is capped unless `net.core.rmem_max` is raised, so on a busy network it silently under-counts. Verified accurate otherwise: 24.30 MiB recorded for a 25 MB transfer. |
 | Per-interface throughput | `network.device` status counters, or `/proc/net/dev` | Delta between polls. |
@@ -464,14 +490,38 @@ mean config we'd have to own.
    - creates a dedicated `oonfeewrt` user with a generated password
    - writes `/usr/share/rpcd/acl.d/oonfeewrt.json` via `file.write`
    - records the TLS certificate fingerprint (trust-on-first-use)
-   - **discards the operator's original credential** — it is never stored
+   - **discards the operator's original credential** — it is never stored, and
+     is requested once again at un-adopt
 4. Device goes green. No config is pushed yet; adoption and provisioning are
    separate steps, and the UI should make that obvious.
 
-**Un-adoption must be a real, tested feature.** One click removes the user
-account and the ACL file, and optionally reverts every UCI section we own. A
-wrapper that can't cleanly remove itself doesn't get trusted, and users are right
-not to trust it.
+**Un-adoption must be a real, tested feature**, and it is deliberately *not* one
+click. It runs in two phases:
+
+1. Under the `oonfeewrt` credential: revert every UCI section we own. Fully
+   granted already, and it is the part that touches the user's config.
+2. Prompted for the **operator credential**, held in memory for that one
+   transaction exactly as at adoption: delete the `config login 'oonfeewrt'`
+   section from `/etc/config/rpcd`, then remove
+   `/usr/share/rpcd/acl.d/oonfeewrt.json` — in that order, so the controller's
+   own session is not cut before phase 2 finishes.
+
+> **The controller is never granted write access to its own ACL file or to the
+> rpcd config.** Self-removal is self-escalation: the contents of that file are
+> unconstrained, so a controller that could rewrite it could grant itself
+> `file.exec` on a shell and collect at the next reload. The rpcd login lives in
+> `/etc/config/rpcd`, and uci grants have no section-level scoping — only a
+> method dimension and a config-name dimension — so "delete just our own login"
+> is not expressible; it would require write on the whole rpcd config, which is
+> the power to add a login or re-point an existing one.
+
+The cost is stated plainly: a device whose admin password has been lost, or that
+is offline, cannot be un-adopted from the controller. That case must degrade to
+showing the exact residue — the two paths above — and the commands that remove
+them. Surface the credential requirement **at adoption time**, not only when the
+user clicks un-adopt. Package installs sit inside the same operator-credentialed
+envelope, at adoption and again at un-adopt for removal; the steady-state
+credential can query installed packages but never mutate them.
 
 **Multi-site / NAT:** out of scope, by construction. Reaching a device behind NAT
 requires either a device-side dial-out agent (which we've ruled out) or a tunnel.

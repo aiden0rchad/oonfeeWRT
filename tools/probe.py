@@ -627,13 +627,22 @@ def probe_binaries_and_packages(ub, rep):
         rep.warn("No file.exec. Channel survey, LLDP and per-port stats are "
                  "unreachable — the Radios and Topology screens lose data.")
         return
-    rep.item(True, "file.exec", "permitted")
+    # Deliberately not "file.exec: permitted" — under rpcd exec is never a
+    # global capability, only a per-command-line one, and claiming otherwise
+    # makes the per-binary results below look more authoritative than they are.
+    rep.item(True, "file.exec", "`true` is permitted; each command is granted "
+                                "individually")
 
     found = {}
     for binname, why in EXPECTED_BINARIES:
-        r = ub.exec_("which", [binname]) or {}
-        path = (r.get("stdout") or "").strip()
-        ok = bool(path) and r.get("code") == 0
+        ok_exec, r = ub.exec_status("which", [binname])
+        if not ok_exec:
+            found[binname] = None
+            rep.item(None, f"  {binname}",
+                     "NOT OBSERVABLE — `which` is not in this ACL's exec list")
+            continue
+        path = ((r or {}).get("stdout") or "").strip()
+        ok = bool(path) and (r or {}).get("code") == 0
         found[binname] = path or None
         rep.item(True if ok else None, f"  {binname}",
                  path if ok else f"absent — {why}")
@@ -736,14 +745,21 @@ def probe_radios(ub, rep):
                  else "absent — fall back to `iw survey dump` via file.exec")
         if code == UBUS_OK:
             rows = (sv or {}).get("results") or []
-            row = rows[0] if rows else {}
+            # A 5 GHz radio returns one row per frequency and only the in-use
+            # one carries counters, so rows[0] is often the empty one.
+            row = max(rows, key=lambda r: r.get("active_time") or 0) if rows else {}
             # Airtime only needs these two. rx_time/tx_time are reported but
             # mwlwifi leaves them uninitialised, so they are not usable here.
             usable = bool(row.get("active_time")) and "busy_time" in row
             rep.item(usable, "    busy/active time present",
-                     "interference + airtime computable from the cheap path"
+                     "channel utilization computable from the cheap path"
                      if usable else "no airtime counters in the native survey")
-            rep.data["survey_dump_usable"] = usable
+            entry["survey_usable"] = usable
+            # Aggregate, never assign: this key is global but the loop is per
+            # radio, so a plain assignment lets the last radio (or the exec
+            # fallback) overwrite a native yes with a no.
+            rep.data["survey_dump_usable"] = (
+                rep.data.get("survey_dump_usable") or usable)
             entry["survey_fields"] = sorted(row)
             # iwinfo.survey reports noise unsigned; iwinfo.info reports it
             # signed. Reading the wrong one puts +163 dBm on screen.
@@ -797,7 +813,7 @@ def probe_switch_and_firewall(ub, rep):
     code, devs = ub.call("luci-rpc", "getNetworkDevices")
     if code == UBUS_OK and isinstance(devs, dict):
         dsa = any((d or {}).get("devtype") == "dsa" for d in devs.values())
-    rep.item(dsa, "DSA switch present",
+    rep.item(True if dsa else None, "DSA switch present",
              "per-port stats available" if dsa else
              "no DSA — hide the Ports screen on this device" if dsa is False
              else "NOT OBSERVABLE — luci-rpc denied, capability unknown")
@@ -806,7 +822,7 @@ def probe_switch_and_firewall(ub, rep):
     ok, r = ub.exec_status("/usr/sbin/nft",
                            ["--terse", "--json", "list", "ruleset"])
     fw4 = (r or {}).get("code") == 0 if ok else None
-    rep.item(fw4, "firewall4 / nftables",
+    rep.item(True if fw4 else None, "firewall4 / nftables",
              "zone model maps cleanly" if fw4 else
              "legacy iptables path" if fw4 is False
              else "NOT OBSERVABLE — file.exec denied, capability unknown")
@@ -866,6 +882,12 @@ def probe_apply_rollback(ub, rep, timeout=12):
     SCRATCH = "oonfeewrt_probe"
 
     def cleanup():
+        # Settle any armed rollback FIRST. If a timer is still running (an
+        # aborted run, a Ctrl-C during the wait), the revert/delete/commit
+        # below get undone by the device seconds later and the run reports a
+        # clean exit over a scratch config that is still there. NO_DATA just
+        # means nothing was pending.
+        ub.call("uci", "rollback", {})
         ub.call("uci", "revert", {"config": SCRATCH})
         ub.call("uci", "delete", {"config": SCRATCH, "section": "probe"})
         ub.call("uci", "commit", {"config": SCRATCH})
@@ -954,6 +976,12 @@ def probe_apply_rollback(ub, rep, timeout=12):
             code, data = verifier.call("uci", "get", {
                 "config": SCRATCH, "section": "probe", "option": "marker"})
         finally:
+            # Destroy, not just close: closing drops the socket but leaves a
+            # live rpcd token behind until it times out.
+            try:
+                verifier.call("session", "destroy", {})
+            except UbusError:
+                pass
             verifier.close()
         got = (data or {}).get("value")
         reverted = got == "v2"
@@ -1052,7 +1080,8 @@ def verdict(rep):
         out("  * PORTS SCREEN: DSA present — per-port stats available.")
     elif d.get("dsa") is None:
         out("  * PORTS SCREEN: UNDETERMINED — the DSA check was denied, not")
-        out("    answered. Grant file.exec and re-probe before hiding anything.")
+        out("    answered — luci-rpc.getNetworkDevices was denied. Grant it")
+        out("    and re-probe before hiding anything.")
     else:
         out("  * PORTS SCREEN: no DSA. Hide the Ports screen for this device")
         out("    entirely (UI-SPEC section 7: absent, not greyed out).")

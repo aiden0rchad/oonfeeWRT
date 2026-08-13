@@ -103,7 +103,7 @@ feature is absent and everything else works.
 
 | UniFi element | OpenWrt source | Verdict |
 |---|---|---|
-| Table: Band, Channel, Ch. Width, TX Power, Clients, Avg. Signal, 24h data, Avg. Interference, Avg. Airtime, Avg. TX Retries, Uplink, Model | `iwinfo`, `iw survey dump`, `iw station dump`, TSDB | 🟢 **This screen is fully achievable and is one of the strongest arguments for the project** |
+| Table: Band, Channel, Ch. Width, TX Power, Clients, Avg. Signal, 24h data, **Channel Utilization**, Avg. TX Retries, Uplink, Model | `hostapd.<iface>` (status + clients), `iwinfo` (survey/info), TSDB | 🟢 **Mostly achievable and still one of the strongest arguments for the project** — but Avg. Interference and Avg. Airtime are 🟠 gated per driver (see the two rows below), so the table is not uniformly green |
 | Channel utilization % | `busy_time / active_time` from `iwinfo.survey` | 🟢 The portable airtime metric — both fields verified good on mwlwifi |
 | Avg. Interference % | `(busy_time − rx_time − tx_time) / active_time` | 🟠 **Capability-gated.** Needs `rx_time`/`tx_time`, which mwlwifi returns uninitialised (a garbage u64). Not computable on the class-A reference device |
 | Avg. Airtime % | `(rx_time + tx_time) / active_time` | 🟠 Same dependency, same gate. Where rx/tx are unusable, show channel utilization instead — never fabricate the split |

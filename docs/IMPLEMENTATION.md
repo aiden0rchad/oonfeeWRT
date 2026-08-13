@@ -224,9 +224,17 @@ the DEVICE-BUDGET §8 cap — do not "improve" it into per-sample inserts.
 ```go
 type Client struct { /* host, scheme, http.Client with keep-alive, session token, mu */ }
 
-// Call performs one ubus invocation. Handles: session refresh on code 6
-// (PERMISSION_DENIED after expiry) with a single retry; transport retry with
-// jittered backoff; decoding [status, payload] result frames.
+// Call performs one ubus invocation. Handles: session refresh on JSON-RPC
+// error -32002 with EXACTLY ONE retry; transport retry with jittered backoff;
+// decoding [status, payload] result frames.
+//
+// Do NOT refresh on ubus status 6. Measured on hardware (§14): status 6 means
+// the session is valid and the *target* is not permitted, so re-authenticating
+// changes nothing and the retry is pure latency. -32002 is the ambiguous one —
+// dead session OR an object+method in no granted access-group — which is why
+// it gets one retry and not a loop: if it recurs after a successful re-login,
+// surface it as a permanent capability error.
+// Both retries MUST be suppressed while a confirmation window is open.
 func (c *Client) Call(ctx context.Context, object, method string, args, out any) error
 
 // Batch sends multiple invocations in one JSON-RPC array (one HTTP round trip).
@@ -354,16 +362,18 @@ IDLE → RENDER → PREFLIGHT → STAGE → APPLY → CONFIRM_POLL → HEALTH �
 | RENDER | render + diff; empty diff → skip device | PREFLIGHT |
 | PREFLIGHT | quiesce collector for device; check session; snapshot `uci.changes` is empty (a dirty delta from LuCI/SSH → abort with "unsaved changes on device" conflict); if the change touches the path the controller manages this device through, require the UI's explicit traversal acknowledgment flag | STAGE |
 | STAGE | issue staged `uci.add/set/delete` batch; verify with `uci.changes` that the delta matches the plan exactly | APPLY |
-| APPLY | `uci.apply {rollback:true, timeout:T}` — T = 90 s default, per-device override from caps | CONFIRM_POLL |
-| CONFIRM_POLL | poll `uci.confirm` every 3 s on a **fresh connection** (the old one may be dead if interfaces cycled); stop on success or T expiry | HEALTH |
-| HEALTH | expected interfaces up (`network.interface dump`), expected SSIDs present (`network.wireless status`), gateway reachable from device if role=ap | CONFIRMED (write `owned_sections`, audit, resume collector) |
+| APPLY | `uci.apply {rollback:true, timeout:T}` — T = 90 s default, per-device override from caps. **Status 0 means "applied", never "healthy": an apply that killed dnsmasq still returns 0** | HEALTH |
+| HEALTH | **runs before confirm, while the rollback timer is still armed** — if it fails, do nothing and let the device revert itself. Expected interfaces up (`network.interface dump`), expected SSIDs present via `iwinfo` + `hostapd.<iface> get_status` (**not** `network.wireless status` — unreachable via rpcd, see §14), gateway reachable if role=ap. Read all of it on a **fresh session**: the applying session's staged delta masks a revert | CONFIRM_POLL |
+| CONFIRM_POLL | poll `uci.confirm` every 3 s **on the applying session token** — reconnecting the socket is fine, re-authenticating is fatal, and a token refresh here is an unrecoverable abort. Stop on success or T expiry | CONFIRMED (write `owned_sections`, audit, resume collector) |
 | AWAIT_REVERT | confirm never landed: wait T + grace (15 s), touching nothing | VERIFY_REVERTED |
 | VERIFY_REVERTED | reconnect; `uci get` spot-checks match pre-apply snapshot; emit event either way | FAILED |
 
-Hard rules: CONFIRM success without HEALTH success is still a failure — but at
-that point the change is committed, so the engine *reverses* it by rendering
-and applying the previous model (a normal apply of the old state), never by
-hand-editing. "Apply without rollback" exists as a separately-authorized flag
+Hard rules: HEALTH gates CONFIRM, so the ordinary failure path costs nothing —
+the engine simply declines to confirm and the device reverts itself, which is
+why the gate is worth the extra round trip. Reversing a *confirmed* change is
+the expensive path and only arises when health degrades after confirmation: the
+engine then renders and applies the previous model (a normal apply of the old
+state), never by hand-editing. "Apply without rollback" exists as a separately-authorized flag
 for changes that legitimately sever the management path (re-addressing the
 management network on the host) and is logged as such in the audit record.
 
@@ -569,7 +579,9 @@ the rollback timeout) until confirm resolves one way or the other.
 `tools/mock_ubus.py` is the contract fixture: it models staged-vs-committed UCI
 state faithfully (set stages; apply commits+snapshots+arms timer; confirm
 cancels; timer restores). It deliberately models the WRT3200ACM's mwlwifi gap
-(no survey busy-time) so capability gating is exercised in CI, not discovered
+(valid active_time/busy_time, but uninitialised rx_time/tx_time and unsigned
+noise from iwinfo.survey against signed noise from iwinfo.info) so capability
+gating and the noise-source rule are exercised in CI, not discovered
 in the field.
 
 ---
@@ -704,6 +716,11 @@ Also measured, and worth carrying into the design:
   like `uci.confirm`**: a second session calling it gets `PERMISSION_DENIED` (6)
   and the change stays applied until its own timer expires. So the applying
   session is the only party that can resolve an armed apply *either way*.
+- **An rpcd restart destroys every session.** Anything that reinstalls the ACL
+  file or edits `/etc/config/rpcd` invalidates the controller's token, so
+  adoption and ACL updates must expect to re-login immediately afterwards — and
+  must never be scheduled while a confirmation window is open, since the
+  applying token cannot survive it and the change would revert.
 - **Staged deltas are session-private**, confirmed directly: with one session
   holding an uncommitted `uci.set`, that session reads the staged value while a
   concurrent session reads the committed one. Two controllers (or a controller

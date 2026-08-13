@@ -234,7 +234,7 @@ at coarse resolutions so spikes survive aggregation.
 | TX retries over time (device panel) | horizontal segmented timeline bar | sequential ramp, low→high |
 | ISP sparkline (card) | bare area sparkline, no axes | tooltip on hover |
 | Uptime strip | binary status bar | good/critical only |
-| Experience score | stat tile + 4-component breakdown on hover | never a bare number — show the inputs |
+| Experience score | stat tile + **variable-arity** component breakdown on hover | never a bare number — show the inputs. Render whichever components the device actually supplies, renormalize the weights over the available terms, and name the omitted ones in the tooltip ("airtime unavailable on this radio"). Never show an empty slot, and never silently drop a term — a score computed over different inputs on different hardware is not comparable |
 
 ---
 
@@ -252,7 +252,8 @@ Requirements:
   filter counts must come from an aggregate query, not from counting the loaded page.
 - Row leading indicator: status dot + label.
 - Semantic value coloring: link speeds, experience ratings, allow/block actions,
-  interference percentages. Coloring is *additive* — the text still says the value.
+  channel-utilization percentages. Coloring is *additive* — the text still says
+  the value. Do not colour-grade interference: it is capability-gated (§7).
 - Click a row → detail slide-over, URL updates, deep-linkable.
 - Sticky header, horizontal scroll with a persistent scrollbar.
 
@@ -282,7 +283,8 @@ Errors | Dropped`, `Bps | Bytes`, `All | Download | Upload`), chart, port table.
 **Hide the PoE column entirely on hardware that can't report it.**
 
 **Insights → Radios.** Left: channel occupancy heatmap, AP/band filters, Channel
-Plan legend, MIMO filter. Content: per-radio table with interference/airtime/
+Plan legend, MIMO filter. Content: per-radio table with channel-utilization
+(always present) plus capability-gated interference/airtime/
 retry columns, color-graded.
 
 **Settings → Overview.** Collapsible summary cards per domain, each a table +
@@ -313,6 +315,20 @@ No greyed-out PoE column on a switch without PoE. No empty 6 GHz tab on a WiFi 5
 AP. No port-statistics panel on hardware with no DSA driver. Greyed-out controls
 read as "this app is broken"; absence reads as "this device doesn't do that,"
 which is the truth.
+
+**There are three capability states, not two.** A field can be missing, present
+and good, or **present and untrustworthy** — and the third is the dangerous one,
+because probing for presence finds it and probing for absence does not. mwlwifi
+returns `rx_time`/`tx_time` in every survey result; the values are uninitialised
+garbage (~1.4e19). `iwinfo.survey` returns `noise` on every radio; it is
+unsigned, so −95 dBm arrives as 161. Both would render as confident nonsense.
+
+So capability gating keys on a **driver/model quirk list** (matched on
+`system.board` plus driver), not on field presence. Any metric derived from a
+field on that list is treated exactly as unsupported: never rendered, never
+color-graded, never averaged into a composite score. The two known entries
+today are mwlwifi's `rx_time`/`tx_time`, and `noise` sourced from
+`iwinfo.survey` rather than `iwinfo.info`.
 
 Where absence would be confusing, replace rather than hide — a short inline note
 in the space the feature would have occupied ("This access point has no 6 GHz

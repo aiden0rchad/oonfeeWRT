@@ -87,11 +87,23 @@ data via a spawned `iw`.
 - Use `file.exec` only for data with no ubus equivalent (LLDP neighbours,
   `ethtool -S`), and at the slow-loop interval, never the fast one. Channel
   survey is *not* one of these — `iwinfo.survey` is native ubus.
-- **Measured, class A:** the six `iwinfo` calls dominate a focused poll.
-  Non-wifi calls total 15.8 ms for seven calls; adding two `info`, two
-  `assoclist` and two `survey` takes the same batch to 194 ms. `iwinfo.info` is
-  near-static (channel, txpower, country, hwmodes) — caching it alone cuts the
-  poll to 125 ms. Batching amortises transport, not this; it is driver time.
+- **Measured, class A — and this is the single biggest win available.** The six
+  `iwinfo` calls are ~92 % of a focused poll: seven non-wifi calls total 15.8 ms,
+  and adding two `info`, two `assoclist` and two `survey` takes the same batch to
+  194 ms. Batching amortises transport, not this; it is driver time inside
+  `iwinfo`. Sourcing the same data from `hostapd.<iface>` instead collapses it:
+
+  | Focused poll, one batched request | Measured |
+  |---|---|
+  | current shape (13 calls, 6 × `iwinfo`) | **196.6 ms** |
+  | `hostapd` for status+clients, `iwinfo.survey` kept (12 calls) | **72.4 ms** |
+  | `hostapd` only, survey demoted to the slow tier (10 calls) | **17.4 ms** |
+
+  An 11× reduction, on the class where the budget is *comfortable* — so on class
+  C, where every one of those driver calls is worse, this is the difference
+  between the focused tier being affordable and not. `iwinfo` is still required
+  for noise (signed), txpower, country and hwmodes, all of which are static or
+  near-static and belong on the slow tier.
 - **Batch ubus calls into one HTTP request** where the JSON-RPC batch form is
   supported **[verify on target release]** — one round trip, one TLS record,
   many calls. This is the single biggest cheap win available.

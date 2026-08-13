@@ -22,15 +22,26 @@ Nothing user-visible. Build this first anyway.
 - **Un-adoption**, in the same sprint: remove user + ACL, optionally revert every
   UCI section we own. A wrapper that can't cleanly remove itself doesn't get
   trusted.
-- **The apply cycle**: batched set → commit → `apply {rollback, timeout}` →
-  health probe → poll `confirm`, with a full audit record.
+- **The apply cycle**: batched staged `set`/`add`/`delete` → `apply {rollback,
+  timeout}` → health probe → poll `confirm`, with a full audit record. **No
+  `commit` before `apply`** — apply is what commits the staged delta with the
+  rollback snapshot, so committing first silently disarms the protection
+  (IMPLEMENTATION §6 has the state machine; ARCHITECTURE §4 the reasoning).
+  The two steps use different sessions on purpose: `confirm` must go out on the
+  token that applied, while the health probe must read on a fresh one.
 - Ownership tagging + the "what will change on this device" diff preview.
 
 **Proof:** two things, both required. (1) Deliberately push a config that breaks
 the device's uplink — the device must come back on its own within the timeout and
-the controller must report the failure honestly. (2) Adopt a device, make changes,
-un-adopt it, and diff its config against a pre-adoption snapshot — the only
-residue should be nothing. *Do not proceed until both work.*
+the controller must report the failure honestly. **The failure must be detected
+from a second, independently logged-in session, or from non-uci evidence
+(reachability, netifd state)** — never from the session that issued the apply,
+which goes on reading its own failed value after the revert and would report
+success. (2) Adopt a device, make changes, un-adopt it, and diff its config
+against a pre-adoption snapshot — the only residue should be nothing. Note
+un-adoption needs the operator credential re-prompted (ARCHITECTURE §6); the
+controller's own login deliberately cannot remove itself. *Do not proceed until
+both work.*
 
 ---
 
@@ -94,8 +105,16 @@ UI, in under a minute, and have it verifiably enforced.
 The screens that make people *enjoy* the tool.
 
 - LLDP + fdb + ARP + assoc → topology graph.
-- Survey/station-dump derived metrics: interference, airtime, TX retries.
-- The Experience score, with its components exposed on hover.
+- Survey/station-dump derived metrics: **channel utilization** (portable — the
+  one that works everywhere measured so far) and TX retries; interference and
+  the airtime split only where the driver reports usable `rx_time`/`tx_time`,
+  which mwlwifi does not. Acceptance also requires capturing the
+  `iwinfo.assoclist` field surface against a **real associated station** before
+  the Radios screen's per-client columns are specified — it has never been seen
+  with a client connected.
+- The Experience score, with its components exposed on hover. It must not
+  include a capability-gated component, or the score means different things on
+  different hardware.
 - Channel Plan + suggested-channel scoring.
 - nflog/syslog ingest → event store with enrichment (identity, zone, GeoIP) and
   the detail slide-over.

@@ -15,7 +15,8 @@
 				"network.device": [ "status" ],
 				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
 				"luci": [ "getFeatures" ],
-				"log": [ "read" ]
+				"log": [ "read" ],
+				"hostapd.*": [ "get_status", "get_clients", "get_features", "list_bans" ]
 			},
 			"uci": [ "network", "wireless", "firewall", "dhcp", "system", "luci", "uhttpd", "dropbear" ],
 			"file": {
@@ -44,6 +45,7 @@
 				"uci": [ "add", "set", "delete", "rename", "order", "revert", "commit", "apply", "confirm", "rollback" ],
 				"network": [ "reload" ],
 				"network.wireless": [ "up", "down" ],
+				"hostapd.*": [ "del_client" ],
 				"file": [ "exec" ]
 			},
 			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ],
