@@ -7,7 +7,7 @@
 				"session": [ "access", "destroy" ],
 				"uci": [ "configs", "get", "changes" ],
 				"system": [ "board", "info" ],
-				"file": [ "read", "stat", "list", "exec" ],
+				"file": [ "read", "list", "exec" ],
 				"iwinfo": [ "devices", "info", "assoclist", "freqlist", "txpowerlist", "countrylist", "survey", "scan" ],
 				"network": [ "get_proto_handlers" ],
 				"network.interface": [ "dump", "status" ],
