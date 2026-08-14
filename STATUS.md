@@ -1,8 +1,8 @@
 # Where this project is
 
-Written 2026-08-13 as a handoff, updated the same day when Phase 0 finished.
-Everything below is either committed or measured on real hardware; nothing here
-is aspiration.
+Written 2026-08-13 as a handoff. Updated the same day when Phase 0 finished,
+and again when Phase 1's read-only fleet view came up. Everything below is
+either committed or measured on real hardware; nothing here is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -12,18 +12,19 @@ Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
 The design is no longer a design. It was validated against a real
 **Linksys WRT3200ACM running OpenWrt 25.12.5**, which corrected several
-assumptions, and then **Phase 0 was built in Go** against those findings.
-Eleven packages plus a daemon entrypoint, all tested; eight verified against the
-device itself rather than only against the mock.
+assumptions, and then **Phases 0 and 1 were built in Go and TypeScript** against
+those findings.
 
-**Phase 0 is complete.** The whole path runs end to end against real hardware: a
-device credential sealed under an operator passphrase, stored in SQLite,
-unsealed at connect time, accepted by the device's rpcd, and a poll loop writing
-what it learns back to the database — with applies that arm a rollback, verify
-health, and confirm only if the device is really healthy.
+**Phase 0 is complete** — transport, capability probing, adoption, the
+apply/rollback/confirm cycle, the credential store, the poll loop.
 
-What is next is Phase 1: the read-only fleet view, which is an HTTP API and a UI
-over state the controller already collects.
+**Phase 1's read-only fleet view runs end to end.** Poll a real device, roll the
+samples into SQLite, serve them through an authenticated API, and render them in
+a browser: dashboard, devices with charts, the client grid, logs. 92 KB of UI
+gzipped against a 1.5 MB budget.
+
+Thirteen Go packages plus a UI, all tested; nine verified against the device
+rather than only against the mock.
 
 ---
 
@@ -66,16 +67,19 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 | `internal/ubus` | JSON-RPC transport, denial channels, batching, TLS pinning | ✅ |
 | `internal/applyengine` | APPLY → HEALTH → CONFIRM, three outcomes, PREFLIGHT | ✅ |
 | `internal/capability` | Three-state probe + registry, driver quirk list | ✅ |
-| `internal/store` | SQLite schema, WAL, ownership bookkeeping | mock only |
-| `internal/crypt` | SHA-512 crypt (`$6$`) | ✅ accepted by real rpcd |
+| `internal/store` | SQLite schema, migrations, rollups, inventory | ✅ (through the API) |
+| `internal/crypt` | SHA-512 crypt (`$6$`) for rpcd | ✅ accepted by real rpcd |
 | `internal/adoption` | Adopt / un-adopt, the two-credential split | mock only |
 | `internal/model` | Site model: networks, WLANs, AP groups | pure |
 | `internal/render` | Site model → per-device UCI, deterministic | pure |
 | `internal/reconcile` | Read → render → diff → apply → record | mock only |
-| `internal/secrets` | argon2id → XChaCha20-Poly1305 credential store | ✅ end to end |
+| `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ end to end |
 | `internal/collector` | The poll loop: two tiers, batching, backoff, quiesce | ✅ |
-| `internal/daemon` | Config, lifecycle, `/healthz`, shutdown, fleet wiring | ✅ |
+| `internal/telemetry` | RAM ring → 5m → 1h, counter/ratio arithmetic | ✅ |
+| `internal/api` | REST, session auth, CSRF, login throttle | ✅ |
+| `internal/daemon` | Lifecycle, shutdown ordering, fleet wiring, static serving | ✅ |
 | `cmd/oonfeewrtd` | The entrypoint | ✅ runs |
+| `ui/` | Vite + React SPA, embedded via `go:embed` | ✅ driven in a browser |
 
 Also: `tools/probe.py` (hardware validation), `tools/mock_ubus.py` (the contract
 fixture — it reproduces the measured semantics, including the awkward ones),
@@ -144,6 +148,17 @@ for someone picking the work up.
   **baseline 8 ms for 7 calls, focused 116 ms for 11.** A 14× difference for
   four extra calls is the whole argument for fetching `iwinfo` only while
   somebody is looking.
+- **`iwinfo.survey`'s `busy_time` and `active_time` are COUNTERS with different
+  epochs.** Both advance correctly, but their absolute values are not
+  comparable, so utilization is Δbusy/Δactive and never the ratio of absolutes.
+  Measured: 5 GHz absolute 1354.7 % against delta 1.7 %; 2.4 GHz absolute 25.9 %
+  against delta **73.3 %** — the dangerous one, because 25.9 % looks entirely
+  reasonable and is wrong by 3×. hostapd's independent BSS-load reading settled
+  it. This corrected a claim asserted as verified in three documents.
+- **The client inventory is cheap.** `luci-rpc.getHostHints` 5.1 ms,
+  `getDHCPLeases` 2.9 ms; adding both took the baseline poll from 8 ms to 11 ms
+  batched. `luci-rpc.getWirelessDevices` is **128.8 ms** — as expensive as an
+  entire focused poll — so it belongs to adoption and must never enter a poll.
 - **The noise floor is a per-radio capability, and changing source does not
   rescue it.** The documented advice was "`iwinfo.survey` reports noise
   unsigned, so read it from `iwinfo.info`" — right about the encoding, silent
@@ -157,44 +172,51 @@ for someone picking the work up.
 
 ## 5. What to do next
 
-Phase 0's list is done. `internal/secrets`, `cmd/oonfeewrtd` and
-`internal/collector` are built, tested, and verified against the device.
+Phase 0 is done. **Phase 1 is functionally done for the data the controller
+collects** — inventory, telemetry, API, UI — with the gaps below.
 
-**Phase 1 — the read-only fleet view** (`ROADMAP.md`), in dependency order:
+**Finish Phase 1:**
 
-1. **The HTTP API.** `/healthz` is the only endpoint today. Phase 1 needs the
-   inventory, per-device detail, client list and events, over the state the
-   collector already gathers. Two hooks are already in place and should be used
-   rather than reinvented: `Daemon.Focus(deviceID)` is what a device screen
-   holds open while it is being viewed, and `Daemon.TrackApply(ctx, deviceID,…)`
-   is how any write must be run — it counts the apply for shutdown *and*
-   quiesces polling for that device.
-2. **Authentication for it.** There is none yet, and `/healthz` is
-   unauthenticated on purpose (§11) — nothing else should be.
-3. **The telemetry pipeline.** The collector emits `Snapshot`s; the sink
-   currently records only `last_seen`, poll state and reachability transitions.
-   The in-RAM ring plus 5 m/1 h rollups from `IMPLEMENTATION.md` §3 is the piece
-   that turns snapshots into graphs. Note the units traps are already encoded on
-   the snapshot types — `Airtime.UtilizationPercent`, `Survey.NoiseDBm`,
-   `Survey.BusyPercent` — so derive through those rather than the raw fields.
-4. **The UI**, per `UI-SPEC.md`.
+1. **Adoption has no UI.** A device gets into the inventory only through
+   `internal/daemon/seed_helper_test.go`. The adoption *mechanism* is built and
+   tested (`internal/adoption`); what is missing is discovery, the operator
+   credential prompt, and a screen. This is the largest remaining gap and the
+   one a new user hits first.
+2. **The WebSocket** (`/api/v1/live`, IMPLEMENTATION §8). The UI currently
+   polls the API every 10 s, which is honest but wasteful and adds latency the
+   focused tier was supposed to remove.
+3. **The resource-budget harness** (DEVICE-BUDGET §7): an hour of baseline and
+   focused polling against a class-C device asserting CPU, RAM, request rate and
+   zero flash writes. It is in the Phase 1 list and is not built. Everything
+   measured so far is a single poll's cost, not a sustained one.
+4. **Client-list scoping.** The grid lists every host the device sees, which on
+   a WAN-facing gateway includes the upstream network's ARP neighbours. Telling
+   LAN from WAN needs the site model to know what a LAN is, so this is really a
+   Phase 3 dependency — but it is visible now and worth stating.
+5. **Virtualized rows and column customization** (UI-SPEC §5). The grid renders
+   every row; fine at 8 clients, not at the 10k the spec anticipates for Logs
+   and Flows.
 
 **Open items that need hardware I do not have:**
-- Class B/C devices. **Class C (MT7621) sets the budget** and every number so far
-  comes from the comfortable class — TLS alone doubled poll CPU there.
+- Class B/C devices. **Class C (MT7621) sets the budget** and every number so
+  far comes from the comfortable class — TLS alone doubled poll CPU there.
 - Hardware flow offload (mvebu has none), so the README's accounting tradeoff
   remains scoped to hardware offload and untested.
 - A second device, for genuine fleet behaviour. The stagger, the per-device
   backoff and the "ten devices at 60 s is one request every 6 s" rule are all
   unit-tested and none of them has met a second real router.
+- **A 32-bit interface counter.** The wrap-recovery path in
+  `internal/telemetry/counter.go` is unit-tested but has never seen a real wrap:
+  determining the reference device's counter width needed 3 GB pushed through
+  it. The code is written to be correct either way.
 
 **Known gaps worth closing cheaply:**
 - `internal/model` has no tests of its own (it is exercised through `render`).
-- `store`, `adoption` and `reconcile` are mock-verified only. An integration
-  test for adoption against the real device would be worth having, but it writes
-  a real login, so it needs a deliberate decision.
-- The collector's sink drops everything except reachability. That is correct for
-  Phase 0 and is the first thing Phase 1 replaces.
+- `adoption` and `reconcile` are mock-verified only. An integration test for
+  adoption against the real device would be worth having, but it writes a real
+  login, so it needs a deliberate decision.
+- The UI has no tests. It was verified by driving a browser against the live
+  device, which caught two rendering bugs no unit test would have.
 
 ---
 
@@ -224,6 +246,12 @@ written and believed.
   and says nothing about whether the value can be trusted — which, on the 2.4
   GHz radio, it cannot, from either source. The advice was not wrong; it was
   answering a different question than the one a reader would use it for.
+- **Run it and look at it.** Four defects in Phase 1 survived a green test
+  suite and died within minutes of a browser pointing at the real thing:
+  firmware never persisted, client IPs collected and dropped, every page load
+  301-ing, and a chart axis labelled with years for data from that afternoon.
+  Tests check what you thought to assert; opening the page checks what is
+  actually there.
 - **Say what a check proves, not what it suggests.** The noise-stability
   detector fires on a disagreement and stays silent on agreement, so silence is
   not evidence. On one hardware run the survey pair agreed while the
@@ -255,6 +283,17 @@ written and believed.
   passphrase in `OONFEE_PASSPHRASE` — env is readable from `/proc`, inherited by
   children, and printed by `docker inspect`. The data directory is created 0700
   and holds `keyring.json` plus `oonfeewrt.db`.
+
+- Building and running the whole thing:
+
+  ```bash
+  npm --prefix ui install && npm --prefix ui run build && ./tools/budget_check.sh
+  ```
+
+  Then `go run ./cmd/oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080`
+  and open <http://127.0.0.1:8080>. The Go binary embeds `ui/dist`; building
+  without it still works and serves an explanation instead of a blank page.
+  `npm --prefix ui run dev` proxies /api to a daemon on :8080 for UI work.
 
 - Adoption has no CLI yet, so seeding a device by hand means sealing its
   credential with `Keeper.SealCredential(mac, user, pass)` and writing a
