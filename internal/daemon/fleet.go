@@ -38,6 +38,13 @@ func (d *Daemon) StartCollector(ctx context.Context, opts collector.Options) err
 	}
 	c.Start(ctx)
 
+	// Once, at startup: collect anything a previous run left behind (a device
+	// removed while the daemon was down, or a crash between the cascade and the
+	// sweep). One scan at boot, not one every five minutes.
+	if err := d.Store.SweepOrphans(ctx); err != nil {
+		d.Log.Error("could not sweep orphaned telemetry at startup", "err", err)
+	}
+
 	d.mu.Lock()
 	d.collector = c
 	d.mu.Unlock()
@@ -75,9 +82,19 @@ func (d *Daemon) Track(dev *store.Device) {
 }
 
 // Untrack removes a device from the poll loop, for un-adoption or deletion.
+//
+// It also sweeps telemetry whose series row the device cascade took with it.
+// That sweep is a full scan of both rollup tables, which is why it lives here
+// rather than on the five-minute tick: it should run when something can
+// actually be orphaned, not every five minutes to find nothing.
 func (d *Daemon) Untrack(deviceID int64) {
 	if c := d.collectorRef(); c != nil {
 		c.Remove(deviceID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.Store.SweepOrphans(ctx); err != nil {
+		d.Log.Error("could not sweep orphaned telemetry", "err", err)
 	}
 }
 

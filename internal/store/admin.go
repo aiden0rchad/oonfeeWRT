@@ -54,6 +54,44 @@ func (db *DB) AdminCount(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// ErrAdminExists means an administrator account already exists, so first-run
+// enrolment must not proceed.
+var ErrAdminExists = errors.New("store: an administrator account already exists")
+
+// CreateFirstAdmin enrols the FIRST operator, atomically.
+//
+// The conditional insert is the guard, not a count in the caller. Enrolment is
+// unauthenticated and the caller has to derive an argon2id hash — tens of
+// milliseconds — between checking and inserting, which is ample room for a
+// second request to pass the same check. Two different usernames would then
+// both insert cleanly, since only `username` is unique, and the endpoint's one
+// security property ("works exactly once") would hold for sequential requests
+// only.
+//
+// SQLite evaluates the WHERE NOT EXISTS and the insert in a single statement,
+// so the race has nowhere to happen.
+func (db *DB) CreateFirstAdmin(ctx context.Context, username, passHash string) (*Admin, error) {
+	if username == "" || passHash == "" {
+		return nil, errors.New("store: admin username and password hash are required")
+	}
+	now := time.Now().Unix()
+	res, err := db.sql.ExecContext(ctx, `
+INSERT INTO admins (username, pass_hash, created_at)
+SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM admins)`, username, passHash, now)
+	if err != nil {
+		return nil, fmt.Errorf("store: create first admin %q: %w", username, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrAdminExists
+	}
+	id, _ := res.LastInsertId()
+	return &Admin{ID: id, Username: username, PassHash: passHash, CreatedAt: now}, nil
+}
+
 // CreateAdmin enrolls an operator. The username is unique, so a second call
 // with the same name fails rather than silently replacing a password.
 func (db *DB) CreateAdmin(ctx context.Context, username, passHash string) (*Admin, error) {

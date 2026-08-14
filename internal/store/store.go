@@ -443,12 +443,26 @@ func (db *DB) LogEvent(ctx context.Context, e Event) error {
 
 // RecentEvents returns the newest events first.
 func (db *DB) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
+	return db.QueryEvents(ctx, "", "", limit)
+}
+
+// QueryEvents returns the newest events matching the filters.
+//
+// The filters are in the SQL, not applied to the result afterwards. Filtering a
+// page that the database already truncated selects from the newest N events
+// overall rather than the newest N matching ones — so a screen filtered to
+// "error" can show nothing while errors exist, simply because a hundred routine
+// events arrived after them.
+func (db *DB) QueryEvents(ctx context.Context, category, severity string, limit int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	rows, err := db.sql.QueryContext(ctx,
 		`SELECT ts, device_id, category, severity, event, detail_json
-		 FROM events ORDER BY ts DESC, id DESC LIMIT ?`, limit)
+		   FROM events
+		  WHERE (? = '' OR category = ?) AND (? = '' OR severity = ?)
+		  ORDER BY ts DESC, id DESC LIMIT ?`,
+		category, category, severity, severity, limit)
 	if err != nil {
 		return nil, err
 	}

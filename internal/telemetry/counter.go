@@ -28,6 +28,24 @@ type rebootState struct {
 // only to reject an arithmetic result that cannot be a real measurement.
 const maxPlausibleBps = 2.5e9
 
+// maxWrapBps is the ceiling the WRAP branch is judged against, and it has to be
+// much tighter than maxPlausibleBps to do anything at all.
+//
+// A 32-bit wrap delta is by construction below 2^32, so testing it against
+// 2.5e9 B/s can only reject when the two readings are under 1.72 s apart — and
+// the fastest configured poll is the focused tier at 5 s. The guard was
+// therefore unreachable at every rate the controller actually uses, while its
+// comment claimed the opposite ("it bites at the focused rate"). That was wrong
+// and this constant is the correction.
+//
+// 1.25e8 B/s is a saturated gigabit link, the fastest port on any supported
+// device. A wrap implying more than that did not happen: at the 5 s focused
+// rate a full wrap implies 859 MB/s and is now rejected, and the branch only
+// accepts a wrap once the interval is long enough (>34 s) for the traffic to
+// have physically fit. Above gigabit hardware this needs raising — with the
+// rest of DEVICE-BUDGET §1, which is where link speeds belong.
+const maxWrapBps = 1.25e8
+
 // observeUptime records a device's uptime and reports whether it restarted.
 //
 // This is the primary reset signal, and it is worth preferring to anything
@@ -84,12 +102,17 @@ func (s *Store) observeUptime(deviceID, uptime, ts int64) bool {
 //  3. If the interface was down and came back, netifd recreated it. Reset.
 //  4. Otherwise assume a 32-bit wrap, unless the implied rate is impossible.
 //
-// Step 4 is the residual guess and it is stated plainly: at a 60-second poll
-// interval a full 2^32 wrap implies 572 Mbit/s, which is entirely plausible, so
-// the plausibility check cannot catch a reset there. It bites at the focused
-// rate, where the same arithmetic implies 6.9 Gbit/s. The counter width on the
-// reference WRT3200ACM could not be determined without pushing 3 GB through it,
-// so this code is written to be correct either way rather than tuned to one.
+// Step 4 is the residual guess and it is stated plainly. The wrap is accepted
+// only if the traffic it implies could physically have crossed a gigabit link
+// in the elapsed time (maxWrapBps), so a wrap is rejected outright below ~34 s
+// between readings — which covers the whole focused tier. At the 60 s baseline
+// a full wrap implies 572 Mbit/s, which a gigabit link genuinely could carry,
+// so a reset there is still indistinguishable from a wrap. That is the residue,
+// and it is one interval wide.
+//
+// The counter width on the reference WRT3200ACM could not be determined without
+// pushing 3 GB through it, so this is written to be correct either way rather
+// than tuned to one.
 func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated bool) (float64, bool) {
 	st := s.counters[k]
 	if st == nil {
@@ -126,7 +149,10 @@ func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated 
 		return rebase()
 	default:
 		delta = (1 << 32) - st.last + counter
-		if float64(delta)/float64(dt) > maxPlausibleBps {
+		// Judged against a real link rate, not the 20 Gbit/s sanity ceiling: a
+		// wrap delta is always below 2^32, so the loose bound could never
+		// reject one at any poll interval the controller uses.
+		if float64(delta)/float64(dt) > maxWrapBps {
 			return rebase()
 		}
 	}
@@ -139,6 +165,36 @@ func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated 
 		return 0, false
 	}
 	return r, true
+}
+
+// expireStale drops counter and ratio baselines that have not been updated for
+// `before`.
+//
+// They cannot ride on series retirement, which is what an earlier version
+// assumed. rate() creates a counterState on a counter's FIRST reading, and that
+// reading produces no sample and therefore no ring — so a series whose rate
+// never became valid has a baseline and no ring, and the retirement sweep walks
+// rings. The `iface_up` pseudo-key is never a series at all.
+//
+// The leak is not only memory. A station that appears once, leaves, and returns
+// an hour later with its counters reset would be measured against the stale
+// baseline: the decrease takes the wrap branch and emits traffic that never
+// happened.
+func (s *Store) expireStale(now, before int64) {
+	for k, st := range s.counters {
+		// iface_up carries no timestamp; it is refreshed on every poll of a
+		// live interface, so age it from the device's other counters instead of
+		// keeping it forever.
+		if st.lastTS == 0 || st.lastTS < before {
+			delete(s.counters, k)
+		}
+	}
+	for k, st := range s.ratios {
+		if st.lastTS < before {
+			delete(s.ratios, k)
+		}
+	}
+	_ = now
 }
 
 // forgetCounters drops every counter baseline for a device, so the next poll
@@ -159,6 +215,7 @@ func (s *Store) forgetCounters(deviceID int64) {
 // ratioState remembers the previous reading of a counter PAIR.
 type ratioState struct {
 	num, den uint64
+	lastTS   int64
 	valid    bool
 }
 
@@ -178,14 +235,14 @@ type ratioState struct {
 //
 // Like every other counter path here, the first reading and any reading after a
 // reset produce nothing rather than a fabricated value.
-func (s *Store) ratio(k SeriesKey, num, den uint64, rebooted bool) (float64, bool) {
+func (s *Store) ratio(k SeriesKey, ts int64, num, den uint64, rebooted bool) (float64, bool) {
 	st := s.ratios[k]
 	if st == nil {
 		st = &ratioState{}
 		s.ratios[k] = st
 	}
 	prevNum, prevDen, had := st.num, st.den, st.valid
-	st.num, st.den, st.valid = num, den, true
+	st.num, st.den, st.valid, st.lastTS = num, den, true, ts
 
 	if rebooted || !had {
 		return 0, false

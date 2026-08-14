@@ -560,3 +560,109 @@ func findKind(rows []Rollup, k Kind) (Rollup, bool) {
 	}
 	return Rollup{}, false
 }
+
+// The wrap branch is judged against a real link rate, not the 20 Gbit/s sanity
+// ceiling. A wrap delta is always below 2^32, so testing it against 2.5e9 B/s
+// could only ever reject when two readings were under 1.72 s apart — and the
+// fastest poll is 5 s. The guard was unreachable at every rate the controller
+// uses while its comment claimed it "bites at the focused rate".
+func TestWrapIsRejectedWhenTheTrafficCouldNotHaveFit(t *testing.T) {
+	s := testStore()
+	k := SeriesKey{DeviceID: 1, Kind: KindIfaceRx, Key: "eth0"}
+
+	// Focused tier, 5 s apart. A station reassociating restarts its counters
+	// with no reboot and no interface flap, so nothing else catches it.
+	rateOf(t, s, k, 100, 1000)
+	if v, ok := rateOf(t, s, k, 105, 500); ok {
+		t.Fatalf("a 4.29 GB 'wrap' over 5 s was accepted as %v B/s (%.1f Gbit/s) — "+
+			"more than a gigabit link can carry", v, v*8/1e9)
+	}
+	// ...and it rebased, so the next reading measures from the new baseline.
+	if v, ok := rateOf(t, s, k, 110, 1000); !ok || v != 100 {
+		t.Fatalf("after the rejected wrap: %v, ok=%v; want 100 B/s", v, ok)
+	}
+}
+
+// At the 60 s baseline a full wrap implies 572 Mbit/s, which a gigabit link
+// genuinely could carry, so a real wrap there must still be recovered. That is
+// the documented residue and it must not be over-corrected away.
+func TestWrapIsStillRecoveredAtTheBaselineRate(t *testing.T) {
+	s := testStore()
+	k := SeriesKey{DeviceID: 1, Kind: KindIfaceRx, Key: "eth0"}
+
+	const nearMax = uint64(1<<32) - 6_000_000
+	rateOf(t, s, k, 100, nearMax)
+	v, ok := rateOf(t, s, k, 160, 6_000_000) // 12 MB over 60 s = 200 kB/s
+	if !ok {
+		t.Fatal("a plausible wrap at the baseline rate was discarded")
+	}
+	if v < 190_000 || v > 210_000 {
+		t.Fatalf("rate = %v B/s, want ~200000", v)
+	}
+}
+
+// A counter whose first reading produced no sample has baseline state and no
+// ring, so series retirement cannot reach it. Left alone it is both a leak
+// keyed by client MAC and a source of fabricated traffic when that MAC returns.
+func TestCounterBaselinesExpireWithoutASeries(t *testing.T) {
+	s := testStore() // Window 60s, IdleWindows 2
+	ctx := context.Background()
+
+	// A station seen once: sta_rx_bps/sta_tx_bps get baselines, no ring.
+	snap := snapshot(1, 100, 1000)
+	snap.Stations = []collector.Station{{
+		Iface: "wlan0", MAC: "aa:bb:cc:11:22:33",
+		RX: collector.Rate{Bytes: 300_000_000},
+		TX: collector.Rate{Bytes: 300_000_000, Packets: 10},
+	}}
+	s.Observe(ctx, snap)
+
+	s.mu.Lock()
+	before := len(s.counters)
+	s.mu.Unlock()
+	if before == 0 {
+		t.Fatal("no counter baselines were created")
+	}
+
+	// Several windows later with nothing seen, they must be gone.
+	s.Flush(at(600))
+	s.mu.Lock()
+	after := len(s.counters)
+	s.mu.Unlock()
+	if after != 0 {
+		t.Fatalf("%d counter baselines survived with no series to retire them", after)
+	}
+
+	// And the station returning with reset counters must not be measured
+	// against the stale baseline — which would emit a 4 GB "wrap".
+	back := snapshot(1, 700, 1600)
+	back.Stations = []collector.Station{{
+		Iface: "wlan0", MAC: "aa:bb:cc:11:22:33",
+		RX: collector.Rate{Bytes: 1000},
+		TX: collector.Rate{Bytes: 1000, Packets: 10},
+	}}
+	s.Observe(ctx, back)
+	for _, r := range s.Flush(at(1200)) {
+		if r.Kind == KindStaRx && r.Max > 1e6 {
+			t.Fatalf("a returning station produced %v B/s from a stale baseline", r.Max)
+		}
+	}
+}
+
+func TestIfaceUpPseudoStateExpires(t *testing.T) {
+	s := testStore()
+	ctx := context.Background()
+	snap := snapshot(1, 100, 1000)
+	snap.Interfaces = map[string]collector.Interface{"eth0": ifaceWith(1000)}
+	s.Observe(ctx, snap)
+
+	s.Flush(at(600))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.counters {
+		if k.Kind == "iface_up" {
+			t.Fatalf("the iface_up pseudo-entry for %q survived; it is never a "+
+				"series, so nothing else can collect it", k.Key)
+		}
+	}
+}

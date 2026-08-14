@@ -132,9 +132,19 @@ func (db *DB) FoldHourly(ctx context.Context, before time.Time) error {
 	cutoff := before.Truncate(time.Hour).Unix()
 	// Fold only from the last hour already folded. Without this floor every tick
 	// re-aggregates the entire 14-day 5-minute table, which is millions of rows
-	// to redo the same arithmetic. Re-folding the boundary hour is harmless
-	// because the upsert below is idempotent: the same samples give the same
-	// aggregate.
+	// to redo the same arithmetic.
+	//
+	// Re-folding the boundary hour is NOT unconditionally harmless, which an
+	// earlier version of this comment claimed. The floor only advances when new
+	// 5-minute data arrives, so a fleet-wide gap pins it — and once retention
+	// pruning starts eating that hour's 5-minute rows, each tick re-folds it
+	// from a shrinking suffix and overwrites the correct hourly aggregate with a
+	// partial one. By then the hourly row is the only copy of that hour left.
+	//
+	// The `WHERE excluded.cnt >= rollup_1h.cnt` guard makes the upsert
+	// monotonic: an hour can be completed or re-stated with at least as many
+	// samples, never quietly reduced. Prune aligning its own cutoff to an hour
+	// boundary is the other half.
 	_, err := db.sql.ExecContext(ctx, `
 INSERT INTO rollup_1h (series_id, ts, avg, min, max, cnt)
 SELECT series_id, ts - (ts % 3600) AS hour,
@@ -144,7 +154,8 @@ SELECT series_id, ts - (ts % 3600) AS hour,
    AND ts < ? AND cnt > 0
  GROUP BY series_id, hour
 ON CONFLICT(series_id, ts) DO UPDATE SET
-  avg=excluded.avg, min=excluded.min, max=excluded.max, cnt=excluded.cnt`, cutoff)
+  avg=excluded.avg, min=excluded.min, max=excluded.max, cnt=excluded.cnt
+  WHERE excluded.cnt >= rollup_1h.cnt`, cutoff)
 	if err != nil {
 		return fmt.Errorf("store: fold hourly rollups: %w", err)
 	}
@@ -165,8 +176,13 @@ type PruneResult struct {
 func (db *DB) Prune(ctx context.Context, now time.Time, r Retention) (PruneResult, error) {
 	var out PruneResult
 	if r.FiveMinute > 0 {
-		res, err := db.sql.ExecContext(ctx, `DELETE FROM rollup_5m WHERE ts < ?`,
-			now.Add(-r.FiveMinute).Unix())
+		// Aligned DOWN to an hour boundary so an hour is always either wholly
+		// present at 5-minute resolution or wholly gone. An unaligned cutoff
+		// cuts through an hour, and anything that later re-folds that hour sees
+		// only the surviving tail.
+		cut := now.Add(-r.FiveMinute).Unix()
+		cut -= ((cut % 3600) + 3600) % 3600
+		res, err := db.sql.ExecContext(ctx, `DELETE FROM rollup_5m WHERE ts < ?`, cut)
 		if err != nil {
 			return out, fmt.Errorf("store: prune 5m rollups: %w", err)
 		}
@@ -191,18 +207,20 @@ DELETE FROM events WHERE id NOT IN (
 		}
 		out.Events, _ = res.RowsAffected()
 	}
-	// Rollups whose series is gone. Deleting a device cascades to `series`, but
-	// the rollup tables carry no foreign key of their own — that was deliberate,
-	// since an index on series_id would cost a write on every row of the hottest
-	// table in the schema. The consequence is that un-adopting a device would
-	// otherwise leave its telemetry behind forever, so it is collected here
-	// instead, on a tick that is already doing bulk deletes.
-	for _, table := range []string{"rollup_5m", "rollup_1h"} {
-		if _, err := db.sql.ExecContext(ctx,
-			`DELETE FROM `+table+` WHERE series_id NOT IN (SELECT id FROM series)`); err != nil {
-			return out, fmt.Errorf("store: prune orphaned %s rows: %w", table, err)
-		}
-	}
+	// Rollups whose series is gone, collected only when one actually can be.
+	//
+	// Deleting a device cascades to `series`, but the rollup tables carry no
+	// foreign key of their own, so those rows would otherwise outlive the
+	// device forever. The sweep that collects them is a full scan of the two
+	// largest tables in the schema, and the process has exactly one database
+	// connection (SetMaxOpenConns(1)) — so running it every five minutes when
+	// nothing has been deleted blocks every API read and every poll write for
+	// the length of two scans, forever, to find nothing.
+	//
+	// SweepOrphans is therefore called from the paths that remove a device.
+	// (An earlier comment justified the missing foreign key by claiming an
+	// index on series_id would cost a write per row; that was wrong — these are
+	// WITHOUT ROWID tables whose primary key already leads with series_id.)
 
 	// Series rows whose every sample has been pruned are dead weight, and their
 	// keys are client MACs — the one identifier guaranteed to churn. This runs
@@ -214,6 +232,27 @@ DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
 		return out, fmt.Errorf("store: prune empty series: %w", err)
 	}
 	return out, nil
+}
+
+// SweepOrphans deletes rollups whose series row is gone, and any series row
+// left with no rollups at all.
+//
+// Called when a device is removed, not on the maintenance tick: it is a full
+// scan of both rollup tables, and doing that every five minutes to find nothing
+// stalls the single database connection for no benefit.
+func (db *DB) SweepOrphans(ctx context.Context) error {
+	for _, table := range []string{"rollup_5m", "rollup_1h"} {
+		if _, err := db.sql.ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE series_id NOT IN (SELECT id FROM series)`); err != nil {
+			return fmt.Errorf("store: sweep orphaned %s rows: %w", table, err)
+		}
+	}
+	if _, err := db.sql.ExecContext(ctx, `
+DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
+                     AND id NOT IN (SELECT series_id FROM rollup_1h)`); err != nil {
+		return fmt.Errorf("store: sweep empty series: %w", err)
+	}
+	return nil
 }
 
 // Point is one value in a queried series.

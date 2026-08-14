@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -82,10 +83,21 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier, ifaces []s
 			continue
 		}
 		if err := spec.decode(res.Data, &snap); err != nil {
-			snap.Degraded = append(snap.Degraded, Degradation{
+			d := Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
 				Err: fmt.Sprintf("decode: %v", err),
-			})
+			}
+			snap.Degraded = append(snap.Degraded, d)
+			if !spec.optional {
+				// A required call that answered with something we cannot read is
+				// no better than one that did not answer. Previously only
+				// res.Err failed the poll, so an unparseable system.info left
+				// Load and Memory at their zero values and the telemetry layer
+				// recorded a load average of 0 — a measurement that was never
+				// taken, indistinguishable from an idle device.
+				snap.Err = fmt.Errorf("collector: %s: %w", d, err)
+				return snap
+			}
 		}
 	}
 	return snap
@@ -173,6 +185,12 @@ func decodeInfo(raw json.RawMessage, s *Snapshot) error {
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
+	}
+	if len(v.Load) == 0 {
+		// Present, well-formed JSON, and missing the one field the whole
+		// device-health series is built from. Zeroes here would be recorded as
+		// an idle device.
+		return errors.New("system.info carried no load average")
 	}
 	s.Uptime = v.Uptime
 	s.Memory = v.Memory

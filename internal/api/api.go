@@ -18,11 +18,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -62,6 +64,13 @@ type Server struct {
 
 	sessions *sessions
 	throttle *throttle
+
+	// hashing bounds concurrent argon2id derivations; see hashSlots.
+	hashing chan struct{}
+
+	// dummyHash is verified against when an account does not exist, so the
+	// unknown-username path costs the same as the known one.
+	dummyHash string
 }
 
 // New builds a Server.
@@ -69,11 +78,23 @@ func New(db *store.DB, fleet Fleet, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{
+	srv := &Server{
 		Store: db, Fleet: fleet, Log: log, Now: time.Now,
 		sessions: newSessions(),
 		throttle: newThrottle(),
+		hashing:  make(chan struct{}, hashSlots),
 	}
+	// One derivation at startup, with the shipped parameters, so that verifying
+	// an unknown username costs exactly what verifying a known one costs.
+	h, err := secrets.HashPassword([]byte("oonfeewrt-timing-equaliser"), secrets.DefaultParams())
+	if err != nil {
+		// Only reachable if the parameters themselves are invalid, which would
+		// mean no password could ever be hashed. Fail loudly rather than run
+		// with a login path that leaks which accounts exist.
+		panic("api: cannot derive the timing-equaliser hash: " + err.Error())
+	}
+	srv.dummyHash = h
+	return srv
 }
 
 func (s *Server) now() time.Time {
@@ -100,8 +121,12 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupState)
-	mux.HandleFunc("POST /api/v1/setup", s.handleSetup)
-	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	// These two are unauthenticated, so the CSRF token cannot protect them —
+	// there is no session to carry one yet. A same-origin gate stands in.
+	// /setup especially: on a fresh controller it creates the administrator
+	// account, and a cross-site POST could claim the install.
+	mux.HandleFunc("POST /api/v1/setup", requireSameOrigin(s.handleSetup))
+	mux.HandleFunc("POST /api/v1/login", requireSameOrigin(s.handleLogin))
 
 	private := http.NewServeMux()
 	private.HandleFunc("POST /api/v1/logout", s.handleLogout)
@@ -153,6 +178,16 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 const maxBody = 64 << 10
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	// Requiring a JSON content type is complementary CSRF hardening, not
+	// pedantry: an HTML form can only send urlencoded, multipart or text/plain,
+	// so a cross-site form post cannot reach any handler that insists on JSON.
+	if ct := r.Header.Get("Content-Type"); ct != "" {
+		if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/json" {
+			writeErr(w, http.StatusUnsupportedMediaType,
+				"request body must be application/json")
+			return false
+		}
+	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

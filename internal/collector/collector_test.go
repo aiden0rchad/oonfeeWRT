@@ -569,3 +569,30 @@ func TestMemoryUsedPrefersAvailable(t *testing.T) {
 		t.Errorf("Used without available = %d, want 400", got)
 	}
 }
+
+// A required call that answers with something unreadable is no better than one
+// that did not answer. Previously only a transport/ubus error failed the poll,
+// so an unparseable system.info left Load and Memory at zero and the telemetry
+// layer recorded a load average of 0 — a measurement never taken, and
+// indistinguishable from an idle device.
+func TestUnreadableRequiredCallFailsThePoll(t *testing.T) {
+	p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+	snap := Snapshot{DeviceID: 1}
+
+	// system.info is the one required call.
+	if err := decodeInfo([]byte(`{"uptime":123}`), &snap); err == nil {
+		t.Fatal("a system.info with no load average decoded cleanly")
+	}
+	if snap.Load[0] != 0 {
+		t.Fatal("fixture assumption broken")
+	}
+	// And the required-vs-optional split is what turns that into a failed poll.
+	calls := p.buildCalls(Baseline, nil)
+	if calls[0].inv.Object != "system" || calls[0].inv.Method != "info" {
+		t.Fatalf("expected system.info first, got %+v", calls[0].inv)
+	}
+	if calls[0].optional {
+		t.Fatal("system.info is marked optional; an unreadable one would degrade " +
+			"rather than fail, and the zeroes would be recorded as data")
+	}
+}

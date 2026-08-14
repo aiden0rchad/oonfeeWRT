@@ -401,9 +401,22 @@ func TestPruneCollectsRollupsOfDeletedDevices(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("series rows = %d after deleting one device, want 1", n)
 	}
-	// ...but the rollup row is orphaned until maintenance sweeps it.
+	// ...but the rollup row is orphaned until the sweep runs. The sweep is NOT
+	// on the maintenance tick: it is a full scan of both rollup tables, and the
+	// process has one database connection, so doing it every five minutes to
+	// find nothing would stall every read and write for no benefit.
 	if _, err := db.Prune(ctx, time.Now(), DefaultRetention()); err != nil {
 		t.Fatalf("Prune: %v", err)
+	}
+	var still int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM rollup_5m`).Scan(&still); err != nil {
+		t.Fatal(err)
+	}
+	if still != 2 {
+		t.Fatalf("the maintenance tick swept orphans: %d rows left, want 2", still)
+	}
+	if err := db.SweepOrphans(ctx); err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
 	}
 	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM rollup_5m`).Scan(&n); err != nil {
 		t.Fatal(err)
@@ -420,4 +433,100 @@ func TestPruneCollectsRollupsOfDeletedDevices(t *testing.T) {
 	if len(got.Points) != 1 {
 		t.Errorf("the remaining device lost its telemetry: %+v", got.Points)
 	}
+}
+
+// The fold's floor only advances when new 5-minute data arrives, so a
+// fleet-wide gap pins it. Once retention starts eating that hour's 5-minute
+// rows, an unguarded re-fold would overwrite the correct hourly aggregate with
+// a partial one — and by then the hourly row is the only copy left.
+func TestFoldHourlyNeverShrinksAnHour(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1)
+
+	hour := time.Date(2026, 8, 13, 3, 0, 0, 0, time.UTC)
+	full := make([]RollupRow, 0, 12)
+	for i := range 12 {
+		full = append(full, RollupRow{
+			DeviceID: 1, Kind: "sys_load1", TS: hour.Unix() + int64(i)*300,
+			Avg: float64(i), Min: float64(i), Max: float64(i), Cnt: 1,
+		})
+	}
+	if err := db.WriteRollups(ctx, full); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FoldHourly(ctx, hour.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var avg float64
+	var cnt int
+	read := func() {
+		t.Helper()
+		if err := db.SQL().QueryRowContext(ctx,
+			`SELECT avg, cnt FROM rollup_1h WHERE ts=?`, hour.Unix()).Scan(&avg, &cnt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read()
+	if cnt != 12 || avg != 5.5 {
+		t.Fatalf("initial fold: avg=%v cnt=%d, want 5.5/12", avg, cnt)
+	}
+
+	// Simulate retention having eaten the first seven windows, then re-fold —
+	// which is exactly what a pinned watermark does on every subsequent tick.
+	if _, err := db.SQL().ExecContext(ctx,
+		`DELETE FROM rollup_5m WHERE ts < ?`, hour.Unix()+7*300); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := db.FoldHourly(ctx, hour.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read()
+	if cnt != 12 || avg != 5.5 {
+		t.Fatalf("re-folding from a partial hour rewrote it: avg=%v cnt=%d, "+
+			"want the original 5.5/12", avg, cnt)
+	}
+}
+
+// An unaligned 5-minute cutoff cuts through an hour, leaving a tail that any
+// later re-fold would mistake for the whole hour.
+func TestPruneAlignsTheFiveMinuteCutoffToAnHour(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1)
+
+	now := time.Date(2026, 8, 13, 12, 35, 0, 0, time.UTC)
+	// Exactly on the retention edge: without alignment this hour would be cut
+	// in half.
+	edge := now.Add(-14 * 24 * time.Hour)
+	hourStart := edge.Truncate(time.Hour)
+	rows := []RollupRow{}
+	for i := range 12 {
+		rows = append(rows, RollupRow{
+			DeviceID: 1, Kind: "sys_load1", TS: hourStart.Unix() + int64(i)*300, Avg: 1, Cnt: 1,
+		})
+	}
+	if err := db.WriteRollups(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Prune(ctx, now, DefaultRetention()); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	var kept, inHour int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM rollup_5m`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM rollup_5m WHERE ts >= ? AND ts < ?`,
+		hourStart.Unix(), hourStart.Add(time.Hour).Unix()).Scan(&inHour); err != nil {
+		t.Fatal(err)
+	}
+	// The hour is either wholly present or wholly gone — never partial.
+	if inHour != 0 && inHour != 12 {
+		t.Fatalf("the boundary hour was cut in half: %d of 12 windows survive", inHour)
+	}
+	_ = kept
 }

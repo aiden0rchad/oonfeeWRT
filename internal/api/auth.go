@@ -221,6 +221,53 @@ func clientAddr(r *http.Request) string {
 	return host
 }
 
+// ---- password work ----
+
+// hashSlots bounds how many argon2id derivations run at once.
+//
+// The login throttle limits the RATE of completed attempts; it does nothing
+// about CONCURRENT ones, because it records a failure only after the hash has
+// finished. Each derivation allocates a 64 MiB arena (DefaultParams), so an
+// unauthenticated caller opening a few hundred simultaneous logins could ask
+// the process for tens of gigabytes — against a documented steady-state
+// envelope of 256 MB.
+//
+// Two at a time caps that at ~128 MiB. This is a single-operator controller;
+// genuine concurrent sign-ins are approximately one, and the cost of being
+// wrong in this direction is a 503 rather than an OOM.
+const hashSlots = 2
+
+// withHashSlot runs fn holding a hashing slot, or reports that none was free.
+func (s *Server) withHashSlot(fn func()) bool {
+	select {
+	case s.hashing <- struct{}{}:
+		defer func() { <-s.hashing }()
+		fn()
+		return true
+	default:
+		return false
+	}
+}
+
+// verifyPassword checks a password, spending the same work whether or not the
+// account exists.
+//
+// The naive form short-circuits: `err != nil || VerifyPassword(...)` never
+// hashes anything when the username is unknown, so an unknown account answers
+// in microseconds and a known one in tens of milliseconds. The status and body
+// are identical — the test asserts that — but the clock is not, and account
+// enumeration is exactly what identical responses were meant to prevent.
+//
+// So the unknown-account path verifies against a fixed dummy hash generated at
+// startup with the same parameters, and throws the result away.
+func (s *Server) verifyPassword(admin *store.Admin, password string) bool {
+	if admin == nil {
+		_ = secrets.VerifyPassword([]byte(password), s.dummyHash)
+		return false
+	}
+	return secrets.VerifyPassword([]byte(password), admin.PassHash) == nil
+}
+
 // ---- middleware ----
 
 type ctxKey int
@@ -337,7 +384,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin, err := s.Store.AdminByName(r.Context(), req.Username)
-	if err != nil || secrets.VerifyPassword([]byte(req.Password), admin.PassHash) != nil {
+	if err != nil {
+		admin = nil // verified against the dummy hash below, for constant work
+	}
+
+	var ok bool
+	if !s.withHashSlot(func() { ok = s.verifyPassword(admin, req.Password) }) {
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusServiceUnavailable,
+			"too many sign-ins in progress; try again shortly")
+		return
+	}
+	if !ok {
 		s.throttle.fail(addr, now)
 		s.logAuth(r.Context(), "auth.login_failed", "warning", req.Username, addr)
 		writeErr(w, http.StatusUnauthorized, "incorrect username or password")
@@ -355,9 +413,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Raising the cost is worth nothing if existing accounts keep the old one,
 	// and a successful sign-in is the only moment the password is in hand.
 	if secrets.NeedsRehash(admin.PassHash, secrets.DefaultParams()) {
-		if h, err := secrets.HashPassword([]byte(req.Password), secrets.DefaultParams()); err == nil {
-			_ = s.Store.SetAdminPassword(r.Context(), admin.ID, h)
-		}
+		s.withHashSlot(func() {
+			if h, err := secrets.HashPassword([]byte(req.Password), secrets.DefaultParams()); err == nil {
+				_ = s.Store.SetAdminPassword(r.Context(), admin.ID, h)
+			}
+		})
 	}
 
 	s.setSessionCookies(w, r, token, sess.csrf)
@@ -410,12 +470,30 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	hash, err := secrets.HashPassword([]byte(req.Password), secrets.DefaultParams())
-	if err != nil {
+	var hash string
+	var hashErr error
+	if !s.withHashSlot(func() {
+		hash, hashErr = secrets.HashPassword([]byte(req.Password), secrets.DefaultParams())
+	}) {
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusServiceUnavailable, "busy; try again shortly")
+		return
+	}
+	if hashErr != nil {
 		writeErr(w, http.StatusInternalServerError, "could not hash the password")
 		return
 	}
-	admin, err := s.Store.CreateAdmin(r.Context(), req.Username, hash)
+
+	// The count above is a courtesy, not the guard. It and this insert are
+	// separated by an argon2id derivation of tens of milliseconds, which is
+	// plenty of room for a second request to pass the same check — and two
+	// different usernames would both insert cleanly, since only `username` is
+	// unique. The insert itself is what enforces "exactly once".
+	admin, err := s.Store.CreateFirstAdmin(r.Context(), req.Username, hash)
+	if errors.Is(err, store.ErrAdminExists) {
+		writeErr(w, http.StatusConflict, "an administrator account already exists")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create the account")
 		return
@@ -463,7 +541,13 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	// The current password is required even though the caller is already signed
 	// in: it is what stops a borrowed session from becoming permanent ownership
 	// of the account.
-	if err := secrets.VerifyPassword([]byte(req.Current), admin.PassHash); err != nil {
+	var ok bool
+	if !s.withHashSlot(func() { ok = s.verifyPassword(admin, req.Current) }) {
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusServiceUnavailable, "busy; try again shortly")
+		return
+	}
+	if !ok {
 		s.logAuth(r.Context(), "auth.password_change_failed", "warning",
 			admin.Username, clientAddr(r))
 		writeErr(w, http.StatusUnauthorized, "current password is incorrect")
@@ -473,8 +557,16 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	hash, err := secrets.HashPassword([]byte(req.New), secrets.DefaultParams())
-	if err != nil {
+	var hash string
+	var hashErr error
+	if !s.withHashSlot(func() {
+		hash, hashErr = secrets.HashPassword([]byte(req.New), secrets.DefaultParams())
+	}) {
+		w.Header().Set("Retry-After", "2")
+		writeErr(w, http.StatusServiceUnavailable, "busy; try again shortly")
+		return
+	}
+	if hashErr != nil {
 		writeErr(w, http.StatusInternalServerError, "could not hash the password")
 		return
 	}

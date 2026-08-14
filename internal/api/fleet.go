@@ -247,23 +247,19 @@ func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100, 1, 1000)
-	events, err := s.Store.RecentEvents(r.Context(), limit)
+	// Filters go to the database, not to the page it returned. Filtering
+	// afterwards selects from the newest N events overall rather than the
+	// newest N matching, so a view filtered to "error" can come back empty
+	// while errors exist.
+	events, err := s.Store.QueryEvents(r.Context(),
+		r.URL.Query().Get("category"), r.URL.Query().Get("severity"), limit)
 	if handleStoreErr(w, err, "events") {
 		return
 	}
-	category := r.URL.Query().Get("category")
-	severity := r.URL.Query().Get("severity")
-	out := make([]store.Event, 0, len(events))
-	for _, e := range events {
-		if category != "" && e.Category != category {
-			continue
-		}
-		if severity != "" && e.Severity != severity {
-			continue
-		}
-		out = append(out, e)
+	if events == nil {
+		events = []store.Event{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 // dashboard is the fleet summary: counts a human reads at a glance, plus what

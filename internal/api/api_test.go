@@ -941,3 +941,226 @@ func TestClientNameIsNotOverwrittenByAnEmptyOne(t *testing.T) {
 		t.Errorf("first_seen changed: %v", got[0].FirstSeen)
 	}
 }
+
+// ---- fixes from the adversarial review ----
+
+// The CSRF token cannot protect /setup and /login — there is no session to
+// carry one yet. /setup is the sharp case: on a fresh controller it creates the
+// administrator account, so a cross-site POST could claim the install.
+func TestUnauthenticatedMutationsRequireSameOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"cross-site fetch metadata", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-site (a sibling subdomain)", map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"foreign Origin", map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
+		{"foreign Referer", map[string]string{"Referer": "https://evil.example/page"}, http.StatusForbidden},
+		{"same-origin metadata", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusCreated},
+		{"user-initiated navigation", map[string]string{"Sec-Fetch-Site": "none"}, http.StatusCreated},
+		{"no browser headers at all (curl)", nil, http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
+				strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+			req.Host = "controller.local"
+			req.RemoteAddr = "192.0.2.10:1"
+			req.Header.Set("Content-Type", "application/json")
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			w := httptest.NewRecorder()
+			h.mux.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("got %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+// An HTML form can only send urlencoded, multipart or text/plain, so insisting
+// on JSON blocks a cross-site form post outright.
+func TestNonJSONContentTypeIsRejected(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
+		strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	req.RemoteAddr = "192.0.2.10:1"
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("got %d, want 415", w.Code)
+	}
+}
+
+// Identical bodies are not enough if the clock differs. An unknown username
+// that skips argon2 entirely answers in microseconds where a known one takes
+// tens of milliseconds, which is the account enumeration the identical
+// responses were meant to prevent.
+func TestLoginSpendsTheSameWorkOnUnknownUsernames(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	h.cookies, h.csrf = nil, ""
+
+	measure := func(username string) time.Duration {
+		// Best of three: the floor is the signal, scheduler noise only adds.
+		best := time.Hour
+		for range 3 {
+			start := time.Now()
+			w := h.do(http.MethodPost, "/api/v1/login",
+				map[string]string{"username": username, "password": "wrong-but-long-enough"})
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("%s: got %d, want 401", username, w.Code)
+			}
+			if d := time.Since(start); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+	known := measure("admin")
+	unknown := measure("no-such-operator")
+
+	// The unknown path must not be dramatically faster. A factor of two is
+	// generous — before the fix it was three orders of magnitude.
+	if unknown*2 < known {
+		t.Fatalf("unknown username answered in %v against %v for a known one; "+
+			"the timing distinguishes them", unknown, known)
+	}
+	t.Logf("known %v, unknown %v", known, unknown)
+}
+
+// The count and the insert are separated by an argon2id derivation, which is
+// ample room for a second request to pass the same check — and two different
+// usernames would both insert cleanly, since only `username` is unique.
+func TestConcurrentSetupCreatesExactlyOneAdmin(t *testing.T) {
+	h := newHarness(t)
+	const n = 6
+	codes := make(chan int, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
+				strings.NewReader(fmt.Sprintf(
+					`{"username":"admin%d","password":"%s"}`, i, testPassword)))
+			req.RemoteAddr = "192.0.2.10:1"
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.mux.ServeHTTP(w, req)
+			codes <- w.Code
+		}(i)
+	}
+	wg.Wait()
+	close(codes)
+
+	created := 0
+	for c := range codes {
+		if c == http.StatusCreated {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("%d of %d concurrent setups reported success, want exactly 1", created, n)
+	}
+	got, err := h.db.AdminCount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1 {
+		t.Fatalf("%d administrator accounts exist, want 1", got)
+	}
+}
+
+// The throttle bounds the RATE of completed attempts, not concurrent ones: it
+// records a failure only after the hash finishes. Each derivation allocates a
+// 64 MiB arena, so unbounded concurrency is a memory-exhaustion primitive on an
+// unauthenticated endpoint.
+func TestConcurrentLoginsAreBounded(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	h.cookies, h.csrf = nil, ""
+
+	const n = 12
+	codes := make(chan int, n)
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/login",
+				strings.NewReader(`{"username":"admin","password":"wrong-but-long-enough"}`))
+			req.RemoteAddr = "192.0.2.10:1"
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.mux.ServeHTTP(w, req)
+			codes <- w.Code
+		}()
+	}
+	wg.Wait()
+	close(codes)
+
+	shed := 0
+	for c := range codes {
+		switch c {
+		case http.StatusServiceUnavailable:
+			shed++
+		case http.StatusUnauthorized, http.StatusTooManyRequests:
+		default:
+			t.Errorf("unexpected status %d", c)
+		}
+	}
+	// Not asserting an exact number — the point is that the server sheds load
+	// instead of admitting every caller into a 64 MiB allocation.
+	t.Logf("%d of %d concurrent logins shed with 503", shed, n)
+	if h.srv.hashing == nil || cap(h.srv.hashing) != hashSlots {
+		t.Fatalf("hashing semaphore is not in place (cap=%d)", cap(h.srv.hashing))
+	}
+}
+
+// Filtering a page the database already truncated selects from the newest N
+// events overall rather than the newest N matching, so a view filtered to
+// "error" can come back empty while errors exist.
+func TestEventFilterAppliesBeforeTheLimit(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+
+	// One old error, then plenty of newer routine events.
+	if err := h.db.LogEvent(ctx, store.Event{
+		TS: 1000, Category: "device", Severity: "error", Event: "device.unreachable",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 50 {
+		if err := h.db.LogEvent(ctx, store.Event{
+			TS: int64(2000 + i), Category: "device", Severity: "info", Event: "device.reachable",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var resp struct {
+		Events []store.Event `json:"events"`
+	}
+	w := h.do(http.MethodGet, "/api/v1/events?severity=error&limit=10", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range resp.Events {
+		if e.Severity != "error" {
+			t.Errorf("filter let %q through", e.Severity)
+		}
+		if e.Event == "device.unreachable" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("an error buried under 50 newer routine events was reported as " +
+			"absent; the filter ran after the LIMIT")
+	}
+}

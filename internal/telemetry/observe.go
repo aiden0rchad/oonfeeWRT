@@ -57,7 +57,7 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		// An interface that was down and is up again was recreated by netifd,
 		// and its counters started over. Tracked per interface rather than per
 		// device, because one link flapping says nothing about the others.
-		recreated := s.ifaceCameBack(dev, name, iface.Up)
+		recreated := s.ifaceCameBack(dev, ts, name, iface.Up)
 		rate(KindIfaceRx, name, uint64(iface.Stats.RxBytes), recreated)
 		rate(KindIfaceTx, name, uint64(iface.Stats.TxBytes), recreated)
 	}
@@ -79,7 +79,7 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		// Store.ratio — dividing the absolutes reads 25.9% on a radio that is
 		// really at 73.3%.
 		k := SeriesKey{DeviceID: dev, Kind: KindChanBusy, Key: sv.Iface}
-		if v, ok := s.ratio(k, uint64(sv.BusyTime), uint64(sv.ActiveTime), rebooted); ok {
+		if v, ok := s.ratio(k, ts, uint64(sv.BusyTime), uint64(sv.ActiveTime), rebooted); ok {
 			s.appendLocked(k, ts, v)
 		}
 		// The noise floor is deliberately not a series. It is gated per radio by
@@ -115,7 +115,7 @@ func skipInterface(name string) bool {
 
 // ifaceCameBack reports an interface transitioning from down to up, which means
 // netifd rebuilt it and its counters restarted.
-func (s *Store) ifaceCameBack(deviceID int64, name string, up bool) bool {
+func (s *Store) ifaceCameBack(deviceID int64, ts int64, name string, up bool) bool {
 	k := SeriesKey{DeviceID: deviceID, Kind: "iface_up", Key: name}
 	st := s.counters[k]
 	if st == nil {
@@ -124,6 +124,7 @@ func (s *Store) ifaceCameBack(deviceID int64, name string, up bool) bool {
 	}
 	was, had := st.last == 1, st.valid
 	st.last, st.valid = 0, true
+	st.lastTS = ts
 	if up {
 		st.last = 1
 	}

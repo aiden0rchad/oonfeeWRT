@@ -190,6 +190,11 @@ func (s *Store) Flush(now time.Time) []Rollup {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Age out baselines that no series retirement can reach: a counter whose
+	// first reading never produced a sample has state but no ring, and the
+	// iface_up pseudo-key is never a series at all.
+	s.expireStale(now.Unix(), now.Add(-time.Duration(s.opts.IdleWindows)*s.opts.Window).Unix())
+
 	var out []Rollup
 	for k, r := range s.series {
 		rolled := r.drain(cutoff, int64(s.opts.Window.Seconds()))
