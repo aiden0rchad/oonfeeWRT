@@ -415,8 +415,15 @@ type poller struct {
 	ifaces  []string
 	ifaceAt time.Time
 	boardAt time.Time
-	focus   int
-	quiesce int
+
+	// networks are the device's IPv4 subnets, refreshed on the slow cadence and
+	// stamped onto every poll in between. Without carrying them forward, only
+	// one poll in fifteen minutes could scope its own hosts, and the other
+	// fourteen would record every client as "unknown".
+	networks []Network
+	netAt    time.Time
+	focus    int
+	quiesce  int
 
 	// fails counts consecutive failed polls, driving exponential backoff.
 	fails int
@@ -526,6 +533,19 @@ func (p *poller) tick(ctx context.Context) {
 		p.ifaces, p.ifaceAt = snap.Ifaces, p.c.now()
 		p.mu.Unlock()
 	}
+	// The subnets, likewise. A device with no IPv4 address at all returns an
+	// empty list legitimately, so freshness is decided by whether this poll
+	// ASKED — p.needNetworks() at build time — not by the list being non-empty.
+	p.mu.Lock()
+	if snap.askedNetworks {
+		p.networks = snap.Networks
+	} else {
+		// Carry the last known set onto this snapshot so the sink can scope the
+		// hosts it just collected. netAt is stamped where the call is BUILT, so
+		// a device that refuses the call does not re-ask on every poll.
+		snap.Networks = p.networks
+	}
+	p.mu.Unlock()
 	p.succeed(snap)
 	p.c.sink.Observe(ctx, snap)
 }

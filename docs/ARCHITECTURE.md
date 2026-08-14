@@ -499,6 +499,37 @@ number is a black box. Make the tooltip show the four components.
 
 ---
 
+### 5.1 Client scoping — whose network is this host on?
+
+A gateway's ARP, neighbour and DHCP tables cover **every** interface, so the
+client inventory built from them mixes the network the device serves with the
+network it connects to. Measured on the reference device: of 16 known hosts, 7
+were neighbours on the upstream network behind the WAN port and only 3 were
+actual clients.
+
+Scope comes from `network.interface dump`, on the same slow refresh cadence as
+the radio list and inside the same batch, so it costs no extra requests. A host
+is:
+
+| Scope | Meaning |
+|---|---|
+| `local` | its address is in a subnet of an interface that does **not** carry the default route |
+| `upstream` | its address is in a subnet of the interface that **does** — a neighbour on the uplink, not a client |
+| `unknown` | no observed address, or an address in no interface's subnet |
+
+**Upstream is decided by the routing table, never by an interface being named
+`wan`.** The name is a convention; a device bridged onto an existing network can
+carry the default route on the interface called `lan`.
+
+`unknown` is a real answer and must not collapse into `local`. A host that has
+not been shown to be on this network must not be counted as one — that is the
+same three-state rule as everywhere else, applied to a question where guessing
+puts someone else's hardware in a list captioned "your devices".
+
+Note this does **not** need the site model (§5). The site model is *our*
+description of a network; this question needs the *device's*, which netifd
+already publishes.
+
 ## 6. Discovery, adoption, identity
 
 **Discovery (LAN):** sweep the management subnet probing TCP/80 for a `/ubus`

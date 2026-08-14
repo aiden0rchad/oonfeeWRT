@@ -430,3 +430,85 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// A determination must never be overwritten by a non-determination.
+//
+// The subnets are re-read every fifteen minutes and carried forward in between,
+// but a poll that happens before the first read — or one against a device that
+// refuses the call — reports "unknown" for every host. Letting that overwrite a
+// correct classification would flicker clients in and out of the default view
+// for reasons no operator could see.
+func TestClientScopeIsNotDowngradedToUnknown(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:bb:cc:00:00:01", Name: "laptop", IPv4: "192.168.1.5", Scope: ScopeLocal},
+	}, 1000); err != nil {
+		t.Fatal(err)
+	}
+	// A later poll that could not classify anything.
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:bb:cc:00:00:01", Name: "laptop", IPv4: "192.168.1.5", Scope: ScopeUnknown},
+	}, 2000); err != nil {
+		t.Fatal(err)
+	}
+	got := clientByMAC(t, db, "aa:bb:cc:00:00:01")
+	if got.Scope != ScopeLocal {
+		t.Errorf("scope = %q after an unknown-scoped poll, want %q", got.Scope, ScopeLocal)
+	}
+	if got.LastSeen == nil || *got.LastSeen != 2000 {
+		t.Errorf("last_seen was not updated by the second poll: %v", got.LastSeen)
+	}
+}
+
+// A real reclassification must still land: a client that moves from one side of
+// the router to the other is exactly what this column is for.
+func TestClientScopeChangesWhenTheAnswerChanges(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:bb:cc:00:00:02", IPv4: "10.7.46.9", Scope: ScopeUpstream},
+	}, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:bb:cc:00:00:02", IPv4: "192.168.1.9", Scope: ScopeLocal},
+	}, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if got := clientByMAC(t, db, "aa:bb:cc:00:00:02"); got.Scope != ScopeLocal {
+		t.Errorf("scope = %q, want %q — a genuine reclassification must land",
+			got.Scope, ScopeLocal)
+	}
+}
+
+// A row from before the column existed reads as undetermined, not local.
+func TestClientWithNoStoredScopeReadsAsUnknown(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO clients (mac, name, ip, first_seen, last_seen) VALUES (?,?,?,?,?)`,
+		"aa:bb:cc:00:00:03", "old row", "192.168.1.7", 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if got := clientByMAC(t, db, "aa:bb:cc:00:00:03"); got.Scope != ScopeUnknown {
+		t.Errorf("a pre-migration row reads as %q, want %q; defaulting it to "+
+			"local would assert something never measured", got.Scope, ScopeUnknown)
+	}
+}
+
+func clientByMAC(t *testing.T, db *DB, mac string) Client {
+	t.Helper()
+	cs, err := db.Clients(context.Background(), 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cs {
+		if c.MAC == mac {
+			return c
+		}
+	}
+	t.Fatalf("client %s not found", mac)
+	return Client{}
+}

@@ -71,12 +71,27 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
+	// Count the scopes here so the UI's filter counts do not depend on the page
+	// it happened to receive, and so an empty local list is legible: "0 local,
+	// 8 upstream" is an answer, an empty grid on its own is not.
+	scopes := map[string]int{}
+	for _, c := range out {
+		scopes[c.Scope]++
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"clients": out,
+		"scopes":  scopes,
 		// Says plainly why most rows have no RF data, so the UI can explain it
 		// rather than leaving a column mysteriously empty.
 		"note": "signal and retry data come from the focused poll tier, so they " +
 			"are present only for devices a screen is currently watching",
+		// The scoping caveat, in the response rather than only in the UI, so an
+		// API consumer gets it too.
+		"scope_note": "clients are scoped by which of the device's own IPv4 " +
+			"subnets their address falls in; \"upstream\" means the interface " +
+			"carrying the default route, i.e. a neighbour on the uplink rather " +
+			"than a client of this network",
 	})
 }
 

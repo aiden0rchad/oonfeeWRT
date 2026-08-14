@@ -25,6 +25,15 @@ import { ago } from '../components/Chart'
 export function Clients({ clients, note }: { clients: Client[]; note: string }) {
   const [presence, setPresence] = useState('online')
   const [connection, setConnection] = useState('')
+  // Defaults to the network this controller manages.
+  //
+  // A gateway's neighbour tables cover every interface, so an unscoped list
+  // mixes the operator's devices with whatever is on the other side of the WAN
+  // port — measured 8 of 16 on the reference device, including the upstream
+  // router itself. Those are not this network's clients by any definition a
+  // user has. They stay reachable through the rail rather than being dropped,
+  // because "where did my device go" needs an answer that is not silence.
+  const [scope, setScope] = useState('local')
   const [hidden, setHidden] = useHiddenColumns('clients')
   const withRF = clients.filter((c) => c.signal != null).length
 
@@ -33,18 +42,12 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
   // would I get if I clicked that instead?" rather than showing 0 beside
   // everything not currently selected.
   const presenceOf = (c: Client) => (c.online ? 'online' : 'offline')
-  const byConnection = connection
-    ? clients.filter((c) => c.connection === connection)
-    : clients
-  const byPresence = presence
-    ? clients.filter((c) => presenceOf(c) === presence)
-    : clients
+  const match = (c: Client, skip: 'presence' | 'connection' | 'scope' | null) =>
+    (skip === 'presence' || presence === '' || presenceOf(c) === presence) &&
+    (skip === 'connection' || connection === '' || c.connection === connection) &&
+    (skip === 'scope' || scope === '' || c.scope === scope)
 
-  const rows = clients.filter(
-    (c) =>
-      (presence === '' || presenceOf(c) === presence) &&
-      (connection === '' || c.connection === connection),
-  )
+  const rows = clients.filter((c) => match(c, null))
 
   const columns: Column<Client>[] = [
     {
@@ -104,6 +107,25 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
       sortBy: (c) => c.tx_retry_pct ?? -1,
     },
     {
+      key: 'scope',
+      header: 'Network',
+      width: 110,
+      render: (c) =>
+        c.scope === 'local' ? (
+          'this network'
+        ) : c.scope === 'upstream' ? (
+          <span
+            style={{ color: 'var(--text-muted)' }}
+            title="On the subnet of the interface carrying the default route — a neighbour on the uplink, not a client of this network."
+          >
+            upstream
+          </span>
+        ) : (
+          <Unknown why="no address has been seen for this host, or its address falls in none of the device's own subnets, so which side of the router it is on has not been established" />
+        ),
+      sortBy: (c) => c.scope,
+    },
+    {
       key: 'seen',
       header: 'Last seen',
       numeric: true,
@@ -133,14 +155,20 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
           counted="loaded"
           groups={[
             {
+              label: 'Network',
+              options: tally(clients.filter((c) => match(c, 'scope')), (c) => c.scope),
+              selected: scope,
+              onChange: setScope,
+            },
+            {
               label: 'Presence',
-              options: tally(byConnection, presenceOf),
+              options: tally(clients.filter((c) => match(c, 'presence')), presenceOf),
               selected: presence,
               onChange: setPresence,
             },
             {
               label: 'Connection',
-              options: tally(byPresence, (c) => c.connection),
+              options: tally(clients.filter((c) => match(c, 'connection')), (c) => c.connection),
               selected: connection,
               onChange: setConnection,
             },

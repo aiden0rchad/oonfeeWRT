@@ -2,6 +2,7 @@ package collector
 
 import (
 	"fmt"
+	"net"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
@@ -53,6 +54,16 @@ type Snapshot struct {
 	// is already built by the time the answer arrives.
 	Ifaces      []string
 	IfacesFresh bool
+
+	// Networks are the device's IPv4 subnets, refreshed on the slow cadence and
+	// carried forward on every poll in between — the hosts they classify arrive
+	// every poll, so a snapshot without them could not scope its own clients.
+	Networks []Network
+	// askedNetworks records whether THIS poll requested them, which is what
+	// decides freshness. A device with no IPv4 address returns an empty list
+	// legitimately, so len(Networks) cannot tell "asked, and there are none"
+	// from "did not ask" — the same distinction IfacesFresh exists for.
+	askedNetworks bool
 
 	Uptime     int64
 	Load       [3]float64 // 1/5/15 minute, already unscaled from /65536
@@ -162,6 +173,64 @@ type Host struct {
 	IPv6  []string `json:"ipv6"`
 	Lease int64    `json:"lease_expires"` // 0 when there is no DHCP lease
 }
+
+// Network is one logical interface's IPv4 subnet, as netifd reports it.
+//
+// This is what makes it possible to say whether a host the router can see is
+// actually on the network the router serves. On a gateway, the ARP and
+// neighbour tables the client inventory is built from cover EVERY interface —
+// so a device with a WAN uplink lists its upstream network's hosts alongside
+// its own clients, indistinguishably. Measured on the reference device: 8 of
+// its 16 known hosts were neighbours on the uplink, not clients.
+//
+// Upstream is taken from the routing table rather than from the interface being
+// named "wan". The name is a convention and nothing enforces it; carrying the
+// default route is what actually makes an interface the way out.
+type Network struct {
+	Name     string `json:"name"`     // netifd's logical name: "lan", "wan"
+	CIDR     string `json:"cidr"`     // "192.168.1.1/24"
+	Upstream bool   `json:"upstream"` // carries the 0.0.0.0/0 route
+}
+
+// Scope reports which side of the router an address is on.
+//
+// Three-state, and the third value carries weight: an address in no known
+// subnet has not been shown to be either local or upstream. That happens for
+// real — a host seen in a neighbour table before it has an address, a static
+// address outside every configured subnet, a device on a VLAN the controller
+// has not read. Calling those "local" would put someone else's hardware in a
+// list captioned "your devices"; calling them "upstream" would hide a device
+// that genuinely belongs to the operator.
+func (s *Snapshot) Scope(ip string) string {
+	if ip == "" || len(s.Networks) == 0 {
+		return ScopeUnknown
+	}
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return ScopeUnknown
+	}
+	for _, n := range s.Networks {
+		_, subnet, err := net.ParseCIDR(n.CIDR)
+		if err != nil || subnet == nil {
+			continue
+		}
+		if subnet.Contains(addr) {
+			if n.Upstream {
+				return ScopeUpstream
+			}
+			return ScopeLocal
+		}
+	}
+	return ScopeUnknown
+}
+
+// Scope values, mirroring store's. Duplicated rather than imported because the
+// collector does not depend on the store — the dependency runs one way.
+const (
+	ScopeLocal    = "local"
+	ScopeUpstream = "upstream"
+	ScopeUnknown  = "unknown"
+)
 
 // AP is one BSS as hostapd reports it — the cheap source.
 //

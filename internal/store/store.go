@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -36,6 +36,14 @@ var migrations = map[int][]string{
 		// "where it is" with "where it must be" would make a DHCP lease look
 		// like a policy.
 		`ALTER TABLE clients ADD COLUMN ip TEXT`,
+	},
+	3: {
+		// Which side of the router a client is on: "local", "upstream", or ""
+		// for not yet determined. A gateway's ARP and neighbour tables cover
+		// every interface, so without this the client list mixes the network's
+		// own devices with the uplink's neighbours and cannot tell them apart —
+		// measured 8 upstream of 16 on the reference device.
+		`ALTER TABLE clients ADD COLUMN scope TEXT`,
 	},
 }
 

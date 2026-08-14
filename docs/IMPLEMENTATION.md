@@ -1032,3 +1032,38 @@ concurrent probes, 12 hosts answering TCP, 1 fingerprinting as OpenWrt. Wall
 time is set almost entirely by dead addresses — a live host answers in under
 5 ms, a dead one costs the full dial timeout — so it is
 `(addresses / workers) x DialTimeout` and nothing else.
+
+### Client scoping on a gateway (measured 2026-08-14)
+
+A gateway's ARP, neighbour and DHCP tables cover every interface, so the client
+inventory built from `luci-rpc.getHostHints` mixes the network the device serves
+with the network it connects to. On the reference device, of 16 known hosts:
+
+| | count |
+|---|---|
+| clients of this network (192.168.1.0/24) | **3** — a laptop, a phone, a watch |
+| neighbours on the uplink (10.7.46.0/24, behind the WAN port) | **7** |
+| no observed IPv4 at all | **4** |
+| the device's own interface MACs, already filtered | 2 |
+
+`network.interface dump` returns each logical interface with its IPv4 subnets
+and its routes, and costs one more invocation in the existing batch on the
+15-minute rediscovery cadence. Measured after adding it: idle **1.00
+polls/min**, observed **6.00 req/min**, zero flash writes — identical to before,
+with 118 more bytes per poll (9,677 → 9,795).
+
+The upstream interface is the one carrying `0.0.0.0/0`, taken from the routing
+table rather than from the interface being named `wan`. On this device `wan` and
+the default route coincide, but nothing enforces that: a device bridged onto an
+existing network can have the default route on `lan`, and both directions are
+unit-tested.
+
+Two storage rules that follow from the refresh cadence:
+
+- **A determination is never overwritten by a non-determination.** Subnets are
+  re-read every fifteen minutes and carried forward in between, so a poll before
+  the first read reports `unknown` for every host. Letting that overwrite a
+  correct classification flickers clients in and out of the default view.
+- **A row with no stored scope reads as `unknown`, never `local`.** Defaulting it
+  would assert something never measured, and the direction of that error puts
+  someone else's hardware in a list captioned "your devices".

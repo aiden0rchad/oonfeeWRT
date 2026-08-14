@@ -30,13 +30,34 @@ type Client struct {
 	TxRate    *int64   `json:"tx_kbit,omitempty"`
 	Uptime    *int64   `json:"connected_seconds,omitempty"`
 	RetryPct  *float64 `json:"tx_retry_pct,omitempty"`
+
+	// Scope is which side of the router this client is on: ScopeLocal,
+	// ScopeUpstream, or ScopeUnknown.
+	//
+	// Three-state, and the third value is the point. A gateway's neighbour
+	// tables cover every interface, so its client list mixes the network it
+	// serves with the network it connects to — 8 of 16 on the reference device
+	// were upstream. But a host with no observed IPv4, or one whose address
+	// falls in no interface's subnet, has not been shown to be either, and
+	// guessing would put someone else's hardware in a list captioned "your
+	// devices".
+	Scope string `json:"scope"`
 }
+
+// Client scopes. Empty in the database means undetermined, which is what a row
+// written before the subnets were known still holds.
+const (
+	ScopeLocal    = "local"
+	ScopeUpstream = "upstream"
+	ScopeUnknown  = "unknown"
+)
 
 // SeenClient is what one poll learned about one host.
 type SeenClient struct {
-	MAC  string
-	Name string
-	IPv4 string
+	MAC   string
+	Name  string
+	IPv4  string
+	Scope string
 }
 
 // UpsertClients records the hosts a poll saw, in one transaction.
@@ -55,12 +76,18 @@ func (db *DB) UpsertClients(ctx context.Context, seen []SeenClient, now int64) e
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
+	// scope follows the same rule as name and ip: a determination is never
+	// overwritten with a non-determination. The subnets are re-read every
+	// fifteen minutes, so a poll in between could otherwise downgrade a client
+	// that was correctly classified back to "unknown" — and the grid would
+	// flicker devices in and out of the view for reasons no operator could see.
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO clients (mac, name, ip, first_seen, last_seen)
-VALUES (?,?,?,?,?)
+INSERT INTO clients (mac, name, ip, scope, first_seen, last_seen)
+VALUES (?,?,?,?,?,?)
 ON CONFLICT(mac) DO UPDATE SET
-  name = CASE WHEN excluded.name != '' THEN excluded.name ELSE clients.name END,
-  ip   = CASE WHEN excluded.ip   != '' THEN excluded.ip   ELSE clients.ip   END,
+  name  = CASE WHEN excluded.name  != '' THEN excluded.name  ELSE clients.name  END,
+  ip    = CASE WHEN excluded.ip    != '' THEN excluded.ip    ELSE clients.ip    END,
+  scope = CASE WHEN excluded.scope NOT IN ('', ?) THEN excluded.scope ELSE clients.scope END,
   last_seen = excluded.last_seen`)
 	if err != nil {
 		return err
@@ -71,7 +98,8 @@ ON CONFLICT(mac) DO UPDATE SET
 		if c.MAC == "" {
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, c.IPv4, now, now); err != nil {
+		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, c.IPv4, c.Scope,
+			now, now, ScopeUnknown); err != nil {
 			return fmt.Errorf("store: upsert client %s: %w", c.MAC, err)
 		}
 	}
@@ -89,7 +117,8 @@ func (db *DB) Clients(ctx context.Context, activeSince int64, limit int) ([]Clie
 	}
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
-       COALESCE(ip,''), blocked, COALESCE(grp,''), first_seen, last_seen
+       COALESCE(ip,''), blocked, COALESCE(grp,''), first_seen, last_seen,
+       COALESCE(scope,'')
   FROM clients
  WHERE (? = 0 OR last_seen >= ?)
  ORDER BY last_seen DESC, mac
@@ -102,8 +131,14 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 	for rows.Next() {
 		var c Client
 		if err := rows.Scan(&c.MAC, &c.Name, &c.Note, &c.FixedIP, &c.IPv4,
-			&c.Blocked, &c.Group, &c.FirstSeen, &c.LastSeen); err != nil {
+			&c.Blocked, &c.Group, &c.FirstSeen, &c.LastSeen, &c.Scope); err != nil {
 			return nil, err
+		}
+		if c.Scope == "" {
+			// A row written before the subnets were known. Undetermined, and it
+			// says so rather than defaulting to local — defaulting is how
+			// someone else's hardware ends up in a list captioned "yours".
+			c.Scope = ScopeUnknown
 		}
 		out = append(out, c)
 	}

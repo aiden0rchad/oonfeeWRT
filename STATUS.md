@@ -220,22 +220,25 @@ counts, server-side paging with a page-size selector, and a sticky header that
 is now actually sticky. See §5b — the interesting part is again what was found
 to be false.
 
+**Client-list scoping landed 2026-08-14**, and it did *not* need the site model
+— see §5c. The client grid now defaults to the network this controller manages.
+
 **Finish Phase 1** (in the order I would do them):
 
-1. **Client-list scoping.** The grid lists every host the device sees, which on
-   a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
-   from WAN needs the site model to know what a LAN is, so it is really a
-   Phase 3 dependency — but it is visible now and will confuse people.
-2. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
+1. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
    CPU percent (needs a control measurement to be honest — the device only
    reports total), the list of packages we installed (nothing installs any yet),
    and the control to loosen the poll interval.
-3. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns".
-4. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
+3. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
    the client list still returns everything and filters in the browser. That is
-   correct today (13 clients) and its rail says so rather than implying
+   correct today (14 clients) and its rail says so rather than implying
    otherwise, but it does not survive a real fleet.
+4. **Scope the fleet client total too.** The dashboard's "Devices on the LAN"
+   counts every host including upstream neighbours, so it still says 14 where
+   the grid now says 3. One query away, but it is a second place the same
+   distinction has to be made and worth doing deliberately.
 
 ### 5a. What discovery corrected
 
@@ -340,6 +343,44 @@ reachable at the 13 rows the screens had before.
   because deleting the inventory row deletes the only record of what is still
   on that device.
 
+### 5c. Client scoping needed the device's model, not ours
+
+This item was in the backlog with a stated reason: "telling LAN from WAN needs
+the site model to know what a LAN is, so it is really a Phase 3 dependency".
+That was wrong, and wrong in a way worth writing down — the site model is *our*
+description of a network, and the question does not need ours. It needs the
+device's, which netifd already publishes and which one call returns.
+
+`network.interface dump` gives every logical interface, its IPv4 subnets, and
+its routes. A host is a client of this network when its address falls in a
+subnet of an interface that is *not* carrying the default route, and a
+neighbour on the uplink when it falls in one that is. Upstream is decided by
+the routing table rather than by an interface being named `wan`, because the
+name is a convention and a device bridged onto an existing network can have the
+default route on the interface called `lan` — tested both ways round.
+
+What it found on the reference device, which is why the item mattered: of 16
+known hosts, **7 were upstream neighbours** on the UniFi network behind the WAN
+port and only **3 were actual clients** (a laptop, a phone, a watch). Four have
+no observed IPv4 at all and are therefore `unknown` — not `local`, because a
+host that has not been shown to be on this network must not be counted as one.
+The grid went from listing 14 things to listing 3, with the other 11 one click
+away in the rail and labelled.
+
+Cost: the call joins the existing batch on the same 15-minute cadence as the
+radio list and the board identity, so it adds no requests. Budget harness after
+the change: **1.00 polls/min idle, 6.00 req/min observed, zero flash writes** —
+identical, with 118 more bytes per poll. The timestamp is stamped where the
+call is *built*, not where its answer is decoded, so a device whose ACL refuses
+`network.interface` does not re-ask on every poll forever.
+
+Two rules the storage had to respect. A determination is never overwritten by a
+non-determination — the subnets are re-read every fifteen minutes and carried
+forward in between, so a poll that cannot classify would otherwise flicker
+clients out of the default view for reasons no operator could see. And a row
+written before the column existed reads as `unknown`, never `local`: defaulting
+it would assert something never measured.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there. The
@@ -419,6 +460,13 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **Check whose model a question actually needs.** Client scoping sat in the
+  backlog behind "needs the site model, so it is a Phase 3 dependency". The
+  reasoning was that telling a LAN from a WAN requires a definition of a LAN —
+  true — and the unexamined step was assuming the definition had to be *ours*.
+  The device already has one and publishes it in a single call. The item was
+  half a day's work sitting behind a phase boundary that did not exist. When a
+  dependency is asserted, check which system actually holds the fact.
 - **A comment that states a guarantee is a claim, and claims need checking.**
   `Logs.tsx` carried an accurate, well-argued paragraph about why filter counts
   must come from an aggregate rather than the loaded page — sitting directly

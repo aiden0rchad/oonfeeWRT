@@ -120,6 +120,10 @@ export interface Client {
   signal?: number
   tx_retry_pct?: number
   device_id?: number
+  /** Which side of the router: a client of this network, a neighbour on its
+   *  uplink, or not established. "unknown" is a real answer — a host with no
+   *  observed address has not been shown to be either. */
+  scope: 'local' | 'upstream' | 'unknown'
 }
 
 export interface Point {
@@ -304,7 +308,15 @@ export const api = {
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
-  clients: () => get<{ clients: Client[]; note: string }>('/clients'),
+  clients: () =>
+    get<{
+      clients: Client[]
+      /** Counts per scope, from the server, so the rail does not depend on
+       *  which rows the page happened to receive. */
+      scopes: Record<string, number>
+      note: string
+      scope_note: string
+    }>('/clients'),
   adopt: (req: {
     host: string
     name?: string

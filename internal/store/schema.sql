@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS clients (
   ip TEXT,                             -- last observed address (migration v2)
   fixed_ip TEXT, blocked INTEGER NOT NULL DEFAULT 0,
   grp TEXT, first_seen INTEGER, last_seen INTEGER,
+  scope TEXT,                          -- local|upstream, NULL = undetermined (migration v3)
   fingerprint_json TEXT NOT NULL DEFAULT '{}'
 );
 

@@ -285,9 +285,14 @@ func (d *Daemon) recordClients(ctx context.Context, s collector.Snapshot) {
 		if own[h.MAC] {
 			continue
 		}
-		c := store.SeenClient{MAC: h.MAC, Name: h.Name}
+		c := store.SeenClient{MAC: h.MAC, Name: h.Name, Scope: store.ScopeUnknown}
 		if len(h.IPv4) > 0 {
 			c.IPv4 = h.IPv4[0]
+			// Scoped here, at ingest, rather than in the API handler: the
+			// snapshot is the only place that has both the host and the
+			// device's own subnets, and this package's rule is that handlers
+			// read what was already worked out.
+			c.Scope = s.Scope(c.IPv4)
 		}
 		seen = append(seen, c)
 	}

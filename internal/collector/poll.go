@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -148,6 +149,26 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 			decode:   decodeIfaces,
 			optional: true,
 		})
+	}
+	if p.needNetworks() {
+		// Same reasoning as the radio list: in the batch, on the slow cadence,
+		// and used by the poll that asked for it rather than the next one — the
+		// hosts it classifies arrive in this same batch. Subnets change when a
+		// human renumbers a network or a WAN lease moves, neither of which
+		// happens between polls.
+		calls = append(calls, call{
+			inv:      ubus.Invocation{Object: "network.interface", Method: "dump"},
+			decode:   decodeNetworks,
+			optional: true,
+		})
+		// Stamped on the ATTEMPT, not on the answer. A device whose ACL does not
+		// grant network.interface would otherwise never set the timestamp and so
+		// would re-request the call on every single poll, forever, for an answer
+		// it is never going to give. The decoder separately marks a successful
+		// read, which is what decides whether the cached subnets are replaced.
+		p.mu.Lock()
+		p.netAt = p.c.now()
+		p.mu.Unlock()
 	}
 	if p.needBoard() {
 		calls = append(calls, call{
@@ -320,6 +341,59 @@ func decodeHostHints(raw json.RawMessage, s *Snapshot) error {
 	return nil
 }
 
+// decodeNetworks reads netifd's interface dump into the subnets that decide
+// whether a host is a client of this network or a neighbour on its uplink.
+//
+// Loopback is skipped: nothing in a host list is ever 127.x, and keeping it
+// would let a bad address match something.
+func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
+	var v struct {
+		Interface []struct {
+			Name string `json:"interface"`
+			IPv4 []struct {
+				Address string `json:"address"`
+				Mask    int    `json:"mask"`
+			} `json:"ipv4-address"`
+			Route []struct {
+				Target string `json:"target"`
+				Mask   int    `json:"mask"`
+			} `json:"route"`
+		} `json:"interface"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	out := make([]Network, 0, len(v.Interface))
+	for _, i := range v.Interface {
+		upstream := false
+		for _, r := range i.Route {
+			// The default route, which is what actually makes an interface the
+			// way out. Not the interface being called "wan".
+			if r.Target == "0.0.0.0" && r.Mask == 0 {
+				upstream = true
+				break
+			}
+		}
+		for _, a := range i.IPv4 {
+			ip := net.ParseIP(a.Address)
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			if a.Mask < 0 || a.Mask > 32 {
+				continue
+			}
+			out = append(out, Network{
+				Name:     i.Name,
+				CIDR:     fmt.Sprintf("%s/%d", a.Address, a.Mask),
+				Upstream: upstream,
+			})
+		}
+	}
+	s.Networks = out
+	s.askedNetworks = true
+	return nil
+}
+
 // decodeDHCPLeases adds the hostname the client asked to be called, which is
 // often better than the reverse-DNS name in the hints.
 func decodeDHCPLeases(raw json.RawMessage, s *Snapshot) error {
@@ -423,6 +497,11 @@ func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, 
 // needIfaces reports whether this poll should re-read the radio list.
 func (p *poller) needIfaces() bool {
 	return p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval
+}
+
+// needNetworks reports whether this poll should re-read the interface subnets.
+func (p *poller) needNetworks() bool {
+	return p.netAt.IsZero() || p.c.now().Sub(p.netAt) >= rediscoverInterval
 }
 
 // needBoard reports whether this poll should re-read the firmware identity.

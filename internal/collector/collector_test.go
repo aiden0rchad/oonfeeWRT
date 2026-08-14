@@ -739,3 +739,111 @@ func TestExternalRequestForAnUnknownDeviceIsIgnored(t *testing.T) {
 		t.Error("noting a request created a poller for a device that is not polled")
 	}
 }
+
+// Scoping decides whether a host the router can see is a client of the network
+// it serves or a neighbour on the network it connects to. Getting it wrong in
+// either direction is a real error: one puts someone else's hardware in a list
+// captioned "your devices", the other hides a device the operator owns.
+func TestScopeClassifiesBySubnet(t *testing.T) {
+	s := &Snapshot{Networks: []Network{
+		{Name: "lan", CIDR: "192.168.1.1/24", Upstream: false},
+		{Name: "wan", CIDR: "10.7.46.69/24", Upstream: true},
+	}}
+	for _, tc := range []struct {
+		ip, want, why string
+	}{
+		{"192.168.1.181", ScopeLocal, "inside the lan subnet"},
+		{"192.168.1.1", ScopeLocal, "the router's own lan address is on the lan"},
+		{"10.7.46.196", ScopeUpstream, "inside the subnet of the default-route interface"},
+		{"10.7.46.1", ScopeUpstream, "the upstream gateway itself"},
+		{"", ScopeUnknown, "no address observed"},
+		{"not-an-ip", ScopeUnknown, "unparseable"},
+		{"172.16.4.9", ScopeUnknown, "in no interface's subnet — not a reason to guess"},
+		{"192.168.2.5", ScopeUnknown, "one subnet over from the lan, which is not the lan"},
+	} {
+		if got := s.Scope(tc.ip); got != tc.want {
+			t.Errorf("Scope(%q) = %q, want %q (%s)", tc.ip, got, tc.want, tc.why)
+		}
+	}
+}
+
+// Upstream is decided by the routing table, not by the interface being called
+// "wan". The name is a convention and nothing enforces it.
+func TestScopeUsesTheDefaultRouteNotTheInterfaceName(t *testing.T) {
+	// An interface named "lan" that actually carries the default route, which
+	// is what a device bridged onto an existing network looks like.
+	s := &Snapshot{Networks: []Network{
+		{Name: "lan", CIDR: "10.0.0.2/24", Upstream: true},
+		{Name: "wan", CIDR: "192.168.9.1/24", Upstream: false},
+	}}
+	if got := s.Scope("10.0.0.55"); got != ScopeUpstream {
+		t.Errorf("a host on the default-route interface's subnet = %q, want %q — "+
+			"the interface is named 'lan' but it is the way out", got, ScopeUpstream)
+	}
+	if got := s.Scope("192.168.9.55"); got != ScopeLocal {
+		t.Errorf("a host on the non-default-route interface = %q, want %q — "+
+			"the interface is named 'wan' but nothing routes through it",
+			got, ScopeLocal)
+	}
+}
+
+// Before the subnets are known, every host is undetermined — not local.
+func TestScopeWithoutNetworksIsUnknownNotLocal(t *testing.T) {
+	s := &Snapshot{}
+	if got := s.Scope("192.168.1.5"); got != ScopeUnknown {
+		t.Errorf("Scope with no known subnets = %q, want %q; defaulting to local "+
+			"is how an upstream neighbour ends up listed as a client", got, ScopeUnknown)
+	}
+}
+
+func TestDecodeNetworksReadsSubnetsAndTheDefaultRoute(t *testing.T) {
+	// Trimmed from a real network.interface.dump off the reference device.
+	raw := []byte(`{"interface":[
+	  {"interface":"lan","up":true,"ipv4-address":[{"address":"192.168.1.1","mask":24}],"route":[]},
+	  {"interface":"loopback","up":true,"ipv4-address":[{"address":"127.0.0.1","mask":8}],"route":[]},
+	  {"interface":"wan","up":true,"ipv4-address":[{"address":"10.7.46.69","mask":24}],
+	   "route":[{"target":"0.0.0.0","mask":0,"nexthop":"10.7.46.1"}]},
+	  {"interface":"wan6","up":true,"ipv4-address":[],
+	   "route":[{"target":"fd9f::","mask":64,"nexthop":"::"}]}
+	]}`)
+	var s Snapshot
+	if err := decodeNetworks(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.askedNetworks {
+		t.Error("a successful decode must mark the subnets fresh")
+	}
+	// Loopback is dropped: nothing in a host list is 127.x, and keeping it lets
+	// a bad address match something.
+	if len(s.Networks) != 2 {
+		t.Fatalf("got %d networks, want 2 (loopback dropped, wan6 has no IPv4): %+v",
+			len(s.Networks), s.Networks)
+	}
+	byName := map[string]Network{}
+	for _, n := range s.Networks {
+		byName[n.Name] = n
+	}
+	if n := byName["lan"]; n.CIDR != "192.168.1.1/24" || n.Upstream {
+		t.Errorf("lan = %+v, want 192.168.1.1/24 not upstream", n)
+	}
+	if n := byName["wan"]; n.CIDR != "10.7.46.69/24" || !n.Upstream {
+		t.Errorf("wan = %+v, want 10.7.46.69/24 upstream", n)
+	}
+}
+
+// An IPv6-only default route must not mark an interface upstream for IPv4
+// purposes... but more importantly, a non-default route must never do it.
+func TestDecodeNetworksIgnoresNonDefaultRoutes(t *testing.T) {
+	raw := []byte(`{"interface":[
+	  {"interface":"lan","ipv4-address":[{"address":"192.168.1.1","mask":24}],
+	   "route":[{"target":"10.9.0.0","mask":16,"nexthop":"192.168.1.9"}]}
+	]}`)
+	var s Snapshot
+	if err := decodeNetworks(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Networks) != 1 || s.Networks[0].Upstream {
+		t.Errorf("a static route to 10.9.0.0/16 made the interface upstream: %+v",
+			s.Networks)
+	}
+}
