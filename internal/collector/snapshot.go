@@ -46,6 +46,7 @@ type Snapshot struct {
 	Degraded []Degradation
 
 	Board      *Board
+	Hosts      []Host
 	Uptime     int64
 	Load       [3]float64 // 1/5/15 minute, already unscaled from /65536
 	Memory     Memory
@@ -123,9 +124,10 @@ func (m Memory) Used() int64 {
 // Counters, not rates. Rates are computed on the controller from two samples,
 // per DEVICE-BUDGET §4.3 — never ask the router to do arithmetic for us.
 type Interface struct {
-	Up      bool `json:"up"`
-	Carrier bool `json:"carrier"`
-	MTU     int  `json:"mtu"`
+	Up      bool   `json:"up"`
+	Carrier bool   `json:"carrier"`
+	MTU     int    `json:"mtu"`
+	MAC     string `json:"macaddr"`
 	Stats   struct {
 		RxBytes   int64 `json:"rx_bytes"`
 		TxBytes   int64 `json:"tx_bytes"`
@@ -134,6 +136,24 @@ type Interface struct {
 		RxErrors  int64 `json:"rx_errors"`
 		TxErrors  int64 `json:"tx_errors"`
 	} `json:"statistics"`
+}
+
+// Host is one thing seen on the LAN, merged from the two cheap sources.
+//
+// Measured on the reference device: luci-rpc.getHostHints costs 5.1 ms and
+// getDHCPLeases 2.9 ms. Together they roughly double the baseline poll (8 ms to
+// ~16 ms) and buy the entire client inventory, which is why they sit in the
+// baseline tier rather than waiting for someone to open a screen — a client list
+// that only exists while you are looking at it is not an inventory.
+//
+// Note what is NOT here: luci-rpc.getWirelessDevices, measured at 128.8 ms, as
+// expensive as an entire focused poll. It belongs to adoption, never to a poll.
+type Host struct {
+	MAC   string   `json:"mac"`
+	Name  string   `json:"name"`
+	IPv4  []string `json:"ipv4"`
+	IPv6  []string `json:"ipv6"`
+	Lease int64    `json:"lease_expires"` // 0 when there is no DHCP lease
 }
 
 // AP is one BSS as hostapd reports it — the cheap source.
@@ -207,9 +227,26 @@ type Rate struct {
 
 // Survey is one channel survey sample.
 //
-// Only ActiveTime and BusyTime are usable on mwlwifi: rx_time and tx_time never
-// advance there, so the airtime split and interference are not computable —
-// present but wrong, which no presence probe would have caught.
+// ActiveTime and BusyTime are monotonic COUNTERS in milliseconds, not a ratio,
+// and they do not share an epoch. Measured 2026-08-13 on the reference device:
+// the 5 GHz radio reported active=24427 against busy=922104 — busy 37x larger —
+// while both advanced sanely (active tracked the wall clock to 99%). Channel
+// utilization is therefore the ratio of two DELTAS, and the ratio of the
+// absolute values is meaningless.
+//
+// That is not a pedantic distinction. On 5 GHz the absolute ratio yields 1354%,
+// which anyone would spot. On 2.4 GHz it yields 25.9% while the true figure was
+// 73.3% — plausible, wrong by 3x, and nobody would question it. hostapd's
+// independent BSS-load reading on the same radio said 70%, which is what
+// settled it.
+//
+// So this type deliberately offers NO percentage method. Utilization is
+// computed in internal/telemetry alongside the other counter-derived rates,
+// where the previous reading is in hand.
+//
+// rx_time and tx_time are separately unusable on mwlwifi: they never advance,
+// so the airtime split and interference are not computable — present but wrong,
+// which no presence probe would have caught.
 //
 // RxTime and TxTime are unsigned for a concrete reason. mwlwifi does not merely
 // leave them at zero, it leaves them uninitialised, and the values that come
@@ -245,12 +282,4 @@ func (s Survey) NoiseDBm() int {
 		return s.Noise - 256
 	}
 	return s.Noise
-}
-
-// BusyPercent is channel utilization, the one derivation this survey supports.
-func (s Survey) BusyPercent() float64 {
-	if s.ActiveTime <= 0 {
-		return 0
-	}
-	return float64(s.BusyTime) * 100 / float64(s.ActiveTime)
 }

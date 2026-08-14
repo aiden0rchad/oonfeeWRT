@@ -654,10 +654,23 @@ def handle_one(req):
             noise = 161
             if not g5 and survey_calls % 2 == 0:
                 noise = 186  # -70 dBm
+            # busy_time and active_time are monotonic COUNTERS in ms, and they
+            # do NOT share an epoch. Measured 2026-08-13: the 5 GHz radio read
+            # active=24427 against busy=922104 while both advanced correctly, so
+            # the absolute ratio said 1354% where the delta ratio said 1.7%. On
+            # 2.4 GHz the absolute ratio said 25.9% against a true 73.3% — the
+            # dangerous case, because 25.9% looks entirely reasonable.
+            #
+            # Reproduced with a large busy offset so a consumer that divides the
+            # absolutes gets an obviously impossible number in CI, and both
+            # counters advancing so a consumer that divides the deltas gets a
+            # steady 25%.
+            active = 19849 + survey_calls * 1000
+            busy = 900000 + survey_calls * 250
             return ok(rid, {"results": [{
                 "mhz": 5180 if g5 else 2437,
                 "noise": noise,
-                "active_time": 19849, "busy_time": 495, "busy_time_ext": 0,
+                "active_time": active, "busy_time": busy, "busy_time_ext": 0,
                 "rx_time": 13869070124637487105, "tx_time": 0}]})
         return err(rid, 8)  # NOT_SUPPORTED
 

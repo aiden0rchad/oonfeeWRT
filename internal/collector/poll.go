@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
@@ -104,6 +106,20 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 			optional: true,
 		},
 	}
+	// The client inventory. Cheap enough for every poll (5.1 ms + 2.9 ms
+	// measured) and the only way the Client Devices screen has data when nobody
+	// is looking at a particular device.
+	calls = append(calls,
+		call{
+			inv:      ubus.Invocation{Object: "luci-rpc", Method: "getHostHints"},
+			decode:   decodeHostHints,
+			optional: true,
+		},
+		call{
+			inv:      ubus.Invocation{Object: "luci-rpc", Method: "getDHCPLeases"},
+			decode:   decodeDHCPLeases,
+			optional: true,
+		})
 	if p.needBoard() {
 		calls = append(calls, call{
 			inv:      ubus.Invocation{Object: "system", Method: "board"},
@@ -247,6 +263,68 @@ func decodeSurvey(iface string) func(json.RawMessage, *Snapshot) error {
 		}
 		return nil
 	}
+}
+
+// decodeHostHints reads luci-rpc's ARP/neighbour/DHCP merge, keyed by MAC.
+func decodeHostHints(raw json.RawMessage, s *Snapshot) error {
+	var v map[string]struct {
+		Name     string   `json:"name"`
+		IPAddrs  []string `json:"ipaddrs"`
+		IP6Addrs []string `json:"ip6addrs"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	for mac, h := range v {
+		e := s.host(mac)
+		e.IPv4, e.IPv6 = h.IPAddrs, h.IP6Addrs
+		if h.Name != "" {
+			e.Name = strings.TrimSuffix(h.Name, ".lan")
+		}
+	}
+	return nil
+}
+
+// decodeDHCPLeases adds the hostname the client asked to be called, which is
+// often better than the reverse-DNS name in the hints.
+func decodeDHCPLeases(raw json.RawMessage, s *Snapshot) error {
+	var v struct {
+		Leases []struct {
+			MAC      string `json:"macaddr"`
+			IP       string `json:"ipaddr"`
+			Hostname string `json:"hostname"`
+			Expires  int64  `json:"expires"`
+		} `json:"dhcp_leases"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	for _, l := range v.Leases {
+		e := s.host(l.MAC)
+		e.Lease = l.Expires
+		if l.Hostname != "" {
+			e.Name = l.Hostname
+		}
+		if l.IP != "" && !slices.Contains(e.IPv4, l.IP) {
+			e.IPv4 = append(e.IPv4, l.IP)
+		}
+	}
+	return nil
+}
+
+// host returns the entry for a MAC, creating it so the two sources can each
+// fill in their half. MACs are normalised: the hints report them uppercase and
+// the leases uppercase too, but nothing guarantees that stays true, and a client
+// listed twice under two spellings is worse than one listed once.
+func (s *Snapshot) host(mac string) *Host {
+	mac = strings.ToLower(strings.TrimSpace(mac))
+	for i := range s.Hosts {
+		if s.Hosts[i].MAC == mac {
+			return &s.Hosts[i]
+		}
+	}
+	s.Hosts = append(s.Hosts, Host{MAC: mac})
+	return &s.Hosts[len(s.Hosts)-1]
 }
 
 // ap returns the AP entry for an interface, creating it in place so the two

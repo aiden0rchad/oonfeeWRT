@@ -133,6 +133,7 @@ type Store struct {
 	mu       sync.Mutex
 	series   map[SeriesKey]*ring
 	counters map[SeriesKey]*counterState
+	ratios   map[SeriesKey]*ratioState
 	reboots  map[int64]*rebootState
 }
 
@@ -142,6 +143,7 @@ func New(opts Options) *Store {
 		opts:     opts.withDefaults(),
 		series:   map[SeriesKey]*ring{},
 		counters: map[SeriesKey]*counterState{},
+		ratios:   map[SeriesKey]*ratioState{},
 		reboots:  map[int64]*rebootState{},
 	}
 }

@@ -74,8 +74,13 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 	}
 
 	for _, sv := range snap.Surveys {
-		if sv.ActiveTime > 0 {
-			gauge(KindChanBusy, sv.Iface, sv.BusyPercent())
+		// Utilization is the ratio of two counter DELTAS, never of the absolute
+		// values: busy_time and active_time do not share an epoch. See
+		// Store.ratio — dividing the absolutes reads 25.9% on a radio that is
+		// really at 73.3%.
+		k := SeriesKey{DeviceID: dev, Kind: KindChanBusy, Key: sv.Iface}
+		if v, ok := s.ratio(k, uint64(sv.BusyTime), uint64(sv.ActiveTime), rebooted); ok {
+			s.appendLocked(k, ts, v)
 		}
 		// The noise floor is deliberately not a series. It is gated per radio by
 		// the capability probe, and on the reference device's 2.4 GHz radio it

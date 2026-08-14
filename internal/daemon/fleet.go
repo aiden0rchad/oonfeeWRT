@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -147,6 +148,7 @@ func (d *Daemon) sink() collector.Sink {
 		// Into the ring. Nothing reaches the database here: raw samples are
 		// drained on the five-minute tick, in one transaction (decision D4).
 		d.Samples.Observe(ctx, s)
+		d.recordClients(ctx, s)
 
 		// A firmware change invalidates the capability snapshot: a new build can
 		// add or remove ubus objects, and rendering against a stale registry is
@@ -227,5 +229,42 @@ func (d *Daemon) stopMaintainer() {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		d.Log.Error("the final telemetry flush did not finish; this window is lost")
+	}
+}
+
+// recordClients writes the client inventory a poll saw.
+//
+// This is a database write per poll, which the rollup path deliberately avoids —
+// and it is justified differently. The inventory is small (one row per host,
+// updated in place), it is what makes the Client Devices screen exist at all
+// between focused polls, and it is bounded by the number of things on the LAN
+// rather than by time. Telemetry is unbounded in time, which is why that goes
+// through the ring instead.
+func (d *Daemon) recordClients(ctx context.Context, s collector.Snapshot) {
+	if len(s.Hosts) == 0 {
+		return
+	}
+	// The device's own interfaces show up in its ARP table. Listing a router as
+	// a client of itself is confusing, and it would be counted in the fleet
+	// client total.
+	own := map[string]bool{}
+	for _, iface := range s.Interfaces {
+		if iface.MAC != "" {
+			own[strings.ToLower(iface.MAC)] = true
+		}
+	}
+	seen := make([]store.SeenClient, 0, len(s.Hosts))
+	for _, h := range s.Hosts {
+		if own[h.MAC] {
+			continue
+		}
+		c := store.SeenClient{MAC: h.MAC, Name: h.Name}
+		if len(h.IPv4) > 0 {
+			c.IPv4 = h.IPv4[0]
+		}
+		seen = append(seen, c)
+	}
+	if err := d.Store.UpsertClients(ctx, seen, s.At.Unix()); err != nil {
+		d.Log.Error("could not record clients", "device", s.MAC, "err", err)
 	}
 }

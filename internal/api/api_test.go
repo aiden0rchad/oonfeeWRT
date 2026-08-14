@@ -768,3 +768,145 @@ func TestSweepExpiresSessions(t *testing.T) {
 		t.Fatalf("%d sessions survived the sweep", n)
 	}
 }
+
+// ---- clients ----
+
+func TestClientsGrid(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+
+	dev := h.seedDevice("ap-c", true, nil)
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{
+		{MAC: "aa:bb:cc:11:22:33", Name: "laptop", IPv4: "192.168.1.130"},
+		{MAC: "aa:bb:cc:44:55:66", Name: "iot-plug", IPv4: "192.168.1.131"},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	// One of them has been seen by a focused poll; the other has not.
+	base := now.Truncate(5 * time.Minute).Unix()
+	if err := h.db.WriteRollups(ctx, []store.RollupRow{
+		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb:cc:11:22:33",
+			TS: base, Avg: -52, Cnt: 12},
+		{DeviceID: dev.ID, Kind: "sta_retry_pct", Key: "aa:bb:cc:11:22:33",
+			TS: base, Avg: 4.5, Cnt: 12},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Clients []clientView `json:"clients"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Clients) != 2 {
+		t.Fatalf("got %d clients, want 2", len(resp.Clients))
+	}
+	byMAC := map[string]clientView{}
+	for _, c := range resp.Clients {
+		byMAC[c.MAC] = c
+	}
+
+	seen := byMAC["aa:bb:cc:11:22:33"]
+	if seen.Connection != "wireless" {
+		t.Errorf("a client with RSSI telemetry is %q, want wireless", seen.Connection)
+	}
+	if seen.Signal == nil || *seen.Signal != -52 {
+		t.Errorf("signal = %v, want -52", seen.Signal)
+	}
+	if seen.RetryPct == nil {
+		t.Error("retry percentage missing for a client with the series")
+	}
+	if !seen.Online {
+		t.Error("a client seen just now is not online")
+	}
+
+	// The one with no focused-poll data must report unknown and carry NO signal
+	// — not "wired", and certainly not 0 dBm.
+	unseen := byMAC["aa:bb:cc:44:55:66"]
+	if unseen.Connection != "unknown" {
+		t.Errorf("connection = %q; absence of wireless evidence is not evidence "+
+			"of a cable", unseen.Connection)
+	}
+	if unseen.Signal != nil {
+		t.Errorf("signal = %v for a client no focused poll has covered", *unseen.Signal)
+	}
+}
+
+// A station series outlives the client's visit by the whole retention period, so
+// without a recency bound the grid would report a laptop as connected at
+// -52 dBm two weeks after it left.
+func TestClientsIgnoreStaleStationTelemetry(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+
+	dev := h.seedDevice("ap-d", true, nil)
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{
+		{MAC: "aa:bb:cc:11:22:33", Name: "laptop"},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-3 * time.Hour).Truncate(5 * time.Minute).Unix()
+	if err := h.db.WriteRollups(ctx, []store.RollupRow{
+		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb:cc:11:22:33",
+			TS: old, Avg: -52, Cnt: 12},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients", nil)
+	var resp struct {
+		Clients []clientView `json:"clients"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Clients) != 1 {
+		t.Fatalf("got %d clients", len(resp.Clients))
+	}
+	if resp.Clients[0].Signal != nil {
+		t.Errorf("three-hour-old RSSI was reported as current: %v", *resp.Clients[0].Signal)
+	}
+	if resp.Clients[0].Connection != "unknown" {
+		t.Errorf("connection = %q from stale telemetry", resp.Clients[0].Connection)
+	}
+}
+
+func TestClientNameIsNotOverwrittenByAnEmptyOne(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t)
+	now := time.Now().Unix()
+
+	if err := h.db.UpsertClients(ctx,
+		[]store.SeenClient{{MAC: "aa:bb", Name: "laptop"}}, now); err != nil {
+		t.Fatal(err)
+	}
+	// A later poll where reverse DNS failed must not erase the name.
+	if err := h.db.UpsertClients(ctx,
+		[]store.SeenClient{{MAC: "aa:bb", Name: ""}}, now+60); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.db.Clients(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "laptop" {
+		t.Fatalf("client = %+v, want the name preserved", got)
+	}
+	if got[0].LastSeen == nil || *got[0].LastSeen != now+60 {
+		t.Errorf("last_seen was not advanced: %v", got[0].LastSeen)
+	}
+	if got[0].FirstSeen == nil || *got[0].FirstSeen != now {
+		t.Errorf("first_seen changed: %v", got[0].FirstSeen)
+	}
+}

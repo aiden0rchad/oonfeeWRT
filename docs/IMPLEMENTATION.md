@@ -667,7 +667,8 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
 3. **mwlwifi does provide survey data** — the design's assumption that it
    doesn't is wrong. `iwinfo.survey` works natively on both radios (no
    `file.exec`, no process spawn) and returns `active_time` + `busy_time`, so
-   **channel utilization** (busy/active) is computable on this hardware. That is
+   **channel utilization** is computable on this hardware — from the DELTAS of
+   those counters, see §14.7. That is
    *not* the same as the interference and airtime columns: both need
    `rx_time`/`tx_time` and so stay capability-gated — see PARITY-MATRIX, where
    they are 🟠 rather than 🟢. Two traps: `rx_time`/`tx_time` are uninitialised
@@ -729,7 +730,34 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    pair agreed while the `iwinfo.info` pair jumped 45 dB, same radio, same
    minute — so `Present` means "not caught misbehaving", never "verified
    stable".
-6. **The two poll tiers are worth the complexity — measured through the real
+6. **`iwinfo.survey`'s `busy_time` and `active_time` are counters, and they do
+   not share an epoch.** Both advance correctly — `active_time` tracked the wall
+   clock to 99% over a 10-second window — but their absolute values are not
+   comparable. Measured 2026-08-13:
+
+   | Radio | absolute busy/active | Δbusy/Δactive | independent check |
+   |---|---|---|---|
+   | 5 GHz (`phy0-ap0`) | **1354.7 %** | 1.7 % | — |
+   | 2.4 GHz (`phy1-ap0`) | **25.9 %** | 73.3 % | hostapd BSS load: 70 % |
+
+   The 5 GHz row is the harmless case: 1354% is obviously broken and someone
+   would catch it. The 2.4 GHz row is the dangerous one — 25.9% is a perfectly
+   reasonable-looking utilization figure that is wrong by a factor of three, and
+   nothing about it invites a second look. hostapd's `airtime.utilization` on
+   the same radio at the same moment is what settled which number was real.
+
+   This corrects a claim that was asserted as verified in ARCHITECTURE §5,
+   PARITY-MATRIX and this document: "Utilization = busy / active — verified good
+   on mwlwifi". The *fields* were verified good. The *formula* was never tested
+   against a radio whose counters had drifted apart, because on a freshly booted
+   device they have not.
+
+   `collector.Survey` therefore offers no percentage method at all — the
+   arithmetic lives in `internal/telemetry` beside the other counter-derived
+   rates, where the previous reading is in hand. A single survey read produces
+   no utilization sample, exactly like a single interface byte counter produces
+   no throughput.
+7. **The two poll tiers are worth the complexity — measured through the real
    collector, under the scoped credential.** Best of five polls each, both
    batched into a single request:
 

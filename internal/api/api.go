@@ -102,6 +102,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/devices/{id}/series", s.handleDeviceSeries)
 	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
 	private.HandleFunc("GET /api/v1/stats/{kind}", s.handleStats)
+	private.HandleFunc("GET /api/v1/clients", s.handleClients)
 	private.HandleFunc("GET /api/v1/events", s.handleEvents)
 	private.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 

@@ -20,6 +20,10 @@ type Maintainer struct {
 	Interval  time.Duration
 	Log       *slog.Logger
 
+	// ClientTTL is how long a client is remembered after it was last seen.
+	// Zero uses DefaultClientTTL.
+	ClientTTL time.Duration
+
 	// AfterTick runs at the end of every cycle. The daemon uses it to expire
 	// idle API sessions and lapsed login lockouts — housekeeping that wants the
 	// same cadence and does not deserve a timer of its own.
@@ -106,6 +110,14 @@ func (m *Maintainer) tick(ctx context.Context, final bool) {
 		m.Log.Error("could not prune telemetry", "err", err)
 		return
 	}
+	// Clients age out on their own schedule. Randomised MACs mean one phone can
+	// produce a new "client" per SSID per reconnect, so the table grows without
+	// this even on a small network.
+	if n, err := m.Store.PruneClients(ctx, now.Add(-m.ClientRetention())); err != nil {
+		m.Log.Error("could not prune clients", "err", err)
+	} else if n > 0 {
+		m.Log.Debug("forgot inactive clients", "count", n)
+	}
 	if res.FiveMinute+res.Hourly+res.Events > 0 {
 		m.Log.Debug("pruned telemetry", "rollup_5m", res.FiveMinute,
 			"rollup_1h", res.Hourly, "events", res.Events)
@@ -119,6 +131,19 @@ func (m *Maintainer) tick(ctx context.Context, final bool) {
 // interval, which belongs here. Deriving it means the two cannot drift apart:
 // a tick shorter than the window is harmless (most ticks flush nothing), but a
 // final flush offset by the wrong amount would drop the last window entirely.
+// DefaultClientTTL keeps a client for 30 days after it was last seen, which is
+// long enough to recognise a laptop returning from a holiday and short enough
+// that randomised MACs do not accumulate forever.
+const DefaultClientTTL = 30 * 24 * time.Hour
+
+// ClientRetention is how long an unseen client is kept.
+func (m *Maintainer) ClientRetention() time.Duration {
+	if m.ClientTTL > 0 {
+		return m.ClientTTL
+	}
+	return DefaultClientTTL
+}
+
 func (m *Maintainer) window() time.Duration {
 	if m.Samples != nil {
 		return m.Samples.Window()

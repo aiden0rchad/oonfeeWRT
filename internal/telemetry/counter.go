@@ -149,4 +149,67 @@ func (s *Store) forgetCounters(deviceID int64) {
 			delete(s.counters, k)
 		}
 	}
+	for k := range s.ratios {
+		if k.DeviceID == deviceID {
+			delete(s.ratios, k)
+		}
+	}
+}
+
+// ratioState remembers the previous reading of a counter PAIR.
+type ratioState struct {
+	num, den uint64
+	valid    bool
+}
+
+// ratio converts two monotonic counters into a percentage over the interval
+// between readings.
+//
+// This exists because channel utilization is not a gauge, however much it looks
+// like one. iwinfo.survey reports busy_time and active_time as counters that do
+// not share an epoch: measured on the reference device, the 5 GHz radio read
+// active=24427 against busy=922104 while both advanced correctly. Dividing the
+// absolutes gave 1354%. Dividing the deltas gave 1.7%.
+//
+// The 2.4 GHz radio is why this matters more than the obvious case: there the
+// absolute ratio produced 25.9% — entirely plausible — against a true 73.3%,
+// confirmed by hostapd's independent BSS-load reading of 70% on the same radio
+// at the same moment.
+//
+// Like every other counter path here, the first reading and any reading after a
+// reset produce nothing rather than a fabricated value.
+func (s *Store) ratio(k SeriesKey, num, den uint64, rebooted bool) (float64, bool) {
+	st := s.ratios[k]
+	if st == nil {
+		st = &ratioState{}
+		s.ratios[k] = st
+	}
+	prevNum, prevDen, had := st.num, st.den, st.valid
+	st.num, st.den, st.valid = num, den, true
+
+	if rebooted || !had {
+		return 0, false
+	}
+	// Either counter going backwards means the pair was reset; a denominator
+	// that did not advance means no time passed to measure over.
+	if num < prevNum || den <= prevDen {
+		return 0, false
+	}
+	pct := float64(num-prevNum) * 100 / float64(den-prevDen)
+	switch {
+	case pct < 0:
+		return 0, false
+	case pct <= 100:
+		return pct, true
+	case pct <= 110:
+		// The two counters are sampled a moment apart inside the driver, so a
+		// fully saturated channel can read slightly over. Clamp rather than
+		// discard a real reading of "busy the whole time".
+		return 100, true
+	default:
+		// Further than jitter explains. Refuse: a utilization above 110% is the
+		// counters disagreeing, and recording it would put an impossible value
+		// in a series someone will later average.
+		return 0, false
+	}
 }

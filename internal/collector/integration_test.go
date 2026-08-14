@@ -100,8 +100,11 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 				t.Error("focused poll returned no surveys")
 			}
 			for _, s := range snap.Surveys {
-				t.Logf("  survey %s %dMHz noise=%ddBm busy=%.1f%%",
-					s.Iface, s.MHz, s.NoiseDBm(), s.BusyPercent())
+				// Counters, not a ratio: utilization is computed from deltas in
+				// internal/telemetry. Printing the raw values here keeps the
+				// wrong formula out of even a log line.
+				t.Logf("  survey %s %dMHz noise=%ddBm active=%dms busy=%dms",
+					s.Iface, s.MHz, s.NoiseDBm(), s.ActiveTime, s.BusyTime)
 				if s.ActiveTime == 0 {
 					t.Errorf("%s: survey has no active time", s.Iface)
 				}

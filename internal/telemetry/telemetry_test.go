@@ -340,7 +340,6 @@ func TestObserveMapsAPoll(t *testing.T) {
 		{DeviceID: 1, Kind: KindMemUsed}:                            600,
 		{DeviceID: 1, Kind: KindMemPct}:                             60,
 		{DeviceID: 1, Kind: KindAPClients, Key: "wlan0"}:            3,
-		{DeviceID: 1, Kind: KindChanBusy, Key: "wlan0"}:             25,
 		{DeviceID: 1, Kind: KindStaRSSI, Key: "aa:bb:cc:11:22:33"}:  -52,
 		{DeviceID: 1, Kind: KindStaRetry, Key: "aa:bb:cc:11:22:33"}: 10,
 	}
@@ -448,4 +447,116 @@ func TestKindIsRate(t *testing.T) {
 			t.Errorf("%s should not be a rate series", k)
 		}
 	}
+}
+
+// Channel utilization is the ratio of two counter DELTAS. busy_time and
+// active_time do not share an epoch: measured on the reference device, the
+// 5 GHz radio read active=24427 against busy=922104 while both advanced
+// correctly, so the absolute ratio said 1354% where the truth was 1.7%.
+func TestChannelUtilizationUsesDeltasNotAbsolutes(t *testing.T) {
+	s := testStore()
+	ctx := context.Background()
+
+	// The dangerous shape: absolutes that look plausible and are wrong. Here the
+	// absolute ratio is 900000/1000000 = 90%, while the deltas say 25%.
+	a := snapshot(1, 100, 1000)
+	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_000_000, BusyTime: 900_000}}
+	s.Observe(ctx, a)
+
+	// A single reading produces nothing, exactly like any other counter.
+	if rows := s.Flush(at(120)); hasKind(rows, KindChanBusy) {
+		t.Fatal("one survey reading produced a utilization sample")
+	}
+
+	b := snapshot(1, 160, 1060)
+	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_004_000, BusyTime: 901_000}}
+	s.Observe(ctx, b)
+
+	rows := s.Flush(at(600))
+	got, ok := findKind(rows, KindChanBusy)
+	if !ok {
+		t.Fatal("no utilization sample after two readings")
+	}
+	// 1000ms busy over 4000ms active = 25%, not the 89.7% the absolutes suggest.
+	if math.Abs(got.Avg-25) > 0.01 {
+		t.Fatalf("utilization = %v%%, want 25%% from the deltas (the absolute "+
+			"ratio would give ~89.7%%)", got.Avg)
+	}
+}
+
+func TestChannelUtilizationRefusesTheImpossible(t *testing.T) {
+	s := testStore()
+	ctx := context.Background()
+
+	a := snapshot(1, 100, 1000)
+	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1000, BusyTime: 1000}}
+	s.Observe(ctx, a)
+
+	// busy advancing far faster than active is the counters disagreeing, not a
+	// channel that is 500% busy.
+	b := snapshot(1, 160, 1060)
+	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 2000, BusyTime: 6000}}
+	s.Observe(ctx, b)
+
+	if rows := s.Flush(at(600)); hasKind(rows, KindChanBusy) {
+		v, _ := findKind(rows, KindChanBusy)
+		t.Fatalf("an impossible utilization of %v%% was recorded", v.Avg)
+	}
+}
+
+// A fully saturated channel can read a fraction over 100% because the driver
+// samples the two counters a moment apart. Clamping keeps a real reading;
+// discarding it would put a hole in the series exactly when it matters most.
+func TestChannelUtilizationClampsJitter(t *testing.T) {
+	s := testStore()
+	ctx := context.Background()
+
+	a := snapshot(1, 100, 1000)
+	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1000, BusyTime: 1000}}
+	s.Observe(ctx, a)
+	b := snapshot(1, 160, 1060)
+	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 2000, BusyTime: 2030}}
+	s.Observe(ctx, b)
+
+	rows := s.Flush(at(600))
+	got, ok := findKind(rows, KindChanBusy)
+	if !ok {
+		t.Fatal("a 103% reading was discarded rather than clamped")
+	}
+	if got.Avg != 100 {
+		t.Fatalf("utilization = %v, want it clamped to 100", got.Avg)
+	}
+}
+
+func TestChannelUtilizationResetsOnReboot(t *testing.T) {
+	s := testStore()
+	ctx := context.Background()
+
+	a := snapshot(1, 100, 5000)
+	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_000_000, BusyTime: 500_000}}
+	s.Observe(ctx, a)
+
+	// Rebooted: the survey counters restarted with everything else.
+	b := snapshot(1, 160, 30)
+	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 4000, BusyTime: 1000}}
+	s.Observe(ctx, b)
+
+	if rows := s.Flush(at(600)); hasKind(rows, KindChanBusy) {
+		v, _ := findKind(rows, KindChanBusy)
+		t.Fatalf("a reboot produced a utilization sample of %v%%", v.Avg)
+	}
+}
+
+func hasKind(rows []Rollup, k Kind) bool {
+	_, ok := findKind(rows, k)
+	return ok
+}
+
+func findKind(rows []Rollup, k Kind) (Rollup, bool) {
+	for _, r := range rows {
+		if r.Kind == k {
+			return r, true
+		}
+	}
+	return Rollup{}, false
 }

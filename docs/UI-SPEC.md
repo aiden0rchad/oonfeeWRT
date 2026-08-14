@@ -326,7 +326,7 @@ unsigned, so −95 dBm arrives as 161. Both would render as confident nonsense.
 So capability gating keys on a **driver/model quirk list** (matched on
 `system.board` plus driver), not on field presence. Any metric derived from a
 field on that list is treated exactly as unsupported: never rendered, never
-color-graded, never averaged into a composite score. Four entries measured on
+color-graded, never averaged into a composite score. Five entries measured on
 mwlwifi so far:
 
 | Field | Defect | Consequence |
@@ -335,6 +335,7 @@ mwlwifi so far:
 | `noise` from `iwinfo.survey` | reported **unsigned** (161 for −95) | `iwinfo.info` reports it signed — but that fixes the encoding only, see the next row |
 | `noise` per station (`assoclist`) | **unstable** — swung 37 dB between reads 3 s apart | **never compute per-sample SNR from it** |
 | `noise` per radio, from **both** `iwinfo.survey` and `iwinfo.info` | **unstable on the 2.4 GHz radio** — 42 dB (info) and 46 dB (survey) spread over 20 samples ~0.35 s apart, while the 5 GHz radio on the same driver held within 7 dB | the noise floor is a **per-radio** capability. Where it is unstable, show utilization or RSSI, never a noise figure or an SNR |
+| `busy_time` / `active_time` (survey) | **counters with different epochs** — not a ratio. Absolutes read 25.9% on a radio truly at 73.3% | compute utilization from Δbusy/Δactive between two samples; never divide the absolute values |
 
 That last one is the reason presence-probing is not enough: the field is there,
 correctly typed, and plausible in any single sample. Only re-reading exposes it.

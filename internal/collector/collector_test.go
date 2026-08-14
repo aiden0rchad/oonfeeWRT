@@ -534,13 +534,19 @@ func TestSurveyNoiseIsUnwrapped(t *testing.T) {
 	}
 }
 
-func TestSurveyBusyPercent(t *testing.T) {
-	s := Survey{ActiveTime: 19849, BusyTime: 495}
-	if got := s.BusyPercent(); got < 2.4 || got > 2.6 {
-		t.Errorf("BusyPercent = %v, want ~2.5", got)
+// Survey deliberately offers no percentage method. busy_time and active_time do
+// not share an epoch, so the ratio of the absolutes is meaningless — on the
+// reference device's 2.4 GHz radio it read 25.9% against a true 73.3%.
+// Utilization is computed from deltas in internal/telemetry.
+func TestSurveyExposesCountersNotAPercentage(t *testing.T) {
+	s := Survey{ActiveTime: 19849, BusyTime: 900000}
+	if s.ActiveTime == 0 || s.BusyTime == 0 {
+		t.Fatal("the survey counters are not exposed")
 	}
-	if got := (Survey{}).BusyPercent(); got != 0 {
-		t.Errorf("BusyPercent with no active time = %v, want 0 rather than a NaN", got)
+	// busy exceeding active is normal and is exactly why the absolute ratio is
+	// not offered: it would report 4534% here.
+	if s.BusyTime <= s.ActiveTime {
+		t.Skip("fixture no longer reproduces the epoch mismatch")
 	}
 }
 
