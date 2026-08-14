@@ -279,6 +279,26 @@ export interface Overhead {
    *  the batch. The second is a defect, not a rate. */
   non_poll_requests: number
   quiesced: boolean
+  /** Device CPU one poll of the current tier costs. Absent when this device's
+   *  class has never been measured — see cpu_basis. */
+  cpu_ms_per_poll?: number
+  /** That cost at the rate this device is actually polled. Absent likewise. */
+  cpu_percent_of_core?: number
+  /** Always present: where the figure came from, or why there is none. A
+   *  derived number that does not announce itself gets read as a measurement. */
+  cpu_basis: string
+}
+
+/** The Management Overhead payload (DEVICE-BUDGET §7). */
+export interface OverheadReport {
+  overhead: Overhead
+  /** Packages the controller installed. Always empty today, and reported
+   *  rather than omitted so the "we install nothing" claim is checkable. */
+  packages: string[]
+  packages_note: string
+  /** 0 means the controller default. */
+  poll_interval_s: number
+  poll_interval_note: string
 }
 
 export interface SessionInfo {
@@ -303,7 +323,9 @@ export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   devices: () => get<{ devices: Device[] }>('/devices'),
   device: (id: number) => get<DeviceDetail>(`/devices/${id}`),
-  overhead: (id: number) => get<Overhead>(`/devices/${id}/overhead`),
+  overhead: (id: number) => get<OverheadReport>(`/devices/${id}/overhead`),
+  setPollInterval: (id: number, seconds: number) =>
+    post<{ poll_interval_s: number }>(`/devices/${id}/poll-interval`, { seconds }),
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   focus: (id: number, seconds = 30) =>

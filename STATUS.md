@@ -223,19 +223,20 @@ to be false.
 **Client-list scoping landed 2026-08-14**, and it did *not* need the site model
 — see §5c. The client grid now defaults to the network this controller manages.
 
-**Finish Phase 1** (in the order I would do them):
+**Management Overhead is complete 2026-08-14** — all three of DEVICE-BUDGET
+§7's remaining fields. See §5d; the CPU measurement produced a finding that
+changes how to reason about poll cost.
 
-1. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
-   CPU percent (needs a control measurement to be honest — the device only
-   reports total), the list of packages we installed (nothing installs any yet),
-   and the control to loosen the poll interval.
-2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+**Phase 1 is complete.** What is left below is polish and scale work, none of
+it blocking Phase 2.
+
+1. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns".
-3. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
+2. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
    the client list still returns everything and filters in the browser. That is
    correct today (14 clients) and its rail says so rather than implying
    otherwise, but it does not survive a real fleet.
-4. **Scope the fleet client total too.** The dashboard's "Devices on the LAN"
+3. **Scope the fleet client total too.** The dashboard's "Devices on the LAN"
    counts every host including upstream neighbours, so it still says 14 where
    the grid now says 3. One query away, but it is a second place the same
    distinction has to be made and worth doing deliberately.
@@ -381,6 +382,49 @@ clients out of the default view for reasons no operator could see. And a row
 written before the column existed reads as `unknown`, never `local`: defaulting
 it would assert something never measured.
 
+### 5d. What the CPU measurement found
+
+DEVICE-BUDGET §7 asked for "CPU percent attributable to oonfeeWRT" and the
+backlog note said it "needs a control measurement to be honest". It did, and
+the measurement's first result was that **a live sample can never work**: a
+baseline poll costs ~5 ms of device CPU once a minute — 0.009% of one core —
+against a device whose own idle CPU is 0.38–0.43%. The quantity is about fifty
+times below the floor it would be measured against and far below that floor's
+minute-to-minute jitter. Sampling it live would report noise with a decimal
+point on it.
+
+So it is derived from a control experiment (CPU over a window with nothing
+polling vs a window with a known number of polls), and the UI says so — the
+tooltip carries the entire basis rather than a reassuring word.
+
+| | class A reference device |
+|---|---|
+| control, nothing polling | 0.38–0.43% busy |
+| baseline poll, 8 invocations | 5.33 ms of device CPU |
+| focused poll, 12 invocations | 6.65 ms of device CPU |
+| at the shipped baseline (1/60 s) | 0.0089% of one core |
+| at the shipped focused (6/60 s) | 0.067% of one core |
+
+Linearity was checked rather than assumed: 4.56 ms/poll at 6,049 polls/min and
+4.38 ms/poll at 372 polls/min, within 4%.
+
+**The finding worth carrying forward:** DEVICE-BUDGET §4 measures iwinfo as
+~92% of a focused poll, but a focused poll costs only **1.25×** a baseline one
+in CPU. That 92% is latency — `iwinfo.survey` and `iwinfo.assoclist` block on
+the wireless driver rather than burning cycles. Wall time and CPU load are
+different quantities and the docs had been using the first to reason about the
+second.
+
+The figure is reported only for classes it was measured on. Class C gets no
+number and a sentence saying why, for the same reason everything else here is
+three-state.
+
+The interval control only ever loosens, and the clamp lives in the collector
+rather than in request validation — the budget is a promise, the harness
+measures the default, and a knob that could raise the rate would put a device
+outside the budget where no test would look. Verified on hardware: an override
+of 5 s stores as 5 and polls at 60.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there. The
@@ -460,6 +504,14 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **Latency is not load.** Four documents described `iwinfo` as "~92% of a
+  focused poll" and that number was being used, implicitly, to reason about
+  what focused polling costs a device. It is 92% of the poll's *wall time*; in
+  CPU a focused poll costs only 1.25× a baseline one, because those calls block
+  on the wireless driver instead of burning cycles. The original measurement
+  was correct and the inference drawn from it was not. When a figure gets
+  reused, check that the quantity it measured is the quantity now being argued
+  about.
 - **Check whose model a question actually needs.** Client scoping sat in the
   backlog behind "needs the site model, so it is a Phase 3 dependency". The
   reasoning was that telling a LAN from a WAN requires a definition of a LAN —

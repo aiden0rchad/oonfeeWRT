@@ -847,3 +847,111 @@ func TestDecodeNetworksIgnoresNonDefaultRoutes(t *testing.T) {
 			s.Networks)
 	}
 }
+
+// The per-device interval override may only make polling cheaper.
+//
+// DEVICE-BUDGET's ceiling is a promise about what the controller does to a
+// device, and the budget harness measures the DEFAULT. A knob that could raise
+// the rate would put a device outside the budget in a way no test would ever
+// see, so the clamp lives in the collector rather than in validation that a
+// future caller could bypass.
+func TestPerDeviceIntervalOnlyLoosens(t *testing.T) {
+	c := New(newRecorder(), Options{Baseline: 60 * time.Second})
+	for _, tc := range []struct {
+		name     string
+		override time.Duration
+		want     time.Duration
+	}{
+		{"no override uses the default", 0, 60 * time.Second},
+		{"a longer interval is honoured", 5 * time.Minute, 5 * time.Minute},
+		{"a shorter one is clamped up", 5 * time.Second, 60 * time.Second},
+		{"equal to the default is the default", 60 * time.Second, 60 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPoller(c, Target{DeviceID: 1, Baseline: tc.override})
+			p.mu.Lock()
+			got := p.baselineLocked()
+			p.mu.Unlock()
+			if got != tc.want {
+				t.Errorf("baseline = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Attributable CPU is reported only for a class it was measured on.
+func TestAttributableCPUIsPerClassAndSaysItsBasis(t *testing.T) {
+	measured, ok := cpuCost("A", Baseline)
+	if !ok || measured <= 0 {
+		t.Fatalf("class A baseline cost = %v, ok=%v — the measurement is missing", measured, ok)
+	}
+	if _, ok := cpuCost("C", Baseline); ok {
+		t.Error("class C has a CPU figure, but it has never been measured; " +
+			"reporting class A's number for it would be a guess in a " +
+			"measurement's clothing")
+	}
+	// Focused costs more than baseline, but not dramatically: iwinfo dominates
+	// a focused poll's LATENCY, not its CPU.
+	focused, _ := cpuCost("A", Focused)
+	if focused <= measured {
+		t.Errorf("focused (%v) should cost more CPU than baseline (%v)", focused, measured)
+	}
+	if focused > measured*3 {
+		t.Errorf("focused (%v ms) is more than 3x baseline (%v ms); the measured "+
+			"ratio was 1.25 and a figure this far off means the constants drifted "+
+			"from the measurement they claim", focused, measured)
+	}
+}
+
+// The reported percentage must follow the interval actually in force, not the
+// configured one — a device we have backed off from costs less, and saying
+// otherwise overstates our own footprint.
+func TestAttributableCPUFollowsTheRealInterval(t *testing.T) {
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa:bb:cc:dd:ee:ff", Name: "ap1", Class: "A",
+		Connect: mockConnect(t)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Start(ctx)
+	defer c.Stop()
+	rec.nextWithAPs(t, 5*time.Second)
+
+	o, ok := c.Overhead(1)
+	if !ok {
+		t.Fatal("no overhead")
+	}
+	if o.CPUPercentOfCore == nil || o.CPUMillisPerPoll == nil {
+		t.Fatalf("class A reported no CPU figure: basis=%q", o.CPUBasis)
+	}
+	want := *o.CPUMillisPerPoll / (o.IntervalSeconds * 1000) * 100
+	if diff := *o.CPUPercentOfCore - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("cpu %% = %v, want %v (ms/poll %v over a %vs interval)",
+			*o.CPUPercentOfCore, want, *o.CPUMillisPerPoll, o.IntervalSeconds)
+	}
+	if o.CPUBasis == "" {
+		t.Error("a derived figure shipped without saying it was derived")
+	}
+}
+
+// An unmeasured class reports no number and explains itself.
+func TestUnmeasuredClassReportsNoCPUFigure(t *testing.T) {
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa:bb:cc:dd:ee:ff", Name: "ap1", Class: "C",
+		Connect: mockConnect(t)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Start(ctx)
+	defer c.Stop()
+	rec.nextWithAPs(t, 5*time.Second)
+
+	o, _ := c.Overhead(1)
+	if o.CPUPercentOfCore != nil {
+		t.Errorf("class C reported %v%% of a core from a class-A measurement",
+			*o.CPUPercentOfCore)
+	}
+	if o.CPUBasis == "" {
+		t.Error("no figure and no reason is the worst of both")
+	}
+}

@@ -281,10 +281,55 @@ current poll interval — with a control to loosen it.
 > amortise to nothing, so a number that grows with the poll count means a call
 > escaped the batch, which is a defect rather than a rate to average away.
 >
-> Still missing from the spec's list: attributable CPU percent (the device
-> reports total CPU, and attributing a share of it to us honestly needs a
-> control measurement), the list of packages we installed (nothing installs
-> packages yet), and the control to loosen the interval.
+> **All three of the spec's remaining fields landed 2026-08-14.**
+>
+> **Attributable CPU percent.** It needed the control measurement, and the
+> measurement showed why a live sample can never work: a baseline poll costs
+> about 5 ms of device CPU once a minute — **0.009% of one core** — while the
+> device's own idle CPU sits at 0.38–0.43%. What we are trying to measure is
+> roughly *fifty times smaller* than the floor it would have to be measured
+> against, and far smaller than the minute-to-minute jitter in that floor. A
+> live reading would be noise with a decimal point on it.
+>
+> So it is derived from a control experiment: device CPU over a window with
+> nothing polling, versus a window with a known number of polls.
+>
+> | | class A reference device |
+> |---|---|
+> | control, nothing polling | 0.38–0.43% busy |
+> | baseline poll, 8 invocations | **5.33 ms** of device CPU |
+> | focused poll, 12 invocations | **6.65 ms** of device CPU |
+> | at the shipped baseline (1/60 s) | 0.0089% of one core |
+> | at the shipped focused (6/60 s) | 0.067% of one core |
+>
+> Checked for linearity rather than assumed: 4.56 ms/poll at 6,049 polls/min
+> and 4.38 ms/poll at 372 polls/min, within 4% — so the figure is not an
+> artefact of saturating the device and extrapolates down honestly.
+>
+> **The finding worth carrying forward: the call that dominates a poll's wall
+> time is not the call that dominates its CPU cost.** §4 measures iwinfo as
+> ~92% of a focused poll, yet a focused poll costs only 1.25× a baseline one in
+> CPU — because `iwinfo.survey` and `iwinfo.assoclist` block on the wireless
+> driver rather than burning cycles. Latency and CPU load must not be used
+> interchangeably when reasoning about what we cost a device.
+>
+> The figure is reported **only for classes it was measured on**. Class C has
+> never been measured, and a class-A number shown against a class-C device
+> would be a guess in a measurement's clothing — so those devices get no figure
+> and a sentence saying why.
+>
+> **Packages we installed.** Empty, and reported rather than omitted: "the
+> controller installs no packages" is the claim ARCHITECTURE §0 makes, and a
+> field that only appears once it is non-empty cannot be used to check it.
+>
+> **The control to loosen the interval.** Per device, 60 s to 1 hour. It can
+> only make polling *cheaper*: the collector clamps any override below the
+> controller default. That clamp is in the collector rather than in request
+> validation on purpose — this table is a promise about what the controller
+> does to a device, the harness measures the default, and a knob that could
+> raise the rate would put a device outside the budget in a way no test would
+> ever see. Verified against real hardware: an override of 5 s stores as 5 and
+> polls at 60.
 
 UniFi never shows you this, and the reason it can afford not to is that it owns
 the hardware. We don't. Surfacing our own cost is both the honest thing to do and

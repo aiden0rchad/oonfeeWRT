@@ -65,6 +65,12 @@ type Server struct {
 	Hub    *Hub
 	Log    *slog.Logger
 
+	// Retrack re-registers a device with the collector after its polling
+	// settings change, so an interval override takes effect without a restart.
+	// Optional; without it the change lands in the database and applies on the
+	// next start, which is worse but not wrong.
+	Retrack func(deviceID int64)
+
 	// Now is injectable for tests.
 	Now func() time.Time
 
@@ -145,6 +151,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/devices/{id}/series", s.handleDeviceSeries)
 	private.HandleFunc("GET /api/v1/devices/{id}/overhead", s.handleOverhead)
 	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
+	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("GET /api/v1/discovery", s.handleScanPlan)

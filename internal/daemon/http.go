@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
@@ -19,6 +20,17 @@ func (d *Daemon) routes() http.Handler {
 	// for every optional collaborator is how a constructor becomes a config
 	// struct nobody reads.
 	d.api.Scan = d
+	// Lets a poll-interval change take effect immediately: the collector holds
+	// the interval in its target, so the row alone would not move until restart.
+	d.api.Retrack = func(id int64) {
+		dev, err := d.Store.DeviceByID(context.Background(), id)
+		if err != nil {
+			d.Log.Warn("could not re-register a device after a settings change",
+				"device", id, "err", err)
+			return
+		}
+		d.Track(dev)
+	}
 	mux.Handle("/api/v1/", d.api.Routes())
 	d.mountUI(mux)
 	return mux

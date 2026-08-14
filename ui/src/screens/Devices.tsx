@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { Device, DeviceDetail, Overhead, Point, Series } from '../lib/api'
+import type { Device, DeviceDetail, OverheadReport, Point, Series } from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
 } from '../components/ui'
@@ -114,7 +114,7 @@ function DeviceDetailPanel({
   const [removing, setRemoving] = useState(false)
   const [detail, setDetail] = useState<DeviceDetail | null>(null)
   const [series, setSeries] = useState<Record<string, string[]>>({})
-  const [overhead, setOverhead] = useState<Overhead | null>(null)
+  const [overhead, setOverhead] = useState<OverheadReport | null>(null)
   const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
 
@@ -317,7 +317,13 @@ function DeviceDetailPanel({
         colour="var(--series-4)"
       />
 
-      {overhead && <ManagementOverhead o={overhead} />}
+      {overhead && (
+        <ManagementOverhead
+          report={overhead}
+          deviceID={id}
+          onChanged={() => api.overhead(id).then(setOverhead).catch(() => {})}
+        />
+      )}
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
         <Button onClick={() => setRemoving(true)}>Remove from controller</Button>
@@ -370,9 +376,39 @@ function DeviceDetailPanel({
  * it turns 'is this thing slowing down my router?' from an anxiety into a
  * number the user can read and act on."
  */
-function ManagementOverhead({ o }: { o: Overhead }) {
+/**
+ * What the controller costs this device (DEVICE-BUDGET §7).
+ *
+ * The CPU figure is derived, not sampled, and says so. A baseline poll costs
+ * about 5 ms of device CPU once a minute — roughly fifty times below the
+ * device's own idle CPU — so a live sample would be reporting noise with a
+ * decimal point on it. The number comes from a control experiment instead, and
+ * the tooltip carries the whole basis rather than a reassuring word.
+ */
+function ManagementOverhead({
+  report,
+  deviceID,
+  onChanged,
+}: {
+  report: OverheadReport
+  deviceID: number
+  onChanged: () => void
+}) {
+  const o = report.overhead
   const budget = o.tier === 'focused' ? 6 : 1
   const overBudget = o.polls_per_minute > budget * 1.05
+  const [saving, setSaving] = useState(false)
+
+  async function setInterval(seconds: number) {
+    setSaving(true)
+    try {
+      await api.setPollInterval(deviceID, seconds)
+      onChanged()
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div>
       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
@@ -389,6 +425,29 @@ function ManagementOverhead({ o }: { o: Overhead }) {
             {o.polls_per_minute.toFixed(2)}/min
           </span>
         </Prop>
+        <Prop label="Device CPU used">
+          {o.cpu_percent_of_core != null ? (
+            <span title={o.cpu_basis}>
+              {o.cpu_percent_of_core < 0.01
+                ? '<0.01'
+                : o.cpu_percent_of_core.toFixed(2)}
+              % of one core
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}
+                ({o.cpu_ms_per_poll?.toFixed(1)} ms/poll, derived)
+              </span>
+            </span>
+          ) : (
+            <Unknown why={o.cpu_basis} />
+          )}
+        </Prop>
+        <Prop label="Packages installed">
+          {report.packages.length === 0 ? (
+            <span title={report.packages_note}>none</span>
+          ) : (
+            report.packages.join(', ')
+          )}
+        </Prop>
         <Prop label="Data sent">{formatBytes(o.bytes_out)}</Prop>
         <Prop label="Polls">
           {o.polls}
@@ -397,7 +456,49 @@ function ManagementOverhead({ o }: { o: Overhead }) {
           )}
         </Prop>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+
+      {/* The control DEVICE-BUDGET §7 asks for. It only loosens: every option
+          is at or above the default, because a knob that could raise the rate
+          would turn the budget into a suggestion no test measures. */}
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+          Poll this device less often
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Default (60s)', s: 0 },
+            { label: '2 min', s: 120 },
+            { label: '5 min', s: 300 },
+            { label: '15 min', s: 900 },
+          ].map((opt) => (
+            <button
+              key={opt.s}
+              disabled={saving}
+              onClick={() => setInterval(opt.s)}
+              style={{
+                fontSize: 11,
+                padding: '2px 8px',
+                borderRadius: 4,
+                cursor: saving ? 'default' : 'pointer',
+                border: '1px solid var(--border-strong)',
+                background:
+                  report.poll_interval_s === opt.s
+                    ? 'var(--accent-soft)'
+                    : 'transparent',
+                color: 'var(--text-primary)',
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+          {report.poll_interval_note} Charts get coarser as the interval grows,
+          and a device can be down for up to one interval before it is noticed.
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
         Budget is one request per minute idle, one per 10 seconds while this
         panel is open. Opening it raises the rate; closing it lowers it within
         30 seconds.

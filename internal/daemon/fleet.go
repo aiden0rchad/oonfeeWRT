@@ -60,7 +60,8 @@ func (d *Daemon) StartCollector(ctx context.Context, opts collector.Options) err
 func (d *Daemon) target(dev *store.Device) collector.Target {
 	id, mac, name := dev.ID, dev.MAC, dev.Name
 	return collector.Target{
-		DeviceID: id, MAC: mac, Name: name,
+		DeviceID: id, MAC: mac, Name: name, Class: dev.Class,
+		Baseline: time.Duration(dev.PollInterval) * time.Second,
 		Connect: func(ctx context.Context) (*ubus.Client, error) {
 			// Re-read the row each time: the address, the certificate pin and
 			// the credential can all have changed since the collector started,

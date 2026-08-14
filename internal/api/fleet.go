@@ -273,7 +273,67 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "this device is not being polled")
 		return
 	}
-	writeJSON(w, http.StatusOK, o)
+	dev, err := s.deviceByID(r, id)
+	if handleStoreErr(w, err, "device") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"overhead": o,
+		// DEVICE-BUDGET §7's remaining two fields.
+		//
+		// Packages is empty and will stay empty until something installs one.
+		// It is reported rather than omitted because "we installed nothing on
+		// your router" is the claim ARCHITECTURE §0 makes, and a field that
+		// only appears once it is non-empty cannot be used to check it.
+		"packages": []string{},
+		"packages_note": "the controller installs no packages. Its entire " +
+			"device-side footprint is one ACL file and one login, both listed " +
+			"by un-adopt",
+		"poll_interval_s": dev.PollInterval,
+		"poll_interval_note": "0 uses the controller default. An override can " +
+			"only make polling less frequent — a per-device knob that could " +
+			"raise the rate would turn the budget into a suggestion",
+	})
+}
+
+// handlePollInterval loosens (never tightens) one device's poll rate.
+func (s *Server) handlePollInterval(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	dev, err := s.deviceByID(r, id)
+	if handleStoreErr(w, err, "device") {
+		return
+	}
+	var req struct {
+		Seconds int `json:"seconds"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	// An hour is already far past useful; beyond it a device would be reported
+	// offline for most of the time it is fine.
+	if req.Seconds < 0 || req.Seconds > 3600 {
+		writeErr(w, http.StatusBadRequest,
+			"the poll interval must be between 0 (controller default) and 3600 seconds")
+		return
+	}
+	if err := s.Store.SetPollInterval(r.Context(), id, req.Seconds); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Re-register so the change takes effect without a restart.
+	if s.Retrack != nil {
+		s.Retrack(id)
+	}
+	devID := id
+	_ = s.Store.LogEvent(r.Context(), store.Event{
+		DeviceID: &devID, Category: "audit", Severity: "info",
+		Event:  "device.poll_interval_set",
+		Detail: map[string]any{"seconds": req.Seconds, "mac": dev.MAC},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"poll_interval_s": req.Seconds})
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

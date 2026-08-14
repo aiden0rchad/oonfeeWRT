@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -44,6 +44,14 @@ var migrations = map[int][]string{
 		// own devices with the uplink's neighbours and cannot tell them apart —
 		// measured 8 upstream of 16 on the reference device.
 		`ALTER TABLE clients ADD COLUMN scope TEXT`,
+	},
+	4: {
+		// A per-device baseline poll interval, in seconds. 0 means the
+		// controller default. It can only make polling cheaper — the collector
+		// clamps anything below the default — because DEVICE-BUDGET's ceiling
+		// is a promise, and a knob that could raise the rate would make it a
+		// suggestion that no test measures.
+		`ALTER TABLE devices ADD COLUMN poll_interval_s INTEGER NOT NULL DEFAULT 0`,
 	},
 }
 
@@ -179,6 +187,9 @@ type Device struct {
 	FWRelease string
 	LastSeen  *int64
 	PollState string
+	// PollInterval is a per-device baseline interval in seconds; 0 uses the
+	// controller default. Only ever loosens the rate — see migration 4.
+	PollInterval int
 }
 
 // Adopted reports whether adoption completed.
@@ -266,7 +277,8 @@ func (db *DB) Devices(ctx context.Context) ([]*Device, error) {
 
 const deviceCols = `SELECT id, mac, host, port, scheme, COALESCE(cert_fp,''),
  name, role, adopted_at, cred_enc, COALESCE(class,''), caps_json,
- COALESCE(fw_release,''), last_seen, poll_state FROM devices`
+ COALESCE(fw_release,''), last_seen, poll_state,
+ COALESCE(poll_interval_s,0) FROM devices`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -274,7 +286,7 @@ func scanDevice(s scanner) (*Device, error) {
 	var d Device
 	err := s.Scan(&d.ID, &d.MAC, &d.Host, &d.Port, &d.Scheme, &d.CertFP,
 		&d.Name, &d.Role, &d.AdoptedAt, &d.CredEnc, &d.Class, &d.CapsJSON,
-		&d.FWRelease, &d.LastSeen, &d.PollState)
+		&d.FWRelease, &d.LastSeen, &d.PollState, &d.PollInterval)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -282,6 +294,28 @@ func scanDevice(s scanner) (*Device, error) {
 		return nil, err
 	}
 	return &d, nil
+}
+
+// SetPollInterval sets a per-device baseline interval in seconds. Zero restores
+// the controller default.
+//
+// The collector separately refuses to let an override make polling FASTER than
+// the default; this only stores what was asked for. Both halves matter: the
+// store should record the operator's intent, and the collector should be the
+// one place that decides what is actually done to a device.
+func (db *DB) SetPollInterval(ctx context.Context, id int64, seconds int) error {
+	if seconds < 0 {
+		return fmt.Errorf("store: poll interval cannot be negative")
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE devices SET poll_interval_s=? WHERE id=?`, seconds, id)
+	if err != nil {
+		return fmt.Errorf("store: set poll interval: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetCertFP records a trust-on-first-use certificate pin.

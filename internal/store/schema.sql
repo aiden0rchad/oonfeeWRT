@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS devices (
   caps_json    TEXT NOT NULL DEFAULT '{}',     -- capability registry snapshot
   fw_release   TEXT,
   last_seen    INTEGER,
-  poll_state   TEXT NOT NULL DEFAULT 'baseline' -- 'baseline'|'focused'|'quiesced'|'backoff'
+  poll_state   TEXT NOT NULL DEFAULT 'baseline', -- 'baseline'|'focused'|'quiesced'|'backoff'
+  poll_interval_s INTEGER NOT NULL DEFAULT 0     -- per-device baseline; 0 = controller default (migration v4)
 );
 
 -- ===== site model (desired state) =====

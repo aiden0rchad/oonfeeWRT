@@ -86,6 +86,19 @@ type Target struct {
 	DeviceID int64
 	MAC      string
 	Name     string
+	// Class is the device's capability class ("A", "B", "C"). It selects the
+	// measured per-poll CPU cost; an unmeasured class reports none rather than
+	// borrowing another class's number.
+	Class string
+	// Baseline overrides the collector-wide baseline interval for this device.
+	// Zero uses the default.
+	//
+	// It can only make polling CHEAPER, never more expensive: a value below the
+	// collector default is clamped up. DEVICE-BUDGET's ceiling is a promise
+	// about what the controller does to a device, and a per-device knob that
+	// could raise the rate would turn that promise into a suggestion — the
+	// budget harness measures the default and would never see the override.
+	Baseline time.Duration
 	Connect  Connect
 }
 
@@ -314,6 +327,17 @@ type Overhead struct {
 	// batch, which is a defect and not a rate to be averaged away.
 	NonPollRequests int64 `json:"non_poll_requests"`
 	Quiesced        bool  `json:"quiesced"`
+
+	// CPUMillisPerPoll is what one poll of the current tier costs this device,
+	// in milliseconds of its own CPU. Nil when the device's class has never
+	// been measured — see cpucost.go.
+	CPUMillisPerPoll *float64 `json:"cpu_ms_per_poll,omitempty"`
+	// CPUPercentOfCore is that cost at the rate this device is ACTUALLY being
+	// polled, including any backoff or widening. Nil for the same reason.
+	CPUPercentOfCore *float64 `json:"cpu_percent_of_core,omitempty"`
+	// CPUBasis always says where the figure came from, or why there is none. A
+	// derived number that does not announce itself gets read as a measurement.
+	CPUBasis string `json:"cpu_basis"`
 }
 
 // Overhead reports the controller's cost for one device.
@@ -352,6 +376,20 @@ func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	if mins := c.now().Sub(p.startedAt).Minutes(); mins > 0 {
 		o.RequestsPerMinute = float64(o.Requests) / mins
 		o.PollsPerMinute = float64(o.Polls) / mins
+	}
+
+	// Attributable CPU, derived from the measured per-poll cost and the rate
+	// this device is actually being polled at — not the configured rate, which
+	// would understate a device we have backed off from and overstate one that
+	// is being widened.
+	if ms, ok := cpuCost(p.target.Class, o.Tier); ok && o.IntervalSeconds > 0 {
+		perPoll := ms
+		pct := ms / (o.IntervalSeconds * 1000) * 100
+		o.CPUMillisPerPoll = &perPoll
+		o.CPUPercentOfCore = &pct
+		o.CPUBasis = CPUBasis
+	} else {
+		o.CPUBasis = CPUUnmeasured
 	}
 	return o, true
 }
@@ -646,7 +684,7 @@ func (p *poller) next() time.Duration {
 // nextLocked is next() with the lock already held, so the overhead readout can
 // report the interval a device is ACTUALLY on without taking it twice.
 func (p *poller) nextLocked() time.Duration {
-	base := p.c.opts.Baseline
+	base := p.baselineLocked()
 	if p.focus > 0 {
 		base = p.c.opts.Focused
 	}
@@ -663,6 +701,16 @@ func (p *poller) nextLocked() time.Duration {
 		return clamp(withJitter(base<<min(p.fails, 6)), base/2, p.c.opts.MaxInterval)
 	}
 	return clamp(base<<p.widen, base, p.c.opts.MaxInterval)
+}
+
+// baselineLocked is this device's baseline interval: its own override when it
+// has one, otherwise the collector default. An override shorter than the
+// default is ignored — see Target.Baseline.
+func (p *poller) baselineLocked() time.Duration {
+	if p.target.Baseline > p.c.opts.Baseline {
+		return p.target.Baseline
+	}
+	return p.c.opts.Baseline
 }
 
 func (p *poller) pollTimeout(tier Tier) time.Duration {
