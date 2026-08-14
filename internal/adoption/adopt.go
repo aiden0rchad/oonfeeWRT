@@ -93,14 +93,7 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 	}
 	aclPath, user, groups := a.aclPath(), a.user(), a.groups()
 
-	// 1. Capability probe, while we still hold the operator credential — it can
-	//    reach things the controller login deliberately cannot.
-	caps, err := capability.Probe(ctx, operator)
-	if err != nil {
-		return nil, fmt.Errorf("adoption: capability probe: %w", err)
-	}
-
-	// 2. Mint the controller credential. rpcd rejects a plaintext password
+	// 1. Mint the controller credential. rpcd rejects a plaintext password
 	//    outright, and target devices carry no mkpasswd/openssl, so the hash is
 	//    computed here.
 	password, err := a.newPassword()
@@ -134,6 +127,25 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 	if err := verified.Login(ctx, user, password); err != nil {
 		return nil, fmt.Errorf("adoption: the credential we just created does "+
 			"not work: %w", err)
+	}
+
+	// 6. Probe LAST, and on the CONTROLLER's session rather than the operator's.
+	//
+	// This ordering is a correction, and the reason is worth stating because the
+	// original looked more natural. Probing first, as the operator, answers
+	// "what can root see" — but the registry gates what every screen renders,
+	// and screens render from what the CONTROLLER can reach. The two differ:
+	// stock OpenWrt grants zero access to iwinfo.devices, so a probe run before
+	// the ACL exists cannot see the radios at all and records survey, hostapd
+	// and per-client accounting as NotObservable on hardware that has all three.
+	//
+	// Measured 2026-08-14 on a genuinely fresh device: the probe reported four
+	// capabilities undetermined; the identical calls returned status 0 the
+	// moment the ACL landed. Earlier runs missed it only because a leftover ACL
+	// file was already on disk, which root's `list read '*'` expanded over.
+	caps, err := capability.Probe(ctx, verified)
+	if err != nil {
+		return nil, fmt.Errorf("adoption: capability probe: %w", err)
 	}
 
 	return &Result{

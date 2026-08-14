@@ -411,3 +411,38 @@ func TestAdoptReportsALoginFailureAfterTheACLLanded(t *testing.T) {
 		t.Error("the ACL should still be on the device, so un-adopt can remove it")
 	}
 }
+
+// The registry gates what every screen renders, and screens render from what
+// the CONTROLLER can reach — so the probe must run on the controller's session,
+// after its ACL is in place. Probing first, as the operator, answers a
+// different question and gets it wrong on a genuinely fresh device.
+func TestProbeRunsAfterTheACLIsInstalled(t *testing.T) {
+	ctx := context.Background()
+	op := operatorClient(t)
+
+	boot := newBootFor(op)
+	// Fail the ACL write. If the probe ran first, it would already have
+	// happened and the capability record would exist; it must not.
+	boot.failACL = errors.New("disk full")
+	if _, err := testAdopter().Adopt(ctx, op, boot); err == nil {
+		t.Fatal("Adopt succeeded despite the ACL write failing")
+	}
+
+	// Now let it succeed and confirm the record comes back populated.
+	boot2 := newBootFor(op)
+	res, err := testAdopter().Adopt(ctx, op, boot2)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if res.Caps == nil {
+		t.Fatal("no capability record")
+	}
+	if len(res.Caps.Features) == 0 {
+		t.Fatal("the capability record is empty")
+	}
+	// The ACL must have been installed BEFORE the probe could have run.
+	if len(boot2.acl) == 0 || boot2.login == "" {
+		t.Fatalf("footprint incomplete when the probe ran: acl=%v login=%q",
+			len(boot2.acl), boot2.login)
+	}
+}

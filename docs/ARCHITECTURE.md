@@ -514,7 +514,6 @@ mean config we'd have to own.
    `system.board` / `system.info` pre-auth where possible, post-auth otherwise.
 2. Operator supplies device credentials **once**.
 3. Controller, in one transaction:
-   - runs the **capability probe** (§6.1)
    - offers to install any missing official-feed packages, itemized, with a
      plain-English reason per package and an explicit opt-out
    - writes `/usr/share/rpcd/acl.d/oonfeewrt.json` **over SSH** (ubus refuses
@@ -522,7 +521,17 @@ mean config we'd have to own.
    - creates a dedicated `oonfeewrt` user with a generated password, also over
      SSH, and only *after* the ACL is in place — a login whose access-groups do
      not exist yet is a credential that authenticates and can do nothing
-   - records the TLS certificate fingerprint (trust-on-first-use)
+   - verifies the new login actually works
+   - runs the **capability probe** (§6.1) **last, on the controller's own
+     session** — not first, and not as the operator. The registry gates what
+     every screen renders, and screens render from what the *controller* can
+     reach. Stock OpenWrt grants zero access to `iwinfo.devices`, so a probe run
+     before the ACL exists cannot see the radios at all: measured 2026-08-14 on
+     a genuinely fresh device, probing first recorded survey, hostapd control
+     and per-client accounting as *undetermined* on hardware that has all three,
+     and the identical calls returned status 0 the moment the ACL landed
+   - records the TLS certificate fingerprint and the SSH host key
+     (trust-on-first-use)
    - **discards the operator's original credential** — it is never stored, and
      is requested once again at un-adopt
 4. Device goes green. No config is pushed yet; adoption and provisioning are

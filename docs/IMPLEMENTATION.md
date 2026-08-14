@@ -797,7 +797,25 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    and surfaces it as a warning — not a refusal, since an operator may knowingly
    run that way on a trusted LAN, but the credential they typed proved nothing
    and they should know it.
-9. **The two poll tiers are worth the complexity — measured through the real
+9. **The capability probe must run on the CONTROLLER's session, after its ACL
+   is installed — not on the operator's, first.** The registry gates what every
+   screen renders, and screens render from what the controller can reach, so a
+   probe answering "what can root see" answers the wrong question.
+
+   It also gets a different answer. Stock OpenWrt grants **zero** access to
+   `iwinfo.devices` (§10), so on a genuinely fresh device a probe run before the
+   ACL exists cannot enumerate the radios at all. Measured 2026-08-14 by
+   adopting a device whose footprint had been fully removed first: the probe
+   reported `iwinfo-survey`, `hostapd-control`, `per-client-accounting` and
+   `airtime-split` as **undetermined**, and the identical calls returned status
+   0 the moment the ACL landed. After reordering, the same device records all
+   seven features.
+
+   Every earlier run missed this because a leftover ACL file was already on
+   disk, which root's `list read '*'` expanded over — the bug was only reachable
+   on a device that had genuinely never been adopted, which is precisely the
+   case every real user hits first.
+10. **The two poll tiers are worth the complexity — measured through the real
    collector, under the scoped credential.** Best of five polls each, both
    batched into a single request:
 
