@@ -271,6 +271,18 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 
 	// Clean, or the caller accepted the residue.
 	if (rep != nil && !rep.FootprintRemains) || req.Force {
+		// Logged BEFORE the row is deleted: the event carries a device_id with a
+		// foreign key, and writing it afterwards would either fail or reference
+		// a device nobody can look up.
+		id := dev.ID
+		_ = d.Store.LogEvent(ctx, store.Event{
+			DeviceID: &id, Category: "audit", Severity: "info",
+			Event: "device.unadopted",
+			Detail: map[string]any{
+				"mac": dev.MAC, "footprint_remains": out.FootprintRemains,
+				"reverted_sections": out.RevertedSections, "forced": req.Force,
+			},
+		})
 		if err := d.deleteDevice(ctx, dev.ID); err != nil {
 			return out, err
 		}

@@ -139,7 +139,10 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.logAuth(r.Context(), "device.adopted", "info", req.Username, clientAddr(r))
+	// The success event is written by the Enroller, which knows the device id,
+	// MAC, model and class. Logging it here too would double every adoption in
+	// the audit trail. The FAILURE event above is logged here on purpose: the
+	// Enroller returns early and never gets to record one.
 	writeJSON(w, http.StatusCreated, res)
 }
 
@@ -174,6 +177,5 @@ func (s *Server) handleUnadopt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.logAuth(r.Context(), "device.unadopted", "info", req.Username, clientAddr(r))
 	writeJSON(w, http.StatusOK, res)
 }

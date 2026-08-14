@@ -219,3 +219,59 @@ func TestAdoptUnavailableWithoutAnEnroller(t *testing.T) {
 		t.Fatalf("got %d, want 503", w.Code)
 	}
 }
+
+// One action, one audit event. The Enroller writes the success event because it
+// knows the device id, MAC, model and class; logging it in the handler too
+// would double every adoption in the audit trail.
+func TestAdoptLogsExactlyOneOutcome(t *testing.T) {
+	h, _ := harnessWithEnroller(t)
+	ctx := context.Background()
+
+	before, err := h.db.RecentEvents(ctx, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := h.do(http.MethodPost, "/api/v1/devices/adopt",
+		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("adopt: %d", w.Code)
+	}
+	after, err := h.db.RecentEvents(ctx, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The stub Enroller writes nothing, so a successful adopt must add NO event
+	// from the handler at all.
+	n := 0
+	for _, e := range after {
+		if e.Event == "device.adopted" {
+			n++
+		}
+	}
+	if n != 0 {
+		t.Errorf("the handler logged %d device.adopted event(s); that is the "+
+			"Enroller's job and doing both doubles the audit trail", n)
+	}
+	if len(after) != len(before) {
+		t.Errorf("a successful adopt added %d handler event(s)", len(after)-len(before))
+	}
+
+	// A failure IS logged here, because the Enroller returns early.
+	e := h.srv.Enroll.(*stubEnroller)
+	e.adoptErr = errors.New("nope")
+	h.do(http.MethodPost, "/api/v1/devices/adopt",
+		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p"})
+	failed, err := h.db.RecentEvents(ctx, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range failed {
+		if ev.Event == "device.adopt_failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a failed adoption was not recorded")
+	}
+}

@@ -155,6 +155,21 @@ for someone picking the work up.
   against delta **73.3 %** — the dangerous one, because 25.9 % looks entirely
   reasonable and is wrong by 3×. hostapd's independent BSS-load reading settled
   it. This corrected a claim asserted as verified in three documents.
+- **Root over ubus is not root, so adoption cannot bootstrap over it.** As
+  root: `uci.get rpcd`, `uci.set rpcd.*` and `file.write` into
+  `/usr/share/rpcd/acl.d/` all return status 6, while `file.read /etc/rc.local`
+  returns 0. rpcd's own ACLs bound `/ubus`, and stock OpenWrt grants write
+  access to neither the rpcd config nor the ACL directory — deliberately. The
+  footprint therefore arrives over **SSH, twice in a device's lifetime**
+  (adoption and un-adoption); everything else stays ubus. That build has **no
+  `base64`** and **no `sftp-server`**, so content is piped to `cat` over stdin.
+- **A stock device with no root password accepts anything** — any password over
+  ubus, and the SSH `none` method. Adoption probes for it and warns.
+- **The capability probe must run on the CONTROLLER's session, after its ACL
+  exists.** Probing first as the operator answers "what can root see", which is
+  a different question and a different answer: on a genuinely fresh device it
+  recorded survey, hostapd control and per-client accounting as *undetermined*
+  on hardware that has all three.
 - **The client inventory is cheap.** `luci-rpc.getHostHints` 5.1 ms,
   `getDHCPLeases` 2.9 ms; adding both took the baseline poll from 8 ms to 11 ms
   batched. `luci-rpc.getWirelessDevices` is **128.8 ms** — as expensive as an
@@ -177,43 +192,22 @@ collects** — inventory, telemetry, API, UI — with the gaps below.
 
 **Finish Phase 1:**
 
-1. **Adoption has no UI.** A device gets into the inventory only through
-   `internal/daemon/seed_helper_test.go`. The adoption *mechanism* is built and
-   tested (`internal/adoption`); what is missing is discovery, the operator
-   credential prompt, and a screen. This is the largest remaining gap and the
-   one a new user hits first.
-2. **The WebSocket** (`/api/v1/live`, IMPLEMENTATION §8). The UI currently
-   polls the API every 10 s, which is honest but wasteful and adds latency the
-   focused tier was supposed to remove.
-3. **The resource-budget harness** (DEVICE-BUDGET §7): an hour of baseline and
+1. **The WebSocket** (`/api/v1/live`, IMPLEMENTATION §8). The UI polls the API
+   every 10 s, which is honest but wasteful and adds latency the focused tier
+   was supposed to remove.
+2. **The resource-budget harness** (DEVICE-BUDGET §7): an hour of baseline and
    focused polling against a class-C device asserting CPU, RAM, request rate and
-   zero flash writes. It is in the Phase 1 list and is not built. Everything
-   measured so far is a single poll's cost, not a sustained one.
-4. **Client-list scoping.** The grid lists every host the device sees, which on
-   a WAN-facing gateway includes the upstream network's ARP neighbours. Telling
-   LAN from WAN needs the site model to know what a LAN is, so this is really a
-   Phase 3 dependency — but it is visible now and worth stating.
-5. **Virtualized rows and column customization** (UI-SPEC §5). The grid renders
-   every row; fine at 8 clients, not at the 10k the spec anticipates for Logs
-   and Flows.
-
-**The review fixes are hardware-verified** (2026-08-14, commit `3c6b859`). The
-three that could only be checked against a real device all held:
-
-- The stricter decode path does not reject a real `system.info` — polls
-  succeeded with `load1=0.19`, `uptime=76425s`, no degradations.
-- The gigabit wrap bound produced no false rejection and no fabricated traffic:
-  zero rate samples negative or above a gigabit link across a focused run.
-- Delta-based channel utilization agreed with hostapd's independent BSS load on
-  both radios — **1.6 % vs 3.6 %** on 5 GHz and **70.6 % vs 76.3 %** on 2.4 GHz.
-  The raw counters that run were `active=1789126/busy=2300469` and
-  `active=265875/busy=3539671`, so the old absolute-ratio formula would have
-  reported 128 % and 1331 %.
-
-A phone was associated during the run, so the station path ran for the first
-time: RSSI −44.3 dBm, 0 % TX retries, and — the detail worth noticing —
-`sta_rssi` recorded 6 samples against `sta_rx_bps`'s 5. Exactly one fewer,
-because a rate needs two counter readings and the first produces nothing.
+   zero flash writes. Everything measured so far is a single poll's cost, not a
+   sustained one.
+3. **Discovery.** Adoption works by address; nothing scans for candidates.
+4. **Un-adopt has no UI.** The endpoint, the two-phase flow and the residue
+   reporting all exist and are tested; no screen calls them.
+5. **Client-list scoping.** The grid lists every host the device sees, which on
+   a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
+   from WAN needs the site model to know what a LAN is, so it is really a
+   Phase 3 dependency — but it is visible now.
+6. **Virtualized rows and column customization** (UI-SPEC §5). The grid renders
+   every row; fine at 13 clients, not at the 10k the spec anticipates.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
@@ -264,6 +258,12 @@ written and believed.
   and says nothing about whether the value can be trusted — which, on the 2.4
   GHz radio, it cannot, from either source. The advice was not wrong; it was
   answering a different question than the one a reader would use it for.
+- **Test against a genuinely clean subject, not a convenient one.** The
+  capability probe ran in the wrong order for the entire life of the project and
+  every test passed, because a leftover ACL file was always already on disk and
+  root's wildcard expanded over it. The bug was reachable only on a device that
+  had never been adopted — which is the state every real user starts from, and
+  the one no test covered until adoption could actually clean up after itself.
 - **A guard that cannot fire is worse than no guard.** The 32-bit wrap check
   was tested against a bound so loose it could only reject readings 1.7 seconds
   apart, while the comment beside it claimed it "bites at the focused rate".
@@ -319,7 +319,18 @@ written and believed.
   without it still works and serves an explanation instead of a blank page.
   `npm --prefix ui run dev` proxies /api to a daemon on :8080 for UI work.
 
-- Adoption has no CLI yet, so seeding a device by hand means sealing its
+- Adoption now works from the UI (the `＋` rail icon) or
+  `POST /api/v1/devices/adopt`. It needs the device's admin credential once, for
+  SSH — see §4. Re-adopting rotates the controller login and narrows it to
+  production scope, which breaks the applyengine hardware tests: they write to a
+  scratch config in the ACL's separate `oonfeewrt-probe` group, which adoption
+  deliberately does not grant. Re-enable them with:
+
+  ```bash
+  ssh root@192.168.1.1 "uci add_list rpcd.oonfeewrt.read=oonfeewrt-probe; uci add_list rpcd.oonfeewrt.write=oonfeewrt-probe; uci commit rpcd"
+  ```
+
+- The older path, if you need it: seeding a device by hand means sealing its
   credential with `Keeper.SealCredential(mac, user, pass)` and writing a
   `store.Device` with `AdoptedAt` set. `internal/daemon/integration_test.go`
   does exactly that and is the shortest working example.
