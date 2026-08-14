@@ -85,6 +85,101 @@ correctly, with automatic rollback if anything goes wrong. That's the product.
 
 ---
 
+## Getting it running
+
+Two sides, and only one of them needs anything installed. Every step below is
+what the code actually does today, verified against a Linksys WRT3200ACM on
+OpenWrt 25.12.5.
+
+### The router: nothing to install
+
+There is no package to build, no opkg feed, no init script. A stock OpenWrt
+device already has everything: `rpcd`, and `uhttpd` with the ubus handler
+enabled. What adoption needs from you is **SSH access, once**.
+
+```
+Prerequisites on the device
+  1. OpenWrt 21.02 or newer, reachable on the network
+  2. SSH enabled (dropbear is on by default)
+  3. A root password set          <-- see the warning below
+```
+
+**Set a root password before adopting.** A stock OpenWrt with no root password
+authenticates *anything* — we measured it accepting an empty password, the
+correct one, and a deliberately wrong one over ubus, plus the SSH `none` method.
+Adoption probes for this and shows a warning, and it deliberately does not
+refuse, because you may be knowingly running that way on a trusted lab network.
+But it means the credential you type proves nothing about who you are:
+
+```sh
+ssh root@192.168.1.1 passwd     # do this first
+```
+
+Adoption then uses that credential exactly **once**, to write one file and
+create one login, and never stores it. Removing the device asks for it again.
+
+### The controller
+
+```sh
+npm --prefix ui install && npm --prefix ui run build   # builds the embedded UI
+go build -o oonfeewrtd ./cmd/oonfeewrtd
+./oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080
+```
+
+On first start it asks for an **operator passphrase**, twice. That passphrase
+encrypts every device credential at rest; there is no recovery if it is lost.
+Then open the address, create the administrator account the UI asks for, and
+adopt a device by address.
+
+For an unattended host (a container, a systemd unit) supply the passphrase from
+a file instead:
+
+```sh
+OONFEE_DATA_DIR=/data OONFEE_LISTEN=:8080 OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase   ./oonfeewrtd
+```
+
+The file must be mode `600` or it is refused. There is deliberately **no
+`OONFEE_PASSPHRASE` environment variable** — env is readable from `/proc`,
+inherited by child processes, and printed by `docker inspect` — and setting one
+is an error rather than being ignored, so the mistake is loud.
+
+### What the setup is protecting, and what it is not
+
+Low friction and secure pull in opposite directions in exactly three places.
+Here is where each line was drawn, so you can move it knowingly:
+
+| Choice | Friction | What it buys |
+|---|---|---|
+| **No default credentials, anywhere.** First run creates the admin account interactively | one extra screen | A shipped default nobody rotates is the most common way a self-hosted controller ends up on the internet with a known password |
+| **The passphrase is not in the environment** | you must create a file for unattended boot | `/proc`, child processes and `docker inspect` never see it |
+| **A device with no root password is warned about, not refused** | none | You keep control of a real tradeoff; the controller's own login is password-protected regardless |
+
+And the parts that are simply free, because they cost you nothing to have:
+
+- **The controller does not run as root on your device.** Adoption creates a
+  dedicated `oonfeewrt` login scoped to one ACL file, and that file is the
+  entire device-side footprint. Review it like code — it is the blast radius.
+- **The operator credential is never stored.** It is used for one transaction
+  and requested again at removal, because a controller that could delete its own
+  permissions could also widen them.
+- **Certificates and host keys are pinned on first use.** A device whose TLS
+  certificate or SSH host key changes is refused, not clicked through.
+- **Removal is complete and tested.** Adopt, use, remove, and the device is
+  byte-for-byte as it was — there is a test that asserts exactly that against
+  real hardware.
+
+### One thing to decide about TLS
+
+Over plain HTTP the session cookie cannot carry the `Secure` attribute, because
+a browser silently drops a `Secure` cookie on an insecure origin and you would
+be unable to sign in at all. On a trusted LAN that is a reasonable place to
+start. If the controller is reachable from anywhere you do not fully trust, put
+it behind TLS — the cookie attributes upgrade themselves automatically once the
+request arrives over HTTPS or through a proxy that sets
+`X-Forwarded-Proto: https`.
+
+---
+
 ## Documents
 
 | File | What's in it |

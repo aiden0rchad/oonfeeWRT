@@ -2,7 +2,7 @@
 
 Written 2026-08-13 as a handoff. Updated when Phase 0 finished, when Phase 1's
 read-only fleet view came up, and again on 2026-08-14 after adoption, the
-budget harness and the live channel landed. Everything below is
+budget harness, the live channel and un-adoption landed. Everything below is
 either committed or measured on real hardware; nothing here is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
@@ -16,8 +16,12 @@ The design is no longer a design. It was validated against a real
 assumptions, and then **Phases 0 and 1 were built in Go and TypeScript** against
 those findings.
 
-**Phase 0 is complete** — transport, capability probing, adoption, the
-apply/rollback/confirm cycle, the credential store, the poll loop.
+**Phase 0 is complete, including both of ROADMAP's proofs.** Proof 1 (a broken
+config reverts on its own and is reported honestly from a second session) was
+met earlier. **Proof 2 is now met too**: adopt a device, use it, remove it, and
+its config matches a pre-adoption snapshot exactly — 369 UCI lines and 9 ACL
+files before, 374 and 10 while adopted, 369 and 9 after, asserted by
+`TestIntegrationAdoptUnadoptLeavesNothing` against real hardware.
 
 **Phase 1 is nearly complete.** The whole path runs against real hardware:
 adopt a device from the UI, poll it, roll the samples into SQLite, serve them
@@ -205,23 +209,18 @@ Phase 0 is done. Phase 1 is done except for the list below.
 
 **Finish Phase 1** (in the order I would do them):
 
-1. **Un-adopt has no UI.** The endpoint, the two-phase flow, the SSH removal and
-   the residue reporting all exist and are tested; nothing calls them from a
-   screen. Smallest remaining item and it completes the adoption story — a
-   controller that cannot cleanly remove itself does not get trusted
-   (ROADMAP Phase 0's second proof).
-2. **Discovery.** Adoption works by address; nothing scans for candidates. mDNS
+1. **Discovery.** Adoption works by address; nothing scans for candidates. mDNS
    or an ARP sweep of the management subnet. Add-by-address must stay, since it
    is the only thing that works across subnets.
-3. **Grid virtualization and column customization** (UI-SPEC §5). The grid
+2. **Grid virtualization and column customization** (UI-SPEC §5). The grid
    renders every row — fine at 13 clients, not at the 10k the spec anticipates
    for Logs and Flows. Also the filter rail with live counts, which only the
    Logs screen has.
-4. **Client-list scoping.** The grid lists every host the device sees, which on
+3. **Client-list scoping.** The grid lists every host the device sees, which on
    a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
    from WAN needs the site model to know what a LAN is, so it is really a
    Phase 3 dependency — but it is visible now and will confuse people.
-5. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
+4. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
    CPU percent (needs a control measurement to be honest — the device only
    reports total), the list of packages we installed (nothing installs any yet),
    and the control to loosen the poll interval.
@@ -231,6 +230,14 @@ LuCI: the site model → render → apply pipeline is already built and tested
 (`internal/model`, `internal/render`, `internal/reconcile`), so Phase 2 is
 largely the *screens* for it plus the pending-changes batching. Read
 ROADMAP.md Phase 2 and IMPLEMENTATION §5–6 before starting.
+
+**Setup is documented in the README** (`## Getting it running`), and every claim
+in it was verified by following it: the build, the passphrase-file path, the
+mode-600 refusal and the `OONFEE_PASSPHRASE` refusal. It states the three places
+where low friction and security actually pull against each other and which way
+each was decided — no default credentials, the passphrase never in the
+environment, and a device with no root password warned about rather than
+refused. If any of those decisions change, that table is the thing to update.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
