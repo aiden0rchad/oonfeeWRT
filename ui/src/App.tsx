@@ -206,7 +206,11 @@ export function App() {
           )}
           {screen === 'dashboard' && dash && <Dashboard data={dash} />}
           {screen === 'devices' && (
-            <Devices devices={devices} onAdopt={() => setScreen('adopt')} />
+            <Devices
+              devices={devices}
+              onAdopt={() => setScreen('adopt')}
+              onChanged={refresh}
+            />
           )}
           {screen === 'clients' && <Clients clients={clients} note={clientNote} />}
           {screen === 'adopt' && <Adopt onAdopted={refresh} />}

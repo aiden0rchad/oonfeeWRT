@@ -7,14 +7,17 @@ import {
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
 import { live } from '../lib/live'
+import { Unadopt } from './Unadopt'
 import type { LiveStats } from '../lib/live'
 
 export function Devices({
   devices,
   onAdopt,
+  onChanged,
 }: {
   devices: Device[]
   onAdopt?: () => void
+  onChanged?: () => void
 }) {
   const [openID, setOpenID] = useState<number | null>(null)
 
@@ -77,7 +80,14 @@ export function Devices({
         />
       </Card>
       {openID !== null && (
-        <DeviceDetailPanel id={openID} onClose={() => setOpenID(null)} />
+        <DeviceDetailPanel
+          id={openID}
+          onClose={() => setOpenID(null)}
+          onRemoved={() => {
+            setOpenID(null)
+            onChanged?.()
+          }}
+        />
       )}
     </>
   )
@@ -92,7 +102,16 @@ export function Devices({
  * cleanup, and a focus that had to be explicitly released would pin a router at
  * the fast rate forever.
  */
-function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void }) {
+function DeviceDetailPanel({
+  id,
+  onClose,
+  onRemoved,
+}: {
+  id: number
+  onClose: () => void
+  onRemoved: () => void
+}) {
+  const [removing, setRemoving] = useState(false)
   const [detail, setDetail] = useState<DeviceDetail | null>(null)
   const [series, setSeries] = useState<Record<string, string[]>>({})
   const [overhead, setOverhead] = useState<Overhead | null>(null)
@@ -159,6 +178,19 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
     detail.interfaces.find((i) => i === 'wan') ??
     detail.interfaces.find((i) => i.startsWith('eth')) ??
     detail.interfaces[0]
+
+  if (removing) {
+    return (
+      <SlideOver title={`Remove ${detail.name || detail.mac}`} onClose={onClose}>
+        <Unadopt
+          deviceID={id}
+          deviceName={detail.name || detail.mac}
+          onDone={onRemoved}
+          onCancel={() => setRemoving(false)}
+        />
+      </SlideOver>
+    )
+  }
 
   return (
     <SlideOver title={detail.name || detail.mac} onClose={onClose}>
@@ -286,6 +318,14 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
       />
 
       {overhead && <ManagementOverhead o={overhead} />}
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+        <Button onClick={() => setRemoving(true)}>Remove from controller</Button>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Hands the device's configuration back and deletes the controller's
+          login and ACL file.
+        </div>
+      </div>
 
       {quirks.length > 0 && (
         <div>

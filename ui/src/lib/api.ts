@@ -12,9 +12,17 @@
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** The decoded response body.
+   *
+   *  Kept because some non-2xx responses ARE the answer rather than a failure:
+   *  un-adopt returns 409 with the full report when phase 2 needs a credential
+   *  the controller deliberately does not hold, and the residue list in that
+   *  body is the whole point of the reply. */
+  body: unknown
+  constructor(status: number, message: string, body?: unknown) {
     super(message)
     this.status = status
+    this.body = body
   }
 }
 
@@ -52,7 +60,8 @@ async function request<T>(
   const text = await resp.text()
   const body = text ? JSON.parse(text) : {}
   if (!resp.ok) {
-    throw new ApiError(resp.status, body.error ?? `request failed (${resp.status})`)
+    throw new ApiError(resp.status,
+      body.error ?? `request failed (${resp.status})`, body)
   }
   return body as T
 }
