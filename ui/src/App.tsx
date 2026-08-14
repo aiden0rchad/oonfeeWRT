@@ -7,15 +7,17 @@ import { Devices } from './screens/Devices'
 import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
 import { Adopt } from './screens/Adopt'
+import { Settings } from './screens/Settings'
 import { Banner } from './components/ui'
 import { live } from './lib/live'
 
-type Screen = 'dashboard' | 'devices' | 'clients' | 'adopt' | 'logs'
+type Screen = 'dashboard' | 'devices' | 'clients' | 'settings' | 'adopt' | 'logs'
 
 const NAV: { id: Screen; label: string; glyph: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◱' },
   { id: 'devices', label: 'Devices', glyph: '⬡' },
   { id: 'clients', label: 'Client Devices', glyph: '⬤' },
+  { id: 'settings', label: 'Settings', glyph: '⚙' },
   { id: 'adopt', label: 'Adopt a device', glyph: '＋' },
   { id: 'logs', label: 'Logs', glyph: '≣' },
 ]
@@ -210,6 +212,7 @@ export function App() {
             />
           )}
           {screen === 'clients' && <Clients clients={clients} note={clientNote} />}
+          {screen === 'settings' && <Settings devices={devices} />}
           {screen === 'adopt' && <Adopt onAdopted={refresh} />}
           {screen === 'logs' && <Logs />}
         </main>

@@ -69,6 +69,7 @@ async function request<T>(
 const get = <T>(path: string) => request<T>(path)
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+const del = <T>(path: string) => request<T>(path, { method: 'DELETE' })
 
 // ---- types, mirroring the Go response structs ----
 
@@ -263,6 +264,105 @@ export interface ScanResult {
   elapsed_ms: number
 }
 
+// ---- the site model (Phase 2) ----
+//
+// Editing any of this changes nothing on any device. It is desired state; it
+// reaches hardware only when someone previews and applies.
+
+export interface WLAN {
+  id: number
+  ssid: string
+  network_id: number
+  group_id: number
+  bands: string[]
+  security_mode: 'sae' | 'sae-mixed' | 'psk2' | 'owe' | 'none'
+  pmf: '0' | '1' | '2'
+  /** Whether a passphrase is set. The passphrase itself never rides along in a
+   *  list — fetch one WLAN with reveal to see it. */
+  has_key: boolean
+  key?: string
+  roaming: { ft: boolean; ft_over_ds: boolean; kv: boolean; ft_with_psk2: boolean }
+  hidden: boolean
+  isolate: boolean
+  max_assoc: number
+  enabled: boolean
+}
+
+export interface APGroup {
+  id: number
+  name: string
+  device_ids: number[]
+}
+
+export interface SiteNetwork {
+  id: number
+  name: string
+  vlan: number
+  cidr: string
+  zone: string
+  enabled: boolean
+}
+
+export interface Site {
+  name: string
+  /** Seeds the mobility-domain derivation, so every AP computes the same
+   *  802.11r domain. Shown because that is what makes roaming consistent. */
+  uuid: string
+  wlans: WLAN[]
+  groups: APGroup[]
+  networks: SiteNetwork[]
+  problems: string[]
+}
+
+export interface Change {
+  action: 'create' | 'update' | 'remove'
+  config: string
+  section: string
+  options?: string[]
+  /** The change writes a passphrase. The value is deliberately not here. */
+  touches_key?: boolean
+}
+
+export interface DevicePreview {
+  device_id: number
+  name: string
+  role: string
+  changes: Change[]
+  /** A human owns something this change would touch. Nothing is applied to a
+   *  blocked device — a partial apply around a conflict gives you half a WLAN. */
+  blocked: boolean
+  conflicts?: string[]
+  /** Options this hardware cannot take. Absent, not failed. */
+  omitted?: string[]
+  /** A section we own whose value on the device no longer matches what we
+   *  applied. Surfaced, never silently corrected. */
+  drift?: string[]
+  /** This device could not be planned. The others are still reported. */
+  error?: string
+}
+
+export interface PreviewResult {
+  site_name: string
+  devices: DevicePreview[]
+  site_errors?: string[]
+}
+
+export interface DeviceApply {
+  device_id: number
+  name: string
+  /** applied | reverted | unknown | error. "unknown" needs a human: the
+   *  confirm never landed and what the device did could not be established. */
+  outcome: string
+  reason?: string
+  changes?: number
+}
+
+export interface ApplyResult {
+  devices: DeviceApply[]
+  aborted: boolean
+  aborted_after?: string
+}
+
 /** What the controller costs one device (DEVICE-BUDGET §7). */
 export interface Overhead {
   device_id: number
@@ -350,6 +450,24 @@ export const api = {
   }) => post<AdoptResult>('/devices/adopt', req),
   unadopt: (id: number, req?: { username?: string; password?: string; force?: boolean }) =>
     post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),
+  site: () => get<Site>('/site'),
+  setSiteName: (name: string) => post<{ name: string }>('/site/name', { name }),
+  wlan: (id: number, reveal = false) =>
+    get<WLAN>(`/site/wlans/${id}${reveal ? '?reveal=1' : ''}`),
+  saveWLAN: (w: Partial<WLAN> & { id?: number }) =>
+    post<{ wlan: WLAN; problems: string[] }>(
+      w.id ? `/site/wlans/${w.id}` : '/site/wlans', w),
+  deleteWLAN: (id: number) => del<{ deleted: number; note: string }>(`/site/wlans/${id}`),
+  saveGroup: (g: Partial<APGroup> & { id?: number }) =>
+    post<APGroup>(g.id ? `/site/groups/${g.id}` : '/site/groups', g),
+  deleteGroup: (id: number) => del<{ deleted: number }>(`/site/groups/${id}`),
+  saveNetwork: (n: Partial<SiteNetwork> & { id?: number }) =>
+    post<SiteNetwork>(n.id ? `/site/networks/${n.id}` : '/site/networks', n),
+  deleteNetwork: (id: number) => del<{ deleted: number }>(`/site/networks/${id}`),
+  preview: () => get<PreviewResult>('/site/preview'),
+  applySite: (device_ids?: number[]) =>
+    post<ApplyResult>('/site/apply', device_ids ? { device_ids } : {}),
+
   scanPlan: () => get<ScanPlan>('/discovery'),
   scan: (req?: { networks?: string[]; https?: boolean }) =>
     post<ScanResult>('/discovery/scan', req ?? {}),

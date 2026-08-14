@@ -1067,3 +1067,56 @@ Two storage rules that follow from the refresh cadence:
 - **A row with no stored scope reads as `unknown`, never `local`.** Defaulting it
   would assert something never measured, and the direction of that error puts
   someone else's hardware in a list captioned "your devices".
+
+### Phase 2's first contact with hardware (2026-08-14)
+
+The site model → render → apply pipeline was built and unit-tested in Phase 0,
+and `STATUS.md` recorded it as "mock-verified only". Wiring it to a real device
+found three things in the first hour, each invisible to a mock.
+
+- **`uci.get` does not return only strings.** `ReadExisting` decoded the payload
+  into `map[string]map[string]string`. On OpenWrt 25.12.5 every UCI *option* is
+  a string, but the section metadata is not: `.anonymous` is a JSON bool and
+  `.index` a number. Go's decoder failed the whole read with "cannot unmarshal
+  bool", so **every device reported as unplannable**. The values are now decoded
+  as `any` and coerced, with list options space-joined the way `uci get` renders
+  them. Nothing is dropped — a key that vanished would read downstream as "the
+  device does not have this option".
+
+- **A new BSS is not up the instant `uci.apply` returns.** The health check read
+  hostapd once, immediately, found the SSID absent and let the device revert —
+  correctly, by its own logic, but wrongly in fact. Measured: a new BSS appears
+  about **1 second** after the reload. The check now polls for up to 20 s, well
+  inside the 90 s rollback window, and its error names what the radios *are*
+  carrying rather than only what is missing. The revert itself was flawless —
+  `/etc/config/wireless` came back byte-identical (same md5) with zero of our
+  sections and the operator's own section untouched — which is the mechanism
+  working exactly as designed, on a false alarm.
+
+- **`Doc.Plan` emitted a set for every existing section without comparing it.**
+  A device that already matched the model still reported "2 changes pending",
+  forever, and `DevicePlan.Empty()` could never be true — so a no-op apply would
+  still stage, apply and confirm against a device, arming a rollback for
+  nothing. Plan now skips a section whose managed values already match. Only the
+  keys we write are compared: the device adds defaults of its own and hostapd
+  writes state back into these sections, so comparing whole sections would find
+  a difference every time and never converge.
+
+**ROADMAP Phase 2's proof, measured.** One WLAN, `sae-mixed`, bands `2g,5g`,
+802.11r/k/v on, one AP group, one device:
+
+| | |
+|---|---|
+| sections rendered from one WLAN | 2 — `oowrt_wlan1_radio0` (5 GHz), `oowrt_wlan1_radio1` (2.4 GHz) |
+| mobility domain on each | `e8ee` — identical, derived from site UUID + WLAN id |
+| passphrase changed once, landed on | both bands, no per-device work |
+| mobility domain after the key change | `e8ee`, unchanged — a key change does not disturb roaming |
+| hand-edited foreign section (`human_wlan`) | untouched through apply, re-apply and prune, key intact |
+| prune after deleting the WLAN | both our sections removed, the human's kept |
+| preview once converged | 0 changes |
+
+The proof's "three APs" remains unmet for want of a second and third device —
+the fan-out is across two bands of one AP. That is the same open hardware item
+`STATUS.md` already tracks, and nothing in the pipeline is per-device: the
+render is driven by group membership, and the mobility domain is derived rather
+than coordinated precisely so that adding an AP needs no new mechanism.

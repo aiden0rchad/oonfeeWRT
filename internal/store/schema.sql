@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 
 -- ===== site model (desired state) =====
+-- One row, id=1. The uuid seeds the deterministic mobility-domain derivation
+-- and must never change once written (migration v5).
+CREATE TABLE IF NOT EXISTS site (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  uuid TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT 'Site'
+);
 CREATE TABLE IF NOT EXISTS networks (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
   vlan INTEGER NOT NULL UNIQUE, cidr TEXT NOT NULL,

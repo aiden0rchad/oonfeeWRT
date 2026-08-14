@@ -23,18 +23,47 @@ import (
 func (d Doc) Plan(existing Existing) applyengine.Plan {
 	ops := make([]applyengine.Op, 0, len(d.Sections))
 	for _, s := range sortedSections(d.Sections) {
-		kind := applyengine.OpAdd
-		if _, present := existing.WifiIfaces[s.Name]; present {
-			// Already there and ours: set, so we do not disturb options a
-			// previous version of us wrote and this one no longer manages.
-			kind = applyengine.OpSet
+		current, present := existing.WifiIfaces[s.Name]
+		if !present {
+			ops = append(ops, applyengine.Op{
+				Kind: applyengine.OpAdd, Config: s.Config, Type: s.Type,
+				Name: s.Name, Section: s.Name, Values: s.Values,
+			})
+			continue
 		}
+		if matches(s, current) {
+			// Already exactly what we would write. Emitting a set anyway makes
+			// every preview report changes that change nothing — "2 changes
+			// pending" on a device that already matches — and that is how an
+			// operator learns to stop reading the preview. It also means
+			// DevicePlan.Empty() could never be true, so a no-op apply would
+			// still stage, apply and confirm against a device for no reason.
+			continue
+		}
+		// Present and ours but different: set rather than add, so options a
+		// previous version of us wrote and this one no longer manages are left
+		// alone rather than being silently dropped.
 		ops = append(ops, applyengine.Op{
-			Kind: kind, Config: s.Config, Type: s.Type,
+			Kind: applyengine.OpSet, Config: s.Config, Type: s.Type,
 			Name: s.Name, Section: s.Name, Values: s.Values,
 		})
 	}
 	return applyengine.Plan{Ops: ops}
+}
+
+// matches reports whether the device already holds every value this section
+// would write.
+//
+// Only the keys WE write are compared. The device adds defaults of its own and
+// hostapd writes state back into these sections, so comparing whole sections
+// would find a difference every time and never converge.
+func matches(s Section, current map[string]string) bool {
+	for k, v := range s.Values {
+		if current[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // Prune returns operations removing sections we own that the render no longer

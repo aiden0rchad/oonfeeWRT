@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -52,6 +52,19 @@ var migrations = map[int][]string{
 		// is a promise, and a knob that could raise the rate would make it a
 		// suggestion that no test measures.
 		`ALTER TABLE devices ADD COLUMN poll_interval_s INTEGER NOT NULL DEFAULT 0`,
+	},
+	5: {
+		// The site row. One per controller, created on first read.
+		//
+		// Its UUID seeds the deterministic mobility-domain derivation
+		// (IMPLEMENTATION §5) that lets every AP compute the same 802.11r
+		// domain without coordination, so it is generated once and never
+		// changes — regenerating it would silently re-key roaming fleet-wide.
+		`CREATE TABLE IF NOT EXISTS site (
+		   id INTEGER PRIMARY KEY CHECK (id = 1),
+		   uuid TEXT NOT NULL,
+		   name TEXT NOT NULL DEFAULT 'Site'
+		 )`,
 	},
 }
 

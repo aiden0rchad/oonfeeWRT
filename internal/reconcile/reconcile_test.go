@@ -466,3 +466,54 @@ func TestReadExistingSeesOnlyWifiIfaces(t *testing.T) {
 }
 
 var _ = render.OwnershipTag // keep the render import meaningful if tests shrink
+
+// A device's uci.get does not return only strings.
+//
+// Measured on OpenWrt 25.12.5: every UCI *option* is a string, but the section
+// metadata is not — `.anonymous` is a JSON bool and `.index` a number. Decoding
+// the payload straight into map[string]string failed the entire read with
+// "cannot unmarshal bool", so every device reported as unplannable. The mock
+// returned strings throughout, which is why it took a preview against real
+// hardware to find.
+func TestFlattenHandlesEveryTypeADeviceReturns(t *testing.T) {
+	got := flatten(map[string]any{
+		".anonymous": false,
+		".index":     float64(1),
+		".type":      "wifi-iface",
+		".name":      "default_radio0",
+		"ssid":       "oonfeewrt-probe-5g",
+		"disabled":   "0",
+		"maclist":    []any{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"},
+		"absent":     nil,
+	})
+	want := map[string]string{
+		".anonymous": "false",
+		".index":     "1",
+		".type":      "wifi-iface",
+		".name":      "default_radio0",
+		"ssid":       "oonfeewrt-probe-5g",
+		"disabled":   "0",
+		"maclist":    "aa:bb:cc:dd:ee:ff 11:22:33:44:55:66",
+		"absent":     "",
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("flatten[%q] = %q, want %q", k, got[k], w)
+		}
+	}
+	// Nothing may be dropped: a key that vanished here would read downstream as
+	// "the device does not have this option", which is a different claim.
+	if len(got) != len(want) {
+		t.Errorf("flatten produced %d keys from %d; keys were dropped", len(got), len(want))
+	}
+}
+
+// A number must not come back with a spurious decimal point, or a comparison
+// against the string we wrote would always report drift.
+func TestFlattenFormatsNumbersWithoutADecimalPoint(t *testing.T) {
+	got := flatten(map[string]any{"n": float64(20000)})
+	if got["n"] != "20000" {
+		t.Errorf("n = %q, want 20000 — a value like 20000.0 would never match "+
+			"the string we applied and would report drift on every poll", got["n"])
+	}
+}

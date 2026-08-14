@@ -227,8 +227,23 @@ to be false.
 §7's remaining fields. See §5d; the CPU measurement produced a finding that
 changes how to reason about poll cost.
 
-**Phase 1 is complete.** What is left below is polish and scale work, none of
-it blocking Phase 2.
+**Phase 1 is complete.** **Phase 2 is underway and its ROADMAP proof is met** —
+see §5e. The site model persists, has screens, and reaches hardware through a
+preview-then-apply flow.
+
+**Phase 2, what remains:**
+
+- **Networks and zones on the device.** The site model holds networks and the
+  renderer's worked example 2 (bridge-VLAN, interface, DHCP, firewall zone) is
+  specified but not built — only wireless renders today. That is Phase 3's
+  territory as much as Phase 2's.
+- **Per-device overrides.** The `device_overrides` table exists and nothing
+  reads it. UI-SPEC wants explicit conflict surfacing on top.
+- **`usteer` / `dawn` configuration and state readout.**
+- **A second AP.** The fan-out is proven across two bands of one device; three
+  APs is the ROADMAP sentence and needs hardware.
+
+**Phase 1 leftovers** (polish, none of it blocking):
 
 1. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns".
@@ -425,6 +440,49 @@ measures the default, and a knob that could raise the rate would put a device
 outside the budget where no test would look. Verified on hardware: an override
 of 5 s stores as 5 and polls at 60.
 
+### 5e. Phase 2's first contact with hardware
+
+The render → apply pipeline was built and unit-tested in Phase 0 and recorded
+here as "mock-verified only". Wiring it to a real device found three defects in
+the first hour, all of them invisible to a mock, and then met the proof.
+
+- **`uci.get` does not return only strings.** `ReadExisting` decoded into
+  `map[string]map[string]string`. Every UCI *option* is a string, but the
+  section metadata is not — `.anonymous` is a bool and `.index` a number — so
+  the decoder failed the entire read and **every device reported as
+  unplannable**. This is the exact shape of the mock-green problem §6 already
+  names: the mock returned strings throughout.
+- **A new BSS is not up the instant `uci.apply` returns.** The health check read
+  hostapd once, immediately, found the SSID absent, and let the device revert.
+  Correct by its own logic, wrong in fact — measured, a BSS appears about a
+  second after the reload. It now polls for up to 20 s inside the 90 s window,
+  and names what the radios *are* carrying when it fails. Worth saying plainly:
+  the revert was flawless. `/etc/config/wireless` came back byte-identical, zero
+  of our sections, the operator's own section untouched. The safety mechanism
+  did exactly its job on a false alarm, which is the failure mode you want.
+- **`Doc.Plan` never compared before writing.** It emitted a set for every
+  existing section, so a converged device reported "2 changes pending" forever
+  and `Empty()` could never be true — a no-op apply would still stage, apply and
+  confirm, arming a rollback for nothing. Fixed to skip sections whose managed
+  values already match, comparing only the keys we write.
+
+**The proof, on hardware.** One WLAN on two bands, 802.11r/k/v:
+
+| | |
+|---|---|
+| sections from one WLAN | 2 — one per radio |
+| mobility domain on each | `e8ee`, identical, derived not coordinated |
+| passphrase changed **once**, landed on | both bands, no per-device work |
+| mobility domain after that change | `e8ee`, unchanged |
+| hand-edited foreign section | untouched through apply, re-apply and prune |
+| prune after deleting the WLAN | our sections gone, the human's kept |
+| preview once converged | 0 changes |
+
+"Three APs" is unmet for want of hardware, and that is the only part that is.
+Nothing in the pipeline is per-device — render is driven by group membership and
+the mobility domain is derived rather than agreed — so a second AP needs no new
+mechanism, only a second AP.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there. The
@@ -440,8 +498,11 @@ of 5 s stores as 5 and polls at 60.
   need 3 GB pushed through it. The code is written to be correct either way.
 
 **Known gaps worth closing cheaply:**
-- `internal/model` has no tests of its own (it is exercised through `render`).
-- `reconcile` is mock-verified only.
+- `internal/model` has no tests of its own (it is exercised through `render`
+  and now through `store`'s site-model round-trip tests).
+- ~~`reconcile` is mock-verified only.~~ Closed 2026-08-14: it now runs against
+  the real device through the Phase 2 apply flow, which is how the `uci.get`
+  decode bug was found (§5e).
 - The UI has no automated tests. It has been driven in a browser against the
   real device, which has now caught **fifteen** defects no unit test would have
   — three from the discovery screen and six more from the table system (§5b),
@@ -504,6 +565,14 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **A mock that is easier to write than the real thing is testing the wrong
+  thing.** `internal/reconcile` was mock-verified and green for weeks. Its mock
+  returned `map[string]string` because that is the obvious shape for UCI values,
+  and the device returns a bool and a number among them — so the very first read
+  against hardware failed completely. The mock did not merely miss a bug; it
+  encoded a simpler world than the one the code runs in, and every test written
+  against it inherited that. Where a mock has to invent a payload shape, get the
+  shape from a real capture.
 - **Latency is not load.** Four documents described `iwinfo` as "~92% of a
   focused poll" and that number was being used, implicitly, to reason about
   what focused polling costs a device. It is 92% of the poll's *wall time*; in

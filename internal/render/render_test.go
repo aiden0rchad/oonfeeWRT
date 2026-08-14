@@ -433,3 +433,55 @@ func TestNilCapabilitiesRenderNothingRatherThanGuessing(t *testing.T) {
 		t.Error("the omission should be reported")
 	}
 }
+
+// A device that already holds what we would write produces no operations.
+//
+// Without this, every preview reports changes that change nothing — "2 changes
+// pending" against a device that already matches — which is how an operator
+// learns to stop reading the preview. It also means DevicePlan.Empty() could
+// never be true, so a no-op apply would still stage, apply and confirm against
+// a device for no reason, with a rollback armed each time.
+func TestPlanSkipsSectionsThatAlreadyMatch(t *testing.T) {
+	doc := Doc{Sections: []Section{{
+		Config: "wireless", Type: "wifi-iface", Name: "oowrt_wlan1_radio0",
+		Values: map[string]string{
+			"ssid": "Home", "device": "radio0", "encryption": "sae-mixed",
+			OwnershipTag: "1",
+		},
+	}}}
+
+	// Exactly what we would write, plus device-added keys we do not manage.
+	same := Existing{WifiIfaces: map[string]map[string]string{
+		"oowrt_wlan1_radio0": {
+			"ssid": "Home", "device": "radio0", "encryption": "sae-mixed",
+			OwnershipTag: "1",
+			// The device's own additions must not count as a difference.
+			".type": "wifi-iface", ".index": "3", "macaddr": "aa:bb:cc:dd:ee:ff",
+		},
+	}}
+	if ops := doc.Plan(same).Ops; len(ops) != 0 {
+		t.Errorf("a matching section produced %d op(s): %+v", len(ops), ops)
+	}
+
+	// One managed value different: a set, not an add.
+	differs := Existing{WifiIfaces: map[string]map[string]string{
+		"oowrt_wlan1_radio0": {
+			"ssid": "Renamed", "device": "radio0", "encryption": "sae-mixed",
+			OwnershipTag: "1",
+		},
+	}}
+	ops := doc.Plan(differs).Ops
+	if len(ops) != 1 {
+		t.Fatalf("a changed section produced %d op(s), want 1", len(ops))
+	}
+	if ops[0].Kind != applyengine.OpSet {
+		t.Errorf("kind = %v, want set — add would drop options a previous "+
+			"version of us wrote and this one no longer manages", ops[0].Kind)
+	}
+
+	// Absent entirely: an add.
+	ops = doc.Plan(Existing{WifiIfaces: map[string]map[string]string{}}).Ops
+	if len(ops) != 1 || ops[0].Kind != applyengine.OpAdd {
+		t.Errorf("a missing section produced %+v, want one add", ops)
+	}
+}

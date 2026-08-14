@@ -1,0 +1,412 @@
+package store
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
+)
+
+// The site model's persistence: the desired state an operator expressed, which
+// internal/render turns into UCI and internal/reconcile pushes to devices.
+//
+// The tables have been in schema.sql since the beginning; nothing read or wrote
+// them until Phase 2, because until Phase 2 there were no screens to express
+// anything with. This file is that gap closed.
+//
+// One property matters more than the rest: **the site UUID is generated once
+// and never changes.** It seeds the deterministic mobility-domain derivation
+// (IMPLEMENTATION §5), which is what lets every AP in a group compute the same
+// 802.11r domain with no coordination between them. Regenerating it would
+// silently re-key roaming across the whole fleet and break fast transition
+// until every device had been re-applied.
+
+// Site loads the whole desired state, creating the site row on first use.
+func (db *DB) Site(ctx context.Context) (model.Site, error) {
+	var s model.Site
+	row := db.sql.QueryRowContext(ctx, `SELECT uuid, name FROM site WHERE id=1`)
+	err := row.Scan(&s.UUID, &s.Name)
+	if err == sql.ErrNoRows {
+		if s, err = db.createSite(ctx); err != nil {
+			return model.Site{}, err
+		}
+	} else if err != nil {
+		return model.Site{}, fmt.Errorf("store: read site: %w", err)
+	}
+
+	if s.Networks, err = db.networks(ctx); err != nil {
+		return model.Site{}, err
+	}
+	if s.Groups, err = db.groups(ctx); err != nil {
+		return model.Site{}, err
+	}
+	if s.WLANs, err = db.wlans(ctx); err != nil {
+		return model.Site{}, err
+	}
+	return s, nil
+}
+
+// createSite writes the singleton row.
+//
+// The UUID is random and permanent. It is not derived from anything — not the
+// hostname, not a device MAC — because every such source can change, and a
+// mobility domain that changes when someone renames a controller is worse than
+// one that means nothing to a human.
+func (db *DB) createSite(ctx context.Context) (model.Site, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return model.Site{}, fmt.Errorf("store: generate site UUID: %w", err)
+	}
+	s := model.Site{UUID: hex.EncodeToString(buf[:]), Name: "Site"}
+	if _, err := db.sql.ExecContext(ctx,
+		`INSERT INTO site (id, uuid, name) VALUES (1, ?, ?)`, s.UUID, s.Name); err != nil {
+		return model.Site{}, fmt.Errorf("store: create site: %w", err)
+	}
+	return s, nil
+}
+
+// SetSiteName renames the site. The UUID is deliberately not settable.
+func (db *DB) SetSiteName(ctx context.Context, name string) error {
+	if _, err := db.Site(ctx); err != nil { // ensure the row exists
+		return err
+	}
+	_, err := db.sql.ExecContext(ctx, `UPDATE site SET name=? WHERE id=1`, name)
+	return err
+}
+
+// ---- networks ----
+
+func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT id, name, vlan, cidr, zone, enabled FROM networks ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list networks: %w", err)
+	}
+	defer rows.Close()
+	out := []model.Network{}
+	for rows.Next() {
+		var n model.Network
+		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone, &n.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// SaveNetwork inserts or updates a network. A zero ID inserts.
+func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
+	if strings.TrimSpace(n.Name) == "" {
+		return fmt.Errorf("store: a network needs a name")
+	}
+	if n.Zone == "" {
+		n.Zone = "lan"
+	}
+	if n.ID == 0 {
+		res, err := db.sql.ExecContext(ctx,
+			`INSERT INTO networks (name, vlan, cidr, zone, enabled) VALUES (?,?,?,?,?)`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled)
+		if err != nil {
+			return fmt.Errorf("store: create network: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		n.ID = int(id)
+		return nil
+	}
+	_, err := db.sql.ExecContext(ctx,
+		`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, enabled=? WHERE id=?`,
+		n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled, n.ID)
+	return err
+}
+
+// DeleteNetwork removes a network, refusing while a WLAN still points at it.
+//
+// The foreign key would catch this too, but as an opaque constraint error. A
+// WLAN referencing a deleted network renders nothing and reports no reason,
+// which is exactly the silent-gap failure this project keeps finding.
+func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
+	var n int
+	if err := db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM wlans WHERE network_id=?`, id).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("store: %d WLAN(s) still use this network; "+
+			"move or delete them first", n)
+	}
+	_, err := db.sql.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, id)
+	return err
+}
+
+// ---- AP groups ----
+
+func (db *DB) groups(ctx context.Context) ([]model.APGroup, error) {
+	rows, err := db.sql.QueryContext(ctx, `SELECT id, name FROM ap_groups ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list AP groups: %w", err)
+	}
+	defer rows.Close()
+	byID := map[int]*model.APGroup{}
+	out := []model.APGroup{}
+	for rows.Next() {
+		var g model.APGroup
+		if err := rows.Scan(&g.ID, &g.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		byID[out[i].ID] = &out[i]
+	}
+
+	mrows, err := db.sql.QueryContext(ctx,
+		`SELECT group_id, device_id FROM ap_group_members ORDER BY group_id, device_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list AP group members: %w", err)
+	}
+	defer mrows.Close()
+	for mrows.Next() {
+		var gid int
+		var did int64
+		if err := mrows.Scan(&gid, &did); err != nil {
+			return nil, err
+		}
+		if g, ok := byID[gid]; ok {
+			g.DeviceIDs = append(g.DeviceIDs, did)
+		}
+	}
+	return out, mrows.Err()
+}
+
+// SaveGroup inserts or updates a group and replaces its membership.
+func (db *DB) SaveGroup(ctx context.Context, g *model.APGroup) error {
+	if strings.TrimSpace(g.Name) == "" {
+		return fmt.Errorf("store: an AP group needs a name")
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	if g.ID == 0 {
+		res, err := tx.ExecContext(ctx, `INSERT INTO ap_groups (name) VALUES (?)`, g.Name)
+		if err != nil {
+			return fmt.Errorf("store: create AP group: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		g.ID = int(id)
+	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE ap_groups SET name=? WHERE id=?`, g.Name, g.ID); err != nil {
+			return err
+		}
+	}
+	// Replace membership wholesale. A diff would be cheaper and would also have
+	// to get removal right; the set is a handful of rows.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM ap_group_members WHERE group_id=?`, g.ID); err != nil {
+		return err
+	}
+	seen := map[int64]bool{}
+	for _, did := range g.DeviceIDs {
+		if seen[did] {
+			continue // a device listed twice is one member, not two
+		}
+		seen[did] = true
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO ap_group_members (group_id, device_id) VALUES (?,?)`,
+			g.ID, did); err != nil {
+			return fmt.Errorf("store: add device %d to group %d: %w", did, g.ID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteGroup removes a group, refusing while a WLAN still targets it.
+func (db *DB) DeleteGroup(ctx context.Context, id int) error {
+	var n int
+	if err := db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM wlans WHERE group_id=?`, id).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return fmt.Errorf("store: %d WLAN(s) still target this group; "+
+			"move or delete them first", n)
+	}
+	_, err := db.sql.ExecContext(ctx, `DELETE FROM ap_groups WHERE id=?`, id)
+	return err
+}
+
+// ---- WLANs ----
+
+func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT id, ssid, network_id, group_id, bands, security_json,
+		        roaming_json, options_json, enabled
+		   FROM wlans ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list WLANs: %w", err)
+	}
+	defer rows.Close()
+	out := []model.WLAN{}
+	for rows.Next() {
+		var w model.WLAN
+		var bands, sec, roam, opts string
+		if err := rows.Scan(&w.ID, &w.SSID, &w.NetworkID, &w.GroupID, &bands,
+			&sec, &roam, &opts, &w.Enabled); err != nil {
+			return nil, err
+		}
+		w.Bands = parseBands(bands)
+		// A row whose JSON will not parse must not silently become a WLAN with
+		// open security. Refuse the whole load instead: a site model that is
+		// partly guessed is worse than one that will not open.
+		if err := json.Unmarshal([]byte(sec), &w.Security); err != nil {
+			return nil, fmt.Errorf("store: WLAN %d has unreadable security: %w", w.ID, err)
+		}
+		if err := json.Unmarshal([]byte(roam), &w.Roaming); err != nil {
+			return nil, fmt.Errorf("store: WLAN %d has unreadable roaming: %w", w.ID, err)
+		}
+		if err := json.Unmarshal([]byte(opts), &w.Options); err != nil {
+			return nil, fmt.Errorf("store: WLAN %d has unreadable options: %w", w.ID, err)
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// SaveWLAN inserts or updates a WLAN.
+//
+// An empty Security.Key on an UPDATE means "leave the key alone", not "clear
+// it". The UI never has to round-trip a passphrase to change an unrelated
+// field, which is the difference between a screen that can safely omit the
+// secret and one that must carry it through every edit.
+//
+// Clearing a key is done by changing the security mode to one that needs none;
+// there is no way to have a keyed mode with no key, and Site.Validate rejects
+// it if one ever appears.
+func (db *DB) SaveWLAN(ctx context.Context, w *model.WLAN) error {
+	if strings.TrimSpace(w.SSID) == "" {
+		return fmt.Errorf("store: a WLAN needs an SSID")
+	}
+	sec, err := json.Marshal(w.Security)
+	if err != nil {
+		return err
+	}
+	roam, err := json.Marshal(w.Roaming)
+	if err != nil {
+		return err
+	}
+	opts, err := json.Marshal(w.Options)
+	if err != nil {
+		return err
+	}
+	bands := formatBands(w.Bands)
+
+	if w.ID == 0 {
+		res, err := db.sql.ExecContext(ctx,
+			`INSERT INTO wlans (ssid, network_id, group_id, bands, security_json,
+			                    roaming_json, options_json, enabled)
+			 VALUES (?,?,?,?,?,?,?,?)`,
+			w.SSID, w.NetworkID, w.GroupID, bands, string(sec),
+			string(roam), string(opts), w.Enabled)
+		if err != nil {
+			return fmt.Errorf("store: create WLAN: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		w.ID = int(id)
+		return nil
+	}
+
+	if w.Security.Key == "" {
+		// Carry the stored key forward. json_set would be neater but this stays
+		// in Go's type system, where the shape of Security is checked.
+		var prev string
+		if err := db.sql.QueryRowContext(ctx,
+			`SELECT security_json FROM wlans WHERE id=?`, w.ID).Scan(&prev); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrNotFound
+			}
+			return err
+		}
+		var old model.Security
+		if err := json.Unmarshal([]byte(prev), &old); err == nil && old.Key != "" {
+			w.Security.Key = old.Key
+			if sec, err = json.Marshal(w.Security); err != nil {
+				return err
+			}
+		}
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE wlans SET ssid=?, network_id=?, group_id=?, bands=?, security_json=?,
+		                  roaming_json=?, options_json=?, enabled=? WHERE id=?`,
+		w.SSID, w.NetworkID, w.GroupID, bands, string(sec),
+		string(roam), string(opts), w.Enabled, w.ID)
+	if err != nil {
+		return fmt.Errorf("store: update WLAN %d: %w", w.ID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteWLAN removes a WLAN from the model.
+//
+// This does not touch any device. The sections it produced stay on their APs
+// until the next apply, which prunes them — a delete that reached out to
+// hardware immediately would be an apply nobody previewed.
+func (db *DB) DeleteWLAN(ctx context.Context, id int) error {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM wlans WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ---- band encoding ----
+
+// Bands are stored as a CSV string, which is what the schema has had all along.
+// Parsing is lenient about spacing and case and drops anything unrecognised
+// rather than failing the load: a band this build does not know about is a
+// forward-compatibility question, not a corrupt row.
+func parseBands(s string) []model.Band {
+	out := []model.Band{}
+	for _, part := range strings.Split(s, ",") {
+		switch model.Band(strings.ToLower(strings.TrimSpace(part))) {
+		case model.Band2G:
+			out = append(out, model.Band2G)
+		case model.Band5G:
+			out = append(out, model.Band5G)
+		case model.Band6G:
+			out = append(out, model.Band6G)
+		}
+	}
+	return out
+}
+
+func formatBands(bs []model.Band) string {
+	seen := map[model.Band]bool{}
+	parts := make([]string, 0, len(bs))
+	for _, b := range bs {
+		if seen[b] {
+			continue
+		}
+		seen[b] = true
+		parts = append(parts, string(b))
+	}
+	sort.Strings(parts) // stable storage, so a no-op save is a no-op
+	return strings.Join(parts, ",")
+}

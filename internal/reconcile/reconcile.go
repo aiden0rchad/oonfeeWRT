@@ -13,6 +13,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
@@ -81,19 +83,61 @@ func New(db *store.DB) *Reconciler {
 // built without it can only ever be provisional — which is why Plan takes it
 // rather than assuming an empty device.
 func ReadExisting(ctx context.Context, c *ubus.Client) (render.Existing, error) {
+	// Decoded as `any`, not as string, because a real device does not return
+	// only strings. Measured on OpenWrt 25.12.5: every UCI option is a string,
+	// but the section metadata is not — `.anonymous` is a JSON bool and
+	// `.index` is a number. Decoding straight into map[string]string therefore
+	// failed the WHOLE read with "cannot unmarshal bool", so every device
+	// reported as unplannable. The mock returned strings throughout, which is
+	// why this survived until a preview ran against hardware.
 	var out struct {
-		Values map[string]map[string]string `json:"values"`
+		Values map[string]map[string]any `json:"values"`
 	}
 	if err := c.Call(ctx, "uci", "get", map[string]any{"config": "wireless"}, &out); err != nil {
 		return render.Existing{}, fmt.Errorf("reconcile: read wireless config: %w", err)
 	}
 	ifaces := map[string]map[string]string{}
 	for name, vals := range out.Values {
-		if vals[".type"] == "wifi-iface" {
-			ifaces[name] = vals
+		flat := flatten(vals)
+		if flat[".type"] == "wifi-iface" {
+			ifaces[name] = flat
 		}
 	}
 	return render.Existing{WifiIfaces: ifaces}, nil
+}
+
+// flatten coerces one section's values to the strings the renderer compares.
+//
+// UCI itself stores everything as text, so the options we care about arrive as
+// strings and pass through untouched. The other cases are the section metadata
+// and list options, and each is rendered the way UCI would render it rather
+// than dropped — a key that vanished here would read downstream as "the device
+// does not have this option", which is a different claim entirely.
+func flatten(vals map[string]any) map[string]string {
+	out := make(map[string]string, len(vals))
+	for k, v := range vals {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		case float64:
+			// JSON has one number type; UCI indices are integers.
+			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+		case []any:
+			// A UCI list. Space-joined, which is how `uci get` renders one.
+			parts := make([]string, 0, len(t))
+			for _, e := range t {
+				parts = append(parts, fmt.Sprint(e))
+			}
+			out[k] = strings.Join(parts, " ")
+		case nil:
+			out[k] = ""
+		default:
+			out[k] = fmt.Sprint(t)
+		}
+	}
+	return out
 }
 
 // PlanDevice produces the preview without changing anything.

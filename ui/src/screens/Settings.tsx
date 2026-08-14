@@ -1,0 +1,852 @@
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../lib/api'
+import type { APGroup, Device, PreviewResult, Site, WLAN } from '../lib/api'
+import { Banner, Button, Card, Field, Prop } from '../components/ui'
+
+/**
+ * Settings — the site model, and the flow that pushes it to hardware.
+ *
+ * The shape of this screen IS Phase 2's idea. Editing a WLAN changes nothing on
+ * any device: it writes desired state. What reaches hardware is an explicit
+ * apply, and the only path to it runs through a preview that says, per device,
+ * exactly which UCI sections would be created, updated or removed.
+ *
+ * That is the difference between this and LuCI. LuCI edits one device's config
+ * directly and you find out what it did afterwards; here one edit fans out
+ * across every AP in a group and across every band, and you read the whole
+ * consequence before any of it happens.
+ */
+export function Settings({ devices }: { devices: Device[] }) {
+  const [site, setSite] = useState<Site | null>(null)
+  const [editing, setEditing] = useState<Partial<WLAN> | null>(null)
+  const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+  const [applied, setApplied] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      setSite(await api.site())
+      setErr('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function runPreview() {
+    setBusy('preview')
+    setApplied(null)
+    try {
+      setPreview(await api.preview())
+      setErr('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  async function runApply() {
+    setBusy('apply')
+    try {
+      const res = await api.applySite()
+      const ok = res.devices.filter((d) => d.outcome === 'applied').length
+      setApplied(
+        res.aborted
+          ? `Stopped after ${res.aborted_after}: ${
+              res.devices.find((d) => d.outcome !== 'applied')?.reason ?? 'apply failed'
+            }`
+          : `Applied to ${ok} device${ok === 1 ? '' : 's'}.`,
+      )
+      // Re-preview so the screen shows the new truth rather than the plan that
+      // has just stopped being pending.
+      setPreview(await api.preview())
+      setErr('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (!site) {
+    return (
+      <div style={{ padding: 20, fontSize: 12, color: 'var(--text-secondary)' }}>
+        {err ? <Banner tone="critical">{err}</Banner> : 'Loading…'}
+      </div>
+    )
+  }
+
+  const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
+
+  return (
+    <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
+      {err && <Banner tone="critical">{err}</Banner>}
+      {site.problems.length > 0 && (
+        <Banner tone="warning">
+          <strong>This configuration is not ready to apply:</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {site.problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        </Banner>
+      )}
+
+      <Card title="Site">
+        <div style={{ display: 'grid', gap: 6 }}>
+          <Prop label="Name">{site.name}</Prop>
+          <Prop label="Networks">{site.networks.length}</Prop>
+          <Prop label="AP groups">{site.groups.length}</Prop>
+          <Prop label="Wireless networks">{site.wlans.length}</Prop>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+          The site identifier <code>{site.uuid.slice(0, 8)}…</code> seeds the
+          802.11r mobility domain, so every AP derives the same value with no
+          coordination. It never changes — that is what keeps fast roaming
+          working across the fleet.
+        </div>
+      </Card>
+
+      <Card
+        title="Wireless networks"
+        actions={
+          <Button
+            onClick={() =>
+              setEditing({
+                ssid: '',
+                bands: ['2g', '5g'],
+                security_mode: 'sae-mixed',
+                pmf: '1',
+                enabled: true,
+                network_id: site.networks[0]?.id ?? 0,
+                group_id: site.groups[0]?.id ?? 0,
+                roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: false },
+                hidden: false,
+                isolate: false,
+                max_assoc: 0,
+              })
+            }
+          >
+            Add a WLAN
+          </Button>
+        }
+        pad={false}
+      >
+        {site.networks.length === 0 || site.groups.length === 0 ? (
+          <div style={{ padding: 14 }}>
+            <Banner>
+              A WLAN needs a network to sit on and an AP group to publish it.
+              Create one of each below first.
+            </Banner>
+          </div>
+        ) : site.wlans.length === 0 ? (
+          <div style={{ padding: 14, fontSize: 12, color: 'var(--text-secondary)' }}>
+            No wireless networks yet.
+          </div>
+        ) : (
+          <div>
+            {site.wlans.map((w) => (
+              <WLANRow
+                key={w.id}
+                w={w}
+                site={site}
+                onEdit={() => setEditing(w)}
+                onDeleted={load}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Groups site={site} devices={devices} onChanged={load} />
+      <Networks site={site} onChanged={load} />
+
+      {/* The pending-changes flow. Preview is a read; apply is the only thing
+          that writes, and it is deliberately unreachable without previewing
+          first — reading what a change does to each device is the point. */}
+      <Card title="Pending changes">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Button onClick={runPreview} disabled={busy !== ''}>
+            {busy === 'preview' ? 'Checking every device…' : 'Preview changes'}
+          </Button>
+          <Button
+            kind="primary"
+            disabled={
+              busy !== '' ||
+              !preview ||
+              pending === 0 ||
+              (preview.site_errors?.length ?? 0) > 0 ||
+              preview.devices.some((d) => d.blocked)
+            }
+            onClick={runApply}
+          >
+            {busy === 'apply' ? 'Applying…' : `Apply${pending ? ` (${pending})` : ''}`}
+          </Button>
+          {applied && <span style={{ fontSize: 12 }}>{applied}</span>}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Nothing above has touched a device. Preview reads each one and reports
+          what would change; apply is the only step that writes, and it stops at
+          the first device that fails rather than leaving the fleet half
+          converted. Every change is applied with a rollback armed — a device
+          that comes back unhealthy reverts itself.
+        </div>
+
+        {preview && <Preview p={preview} />}
+      </Card>
+
+      {editing && (
+        <WLANEditor
+          w={editing}
+          site={site}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null)
+            await load()
+            // A saved WLAN makes the previous preview stale, and a stale
+            // preview next to an Apply button is the one thing this screen
+            // must never show.
+            setPreview(null)
+            setApplied(null)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function WLANRow({
+  w,
+  site,
+  onEdit,
+  onDeleted,
+}: {
+  w: WLAN
+  site: Site
+  onEdit: () => void
+  onDeleted: () => void
+}) {
+  const group = site.groups.find((g) => g.id === w.group_id)
+  const net = site.networks.find((n) => n.id === w.network_id)
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 14px',
+        borderTop: '1px solid var(--border)',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          {w.ssid}
+          {!w.enabled && (
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · disabled</span>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          {w.bands.join(' + ')} · {w.security_mode}
+          {w.has_key ? '' : w.security_mode !== 'none' && w.security_mode !== 'owe'
+            ? ' · no passphrase set'
+            : ''}
+          {' · '}
+          {group?.name ?? `group ${w.group_id}`} · {net?.name ?? `network ${w.network_id}`}
+          {w.roaming.ft && ' · 802.11r'}
+        </div>
+      </div>
+      <Button onClick={onEdit}>Edit</Button>
+      <Button
+        onClick={async () => {
+          const res = await api.deleteWLAN(w.id)
+          alert(res.note)
+          onDeleted()
+        }}
+      >
+        Delete
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * The WLAN editor.
+ *
+ * The passphrase field starts empty on an edit and is only sent when typed.
+ * The server treats an empty key on an update as "leave it alone", so changing
+ * a band or a roaming toggle never requires the operator — or this screen — to
+ * hold the secret.
+ */
+function WLANEditor({
+  w,
+  site,
+  onClose,
+  onSaved,
+}: {
+  w: Partial<WLAN>
+  site: Site
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [draft, setDraft] = useState<Partial<WLAN>>({ ...w, key: '' })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (patch: Partial<WLAN>) => setDraft((d) => ({ ...d, ...patch }))
+
+  const needsKey =
+    draft.security_mode === 'sae' ||
+    draft.security_mode === 'sae-mixed' ||
+    draft.security_mode === 'psk2'
+  // 802.11r on WPA2-PSK breaks some older clients, so it is an explicit
+  // opt-in rather than something the renderer decides quietly.
+  const ftOnPSK2 = draft.roaming?.ft && draft.security_mode === 'psk2'
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.saveWLAN(draft)
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title={w.id ? `Edit ${w.ssid}` : 'New wireless network'}>
+      <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
+        {err && <Banner tone="critical">{err}</Banner>}
+
+        <Field
+          label="SSID"
+          value={draft.ssid ?? ''}
+          autoFocus
+          onChange={(e) => set({ ssid: e.target.value })}
+        />
+
+        <Choice
+          label="Bands"
+          multi
+          options={[
+            { v: '2g', l: '2.4 GHz' },
+            { v: '5g', l: '5 GHz' },
+            { v: '6g', l: '6 GHz' },
+          ]}
+          value={draft.bands ?? []}
+          onChange={(bands) => set({ bands })}
+        />
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -6 }}>
+          A band no device in the group has is simply not rendered there — the
+          preview says which options were left out and why.
+        </div>
+
+        <Choice
+          label="Security"
+          options={[
+            { v: 'sae-mixed', l: 'WPA2/WPA3' },
+            { v: 'sae', l: 'WPA3 only' },
+            { v: 'psk2', l: 'WPA2 only' },
+            { v: 'owe', l: 'Enhanced open' },
+            { v: 'none', l: 'Open' },
+          ]}
+          value={[draft.security_mode ?? 'sae-mixed']}
+          onChange={([m]) => set({ security_mode: m as WLAN['security_mode'] })}
+        />
+
+        {needsKey && (
+          <>
+            <Field
+              label={w.id ? 'Passphrase (leave blank to keep the current one)' : 'Passphrase'}
+              type="password"
+              autoComplete="new-password"
+              value={draft.key ?? ''}
+              onChange={(e) => set({ key: e.target.value })}
+            />
+            {w.id && !draft.key && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -6 }}>
+                {w.has_key
+                  ? 'The existing passphrase stays as it is.'
+                  : 'This network has no passphrase yet and will not apply until it does.'}
+              </div>
+            )}
+          </>
+        )}
+
+        <Choice
+          label="Network"
+          options={site.networks.map((n) => ({ v: String(n.id), l: `${n.name} (VLAN ${n.vlan})` }))}
+          value={[String(draft.network_id ?? '')]}
+          onChange={([v]) => set({ network_id: Number(v) })}
+        />
+        <Choice
+          label="AP group"
+          options={site.groups.map((g) => ({
+            v: String(g.id),
+            l: `${g.name} (${g.device_ids.length} device${g.device_ids.length === 1 ? '' : 's'})`,
+          }))}
+          value={[String(draft.group_id ?? '')]}
+          onChange={([v]) => set({ group_id: Number(v) })}
+        />
+
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+            Roaming
+          </div>
+          <Toggle
+            label="802.11r fast transition"
+            on={!!draft.roaming?.ft}
+            onChange={(v) =>
+              set({ roaming: { ...draft.roaming!, ft: v } })
+            }
+          />
+          <Toggle
+            label="802.11k/v neighbour reports and BSS transition"
+            on={!!draft.roaming?.kv}
+            onChange={(v) => set({ roaming: { ...draft.roaming!, kv: v } })}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+            Every AP in the group gets the same mobility domain, derived from the
+            site identifier. This is the thing that is essentially impossible to
+            keep consistent by hand.
+          </div>
+          {ftOnPSK2 && (
+            <div style={{ marginTop: 8 }}>
+              <Banner tone="warning">
+                802.11r on WPA2-only breaks association for some older clients.
+                It is applied only if you tick this.
+              </Banner>
+              <Toggle
+                label="I accept the WPA2 + 802.11r compatibility risk"
+                on={!!draft.roaming?.ft_with_psk2}
+                onChange={(v) =>
+                  set({ roaming: { ...draft.roaming!, ft_with_psk2: v } })
+                }
+              />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <Toggle label="Enabled" on={!!draft.enabled} onChange={(v) => set({ enabled: v })} />
+          <Toggle label="Hide the SSID" on={!!draft.hidden} onChange={(v) => set({ hidden: v })} />
+          <Toggle
+            label="Isolate clients from each other"
+            on={!!draft.isolate}
+            onChange={(v) => set({ isolate: v })}
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button kind="primary" disabled={saving || !draft.ssid} onClick={save}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+          <Button onClick={onClose}>Cancel</Button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          Saving writes the site model only. Nothing reaches a device until you
+          preview and apply.
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function Groups({
+  site,
+  devices,
+  onChanged,
+}: {
+  site: Site
+  devices: Device[]
+  onChanged: () => void
+}) {
+  const [name, setName] = useState('')
+  const adopted = devices.filter((d) => d.adopted)
+
+  async function toggle(g: APGroup, deviceID: number) {
+    const has = g.device_ids.includes(deviceID)
+    await api.saveGroup({
+      ...g,
+      device_ids: has
+        ? g.device_ids.filter((x) => x !== deviceID)
+        : [...g.device_ids, deviceID],
+    })
+    onChanged()
+  }
+
+  return (
+    <Card
+      title="AP groups"
+      actions={
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            value={name}
+            placeholder="new group"
+            onChange={(e) => setName(e.target.value)}
+            style={{
+              height: 26,
+              padding: '0 8px',
+              borderRadius: 4,
+              background: 'var(--surface-0)',
+              border: '1px solid var(--border-strong)',
+              color: 'var(--text-primary)',
+              fontSize: 12,
+            }}
+          />
+          <Button
+            disabled={!name.trim()}
+            onClick={async () => {
+              await api.saveGroup({ name: name.trim(), device_ids: [] })
+              setName('')
+              onChanged()
+            }}
+          >
+            Add
+          </Button>
+        </div>
+      }
+    >
+      {site.groups.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          A group is the set of APs a WLAN publishes on. Create one to get started.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 12 }}>
+          {site.groups.map((g) => (
+            <div key={g.id}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                }}
+              >
+                {g.name}
+                <div style={{ flex: 1 }} />
+                <Button
+                  onClick={async () => {
+                    try {
+                      await api.deleteGroup(g.id)
+                      onChanged()
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : String(e))
+                    }
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+                {adopted.length === 0 && (
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    No adopted devices yet.
+                  </span>
+                )}
+                {adopted.map((d) => (
+                  <label
+                    key={d.id}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={g.device_ids.includes(d.id)}
+                      onChange={() => toggle(g, d.id)}
+                    />
+                    {d.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
+  const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '' })
+  return (
+    <Card title="Networks">
+      <div style={{ display: 'grid', gap: 8 }}>
+        {site.networks.map((n) => (
+          <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <strong>{n.name}</strong>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              VLAN {n.vlan} · {n.cidr || 'no address'} · zone {n.zone}
+            </span>
+            <div style={{ flex: 1 }} />
+            <Button
+              onClick={async () => {
+                try {
+                  await api.deleteNetwork(n.id)
+                  onChanged()
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : String(e))
+                }
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        ))}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ width: 130 }}>
+            <Field
+              label="Name"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+          </div>
+          <div style={{ width: 90 }}>
+            <Field
+              label="VLAN"
+              type="number"
+              value={draft.vlan}
+              onChange={(e) => setDraft({ ...draft, vlan: Number(e.target.value) })}
+            />
+          </div>
+          <div style={{ width: 160 }}>
+            <Field
+              label="Address"
+              placeholder="192.168.1.1/24"
+              value={draft.cidr}
+              onChange={(e) => setDraft({ ...draft, cidr: e.target.value })}
+            />
+          </div>
+          <Button
+            disabled={!draft.name.trim()}
+            onClick={async () => {
+              await api.saveNetwork({ ...draft, name: draft.name.trim(), enabled: true })
+              setDraft({ name: '', vlan: 1, cidr: '' })
+              onChanged()
+            }}
+          >
+            Add
+          </Button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          A network is the L2/L3 segment a WLAN puts clients on. For a simple
+          setup one network named <code>lan</code> on VLAN 1 is enough.
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+/** The per-device diff an operator reads before applying anything. */
+function Preview({ p }: { p: PreviewResult }) {
+  if (p.site_errors && p.site_errors.length > 0) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <Banner tone="critical">
+          No device was checked, because the configuration itself is not valid:
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {p.site_errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        </Banner>
+      </div>
+    )
+  }
+  const total = p.devices.reduce((n, d) => n + d.changes.length, 0)
+  return (
+    <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        {p.devices.length} device{p.devices.length === 1 ? '' : 's'} checked ·{' '}
+        {total} change{total === 1 ? '' : 's'} pending
+        {total === 0 && ' — every device already matches the site model'}
+      </div>
+      {p.devices.map((d) => (
+        <div
+          key={d.device_id}
+          style={{
+            border: '1px solid var(--border-strong)',
+            borderRadius: 6,
+            padding: '8px 10px',
+            background: 'var(--surface-2)',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {d.name}
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
+              {' '}
+              · {d.role}
+            </span>
+          </div>
+
+          {d.error && <Banner tone="critical">{d.error}</Banner>}
+
+          {d.blocked && (
+            <Banner tone="critical">
+              Nothing will be applied to this device: something a person owns is
+              in the way.
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {d.conflicts?.map((c) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+            </Banner>
+          )}
+
+          {!d.error && !d.blocked && d.changes.length === 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              Already matches — nothing to do.
+            </div>
+          )}
+
+          {d.changes.length > 0 && (
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11 }}>
+              {d.changes.map((c) => (
+                <li key={`${c.config}.${c.section}`}>
+                  <span
+                    style={{
+                      color:
+                        c.action === 'remove'
+                          ? 'var(--critical)'
+                          : c.action === 'create'
+                            ? 'var(--good)'
+                            : 'var(--text-primary)',
+                    }}
+                  >
+                    {c.action}
+                  </span>{' '}
+                  <code>{c.config}.{c.section}</code>
+                  {c.options && c.options.length > 0 && (
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {' '}
+                      — {c.options.length} option{c.options.length === 1 ? '' : 's'}
+                      {c.touches_key && ', including the passphrase'}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {d.omitted && d.omitted.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Left out on this device (not an error — the hardware or firmware
+              cannot take it):
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {d.omitted.map((o) => (
+                  <li key={o}>{o}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {d.drift && d.drift.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <Banner tone="warning">
+                Someone edited config we own on this device. Applying will put it
+                back to the site model.
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {d.drift.map((x) => (
+                    <li key={x}>{x}</li>
+                  ))}
+                </ul>
+              </Banner>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---- small controls ----
+
+function Choice({
+  label,
+  options,
+  value,
+  onChange,
+  multi,
+}: {
+  label: string
+  options: { v: string; l: string }[]
+  value: string[]
+  onChange: (v: string[]) => void
+  multi?: boolean
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {options.map((o) => {
+          const on = value.includes(o.v)
+          return (
+            <button
+              key={o.v}
+              type="button"
+              onClick={() =>
+                onChange(
+                  multi
+                    ? on
+                      ? value.filter((x) => x !== o.v)
+                      : [...value, o.v]
+                    : [o.v],
+                )
+              }
+              style={{
+                fontSize: 12,
+                padding: '4px 10px',
+                borderRadius: 4,
+                cursor: 'pointer',
+                border: '1px solid var(--border-strong)',
+                background: on ? 'var(--accent-soft)' : 'transparent',
+                color: 'var(--text-primary)',
+              }}
+            >
+              {o.l}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function Toggle({
+  label,
+  on,
+  onChange,
+}: {
+  label: string
+  on: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        cursor: 'pointer',
+        marginTop: 3,
+      }}
+    >
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      {label}
+    </label>
+  )
+}

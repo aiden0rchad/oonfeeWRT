@@ -62,8 +62,11 @@ type Server struct {
 	Fleet  Fleet
 	Enroll Enroller
 	Scan   Scanner
-	Hub    *Hub
-	Log    *slog.Logger
+	// Provision previews and applies the site model. Optional: the fleet view
+	// works without it.
+	Provision Provisioner
+	Hub       *Hub
+	Log       *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -154,6 +157,23 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
+	// The site model (Phase 2). Editing any of this changes nothing on any
+	// device; /site/preview says what it WOULD change and /site/apply does it.
+	private.HandleFunc("GET /api/v1/site", s.handleSite)
+	private.HandleFunc("POST /api/v1/site/name", s.handleSiteName)
+	private.HandleFunc("GET /api/v1/site/wlans/{id}", s.handleGetWLAN)
+	private.HandleFunc("POST /api/v1/site/wlans", s.handleSaveWLAN)
+	private.HandleFunc("POST /api/v1/site/wlans/{id}", s.handleSaveWLAN)
+	private.HandleFunc("DELETE /api/v1/site/wlans/{id}", s.handleDeleteWLAN)
+	private.HandleFunc("POST /api/v1/site/groups", s.handleSaveGroup)
+	private.HandleFunc("POST /api/v1/site/groups/{id}", s.handleSaveGroup)
+	private.HandleFunc("DELETE /api/v1/site/groups/{id}", s.handleDeleteGroup)
+	private.HandleFunc("POST /api/v1/site/networks", s.handleSaveNetwork)
+	private.HandleFunc("POST /api/v1/site/networks/{id}", s.handleSaveNetwork)
+	private.HandleFunc("DELETE /api/v1/site/networks/{id}", s.handleDeleteNetwork)
+	private.HandleFunc("GET /api/v1/site/preview", s.handlePreview)
+	private.HandleFunc("POST /api/v1/site/apply", s.handleApply)
+
 	private.HandleFunc("GET /api/v1/discovery", s.handleScanPlan)
 	// A POST because it makes the controller emit traffic across a subnet.
 	// requireAuth enforces the CSRF token on it for that reason: a GET would be
