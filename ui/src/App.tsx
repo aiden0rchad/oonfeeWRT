@@ -8,6 +8,7 @@ import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
 import { Adopt } from './screens/Adopt'
 import { Banner } from './components/ui'
+import { live } from './lib/live'
 
 type Screen = 'dashboard' | 'devices' | 'clients' | 'adopt' | 'logs'
 
@@ -93,9 +94,21 @@ export function App() {
   useEffect(() => {
     if (!username) return
     refresh()
-    const t = setInterval(refresh, 10_000)
+    live.connect()
+    // The fleet list still refreshes on a timer, but slowly: it changes when a
+    // device is adopted or goes offline, not every poll. Per-device detail is
+    // pushed over the live channel instead.
+    const t = setInterval(refresh, 30_000)
     return () => clearInterval(t)
   }, [username, refresh])
+
+  // Close the live channel on sign-out, but not before we know whether anyone
+  // is signed in: `ready` gates it so the initial render does not close a
+  // channel that has not been opened.
+  useEffect(() => {
+    if (!ready || username) return
+    live.close()
+  }, [ready, username])
 
   if (!ready) return null
   if (!username) {

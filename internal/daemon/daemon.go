@@ -212,8 +212,15 @@ func (d *Daemon) shutdown() error {
 		d.http.Close()
 	}
 
-	// 2. Stop polling. Devices are left alone from here: an apply in flight is
-	//    the only thing that should still be talking to one.
+	// 2. Drop live clients, then stop polling. This order matters: closing a
+	//    connection releases the focus it holds, and releasing focus after the
+	//    collector has stopped would touch a poller that is already gone.
+	d.mu.Lock()
+	apiSrv := d.api
+	d.mu.Unlock()
+	if apiSrv != nil && apiSrv.Hub != nil {
+		apiSrv.Hub.Close()
+	}
 	if c := d.collectorRef(); c != nil {
 		c.Stop()
 	}

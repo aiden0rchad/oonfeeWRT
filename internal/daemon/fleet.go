@@ -167,6 +167,7 @@ func (d *Daemon) sink() collector.Sink {
 		d.Samples.Observe(ctx, s)
 		d.recordClients(ctx, s)
 		d.recordLiveClients(s)
+		d.publishLive(s)
 
 		// Record the firmware every time the board is re-read. Without this the
 		// column stays empty forever: nothing else writes it after adoption.
@@ -329,4 +330,65 @@ func (d *Daemon) recordLiveClients(s collector.Snapshot) {
 	}
 	v := n
 	d.lastClients[s.DeviceID] = &v
+}
+
+// publishLive pushes a completed poll to any browser watching this device.
+//
+// It sends what a screen shows rather than the whole snapshot: the raw poll
+// carries interface counters and station byte totals, which are inputs to
+// derived series and meaningless on their own. Sending them would invite a
+// client to do the derivation itself, differently, and DEVICE-BUDGET §4.3 is
+// clear that derivation happens in one place.
+func (d *Daemon) publishLive(s collector.Snapshot) {
+	d.mu.Lock()
+	api := d.api
+	d.mu.Unlock()
+	if api == nil || api.Hub == nil {
+		return
+	}
+	if !s.OK() {
+		api.Hub.Publish(s.DeviceID, map[string]any{
+			"type": "device.unreachable", "device_id": s.DeviceID,
+			"ts": s.At.Unix(), "error": s.Err.Error(),
+		})
+		return
+	}
+
+	aps := make([]map[string]any, 0, len(s.APs))
+	for _, ap := range s.APs {
+		e := map[string]any{"iface": ap.Iface, "ssid": ap.SSID,
+			"channel": ap.Channel, "freq": ap.Freq}
+		// nil, not zero: "we could not ask" and "nobody is connected" are
+		// different answers, and JSON null is how that survives the wire.
+		e["clients"] = ap.Clients
+		if ap.Airtime != nil {
+			e["airtime_pct"] = ap.Airtime.UtilizationPercent()
+		}
+		aps = append(aps, e)
+	}
+	stations := make([]map[string]any, 0, len(s.Stations))
+	for _, st := range s.Stations {
+		stations = append(stations, map[string]any{
+			"mac": st.MAC, "iface": st.Iface, "signal": st.Signal,
+			"rx_kbit": st.RX.Rate, "tx_kbit": st.TX.Rate,
+			"connected_seconds": st.ConnectedTime,
+		})
+	}
+	clients, clientsKnown := s.ClientCount()
+	msg := map[string]any{
+		"type": "stats", "device_id": s.DeviceID, "ts": s.At.Unix(),
+		"tier": string(s.Tier), "uptime": s.Uptime, "load1": s.Load[0],
+		"poll_ms": s.Duration.Milliseconds(),
+		"aps":     aps, "stations": stations,
+		"degraded": len(s.Degraded),
+	}
+	if s.Memory.Total > 0 {
+		msg["mem_pct"] = float64(s.Memory.Used()) * 100 / float64(s.Memory.Total)
+	}
+	if clientsKnown {
+		msg["clients"] = clients
+	} else {
+		msg["clients"] = nil
+	}
+	api.Hub.Publish(s.DeviceID, msg)
 }

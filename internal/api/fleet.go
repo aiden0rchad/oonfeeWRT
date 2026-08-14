@@ -220,11 +220,15 @@ func knownKind(k string) bool {
 
 // handleFocus raises a device to the focused poll rate for a bounded time.
 //
-// Bounded, and released by a timer rather than by a matching call. A browser tab
-// that closes does not get to run cleanup code, so a focus held until an
-// explicit release would leak — and a leaked focus means a router polled every
-// five seconds forever because somebody closed a laptop lid. The UI re-posts
-// while the screen is open; silence is how it stops.
+// Bounded, and released by a timer rather than by a matching call. A caller that
+// goes away does not get to run cleanup code, so a focus held until an explicit
+// release would leak — and a leaked focus means a router polled every five
+// seconds forever because somebody closed a laptop lid.
+//
+// The UI does NOT use this: it subscribes on the live channel, where the
+// connection's lifetime is the focus's lifetime and the release is exact. This
+// stays for clients that cannot hold a WebSocket — a script, a probe, a curl —
+// where a lease is the only honest option.
 func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r, "id")
 	if !ok {

@@ -6,6 +6,8 @@ import {
 } from '../components/ui'
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
+import { live } from '../lib/live'
+import type { LiveStats } from '../lib/live'
 
 export function Devices({
   devices,
@@ -94,34 +96,45 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
   const [detail, setDetail] = useState<DeviceDetail | null>(null)
   const [series, setSeries] = useState<Record<string, string[]>>({})
   const [overhead, setOverhead] = useState<Overhead | null>(null)
+  const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    let live = true
+    let alive = true
     const load = async () => {
       try {
         const [d, s] = await Promise.all([api.device(id), api.deviceSeries(id)])
-        if (!live) return
+        if (!alive) return
         setDetail(d)
         setSeries(s.series)
         // Not fatal: a device in the inventory but not yet polled has no
         // overhead to report, which is a real state rather than zero cost.
-        api.overhead(id).then((o) => live && setOverhead(o)).catch(() => {})
+        api.overhead(id).then((o) => alive && setOverhead(o)).catch(() => {})
       } catch (e) {
-        if (live) setErr(e instanceof Error ? e.message : String(e))
+        if (alive) setErr(e instanceof Error ? e.message : String(e))
       }
     }
     load()
 
-    // The lease. 30-second grant, renewed every 20 so it never lapses while the
-    // panel is open, and gone within 30 once it is not.
-    const focus = () => api.focus(id, 30).catch(() => {})
-    focus()
-    const renew = setInterval(focus, 20_000)
-    const refresh = setInterval(load, 10_000)
+    // Watching the device IS the focus. The server reference-counts it on the
+    // subscription, so closing this panel — or closing the tab, or losing the
+    // network — releases it exactly. The renewal timer this replaced could only
+    // ever approximate that.
+    const unwatch = live.watch(id)
+    const off = live.on((msg) => {
+      if (!alive) return
+      if (msg.type === 'stats' && (msg as LiveStats).device_id === id) {
+        setStats(msg as LiveStats)
+      }
+    })
+    // The slower things — the series index and the overhead totals — still come
+    // from REST, because they change on the scale of minutes and pushing them
+    // would be noise.
+    const refresh = setInterval(load, 30_000)
     return () => {
-      live = false
-      clearInterval(renew)
+      alive = false
+      off()
+      unwatch()
       clearInterval(refresh)
     }
   }, [id])
@@ -162,17 +175,83 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
           {detail.class ?? <Unknown why="not classified" />}
         </Prop>
         <Prop label="Poll rate">
-          {detail.quiesced ? 'paused for an apply' : (detail.tier ?? detail.poll_state)}
+          {/* The live frame wins: `detail` comes from a REST refresh every 30 s
+              and would show the tier this panel had before it subscribed. */}
+          {detail.quiesced
+            ? 'paused for an apply'
+            : (stats?.tier ?? detail.tier ?? detail.poll_state)}
         </Prop>
         <Prop label="Last seen">
-          {detail.last_seen ? ago(detail.last_seen) : <Unknown why="never polled" />}
+          {stats ? 'just now (live)' : detail.last_seen ? ago(detail.last_seen) : <Unknown why="never polled" />}
         </Prop>
+        {stats && (
+          <>
+            <Prop label="Load average">{stats.load1.toFixed(2)}</Prop>
+            {stats.mem_pct !== undefined && (
+              <Prop label="Memory">{stats.mem_pct.toFixed(0)}%</Prop>
+            )}
+            <Prop label="Clients">
+              {stats.clients === null ? (
+                <Unknown why="an access point could not report its client count" />
+              ) : (
+                stats.clients
+              )}
+            </Prop>
+            <Prop label="Poll time">{stats.poll_ms} ms</Prop>
+          </>
+        )}
       </div>
 
-      {detail.tier !== 'focused' && (
+      {stats && stats.aps.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Radios</div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {stats.aps.map((ap) => (
+              <div key={ap.iface} style={{ fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>
+                    {ap.ssid || ap.iface}{' '}
+                    <span style={{ color: 'var(--text-muted)' }}>ch {ap.channel}</span>
+                  </span>
+                  <span className="num">
+                    {ap.clients === null ? (
+                      <Unknown why="this radio did not report a client count" />
+                    ) : (
+                      `${ap.clients} client${ap.clients === 1 ? '' : 's'}`
+                    )}
+                  </span>
+                </div>
+                {ap.airtime_pct !== undefined && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+                    airtime {ap.airtime_pct.toFixed(1)}%
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {stats && stats.stations.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+            Associated now
+          </div>
+          <div style={{ display: 'grid', gap: 4 }}>
+            {stats.stations.map((st) => (
+              <div key={st.mac} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                <span style={{ color: 'var(--text-secondary)' }}>{st.mac}</span>
+                <span className="num">{st.signal} dBm</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!stats && (
         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          Opening this panel raises the poll rate for this device. Per-station and
-          survey data appear within a few seconds.
+          Opening this panel subscribes to this device, which raises its poll
+          rate. Live values appear on the next poll — a few seconds.
         </div>
       )}
 

@@ -61,6 +61,7 @@ type Server struct {
 	Store  *store.DB
 	Fleet  Fleet
 	Enroll Enroller
+	Hub    *Hub
 	Log    *slog.Logger
 
 	// Now is injectable for tests.
@@ -88,6 +89,7 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 		throttle: newThrottle(),
 		hashing:  make(chan struct{}, hashSlots),
 	}
+	srv.Hub = NewHub(fleet, log)
 	// One derivation at startup, with the shipped parameters, so that verifying
 	// an unknown username costs exactly what verifying a known one costs.
 	h, err := secrets.HashPassword([]byte("oonfeewrt-timing-equaliser"), secrets.DefaultParams())
@@ -148,6 +150,10 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/clients", s.handleClients)
 	private.HandleFunc("GET /api/v1/events", s.handleEvents)
 	private.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
+	// Behind requireAuth like everything else. The upgrade is a GET, so the
+	// CSRF token does not apply — handleLive checks the Origin itself, which
+	// is what actually stops cross-site WebSocket hijacking.
+	private.HandleFunc("GET /api/v1/live", s.handleLive)
 
 	mux.Handle("/api/v1/", s.requireAuth(private))
 	return noStore(mux)
