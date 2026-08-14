@@ -132,6 +132,23 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 			decode:   decodeDHCPLeases,
 			optional: true,
 		})
+	if p.needIfaces() {
+		// In the batch, not beside it. A separate Call here was the one thing
+		// breaking this package's own "one request per poll" rule, and it cost a
+		// whole extra HTTP request — measured by the budget harness as 1.08
+		// req/min at steady state against a stated ceiling of 1.0.
+		//
+		// The result is used by the NEXT poll rather than this one, because the
+		// interface list decides which calls go in the batch and the batch is
+		// already built. Interfaces change only when someone reconfigures the
+		// radios, so a poll of staleness costs nothing; the alternative costs a
+		// request every time, forever.
+		calls = append(calls, call{
+			inv:      ubus.Invocation{Object: "iwinfo", Method: "devices"},
+			decode:   decodeIfaces,
+			optional: true,
+		})
+	}
 	if p.needBoard() {
 		calls = append(calls, call{
 			inv:      ubus.Invocation{Object: "system", Method: "board"},
@@ -374,11 +391,25 @@ func (s *Snapshot) ClientCount() (int, bool) {
 	return total, len(s.APs) > 0
 }
 
-// discoverIfaces lists the wireless interfaces to poll.
+// decodeIfaces records the wireless interface list a poll discovered, for the
+// next poll to use.
+func decodeIfaces(raw json.RawMessage, s *Snapshot) error {
+	var v struct {
+		Devices []string `json:"devices"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	s.Ifaces = v.Devices
+	s.IfacesFresh = true
+	return nil
+}
+
+// discoverIfaces lists the wireless interfaces in a single call.
 //
-// Kept out of the hot batch and refreshed rarely: it changes only when the
-// radios are reconfigured, and asking every minute would add a call to every
-// poll for an answer that is almost always the same one.
+// Only adoption and the integration tests use it — the poll loop gets the same
+// answer inside its batch. Kept because "what radios does this device have" is
+// a reasonable one-off question.
 func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, error) {
 	var v struct {
 		Devices []string `json:"devices"`
@@ -387,6 +418,11 @@ func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, 
 		return nil, err
 	}
 	return v.Devices, nil
+}
+
+// needIfaces reports whether this poll should re-read the radio list.
+func (p *poller) needIfaces() bool {
+	return p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval
 }
 
 // needBoard reports whether this poll should re-read the firmware identity.

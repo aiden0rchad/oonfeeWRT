@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -82,7 +83,21 @@ type Client struct {
 	shared bool
 
 	nextID int
+
+	// requests and bytesOut are the device-facing cost, for the Management
+	// Overhead readout and the budget harness. Atomic rather than under mu:
+	// they are incremented on every call and read from another goroutine, and
+	// taking the client's lock to read a counter would serialise reporting
+	// against real work.
+	requests int64
+	bytesOut int64
 }
+
+// Requests is how many HTTP round trips this client has made to the device.
+func (c *Client) Requests() int64 { return atomic.LoadInt64(&c.requests) }
+
+// BytesOut is how many request-body bytes have been sent.
+func (c *Client) BytesOut() int64 { return atomic.LoadInt64(&c.bytesOut) }
 
 // Options configure a Client.
 type Options struct {
@@ -448,6 +463,13 @@ func (c *Client) postRaw(ctx context.Context, body []byte, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
+	// Counted here and nowhere else: this is the single point at which the
+	// controller costs the device anything. DEVICE-BUDGET's network budget is
+	// stated in requests per minute, so it has to be measured in requests, not
+	// inferred from polls — a poll that chunks into two batches is two.
+	atomic.AddInt64(&c.requests, 1)
+	atomic.AddInt64(&c.bytesOut, int64(len(body)))
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -155,6 +155,12 @@ for someone picking the work up.
   against delta **73.3 %** — the dangerous one, because 25.9 % looks entirely
   reasonable and is wrong by 3×. hostapd's independent BSS-load reading settled
   it. This corrected a claim asserted as verified in three documents.
+- **The shipped defaults now meet the shipped budget, because the harness
+  checked.** Measured through the real collector: **idle 1.00 polls/min (60
+  requests/hour), observed 6.00 req/min, zero flash writes**, 0.49% device CPU
+  across the run. The first run failed at 1.08 req/min idle and found two real
+  defects — interface discovery was a separate unbatched call, and the focused
+  default was 8 s against a stated ceiling of one request per 10 s.
 - **Root over ubus is not root, so adoption cannot bootstrap over it.** As
   root: `uci.get rpcd`, `uci.set rpcd.*` and `file.write` into
   `/usr/share/rpcd/acl.d/` all return status 6, while `file.read /etc/rc.local`
@@ -195,11 +201,7 @@ collects** — inventory, telemetry, API, UI — with the gaps below.
 1. **The WebSocket** (`/api/v1/live`, IMPLEMENTATION §8). The UI polls the API
    every 10 s, which is honest but wasteful and adds latency the focused tier
    was supposed to remove.
-2. **The resource-budget harness** (DEVICE-BUDGET §7): an hour of baseline and
-   focused polling against a class-C device asserting CPU, RAM, request rate and
-   zero flash writes. Everything measured so far is a single poll's cost, not a
-   sustained one.
-3. **Discovery.** Adoption works by address; nothing scans for candidates.
+2. **Discovery.** Adoption works by address; nothing scans for candidates.
 4. **Un-adopt has no UI.** The endpoint, the two-phase flow and the residue
    reporting all exist and are tested; no screen calls them.
 5. **Client-list scoping.** The grid lists every host the device sees, which on
@@ -209,9 +211,19 @@ collects** — inventory, telemetry, API, UI — with the gaps below.
 6. **Virtualized rows and column customization** (UI-SPEC §5). The grid renders
    every row; fine at 13 clients, not at the 10k the spec anticipates.
 
+**The budget harness is built and green** (`internal/daemon/budget_integration_test.go`,
+`OONFEE_BUDGET_MINUTES=60` for the full run), and the Management Overhead
+readout is in the device slide-over. Three items from DEVICE-BUDGET §7's list
+are still missing: attributable CPU percent (the device reports total CPU, and
+attributing a share of it honestly needs a control measurement), the list of
+packages we installed (nothing installs any yet), and the control to loosen the
+poll interval.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
-  far comes from the comfortable class — TLS alone doubled poll CPU there.
+  far comes from the comfortable class — TLS alone doubled poll CPU there. The
+  budget harness runs anywhere; it has only ever run against class A, so the
+  CPU and RAM rows of DEVICE-BUDGET §2 remain unverified where they bind.
 - Hardware flow offload (mvebu has none), so the README's accounting tradeoff
   remains scoped to hardware offload and untested.
 - A second device, for genuine fleet behaviour. The stagger, the per-device

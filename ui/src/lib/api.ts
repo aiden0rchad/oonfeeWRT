@@ -187,6 +187,24 @@ export interface UnadoptResult {
   needs_operator_credential: boolean
 }
 
+/** What the controller costs one device (DEVICE-BUDGET §7). */
+export interface Overhead {
+  device_id: number
+  tier: string
+  interval_seconds: number
+  requests: number
+  polls_per_minute: number
+  bytes_out: number
+  polls: number
+  failed_polls: number
+  since: number
+  requests_per_minute: number
+  /** Requests that were not polls: session logins, and anything that escaped
+   *  the batch. The second is a defect, not a rate. */
+  non_poll_requests: number
+  quiesced: boolean
+}
+
 export interface SessionInfo {
   username: string
   csrf: string
@@ -209,6 +227,7 @@ export const api = {
   dashboard: () => get<Dashboard>('/dashboard'),
   devices: () => get<{ devices: Device[] }>('/devices'),
   device: (id: number) => get<DeviceDetail>(`/devices/${id}`),
+  overhead: (id: number) => get<Overhead>(`/devices/${id}/overhead`),
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   focus: (id: number, seconds = 30) =>

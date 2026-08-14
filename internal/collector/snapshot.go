@@ -45,8 +45,15 @@ type Snapshot struct {
 	// for a zero reading either.
 	Degraded []Degradation
 
-	Board      *Board
-	Hosts      []Host
+	Board *Board
+	Hosts []Host
+
+	// Ifaces is the radio list this poll discovered, when it asked. The NEXT
+	// poll uses it: the list decides which calls go in the batch, and the batch
+	// is already built by the time the answer arrives.
+	Ifaces      []string
+	IfacesFresh bool
+
 	Uptime     int64
 	Load       [3]float64 // 1/5/15 minute, already unscaled from /65536
 	Memory     Memory

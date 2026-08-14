@@ -245,6 +245,33 @@ func (s *Server) handleFocus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleOverhead reports what the controller costs one device.
+//
+// DEVICE-BUDGET §7 asks for this to be shown, not merely measured. The numbers
+// are the ones the budget is actually written in — requests per minute and the
+// interval currently in force — rather than the configured interval, which
+// would understate a device we have deliberately backed off from.
+func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	if _, err := s.deviceByID(r, id); handleStoreErr(w, err, "device") {
+		return
+	}
+	if s.Fleet == nil {
+		writeErr(w, http.StatusServiceUnavailable, "the collector is not running")
+		return
+	}
+	o, ok := s.Fleet.Overhead(id)
+	if !ok {
+		// Adopted but not polled: an honest "nothing yet", not zero cost.
+		writeErr(w, http.StatusNotFound, "this device is not being polled")
+		return
+	}
+	writeJSON(w, http.StatusOK, o)
+}
+
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100, 1, 1000)
 	// Filters go to the database, not to the page it returned. Filtering

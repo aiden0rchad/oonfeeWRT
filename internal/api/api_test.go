@@ -29,11 +29,13 @@ type stubFleet struct {
 	tier     map[int64]collector.Tier
 	quiesced map[int64]bool
 	clients  map[int64]*int
+	overhead map[int64]collector.Overhead
 }
 
 func newStubFleet() *stubFleet {
 	return &stubFleet{focused: map[int64]int{}, tier: map[int64]collector.Tier{},
-		quiesced: map[int64]bool{}, clients: map[int64]*int{}}
+		quiesced: map[int64]bool{}, clients: map[int64]*int{},
+		overhead: map[int64]collector.Overhead{}}
 }
 
 func (f *stubFleet) Focus(deviceID int64) func() {
@@ -81,6 +83,13 @@ func (f *stubFleet) setClients(deviceID int64, n *int) {
 	f.mu.Lock()
 	f.clients[deviceID] = n
 	f.mu.Unlock()
+}
+
+func (f *stubFleet) Overhead(deviceID int64) (collector.Overhead, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	o, ok := f.overhead[deviceID]
+	return o, ok
 }
 
 func (f *stubFleet) focusCount(deviceID int64) int {

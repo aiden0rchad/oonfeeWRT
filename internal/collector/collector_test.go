@@ -121,6 +121,27 @@ func (r *recorder) Observe(_ context.Context, s Snapshot) {
 	}
 }
 
+// nextWithAPs waits for a poll that carries radio data.
+//
+// The FIRST poll of a device never does: the radio list is discovered inside
+// that poll's batch and used by the next one, which is what keeps the collector
+// to one request per poll. One poll of delay on first contact is the cost.
+func (r *recorder) nextWithAPs(t *testing.T, within time.Duration) Snapshot {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		select {
+		case s := <-r.ch:
+			if s.OK() && len(s.APs) > 0 {
+				return s
+			}
+		case <-deadline:
+			t.Fatal("no snapshot with radio data arrived")
+			return Snapshot{}
+		}
+	}
+}
+
 func (r *recorder) next(t *testing.T, within time.Duration) Snapshot {
 	t.Helper()
 	select {
@@ -163,7 +184,28 @@ func TestBaselinePollShape(t *testing.T) {
 	rec := newRecorder()
 	startCollector(t, rec, fastOptions())
 
-	snap := rec.next(t, 5*time.Second)
+	// The FIRST poll carries the board and discovers the radio list; the SECOND
+	// uses that list. Both are asserted, because each carries something the
+	// other does not — and conflating them is how the earlier version of this
+	// test started checking the board on a poll that never reads it.
+	first := rec.next(t, 5*time.Second)
+	if !first.OK() {
+		t.Fatalf("first poll failed: %v", first.Err)
+	}
+	if first.Board == nil {
+		t.Fatal("the first poll did not read the board")
+	}
+	if first.Board.Release.Description == "" {
+		t.Error("board release description is empty")
+	}
+	if !first.IfacesFresh {
+		t.Error("the first poll did not discover the radio list")
+	}
+	if len(first.APs) != 0 {
+		t.Error("the first poll had no radio list yet, so it cannot have AP data")
+	}
+
+	snap := rec.nextWithAPs(t, 5*time.Second)
 	if !snap.OK() {
 		t.Fatalf("poll failed: %v", snap.Err)
 	}
@@ -179,12 +221,6 @@ func TestBaselinePollShape(t *testing.T) {
 	// The mock reports load [8000, 9000, 8500] in 1/65536 units.
 	if got := snap.Load[0]; got < 0.11 || got > 0.13 {
 		t.Errorf("load1 = %v, want ~0.122 (the fixed-point scale is /65536)", got)
-	}
-	if snap.Board == nil {
-		t.Fatal("the first poll did not read the board")
-	}
-	if snap.Board.Release.Description == "" {
-		t.Error("board release description is empty")
 	}
 	if _, ok := snap.Interfaces["br-lan"]; !ok {
 		t.Errorf("no interface counters: %v", snap.Interfaces)
@@ -321,7 +357,7 @@ func TestPartialFailureDegradesRatherThanDiscards(t *testing.T) {
 	rec := newRecorder()
 	startCollector(t, rec, fastOptions())
 
-	snap := rec.next(t, 5*time.Second)
+	snap := rec.nextWithAPs(t, 5*time.Second)
 	if !snap.OK() {
 		t.Fatalf("one denied optional call failed the whole poll: %v", snap.Err)
 	}
@@ -594,5 +630,60 @@ func TestUnreadableRequiredCallFailsThePoll(t *testing.T) {
 	if calls[0].optional {
 		t.Fatal("system.info is marked optional; an unreadable one would degrade " +
 			"rather than fail, and the zeroes would be recorded as data")
+	}
+}
+
+// "One request per poll" is this package's own rule and the budget is written
+// in requests, so it is worth asserting rather than assuming. Interface
+// discovery used to break it with a separate Call, which the budget harness
+// caught as 1.08 req/min against a stated ceiling of 1.0.
+func TestOnePollIsOneRequest(t *testing.T) {
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	connect := mockConnect(t)
+	var client *ubus.Client
+	c.Add(Target{DeviceID: 1, MAC: "aa:bb:cc:dd:ee:ff", Name: "ap1",
+		Connect: func(ctx context.Context) (*ubus.Client, error) {
+			cl, err := connect(ctx)
+			client = cl
+			return cl, err
+		}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Start(ctx)
+	defer c.Stop()
+
+	// Let several polls happen, including one that re-reads the radio list.
+	rec.nextWithAPs(t, 5*time.Second)
+	o, ok := c.Overhead(1)
+	if !ok {
+		t.Fatal("no overhead recorded")
+	}
+	if client == nil {
+		t.Fatal("no client was created")
+	}
+
+	// One login, then one request per poll. Anything more means a call escaped
+	// the batch.
+	const loginRequests = 1
+	if o.Requests > o.Polls+loginRequests {
+		t.Fatalf("%d requests for %d polls (+1 login): something is calling "+
+			"outside the batch", o.Requests, o.Polls)
+	}
+	if o.Polls == 0 {
+		t.Fatal("no polls completed")
+	}
+	t.Logf("%d requests for %d polls, %d bytes out", o.Requests, o.Polls, o.BytesOut)
+}
+
+// The shipped focused default must meet the shipped budget: DEVICE-BUDGET §2
+// caps the observed tier at one request per 10 s, and its table is headed
+// "these are test criteria, not aspirations".
+func TestShippedDefaultsMeetTheStatedBudget(t *testing.T) {
+	if perMin := 60.0 / DefaultBaseline.Seconds(); perMin > 1.0 {
+		t.Errorf("baseline default is %.2f req/min, over the 1/60s budget", perMin)
+	}
+	if perMin := 60.0 / DefaultFocused.Seconds(); perMin > 6.0 {
+		t.Errorf("focused default is %.2f req/min, over the 1/10s budget", perMin)
 	}
 }

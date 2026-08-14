@@ -245,9 +245,46 @@ Two commitments that follow from having a budget at all:
 focused polling for an hour, and asserts the §2 numbers. Run it per release. A
 budget nobody measures is a wish.
 
+> **Built, and it earned its keep on the first run.**
+> `internal/daemon/budget_integration_test.go`; `OONFEE_BUDGET_MINUTES=60` for
+> the real thing. It measures device-side state over SSH, which the controller's
+> own credential deliberately cannot reach — a harness that could only see what
+> the controller sees could not check whether the controller is lying.
+>
+> The first run failed, on a class-A device, at **1.08 requests/min idle against
+> a ceiling of 1.0**. Two real defects:
+>
+> - **Interface discovery was a separate unbatched call**, breaking the
+>   collector's own "one request per poll" rule and costing an extra request
+>   every 15 minutes. It now travels inside the batch, and its answer is used by
+>   the *next* poll — the list decides what goes in the batch, and the batch is
+>   already built by the time the answer arrives. One poll of staleness on a
+>   list that changes only when someone reconfigures the radios.
+> - **The shipped focused default was 8 s**, which is 7.5 requests/min against
+>   this table's ceiling of one per 10 s. §4.2's "~5–10 s" is the design range;
+>   this table is the budget, and the shipped default has to meet it. Now 10 s.
+>
+> After both: **idle 1.00 polls/min (60 requests/hour, 1 non-poll request — the
+> session login), observed 6.00 req/min, zero flash writes**, 21 polls with no
+> failures, ~1.3 KB per request. Device CPU 0.49% across the run, all causes.
+>
+> Class C still sets the budget and remains unmeasured — see the open items in
+> `STATUS.md`.
+
 **Show it.** A per-device **Management Overhead** readout in the UI: requests per
 minute, CPU percent attributable to oonfeeWRT, packages we installed, and the
 current poll interval — with a control to loosen it.
+
+> **Built**, in the device slide-over: current interval and tier, requests per
+> minute against the budget, bytes sent, polls and failures. It flags a rate
+> over budget, and separately flags requests that were not polls — logins
+> amortise to nothing, so a number that grows with the poll count means a call
+> escaped the batch, which is a defect rather than a rate to average away.
+>
+> Still missing from the spec's list: attributable CPU percent (the device
+> reports total CPU, and attributing a share of it to us honestly needs a
+> control measurement), the list of packages we installed (nothing installs
+> packages yet), and the control to loosen the interval.
 
 UniFi never shows you this, and the reason it can afford not to is that it owns
 the hardware. We don't. Surfacing our own cost is both the honest thing to do and

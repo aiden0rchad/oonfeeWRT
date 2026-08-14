@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { Device, DeviceDetail, Point, Series } from '../lib/api'
+import type { Device, DeviceDetail, Overhead, Point, Series } from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
 } from '../components/ui'
@@ -93,6 +93,7 @@ export function Devices({
 function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const [detail, setDetail] = useState<DeviceDetail | null>(null)
   const [series, setSeries] = useState<Record<string, string[]>>({})
+  const [overhead, setOverhead] = useState<Overhead | null>(null)
   const [err, setErr] = useState('')
 
   useEffect(() => {
@@ -103,6 +104,9 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
         if (!live) return
         setDetail(d)
         setSeries(s.series)
+        // Not fatal: a device in the inventory but not yet polled has no
+        // overhead to report, which is a real state rather than zero cost.
+        api.overhead(id).then((o) => live && setOverhead(o)).catch(() => {})
       } catch (e) {
         if (live) setErr(e instanceof Error ? e.message : String(e))
       }
@@ -202,6 +206,8 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
         colour="var(--series-4)"
       />
 
+      {overhead && <ManagementOverhead o={overhead} />}
+
       {quirks.length > 0 && (
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
@@ -234,6 +240,70 @@ function DeviceDetailPanel({ id, onClose }: { id: number; onClose: () => void })
       )}
     </SlideOver>
   )
+}
+
+/**
+ * What the controller costs this device.
+ *
+ * DEVICE-BUDGET §7 asks for this explicitly: "UniFi never shows you this, and
+ * the reason it can afford not to is that it owns the hardware. We don't.
+ * Surfacing our own cost is both the honest thing to do and a real feature —
+ * it turns 'is this thing slowing down my router?' from an anxiety into a
+ * number the user can read and act on."
+ */
+function ManagementOverhead({ o }: { o: Overhead }) {
+  const budget = o.tier === 'focused' ? 6 : 1
+  const overBudget = o.polls_per_minute > budget * 1.05
+  return (
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+        Management overhead
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}>
+        <Prop label="Poll interval">
+          {o.quiesced
+            ? 'paused for an apply'
+            : `${o.interval_seconds.toFixed(0)}s (${o.tier})`}
+        </Prop>
+        <Prop label="Requests to this device">
+          <span style={{ color: overBudget ? 'var(--warning)' : undefined }}>
+            {o.polls_per_minute.toFixed(2)}/min
+          </span>
+        </Prop>
+        <Prop label="Data sent">{formatBytes(o.bytes_out)}</Prop>
+        <Prop label="Polls">
+          {o.polls}
+          {o.failed_polls > 0 && (
+            <span style={{ color: 'var(--warning)' }}> ({o.failed_polls} failed)</span>
+          )}
+        </Prop>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+        Budget is one request per minute idle, one per 10 seconds while this
+        panel is open. Opening it raises the rate; closing it lowers it within
+        30 seconds.
+        {o.non_poll_requests > 5 && (
+          <>
+            {' '}
+            <strong style={{ color: 'var(--warning)' }}>
+              {o.non_poll_requests} requests were not polls
+            </strong>{' '}
+            — that should only be session logins.
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function formatBytes(n: number): string {
+  const u = ['B', 'kB', 'MB', 'GB']
+  let i = 0
+  while (n >= 1000 && i < u.length - 1) {
+    n /= 1000
+    i++
+  }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 
 function ChartBlock({

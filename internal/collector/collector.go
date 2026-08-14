@@ -33,7 +33,14 @@ import (
 // Defaults from DEVICE-BUDGET §2 and §4.
 const (
 	DefaultBaseline = 60 * time.Second
-	DefaultFocused  = 8 * time.Second
+
+	// DefaultFocused is 10 s, not the 8 s it used to be. DEVICE-BUDGET §4.2
+	// gives a design range of "~5–10 s", but §2's table — the one headed "these
+	// are test criteria, not aspirations" — caps the observed tier at one
+	// request per 10 s. 8 s is 7.5 requests/min against a ceiling of 6, so the
+	// shipped default did not meet the shipped budget. The budget harness said
+	// so; 5 s remains available to anyone who lowers it deliberately.
+	DefaultFocused = 10 * time.Second
 
 	// DefaultMaxInterval caps both backoff paths. An unreachable device is
 	// retried at least this often, so one that comes back is noticed without a
@@ -277,6 +284,78 @@ func (c *Collector) Quiesced(deviceID int64) bool {
 	return p.quiesce > 0
 }
 
+// Overhead is what the controller is costing one device.
+//
+// DEVICE-BUDGET §7 asks for this to be SHOWN, not just measured: "surfacing our
+// own cost is both the honest thing to do and a real feature — it turns 'is this
+// thing slowing down my router?' from an anxiety into a number the user can read
+// and act on." UniFi can afford not to show it because it owns the hardware. We
+// do not.
+type Overhead struct {
+	DeviceID int64         `json:"device_id"`
+	Tier     Tier          `json:"tier"`
+	Interval time.Duration `json:"-"`
+	// IntervalSeconds is the CURRENT interval, including any backoff or
+	// evidence-based widening — not the configured one, which would understate
+	// a device we have deliberately backed off from.
+	IntervalSeconds float64 `json:"interval_seconds"`
+	PollsPerMinute  float64 `json:"polls_per_minute"`
+	Requests        int64   `json:"requests"`
+	BytesOut        int64   `json:"bytes_out"`
+	Polls           int64   `json:"polls"`
+	Failures        int64   `json:"failed_polls"`
+	Since           int64   `json:"since"`
+	// RequestsPerMinute is the rate actually observed, which is the number the
+	// budget is written in.
+	RequestsPerMinute float64 `json:"requests_per_minute"`
+	// NonPollRequests is every request that was not a poll — session logins,
+	// and anything that escaped the batch. Logins amortise to nothing; a number
+	// that grows with the poll count means a call is being made outside the
+	// batch, which is a defect and not a rate to be averaged away.
+	NonPollRequests int64 `json:"non_poll_requests"`
+	Quiesced        bool  `json:"quiesced"`
+}
+
+// Overhead reports the controller's cost for one device.
+func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return Overhead{}, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	o := Overhead{
+		DeviceID: deviceID,
+		Tier:     p.tierLocked(),
+		Interval: p.nextLocked(),
+		Polls:    p.polls,
+		Failures: p.failures,
+		Since:    p.startedAt.Unix(),
+		Quiesced: p.quiesce > 0,
+	}
+	o.IntervalSeconds = o.Interval.Seconds()
+	o.Requests, o.BytesOut = p.requestsBase, p.bytesBase
+	if p.client != nil {
+		o.Requests += p.client.Requests()
+		o.BytesOut += p.client.BytesOut()
+	}
+	// Requests beyond one per poll: session logins, and anything that escaped
+	// the batch. The second is a defect, so the number is worth surfacing
+	// rather than folding into a rate that hides it.
+	o.NonPollRequests = o.Requests - o.Polls
+	if o.NonPollRequests < 0 {
+		o.NonPollRequests = 0
+	}
+	if mins := c.now().Sub(p.startedAt).Minutes(); mins > 0 {
+		o.RequestsPerMinute = float64(o.Requests) / mins
+		o.PollsPerMinute = float64(o.Polls) / mins
+	}
+	return o, true
+}
+
 // Tier reports how a device is currently being polled, for the UI.
 func (c *Collector) Tier(deviceID int64) (Tier, bool) {
 	c.mu.Lock()
@@ -317,6 +396,19 @@ type poller struct {
 	// fails counts consecutive failed polls, driving exponential backoff.
 	fails int
 
+	// polls and failures are lifetime totals for the overhead readout, distinct
+	// from fails, which resets on every success.
+	polls     int64
+	failures  int64
+	startedAt time.Time
+
+	// requestsBase and bytesBase carry the counts of clients we have dropped.
+	// The counters live on the ubus client, so a reconnect would otherwise
+	// silently reset the device-facing cost the UI shows — and a device that
+	// reconnects often is exactly the one whose cost you want to see.
+	requestsBase int64
+	bytesBase    int64
+
 	// widen counts evidence-based interval doublings: the device told us, by
 	// its load or its latency, that it is busy. Distinct from fails, because
 	// "slow" and "gone" deserve different recovery — this one decays gently
@@ -329,10 +421,11 @@ type poller struct {
 
 func newPoller(c *Collector, t Target) *poller {
 	return &poller{
-		c:      c,
-		target: t,
-		wake:   make(chan struct{}, 1),
-		done:   make(chan struct{}),
+		c:         c,
+		target:    t,
+		startedAt: c.now(),
+		wake:      make(chan struct{}, 1),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -379,7 +472,6 @@ func (p *poller) tick(ctx context.Context) {
 	tier := p.tierLocked()
 	target := p.target
 	ifaces := p.ifaces
-	stale := p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval
 	p.mu.Unlock()
 
 	// Bound the poll by its own interval so a slow device produces gaps rather
@@ -395,25 +487,19 @@ func (p *poller) tick(ctx context.Context) {
 		})
 		return
 	}
-	if stale {
-		if found, err := p.discoverIfaces(pctx, client); err == nil {
-			ifaces = found
-			p.mu.Lock()
-			p.ifaces, p.ifaceAt = found, p.c.now()
-			p.mu.Unlock()
-		} else {
-			// Not fatal: a device with no radios is a legitimate target, and a
-			// denied grant must not stop the rest of the poll. It is recorded on
-			// the snapshot below so it cannot pass for "no wireless".
-			p.c.log.Debug("could not list wireless interfaces",
-				"device", target.MAC, "err", err)
-		}
-	}
-
 	snap := p.poll(pctx, client, tier, ifaces)
 	if snap.Err != nil {
 		p.fail(ctx, snap)
 		return
+	}
+	// The radio list, if this poll asked for it, for the next poll to use. A
+	// device with no radios legitimately returns an empty list, which is why
+	// IfacesFresh is separate from len(Ifaces) — "asked and there are none" and
+	// "did not ask" are different, and only the first should update the cache.
+	if snap.IfacesFresh {
+		p.mu.Lock()
+		p.ifaces, p.ifaceAt = snap.Ifaces, p.c.now()
+		p.mu.Unlock()
 	}
 	p.succeed(snap)
 	p.c.sink.Observe(ctx, snap)
@@ -448,12 +534,16 @@ func (p *poller) dial(ctx context.Context, t Target) (*ubus.Client, error) {
 func (p *poller) fail(ctx context.Context, snap Snapshot) {
 	p.mu.Lock()
 	p.fails++
+	p.polls++
+	p.failures++
 	n := p.fails
 	// Drop the session after repeated failures so the next attempt re-logs in.
 	// One failure is not enough: the client already replays a single expired
 	// session itself, and discarding it on every blip would turn a flaky link
 	// into a login storm.
 	if n >= 2 && p.client != nil {
+		p.requestsBase += p.client.Requests()
+		p.bytesBase += p.client.BytesOut()
 		p.client.Close()
 		p.client = nil
 	}
@@ -473,6 +563,7 @@ func (p *poller) succeed(snap Snapshot) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.fails = 0
+	p.polls++
 	p.lastPoll = p.c.now()
 	if snap.Board != nil {
 		p.boardAt = p.c.now()
@@ -504,7 +595,12 @@ func (p *poller) succeed(snap Snapshot) {
 func (p *poller) next() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.nextLocked()
+}
 
+// nextLocked is next() with the lock already held, so the overhead readout can
+// report the interval a device is ACTUALLY on without taking it twice.
+func (p *poller) nextLocked() time.Duration {
 	base := p.c.opts.Baseline
 	if p.focus > 0 {
 		base = p.c.opts.Focused

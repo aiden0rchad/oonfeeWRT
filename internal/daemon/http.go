@@ -43,6 +43,14 @@ func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
 	return f.d.liveClients(deviceID)
 }
 
+func (f fleetAdapter) Overhead(deviceID int64) (collector.Overhead, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return collector.Overhead{}, false
+	}
+	return c.Overhead(deviceID)
+}
+
 // healthz reports liveness: unauthenticated, and it says nothing about the
 // fleet.
 //
