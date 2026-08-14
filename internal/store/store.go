@@ -454,15 +454,23 @@ func (db *DB) RecentEvents(ctx context.Context, limit int) ([]Event, error) {
 // "error" can show nothing while errors exist, simply because a hundred routine
 // events arrived after them.
 func (db *DB) QueryEvents(ctx context.Context, category, severity string, limit int) ([]Event, error) {
+	return db.QueryEventsPage(ctx, category, severity, limit, 0)
+}
+
+// QueryEventsPage is QueryEvents with an offset, for server-side paging.
+func (db *DB) QueryEventsPage(ctx context.Context, category, severity string, limit, offset int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := db.sql.QueryContext(ctx,
 		`SELECT ts, device_id, category, severity, event, detail_json
 		   FROM events
 		  WHERE (? = '' OR category = ?) AND (? = '' OR severity = ?)
-		  ORDER BY ts DESC, id DESC LIMIT ?`,
-		category, category, severity, severity, limit)
+		  ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`,
+		category, category, severity, severity, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -477,6 +485,81 @@ func (db *DB) QueryEvents(ctx context.Context, category, severity string, limit 
 		}
 		e.Detail = json.RawMessage(detail)
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Facet is one filter option and how many rows would match it.
+type Facet struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// EventFacets counts the filter options for the event log, and totals the
+// current selection.
+//
+// The counts are computed by the database over the whole table, not by counting
+// the page that was returned. UI-SPEC §5 singles this out, and it is not
+// pedantry: the log endpoint returns at most a few hundred of ~13k rows, so a
+// count taken from the response says "3 errors" when the table holds three
+// hundred, and it says it with the same confidence as the true number.
+//
+// Each facet is counted with the OTHER filters applied but not its own, which
+// is what makes the counts useful rather than decorative. Applying a facet to
+// itself would show the selected option's count and zero beside every
+// alternative, so the rail could never answer the only question anyone asks of
+// it: "how many would I get if I clicked that instead?"
+func (db *DB) EventFacets(ctx context.Context, category, severity string) (cats, sevs []Facet, total int, err error) {
+	// Severity options: category filter applies, severity filter does not.
+	sevs, err = db.facet(ctx, "severity", "category", category)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	// Category options: severity filter applies, category filter does not.
+	cats, err = db.facet(ctx, "category", "severity", severity)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	row := db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events
+		  WHERE (? = '' OR category = ?) AND (? = '' OR severity = ?)`,
+		category, category, severity, severity)
+	if err := row.Scan(&total); err != nil {
+		return nil, nil, 0, err
+	}
+	return cats, sevs, total, nil
+}
+
+// facet groups by one column while filtering on another. Both column names are
+// literals from EventFacets, never from a request — this builds SQL by
+// concatenation and that is only safe because of it.
+func (db *DB) facet(ctx context.Context, groupCol, filterCol, filterVal string) ([]Facet, error) {
+	switch groupCol {
+	case "category", "severity":
+	default:
+		return nil, fmt.Errorf("store: %q is not a facetable column", groupCol)
+	}
+	switch filterCol {
+	case "category", "severity":
+	default:
+		return nil, fmt.Errorf("store: %q is not a filterable column", filterCol)
+	}
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT `+groupCol+`, COUNT(*) FROM events
+		  WHERE (? = '' OR `+filterCol+` = ?)
+		  GROUP BY `+groupCol+` ORDER BY COUNT(*) DESC, `+groupCol,
+		filterVal, filterVal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Facet{}
+	for rows.Next() {
+		var f Facet
+		if err := rows.Scan(&f.Value, &f.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }

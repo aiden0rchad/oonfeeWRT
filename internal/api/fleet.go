@@ -278,19 +278,37 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100, 1, 1000)
+	offset := queryInt(r, "offset", 0, 0, 1<<30)
+	category := r.URL.Query().Get("category")
+	severity := r.URL.Query().Get("severity")
+
 	// Filters go to the database, not to the page it returned. Filtering
 	// afterwards selects from the newest N events overall rather than the
 	// newest N matching, so a view filtered to "error" can come back empty
 	// while errors exist.
-	events, err := s.Store.QueryEvents(r.Context(),
-		r.URL.Query().Get("category"), r.URL.Query().Get("severity"), limit)
+	events, err := s.Store.QueryEventsPage(r.Context(), category, severity, limit, offset)
 	if handleStoreErr(w, err, "events") {
 		return
 	}
 	if events == nil {
 		events = []store.Event{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+
+	// The filter counts and the total come from an aggregate over the whole
+	// table, per UI-SPEC §5. Counting the returned page instead would report "3
+	// errors" from a page of 100 while the table holds three hundred — and
+	// report it in exactly the same typeface as a true number.
+	cats, sevs, total, err := s.Store.EventFacets(r.Context(), category, severity)
+	if handleStoreErr(w, err, "events") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events": events,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+		"facets": map[string]any{"category": cats, "severity": sevs},
+	})
 }
 
 // dashboard is the fleet summary: counts a human reads at a glance, plus what

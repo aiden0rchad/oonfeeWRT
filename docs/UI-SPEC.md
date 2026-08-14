@@ -244,18 +244,33 @@ Every major screen is a filtered, virtualized data grid. Build one component.
 
 Requirements:
 - Virtualized rows (Flows and Logs run to 10k+ rows; the screenshots show
-  "1-100 of 13106 Logs").
+  "1-100 of 13106 Logs"). Row height must be **measured, not assumed** — the
+  window computes row N's offset as `N x height`, so a cell that renders a
+  fraction of a pixel taller than its CSS is invisible at the top of the grid
+  and most of a screen out by the bottom. Windowing also breaks find-in-page,
+  which the grid has to admit on screen rather than let a reader conclude a
+  value is absent.
 - Server-side pagination with page size selector (default 100).
 - Column show/hide + reorder, persisted per user (`Customize Columns`).
 - Multi-select filter rail driving the query, with **live counts per filter
   option** — this is a big part of why UniFi feels responsive, and it means your
   filter counts must come from an aggregate query, not from counting the loaded page.
+  Two things this requirement does not say, both learned the hard way
+  (STATUS §5b): each facet must be counted with the *other* filters applied but
+  **not its own**, or selecting an option zeroes every alternative and the rail
+  becomes one-way; and the **selected** option must stay in the list even at a
+  count of zero, or choosing it makes it vanish and leaves an empty grid with
+  nothing to explain why.
 - Row leading indicator: status dot + label.
 - Semantic value coloring: link speeds, experience ratings, allow/block actions,
   channel-utilization percentages. Coloring is *additive* — the text still says
   the value. Do not colour-grade interference: it is capability-gated (§7).
 - Click a row → detail slide-over, URL updates, deep-linkable.
-- Sticky header, horizontal scroll with a persistent scrollbar.
+- Sticky header, horizontal scroll with a persistent scrollbar. The grid must
+  own its own scroll container to get this: `position: sticky` resolves against
+  the nearest scrolling ancestor, and any wrapper with `overflow: hidden` — a
+  card with rounded corners, for instance — silently becomes that ancestor and
+  the header stops sticking without ever looking broken.
 
 ---
 

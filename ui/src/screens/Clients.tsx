@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import type { Client } from '../lib/api'
-import { Card, DataGrid, Status, Unknown, Banner } from '../components/ui'
+import {
+  Card,
+  DataGrid,
+  FilterRail,
+  Status,
+  Unknown,
+  Banner,
+  useHiddenColumns,
+} from '../components/ui'
 import type { Column } from '../components/ui'
 import { ago } from '../components/Chart'
 
@@ -15,9 +23,28 @@ import { ago } from '../components/Chart'
  * not know.
  */
 export function Clients({ clients, note }: { clients: Client[]; note: string }) {
-  const [onlyOnline, setOnlyOnline] = useState(true)
-  const rows = onlyOnline ? clients.filter((c) => c.online) : clients
+  const [presence, setPresence] = useState('online')
+  const [connection, setConnection] = useState('')
+  const [hidden, setHidden] = useHiddenColumns('clients')
   const withRF = clients.filter((c) => c.signal != null).length
+
+  // Faceted the same way the server does it for the log: each rail counts with
+  // the OTHER filter applied but not its own, so every option answers "how many
+  // would I get if I clicked that instead?" rather than showing 0 beside
+  // everything not currently selected.
+  const presenceOf = (c: Client) => (c.online ? 'online' : 'offline')
+  const byConnection = connection
+    ? clients.filter((c) => c.connection === connection)
+    : clients
+  const byPresence = presence
+    ? clients.filter((c) => presenceOf(c) === presence)
+    : clients
+
+  const rows = clients.filter(
+    (c) =>
+      (presence === '' || presenceOf(c) === presence) &&
+      (connection === '' || c.connection === connection),
+  )
 
   const columns: Column<Client>[] = [
     {
@@ -30,6 +57,7 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
     {
       key: 'name',
       header: 'Name',
+      required: true,
       render: (c) => c.name || <span style={{ color: 'var(--text-muted)' }}>{c.mac}</span>,
       sortBy: (c) => c.name || c.mac,
     },
@@ -89,29 +117,62 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
       {withRF === 0 && clients.length > 0 && (
         <Banner tone="accent">{note}. Open a device to populate them.</Banner>
       )}
-      <Card
-        title={`Client devices (${rows.length}${onlyOnline && clients.length !== rows.length ? ` of ${clients.length}` : ''})`}
-        actions={
-          <label style={{ fontSize: 11, color: 'var(--text-secondary)', display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="checkbox"
-              checked={onlyOnline}
-              onChange={(e) => setOnlyOnline(e.target.checked)}
-            />
-            Active only
-          </label>
-        }
-        pad={false}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '190px 1fr',
+          gap: 14,
+          alignItems: 'start',
+        }}
       >
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          rowKey={(c) => c.mac}
-          empty="No clients seen yet. The inventory is built from the baseline poll, so it fills in within a minute of a device coming online."
+        {/* counted="loaded" and not "all": /clients returns the entire
+            inventory in one response, so counting it here IS counting
+            everything. The rail says which it is rather than leaving the
+            reader to assume — the assumption is wrong on the log screen. */}
+        <FilterRail
+          counted="loaded"
+          groups={[
+            {
+              label: 'Presence',
+              options: tally(byConnection, presenceOf),
+              selected: presence,
+              onChange: setPresence,
+            },
+            {
+              label: 'Connection',
+              options: tally(byPresence, (c) => c.connection),
+              selected: connection,
+              onChange: setConnection,
+            },
+          ]}
         />
-      </Card>
+        <Card
+          title={`Client devices (${rows.length.toLocaleString()}${
+            rows.length !== clients.length ? ` of ${clients.length.toLocaleString()}` : ''
+          })`}
+          pad={false}
+        >
+          <DataGrid
+            rows={rows}
+            columns={columns}
+            hidden={hidden}
+            onHiddenChange={setHidden}
+            rowKey={(c) => c.mac}
+            empty="No clients match these filters. The inventory is built from the baseline poll, so it fills in within a minute of a device coming online."
+          />
+        </Card>
+      </div>
     </div>
   )
+}
+
+/** Count each distinct value of `of` across rows, commonest first. */
+function tally(rows: Client[], of: (c: Client) => string) {
+  const m = new Map<string, number>()
+  for (const c of rows) m.set(of(c), (m.get(of(c)) ?? 0) + 1)
+  return [...m.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([value, count]) => ({ value, count }))
 }
 
 /** RSSI colouring. Additive only — the number is always shown (UI-SPEC §5). */

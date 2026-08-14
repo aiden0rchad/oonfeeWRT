@@ -214,20 +214,28 @@ OpenWrt; add-by-address is unchanged and still first-class, because discovery
 cannot work at all from a bridged container. Two documented claims were refuted
 building it — see §5a below, they are the interesting part.
 
+**The table system landed 2026-08-14** (UI-SPEC §5): virtualized rows,
+show/hide columns persisted across reloads, a shared filter rail with live
+counts, server-side paging with a page-size selector, and a sticky header that
+is now actually sticky. See §5b — the interesting part is again what was found
+to be false.
+
 **Finish Phase 1** (in the order I would do them):
 
-1. **Grid virtualization and column customization** (UI-SPEC §5). The grid
-   renders every row — fine at 13 clients, not at the 10k the spec anticipates
-   for Logs and Flows. Also the filter rail with live counts, which only the
-   Logs screen has.
-2. **Client-list scoping.** The grid lists every host the device sees, which on
+1. **Client-list scoping.** The grid lists every host the device sees, which on
    a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
    from WAN needs the site model to know what a LAN is, so it is really a
    Phase 3 dependency — but it is visible now and will confuse people.
-3. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
+2. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
    CPU percent (needs a control measurement to be honest — the device only
    reports total), the list of packages we installed (nothing installs any yet),
    and the control to loosen the poll interval.
+3. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+   the remaining half of UI-SPEC §5's "Customize Columns".
+4. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
+   the client list still returns everything and filters in the browser. That is
+   correct today (13 clients) and its rail says so rather than implying
+   otherwise, but it does not survive a real fleet.
 
 ### 5a. What discovery corrected
 
@@ -282,6 +290,56 @@ each was decided — no default credentials, the passphrase never in the
 environment, and a device with no root password warned about rather than
 refused. If any of those decisions change, that table is the thing to update.
 
+### 5b. What the table system corrected
+
+Every one of these was found by running the grid against 13,106 seeded events —
+the row count UI-SPEC quotes from the UniFi screenshots. None of them is
+reachable at the 13 rows the screens had before.
+
+- **The filter counts were the lie the spec warns about.** `Logs.tsx` carried a
+  comment reading "Filter counts come from the whole result set, never from the
+  visible page — a count computed from what happens to be loaded is a lie". It
+  counted the array it was handed, which was the newest 300 of 13,106 rows. The
+  comment asserted precisely the property it did not have. Counts now come from
+  SQL `GROUP BY` over the whole table, each facet computed with the *other*
+  filters applied but not its own — so "info 8,819" stays clickable while
+  `severity=error` is selected, and the category rail re-scopes to the 2,116
+  errors and sums to exactly that.
+- **The sticky header was never sticky.** `position: sticky` resolves against
+  the nearest scrolling ancestor, and `Card` sets `overflow: hidden` for its
+  rounded corners — which made Card that ancestor. The header was pinned to the
+  top of a box that does not scroll, so it slid away with the rows. Invisible
+  for as long as no grid had enough rows to scroll. The grid now owns its
+  scroll container.
+- **`height: 33` on a table cell is a minimum, not a height.** Rows measured
+  33.84px. Virtualization computes row N's position as `N x height`, so that
+  0.84px compounded to 840px by row 1000 — a full screen of drift. Fixed by
+  pinning the line box *and* measuring a real row, because a font that renders
+  differently would silently reintroduce it. Verified after the fix: at
+  scrollTop 16530 of 33060 the window shows row 500 of 1000 exactly, and the
+  last row at the bottom is exactly the last row.
+- **A windowed grid breaks find-in-page, so it says so.** ⌘F only searches
+  rendered rows. The grid prints "1,000 rows, drawn as you scroll — ⌘F searches
+  only what is on screen" whenever it is windowed, because a search that comes
+  up empty is otherwise indistinguishable from the value being absent.
+  Virtualization only engages above 150 rows for the same reason: below that the
+  DOM cost is irrelevant and full-text search is worth more.
+- **A selected filter with no matches vanished from the rail.** The client
+  list defaults to `online`, none of its 14 clients were online, so the option
+  dropped out of the count query — leaving an empty grid, "0 of 14", and
+  nothing highlighted to explain why. The rail now always renders the selected
+  option, at zero if that is the truth.
+- **`Force` on un-adopt was dead code.** It is documented as removing a device
+  "even if the device could not be reached at all — for hardware that is gone
+  for good", and the check sat *after* the early return for
+  `ErrOperatorRequired`. An unreachable device always takes that path, so the
+  flag could never fire in the only case it exists for; the caller got a 409
+  asking for the credential of a router that no longer exists. Found by trying
+  it on a device whose credential had gone stale. Fixed, tested, and confirmed
+  against real hardware — and a forced removal now logs the residue at WARN,
+  because deleting the inventory row deletes the only record of what is still
+  on that device.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there. The
@@ -300,11 +358,11 @@ refused. If any of those decisions change, that table is the thing to update.
 - `internal/model` has no tests of its own (it is exercised through `render`).
 - `reconcile` is mock-verified only.
 - The UI has no automated tests. It has been driven in a browser against the
-  real device, which has now caught nine defects no unit test would have — the
-  latest three from the discovery screen: a "not scanned" list rendered twice,
-  a candidate row that printed "model unknown until you sign in" directly beside
-  "already managed as Linksys WRT3200ACM", and that same label wrapping into the
-  text under it. But that is a manual step someone has to remember.
+  real device, which has now caught **fifteen** defects no unit test would have
+  — three from the discovery screen and six more from the table system (§5b),
+  including a sticky header that had never once been sticky and a
+  virtualization drift of 840px. That is a manual step someone has to remember,
+  and it is now the single highest-value gap in the project's testing.
 - Nothing re-probes capabilities after adoption. A firmware upgrade is detected
   and logged as a warning, and the stale registry is left in place.
 
@@ -361,6 +419,21 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **A comment that states a guarantee is a claim, and claims need checking.**
+  `Logs.tsx` carried an accurate, well-argued paragraph about why filter counts
+  must come from an aggregate rather than the loaded page — sitting directly
+  above code that counted the loaded page. The prose was not wrong about the
+  principle; it was wrong that the code implemented it. Nothing flags this: it
+  reads as documentation of a decision rather than an assertion about
+  behaviour. Same failure as the 32-bit wrap guard whose comment claimed it
+  "bites at the focused rate". When a comment promises a property, the property
+  is a test, not a sentence.
+- **A default CSS value is not a fixed value.** `height: 33` on a `<td>` is a
+  minimum in table layout; the row came out 33.84px. Virtualization multiplies
+  that error by the row index, so it was invisible at the top of the grid and
+  most of a screen wrong at the bottom — the worst possible signature, because
+  every casual check happens at the top. Anything that gets multiplied by N
+  should be measured rather than assumed.
 - **A probe is only read-only if it cannot succeed.** ARCHITECTURE specified
   fingerprinting devices with a `session.login` that fails, on the reasoning
   that a failed login reads nothing and writes nothing. The reasoning is sound
@@ -389,8 +462,11 @@ written and believed.
 - `CGO_ENABLED=0` cross-compiles cleanly for `linux/amd64` and `linux/arm64` —
   verified, and the reason decision D3 chose that driver.
 - The device credential lives in the session scratchpad
-  (`oonfeewrt-device-password.txt`), rotated 2026-08-14 to
-  `oonfeewrt / TcjryvybreWy_gRKIM15uFh5RBMTwWP_`. If lost, delete
+  (`oonfeewrt-device-password.txt`). It was rotated several times on
+  2026-08-14 and the live one is sealed in the scratchpad's `disco/data`
+  keyring rather than written down — re-run
+  `TestIntegrationAdoptARealDevice`, which prints the credential it creates,
+  to get a known one. If lost, delete
   `rpcd.oonfeewrt` on the device and re-run adoption, or regenerate a `$6$` hash
   with `internal/crypt` and write it into `/etc/config/rpcd`.
 - Running the daemon from a checkout:

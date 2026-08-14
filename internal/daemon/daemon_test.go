@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -567,5 +568,68 @@ func TestTrackApplyQuiescesTheDevice(t *testing.T) {
 	}
 	if d.collectorRef().Quiesced(dev.ID) {
 		t.Error("polling was not resumed after the apply finished")
+	}
+}
+
+// Force must work in the situation it exists for.
+//
+// It is documented as removing a device "even if the device could not be
+// reached at all — for hardware that is gone for good", and an unreachable
+// device always fails phase 2 with ErrOperatorRequired: there is no controller
+// session and no SSH. The Force check used to sit AFTER the early return for
+// that error, so the flag was unreachable in exactly that case and the caller
+// got a 409 asking for the credential of a router that no longer exists.
+func TestForceRemovesADeviceThatCannotBeReached(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	// An adopted device at an address nothing answers on: no controller
+	// session, no SSH, which is what "gone for good" looks like.
+	blob, err := d.Keys.SealCredential("de:ad:be:ef:00:01", "u", "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := int64(1)
+	dev := &store.Device{MAC: "de:ad:be:ef:00:01", Host: "127.0.0.1", Port: 1,
+		Name: "gone", Scheme: "http", AdoptedAt: &at, CredEnc: blob}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without Force: refuse, and say a credential is needed.
+	res, err := d.Unadopt(ctx, api.UnadoptRequest{DeviceID: dev.ID})
+	if !errors.Is(err, api.ErrOperatorRequired) {
+		t.Fatalf("unforced unadopt of an unreachable device: err = %v, want ErrOperatorRequired", err)
+	}
+	if res.Removed {
+		t.Error("unforced unadopt removed a device with a footprint still on it")
+	}
+	if _, err := d.Store.DeviceByID(ctx, dev.ID); err != nil {
+		t.Fatalf("the device row should survive a refused unadopt: %v", err)
+	}
+
+	// With Force: gone from the inventory, and the residue reported — that
+	// response is the last record of what is still on the device.
+	res, err = d.Unadopt(ctx, api.UnadoptRequest{DeviceID: dev.ID, Force: true})
+	if err != nil {
+		t.Fatalf("forced unadopt: %v", err)
+	}
+	if !res.Removed {
+		t.Fatal("Force did not remove the device — the flag is dead code again")
+	}
+	if !res.FootprintRemains {
+		t.Error("a forced removal from an unreachable device must still report " +
+			"that a footprint remains; claiming otherwise says the device is clean")
+	}
+	if len(res.Residue) == 0 {
+		t.Error("forced removal deleted the only record of what is on the device " +
+			"without listing it")
+	}
+	if _, err := d.Store.DeviceByID(ctx, dev.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the device row survived a forced unadopt: %v", err)
 	}
 }

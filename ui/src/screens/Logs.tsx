@@ -1,36 +1,66 @@
-import { useState } from 'react'
-import type { EventRow } from '../lib/api'
-import { Card, DataGrid } from '../components/ui'
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../lib/api'
+import type { EventPage, EventRow } from '../lib/api'
+import { Banner, Card, DataGrid, FilterRail, Pager, useHiddenColumns } from '../components/ui'
 import type { Column } from '../components/ui'
 
 /**
  * The event log.
  *
- * Filter counts come from the whole result set, never from the visible page —
- * a count computed from what happens to be loaded is a lie that makes a UI feel
- * responsive right up until someone relies on it (UI-SPEC §5).
+ * Fetches its own page rather than being handed one. Filtering and paging are
+ * server-side, so a parent that pre-fetched a fixed window could only ever hand
+ * this screen the wrong rows: filtering that window client-side selects from
+ * the newest N events overall instead of the newest N matching, which shows an
+ * empty "errors" view on a controller that has plenty of them.
+ *
+ * The filter counts come from an aggregate over the whole table (UI-SPEC §5).
+ * This screen previously computed them from the array it was given and carried
+ * a comment claiming they covered "the whole result set, never the visible
+ * page" — while the endpoint returned at most 300 of however many rows exist.
+ * The comment asserted precisely the property it did not have.
  */
-export function Logs({ events }: { events: EventRow[] }) {
-  const [category, setCategory] = useState<string>('')
-  const [severity, setSeverity] = useState<string>('')
+export function Logs() {
+  const [category, setCategory] = useState('')
+  const [severity, setSeverity] = useState('')
+  const [limit, setLimit] = useState(100)
+  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState<EventPage | null>(null)
+  const [err, setErr] = useState('')
+  const [hidden, setHidden] = useHiddenColumns('logs')
 
-  const counts = (field: 'Category' | 'Severity') => {
-    const m = new Map<string, number>()
-    for (const e of events) m.set(e[field], (m.get(e[field]) ?? 0) + 1)
-    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  const load = useCallback(async () => {
+    try {
+      setPage(await api.events({ limit, offset, category, severity }))
+      setErr('')
+    } catch (e) {
+      // Keep the last good page on screen. Blanking it on one dropped request
+      // would look like "no events", which is a different claim entirely.
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [limit, offset, category, severity])
+
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 10_000)
+    return () => clearInterval(t)
+  }, [load])
+
+  // Changing a filter has to reset the offset. Page 4 of the unfiltered log is
+  // not page 4 of the filtered one, and keeping the offset lands on an empty
+  // page that reads as "no matches".
+  const setFilter = (set: (v: string) => void) => (v: string) => {
+    set(v)
+    setOffset(0)
   }
 
-  const rows = events.filter(
-    (e) =>
-      (category === '' || e.Category === category) &&
-      (severity === '' || e.Severity === severity),
-  )
+  const rows = page?.events ?? []
 
   const columns: Column<EventRow>[] = [
     {
       key: 'ts',
       header: 'Time',
       width: 170,
+      required: true,
       render: (e) => new Date(e.TS * 1000).toLocaleString(),
       sortBy: (e) => e.TS,
     },
@@ -43,7 +73,13 @@ export function Logs({ events }: { events: EventRow[] }) {
       ),
       sortBy: (e) => e.Severity,
     },
-    { key: 'cat', header: 'Category', width: 90, render: (e) => e.Category, sortBy: (e) => e.Category },
+    {
+      key: 'cat',
+      header: 'Category',
+      width: 90,
+      render: (e) => e.Category,
+      sortBy: (e) => e.Category,
+    },
     { key: 'event', header: 'Event', render: (e) => e.Event, sortBy: (e) => e.Event },
     {
       key: 'detail',
@@ -55,92 +91,71 @@ export function Logs({ events }: { events: EventRow[] }) {
   ]
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '190px 1fr', gap: 14, alignItems: 'start' }}>
-      <Card title="Filters">
-        <FilterGroup
-          label="Severity"
-          options={counts('Severity')}
-          value={severity}
-          onChange={setSeverity}
-        />
-        <div style={{ height: 12 }} />
-        <FilterGroup
-          label="Category"
-          options={counts('Category')}
-          value={category}
-          onChange={setCategory}
-        />
-      </Card>
-      <Card title={`Events (${rows.length})`} pad={false}>
-        <DataGrid rows={rows} columns={columns} rowKey={(e) => `${e.TS}-${e.Event}-${e.Category}`} empty="No events match these filters." />
-      </Card>
-    </div>
-  )
-}
-
-function FilterGroup({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string
-  options: [string, number][]
-  value: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <div>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 6 }}>
-        {label}
-      </div>
-      <div style={{ display: 'grid', gap: 3 }}>
-        <Option label="All" count={options.reduce((n, [, c]) => n + c, 0)} active={value === ''} onClick={() => onChange('')} />
-        {options.map(([k, n]) => (
-          <Option key={k} label={k} count={n} active={value === k} onClick={() => onChange(k)} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function Option({
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  label: string
-  count: number
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
+    <div
       style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '3px 7px',
-        borderRadius: 4,
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: 12,
-        background: active ? 'var(--accent-soft)' : 'transparent',
-        color: 'var(--text-primary)',
+        display: 'grid',
+        gridTemplateColumns: '190px 1fr',
+        gap: 14,
+        alignItems: 'start',
       }}
     >
-      <span>{label}</span>
-      <span className="num" style={{ color: 'var(--text-secondary)' }}>
-        {count}
-      </span>
-    </button>
+      <FilterRail
+        counted="all"
+        groups={[
+          {
+            label: 'Severity',
+            options: page?.facets.severity ?? [],
+            selected: severity,
+            onChange: setFilter(setSeverity),
+          },
+          {
+            label: 'Category',
+            options: page?.facets.category ?? [],
+            selected: category,
+            onChange: setFilter(setCategory),
+          },
+        ]}
+      />
+      <Card title={`Events (${(page?.total ?? 0).toLocaleString()})`} pad={false}>
+        {err && (
+          <div style={{ padding: 12 }}>
+            <Banner tone="critical">{err}</Banner>
+          </div>
+        )}
+        <DataGrid
+          rows={rows}
+          columns={columns}
+          hidden={hidden}
+          onHiddenChange={setHidden}
+          rowKey={(e) => `${e.TS}-${e.Category}-${e.Event}`}
+          empty={
+            category || severity
+              ? 'No events match these filters.'
+              : 'No events yet.'
+          }
+        />
+        {page && (
+          <Pager
+            total={page.total}
+            limit={limit}
+            offset={offset}
+            onChange={(l, o) => {
+              setLimit(l)
+              setOffset(o)
+            }}
+          />
+        )}
+      </Card>
+    </div>
   )
 }
 
 function severityTone(s: string): string {
-  return s === 'error' ? 'var(--critical)' : s === 'warning' ? 'var(--warning)' : 'var(--text-secondary)'
+  return s === 'error'
+    ? 'var(--critical)'
+    : s === 'warning'
+      ? 'var(--warning)'
+      : 'var(--text-secondary)'
 }
 
 function summarise(detail: unknown): string {

@@ -285,3 +285,148 @@ func TestSetCertFPIsTrustOnFirstUseOnly(t *testing.T) {
 		t.Fatalf("pin changed to %q despite the refusal", got.CertFP)
 	}
 }
+
+// The whole point of a facet count is that it is NOT the count of what came
+// back. UI-SPEC §5 says so, and the log endpoint returns a few hundred of what
+// can be tens of thousands of rows — so a count taken from the page reports
+// "3 errors" from a table holding three hundred, in the same typeface as a true
+// number.
+func TestEventFacetsCountTheTableNotThePage(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	// 300 events: 250 info/system, 50 error/device.
+	for i := 0; i < 250; i++ {
+		if err := db.LogEvent(ctx, Event{TS: int64(1000 + i),
+			Category: "system", Severity: "info", Event: "tick"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 50; i++ {
+		if err := db.LogEvent(ctx, Event{TS: int64(2000 + i),
+			Category: "device", Severity: "error", Event: "poll_failed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A page far smaller than the table, which is the situation that makes
+	// page-derived counts wrong.
+	page, err := db.QueryEventsPage(ctx, "", "", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 10 {
+		t.Fatalf("page holds %d rows, want 10", len(page))
+	}
+
+	cats, sevs, total, err := db.EventFacets(ctx, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 300 {
+		t.Errorf("total = %d, want 300 — the total must count the table", total)
+	}
+	if got := facetCount(sevs, "info"); got != 250 {
+		t.Errorf("info = %d, want 250 (the page held only %d rows in total)",
+			got, len(page))
+	}
+	if got := facetCount(sevs, "error"); got != 50 {
+		t.Errorf("error = %d, want 50", got)
+	}
+	if got := facetCount(cats, "system"); got != 250 {
+		t.Errorf("system = %d, want 250", got)
+	}
+}
+
+// A facet must be counted with the OTHER filters applied but not its own.
+// Applying a facet to itself shows the selected option's count and zero next to
+// every alternative, which cannot answer the only question the rail is for:
+// how many would I get if I clicked that instead?
+func TestEventFacetsExcludeTheirOwnFilter(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	seed := []Event{
+		{TS: 1, Category: "system", Severity: "info", Event: "a"},
+		{TS: 2, Category: "system", Severity: "error", Event: "b"},
+		{TS: 3, Category: "device", Severity: "error", Event: "c"},
+		{TS: 4, Category: "device", Severity: "error", Event: "d"},
+		{TS: 5, Category: "audit", Severity: "info", Event: "e"},
+	}
+	for _, e := range seed {
+		if err := db.LogEvent(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Severity "error" selected. The severity rail must still offer "info" with
+	// a real count, or there is no way back.
+	cats, sevs, total, err := db.EventFacets(ctx, "", "error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 {
+		t.Errorf("total = %d, want 3 — the total DOES apply every filter", total)
+	}
+	if got := facetCount(sevs, "info"); got != 2 {
+		t.Errorf("with severity=error selected, info = %d, want 2; a severity "+
+			"facet must not filter on severity or the rail becomes one-way", got)
+	}
+	// The category rail, meanwhile, is scoped to the selected severity: those
+	// counts answer "how many errors in each category", which is the question.
+	if got := facetCount(cats, "device"); got != 2 {
+		t.Errorf("category device = %d, want 2 (errors only)", got)
+	}
+	if got := facetCount(cats, "audit"); got != 0 {
+		t.Errorf("audit has no errors, so it should be absent from the "+
+			"error-scoped category rail; got %d", got)
+	}
+}
+
+func facetCount(fs []Facet, value string) int {
+	for _, f := range fs {
+		if f.Value == value {
+			return f.Count
+		}
+	}
+	return 0
+}
+
+// Paging must not repeat or skip rows.
+func TestEventPagingWalksTheTableExactlyOnce(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	for i := 0; i < 25; i++ {
+		if err := db.LogEvent(ctx, Event{TS: int64(1000 + i),
+			Category: "system", Severity: "info", Event: "e" + itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	for offset := 0; offset < 25; offset += 10 {
+		page, err := db.QueryEventsPage(ctx, "", "", 10, offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range page {
+			if seen[e.Event] {
+				t.Errorf("%s appeared on two pages", e.Event)
+			}
+			seen[e.Event] = true
+		}
+	}
+	if len(seen) != 25 {
+		t.Errorf("paging saw %d of 25 events", len(seen))
+	}
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}

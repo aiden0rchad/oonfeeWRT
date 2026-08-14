@@ -147,6 +147,25 @@ export interface EventRow {
   Detail: unknown
 }
 
+/** One filter option and how many rows would match it. */
+export interface Facet {
+  value: string
+  count: number
+}
+
+/** A page of the event log, plus counts taken over the whole table.
+ *
+ *  `facets` is the reason this is not just an array: UI-SPEC §5 requires filter
+ *  counts from an aggregate query, and counting the returned page would report
+ *  "3 errors" from a page of 100 while the table holds three hundred. */
+export interface EventPage {
+  events: EventRow[] | null
+  total: number
+  limit: number
+  offset: number
+  facets: { category: Facet[]; severity: Facet[] }
+}
+
 export interface Dashboard {
   devices: {
     total: number
@@ -300,7 +319,19 @@ export const api = {
   scanPlan: () => get<ScanPlan>('/discovery'),
   scan: (req?: { networks?: string[]; https?: boolean }) =>
     post<ScanResult>('/discovery/scan', req ?? {}),
-  events: (limit = 200) => get<{ events: EventRow[] | null }>(`/events?limit=${limit}`),
+  events: (opts: {
+    limit?: number
+    offset?: number
+    category?: string
+    severity?: string
+  } = {}) => {
+    const q = new URLSearchParams()
+    q.set('limit', String(opts.limit ?? 100))
+    if (opts.offset) q.set('offset', String(opts.offset))
+    if (opts.category) q.set('category', opts.category)
+    if (opts.severity) q.set('severity', opts.severity)
+    return get<EventPage>(`/events?${q}`)
+  },
   stats: (kind: string, deviceID: number, key: string, from: number, to: number) =>
     get<Series>(
       `/stats/${kind}?device_id=${deviceID}&key=${encodeURIComponent(key)}` +

@@ -264,7 +264,17 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 			out.Errors = append(out.Errors, e.Error())
 		}
 	}
-	if errors.Is(uerr, adoption.ErrOperatorRequired) {
+	// Force is checked BEFORE this early return, not after.
+	//
+	// It used to sit below, next to the clean-removal case, which made it dead
+	// code in the only situation it exists for. Force is documented as "remove
+	// it from the inventory even if the device could not be reached at all —
+	// for hardware that is gone for good", and a device that is gone for good
+	// always fails phase 2: no controller session, no SSH, so ErrOperatorRequired
+	// every time. The flag returned above without ever being read, and the
+	// caller got a 409 telling them to supply a credential for a router that no
+	// longer exists.
+	if errors.Is(uerr, adoption.ErrOperatorRequired) && !req.Force {
 		out.NeedsOperator = true
 		return out, api.ErrOperatorRequired
 	}
@@ -287,8 +297,16 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 			return out, err
 		}
 		out.Removed = true
-		d.Log.Info("removed device from the inventory", "mac", dev.MAC,
-			"footprint_remains", out.FootprintRemains)
+		if out.FootprintRemains {
+			// Forced. The inventory row was the only record of what is still on
+			// that device, and it has just been deleted — so this warning and
+			// the residue in the response are the last copy of it.
+			d.Log.Warn("forced removal: the device keeps a footprint and the "+
+				"controller no longer has a record of it", "mac", dev.MAC,
+				"host", dev.Host, "residue", out.Residue)
+		} else {
+			d.Log.Info("removed device from the inventory", "mac", dev.MAC)
+		}
 	}
 	if uerr != nil && !errors.Is(uerr, adoption.ErrOperatorRequired) {
 		return out, uerr
