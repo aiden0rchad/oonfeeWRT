@@ -197,20 +197,23 @@ collects** — inventory, telemetry, API, UI — with the gaps below.
    every row; fine at 8 clients, not at the 10k the spec anticipates for Logs
    and Flows.
 
-**Pending hardware re-verification.** Ten defects found by an adversarial
-review were fixed after the last hardware run (commit `3c6b859`), and the
-ethernet adapter to the device was unplugged before they could be re-checked
-against it. Everything is green on the mock. The changes that touch device
-behaviour and want a real run:
+**The review fixes are hardware-verified** (2026-08-14, commit `3c6b859`). The
+three that could only be checked against a real device all held:
 
-- the wrap guard's new gigabit bound (`internal/telemetry/counter.go`),
-- a required call that fails to decode now failing the whole poll
-  (`internal/collector/poll.go`) — worth confirming no real device response
-  trips it,
-- `system.info` with no `load` array now being a decode failure.
+- The stricter decode path does not reject a real `system.info` — polls
+  succeeded with `load1=0.19`, `uptime=76425s`, no degradations.
+- The gigabit wrap bound produced no false rejection and no fabricated traffic:
+  zero rate samples negative or above a gigabit link across a focused run.
+- Delta-based channel utilization agreed with hostapd's independent BSS load on
+  both radios — **1.6 % vs 3.6 %** on 5 GHz and **70.6 % vs 76.3 %** on 2.4 GHz.
+  The raw counters that run were `active=1789126/busy=2300469` and
+  `active=265875/busy=3539671`, so the old absolute-ratio formula would have
+  reported 128 % and 1331 %.
 
-Re-run: plug the adapter back in, confirm `192.168.1.1` responds, then the
-`-tags=integration -p 1` line in §2.
+A phone was associated during the run, so the station path ran for the first
+time: RSSI −44.3 dBm, 0 % TX retries, and — the detail worth noticing —
+`sta_rssi` recorded 6 samples against `sta_rx_bps`'s 5. Exactly one fewer,
+because a rate needs two counter readings and the first produces nothing.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so

@@ -319,18 +319,32 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 
 	// The dashboard must agree with the device list.
 	var dash struct {
-		Devices struct{ Total, Online int } `json:"devices"`
-		Clients *int                        `json:"clients"`
+		Devices         struct{ Total, Online int } `json:"devices"`
+		WirelessClients *int                        `json:"wireless_clients"`
+		UnknownOn       []string                    `json:"wireless_clients_unknown_on"`
+		KnownDevices    int                         `json:"known_devices"`
+		ActiveDevices   int                         `json:"active_devices"`
 	}
 	apiGet(t, client, base+"/api/v1/dashboard", &dash)
 	if dash.Devices.Total != 1 || dash.Devices.Online != 1 {
 		t.Errorf("dashboard device counts = %+v, want 1 total / 1 online", dash.Devices)
 	}
-	clients := "unknown"
-	if dash.Clients != nil {
-		clients = fmt.Sprint(*dash.Clients)
+	// The device answered every poll above, so its client count is KNOWN. A nil
+	// here would mean the live-count path is broken — and it must be asserted,
+	// not merely logged: this block previously read a `clients` field that had
+	// been renamed, so it decoded nil forever and could never fail.
+	if dash.WirelessClients == nil {
+		t.Fatalf("wireless_clients is unknown for a device that answered every "+
+			"poll; unreadable on: %v", dash.UnknownOn)
 	}
-	t.Logf("dashboard: %d device(s) online, clients=%s", dash.Devices.Online, clients)
+	// The client inventory comes from the baseline poll, so a live LAN has some.
+	if dash.KnownDevices == 0 {
+		t.Error("no LAN devices recorded; the host-hint sources did not populate")
+	}
+	t.Logf("dashboard: %d device(s) online, %d wireless client(s), "+
+		"%d LAN device(s) (%d active)",
+		dash.Devices.Online, *dash.WirelessClients,
+		dash.KnownDevices, dash.ActiveDevices)
 
 	_ = csrf
 	cancel()
