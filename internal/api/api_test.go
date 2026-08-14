@@ -28,11 +28,12 @@ type stubFleet struct {
 	focused  map[int64]int
 	tier     map[int64]collector.Tier
 	quiesced map[int64]bool
+	clients  map[int64]*int
 }
 
 func newStubFleet() *stubFleet {
 	return &stubFleet{focused: map[int64]int{}, tier: map[int64]collector.Tier{},
-		quiesced: map[int64]bool{}}
+		quiesced: map[int64]bool{}, clients: map[int64]*int{}}
 }
 
 func (f *stubFleet) Focus(deviceID int64) func() {
@@ -64,6 +65,22 @@ func (f *stubFleet) Quiesced(deviceID int64) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.quiesced[deviceID]
+}
+
+func (f *stubFleet) LiveClients(deviceID int64) (int, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, ok := f.clients[deviceID]
+	if !ok || n == nil {
+		return 0, false
+	}
+	return *n, true
+}
+
+func (f *stubFleet) setClients(deviceID int64, n *int) {
+	f.mu.Lock()
+	f.clients[deviceID] = n
+	f.mu.Unlock()
 }
 
 func (f *stubFleet) focusCount(deviceID int64) int {
@@ -663,13 +680,12 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	a := h.seedDevice("ap-one", true, &recent)
 	b := h.seedDevice("ap-two-x", true, &recent)
 	ctx := context.Background()
-	base := now.Truncate(5 * time.Minute).Unix()
-	if err := h.db.WriteRollups(ctx, []store.RollupRow{
-		{DeviceID: a.ID, Kind: "ap_clients", Key: "wlan0", TS: base, Avg: 3, Cnt: 12},
-		{DeviceID: a.ID, Kind: "ap_clients", Key: "wlan1", TS: base, Avg: 2, Cnt: 12},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	// One AP answered with a count; the other could not be asked at all. The
+	// counts are LIVE state from the last poll, not rollups — asking the rollup
+	// table would report "unknown" for the first five minutes of every run.
+	five := 5
+	h.fleet.setClients(a.ID, &five)
+	h.fleet.setClients(b.ID, nil)
 
 	w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
 	if w.Code != http.StatusOK {
@@ -682,26 +698,41 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	if d.Devices.Total != 2 || d.Devices.Online != 2 {
 		t.Errorf("device counts = %+v", d.Devices)
 	}
-	if d.Clients != nil {
-		t.Errorf("clients = %d, want null — device %q has no readable count",
-			*d.Clients, b.Name)
+	if d.WirelessClients != nil {
+		t.Errorf("wireless_clients = %d, want null — device %q has no readable count",
+			*d.WirelessClients, b.Name)
 	}
 	if len(d.ClientsUnsure) != 1 || d.ClientsUnsure[0] != b.Name {
 		t.Errorf("clients_unknown_on = %v, want [%s]", d.ClientsUnsure, b.Name)
 	}
 
 	// Once every AP can be read, the total is reported.
-	if err := h.db.WriteRollups(ctx, []store.RollupRow{
-		{DeviceID: b.ID, Kind: "ap_clients", Key: "wlan0", TS: base, Avg: 4, Cnt: 12},
-	}); err != nil {
+	four := 4
+	h.fleet.setClients(b.ID, &four)
+	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.WirelessClients == nil || *d.WirelessClients != 9 {
+		t.Fatalf("wireless_clients = %v, want 9", d.WirelessClients)
+	}
+
+	// The LAN inventory is a different question and must not be conflated with
+	// associated stations.
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{
+		{MAC: "11:11:11:11:11:11", Name: "wired-nas"},
+	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
 	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.Clients == nil || *d.Clients != 9 {
-		t.Fatalf("clients = %v, want 9", d.Clients)
+	if d.KnownDevices != 1 || d.ActiveDevices != 1 {
+		t.Errorf("known/active devices = %d/%d, want 1/1", d.KnownDevices, d.ActiveDevices)
+	}
+	if d.WirelessClients == nil || *d.WirelessClients != 9 {
+		t.Errorf("the LAN inventory changed the wireless total: %v", d.WirelessClients)
 	}
 }
 

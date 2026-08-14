@@ -149,6 +149,15 @@ func (d *Daemon) sink() collector.Sink {
 		// drained on the five-minute tick, in one transaction (decision D4).
 		d.Samples.Observe(ctx, s)
 		d.recordClients(ctx, s)
+		d.recordLiveClients(s)
+
+		// Record the firmware every time the board is re-read. Without this the
+		// column stays empty forever: nothing else writes it after adoption.
+		if s.Board != nil {
+			if err := d.Store.SetFirmware(ctx, id, s.Board.Release.Description); err != nil {
+				d.Log.Debug("could not record firmware", "device", s.MAC, "err", err)
+			}
+		}
 
 		// A firmware change invalidates the capability snapshot: a new build can
 		// add or remove ubus objects, and rendering against a stale registry is
@@ -267,4 +276,40 @@ func (d *Daemon) recordClients(ctx context.Context, s collector.Snapshot) {
 	if err := d.Store.UpsertClients(ctx, seen, s.At.Unix()); err != nil {
 		d.Log.Error("could not record clients", "device", s.MAC, "err", err)
 	}
+}
+
+// liveClients reports the associated-station count from the most recent poll.
+//
+// Kept in memory rather than read back from the rollups: this is a question
+// about right now, and the rollups only exist after the five-minute flush.
+// Reading them made a freshly started controller answer "unknown" for five
+// minutes while it was polling successfully the whole time — which is exactly
+// the confusion between "could not find out" and "have not written it down"
+// that the three-state rule exists to prevent.
+func (d *Daemon) liveClients(deviceID int64) (int, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n, ok := d.lastClients[deviceID]
+	if !ok || n == nil {
+		return 0, false
+	}
+	return *n, true
+}
+
+// recordLiveClients stores what a poll learned, including that it could not
+// find out — a nil entry is the "asked and was refused" state, distinct from
+// having no entry at all.
+func (d *Daemon) recordLiveClients(s collector.Snapshot) {
+	n, ok := s.ClientCount()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastClients == nil {
+		d.lastClients = map[int64]*int{}
+	}
+	if !ok {
+		d.lastClients[s.DeviceID] = nil
+		return
+	}
+	v := n
+	d.lastClients[s.DeviceID] = &v
 }

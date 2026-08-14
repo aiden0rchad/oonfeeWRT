@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -21,7 +22,22 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 1
+const schemaVersion = 2
+
+// migrations are applied in order for any database below schemaVersion.
+//
+// Forward-only, and never by editing schema.sql: that file uses CREATE TABLE IF
+// NOT EXISTS, so a changed column list is silently ignored on a database that
+// already exists. Anything that changes an existing table has to appear here.
+var migrations = map[int][]string{
+	2: {
+		// The address a client was last seen at, as observed. Distinct from
+		// fixed_ip, which is a reservation an operator asked for — conflating
+		// "where it is" with "where it must be" would make a DHCP lease look
+		// like a policy.
+		`ALTER TABLE clients ADD COLUMN ip TEXT`,
+	},
+}
 
 // DB is the controller's database handle.
 type DB struct {
@@ -89,6 +105,18 @@ func (db *DB) migrate(ctx context.Context) error {
 	}
 	if current == schemaVersion {
 		return nil
+	}
+	for v := current + 1; v <= schemaVersion; v++ {
+		for _, stmt := range migrations[v] {
+			if _, err := db.sql.ExecContext(ctx, stmt); err != nil {
+				// A fresh database gets its columns from schema.sql, so the
+				// ALTER is a duplicate there rather than a failure. Anything
+				// else is real.
+				if !strings.Contains(err.Error(), "duplicate column name") {
+					return fmt.Errorf("store: migration to v%d (%s): %w", v, stmt, err)
+				}
+			}
+		}
 	}
 	_, err = db.sql.ExecContext(ctx,
 		`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`,
@@ -282,6 +310,19 @@ func (db *DB) SetLastSeen(ctx context.Context, deviceID int64, ts int64, pollSta
 		return fmt.Errorf("store: touch device %d: %w", deviceID, err)
 	}
 	return nil
+}
+
+// SetFirmware records the release string the board reported. Called whenever a
+// poll re-reads the board, which is how an upgrade becomes visible without
+// anyone telling the controller about it.
+func (db *DB) SetFirmware(ctx context.Context, deviceID int64, release string) error {
+	if release == "" {
+		return nil
+	}
+	_, err := db.sql.ExecContext(ctx,
+		`UPDATE devices SET fw_release=? WHERE id=? AND COALESCE(fw_release,'') != ?`,
+		release, deviceID, release)
+	return err
 }
 
 // SetCapabilities stores a capability registry snapshot against a device.

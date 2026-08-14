@@ -52,6 +52,11 @@ type Daemon struct {
 
 	mu        sync.Mutex
 	collector *collector.Collector
+	// lastClients is the newest associated-station count per device. A nil
+	// value means the device was asked and could not answer, which is not the
+	// same as having no entry.
+	lastClients map[int64]*int
+
 	maint     *telemetry.Maintainer
 	maintDone chan struct{}
 	maintStop context.CancelFunc

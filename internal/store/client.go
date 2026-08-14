@@ -56,10 +56,11 @@ func (db *DB) UpsertClients(ctx context.Context, seen []SeenClient, now int64) e
 	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO clients (mac, name, fixed_ip, first_seen, last_seen)
-VALUES (?,?,NULL,?,?)
+INSERT INTO clients (mac, name, ip, first_seen, last_seen)
+VALUES (?,?,?,?,?)
 ON CONFLICT(mac) DO UPDATE SET
   name = CASE WHEN excluded.name != '' THEN excluded.name ELSE clients.name END,
+  ip   = CASE WHEN excluded.ip   != '' THEN excluded.ip   ELSE clients.ip   END,
   last_seen = excluded.last_seen`)
 	if err != nil {
 		return err
@@ -70,7 +71,7 @@ ON CONFLICT(mac) DO UPDATE SET
 		if c.MAC == "" {
 			continue
 		}
-		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, now, now); err != nil {
+		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, c.IPv4, now, now); err != nil {
 			return fmt.Errorf("store: upsert client %s: %w", c.MAC, err)
 		}
 	}
@@ -88,7 +89,7 @@ func (db *DB) Clients(ctx context.Context, activeSince int64, limit int) ([]Clie
 	}
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
-       blocked, COALESCE(grp,''), first_seen, last_seen
+       COALESCE(ip,''), blocked, COALESCE(grp,''), first_seen, last_seen
   FROM clients
  WHERE (? = 0 OR last_seen >= ?)
  ORDER BY last_seen DESC, mac
@@ -100,8 +101,8 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 	out := []Client{}
 	for rows.Next() {
 		var c Client
-		if err := rows.Scan(&c.MAC, &c.Name, &c.Note, &c.FixedIP, &c.Blocked,
-			&c.Group, &c.FirstSeen, &c.LastSeen); err != nil {
+		if err := rows.Scan(&c.MAC, &c.Name, &c.Note, &c.FixedIP, &c.IPv4,
+			&c.Blocked, &c.Group, &c.FirstSeen, &c.LastSeen); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -278,11 +277,20 @@ type dashboard struct {
 		Unknown int `json:"unknown"`
 	} `json:"devices"`
 
-	// Clients is the fleet total and is nil when it cannot be totalled — if any
-	// AP's count was unreadable, summing the rest reports a dip that means "a
-	// radio did not answer". Unknown names the devices responsible.
-	Clients       *int     `json:"clients"`
-	ClientsUnsure []string `json:"clients_unknown_on,omitempty"`
+	// WirelessClients counts stations ASSOCIATED to the fleet's radios, from
+	// hostapd. It is nil when it cannot be totalled — if any AP's count was
+	// unreadable, summing the rest reports a dip that means "a radio did not
+	// answer". ClientsUnsure names the devices responsible.
+	WirelessClients *int     `json:"wireless_clients"`
+	ClientsUnsure   []string `json:"wireless_clients_unknown_on,omitempty"`
+
+	// KnownDevices counts everything seen on the LAN — wireless, wired and
+	// whatever else answers ARP. It is a different question from
+	// WirelessClients and is deliberately a separate number: showing one
+	// labelled "clients" next to a grid listing the other is how a dashboard
+	// gets quietly distrusted.
+	KnownDevices  int `json:"known_devices"`
+	ActiveDevices int `json:"active_devices"`
 
 	Focused  int           `json:"focused_devices"`
 	Quiesced int           `json:"quiesced_devices"`
@@ -323,7 +331,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		if v.Status != "online" {
 			continue
 		}
-		n, ok := s.latestClientCount(ctx, dev.ID)
+		n, ok := s.liveClientCount(dev.ID)
 		if !ok {
 			known = false
 			d.ClientsUnsure = append(d.ClientsUnsure, dev.Name)
@@ -332,7 +340,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		total += n
 	}
 	if known {
-		d.Clients = &total
+		d.WirelessClients = &total
+	}
+
+	if clients, err := s.Store.Clients(ctx, 0, 5000); err == nil {
+		d.KnownDevices = len(clients)
+		cutoff := now.Add(-clientActiveWindow).Unix()
+		for _, c := range clients {
+			if c.LastSeen != nil && *c.LastSeen >= cutoff {
+				d.ActiveDevices++
+			}
+		}
 	}
 
 	if events, err := s.Store.RecentEvents(ctx, 20); err == nil {
@@ -345,29 +363,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// latestClientCount sums the most recent per-AP client counts for a device.
+// liveClientCount asks the collector what the last poll saw.
 //
-// It reports ok=false when the device has no client-count series at all, which
-// is how "we have never been able to read this" stays distinct from "zero
-// clients are connected". A device with no radios legitimately has neither, and
-// is excluded by the caller only counting online devices with series.
-func (s *Server) latestClientCount(ctx context.Context, deviceID int64) (int, bool) {
-	keys, err := s.Store.SeriesKeys(ctx, deviceID, string(telemetry.KindAPClients))
-	if err != nil || len(keys) == 0 {
+// ok=false means the count is genuinely unknown — no poll has succeeded, or the
+// call that would have counted them was refused. It never means "we have not
+// flushed yet", which is why this reads live state rather than the rollups.
+func (s *Server) liveClientCount(deviceID int64) (int, bool) {
+	if s.Fleet == nil {
 		return 0, false
 	}
-	total := 0
-	for _, key := range keys {
-		var v float64
-		err := s.Store.SQL().QueryRowContext(ctx, `
-SELECT r.avg FROM rollup_5m r JOIN series s ON s.id = r.series_id
- WHERE s.device_id=? AND s.kind=? AND s.key=?
- ORDER BY r.ts DESC LIMIT 1`,
-			deviceID, string(telemetry.KindAPClients), key).Scan(&v)
-		if err != nil {
-			return 0, false
-		}
-		total += int(v + 0.5)
-	}
-	return total, true
+	return s.Fleet.LiveClients(deviceID)
 }

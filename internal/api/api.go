@@ -38,6 +38,17 @@ type Fleet interface {
 	Tier(deviceID int64) (collector.Tier, bool)
 	// Quiesced reports polling suspended for an apply.
 	Quiesced(deviceID int64) bool
+
+	// LiveClients reports the most recent associated-station count for a
+	// device, and whether it is known at all.
+	//
+	// From the last poll, not from the rollup table. "How many clients are
+	// connected" is a question about now, and the rollups only exist after the
+	// five-minute flush — asking them made a freshly started controller report
+	// "unknown" for five minutes while it was polling successfully the whole
+	// time. Unknown must mean we could not find out, not that we have not
+	// written it down yet.
+	LiveClients(deviceID int64) (int, bool)
 }
 
 // Server serves /api/v1.

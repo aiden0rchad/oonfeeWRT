@@ -1,0 +1,110 @@
+/* Design tokens — copied from docs/UI-SPEC.md §3.
+ *
+ * The categorical palette is validated (lightness band, chroma floor,
+ * adjacent-pair CVD deltaE 8.4, normal-vision deltaE 19.3, contrast >=3:1
+ * against --surface-1). Do not substitute hues without re-running the
+ * validator: the point of a validated palette is that nobody has to guess
+ * whether two adjacent series are distinguishable.
+ *
+ * Status colours are RESERVED. They never appear as a series colour, because a
+ * line that happens to be red must not read as "critical".
+ */
+
+:root,
+[data-theme='dark'] {
+  --surface-0: #0f1114;
+  --surface-1: #16181c;
+  --surface-2: #1e2126;
+  --border: #2a2e35;
+  --border-strong: #3a3f48;
+
+  --text-primary: #f2f4f7;
+  --text-secondary: #a0a6b0;
+  --text-muted: #6b7280;
+
+  --accent: #3987e5;
+  --accent-soft: #1d3b63;
+
+  --good: #199e70;
+  --warning: #c98500;
+  --serious: #d95926;
+  --critical: #e66767;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+/* Light is SELECTED, not an inverted flip: every series colour is the
+ * separately validated light-surface variant from UI-SPEC §3. */
+[data-theme='light'] {
+  --surface-0: #f5f6f8;
+  --surface-1: #ffffff;
+  --surface-2: #eef0f4;
+  --border: #dcdfe5;
+  --border-strong: #c2c7d0;
+
+  --text-primary: #14171c;
+  --text-secondary: #545b66;
+  --text-muted: #7c838f;
+
+  --accent: #2a78d6;
+  --accent-soft: #d7e6fa;
+
+  --good: #14805b;
+  --warning: #a06a00;
+  --serious: #c04a1c;
+  --critical: #cf4747;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+  /* System stack only — never ship someone else's typeface (UI-SPEC §3). */
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numeric columns line up only if the digits are the same width. */
+.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

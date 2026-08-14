@@ -15,6 +15,7 @@ func (d *Daemon) routes() http.Handler {
 
 	d.api = api.New(d.Store, fleetAdapter{d}, d.Log)
 	mux.Handle("/api/v1/", d.api.Routes())
+	d.mountUI(mux)
 	return mux
 }
 
@@ -36,6 +37,10 @@ func (f fleetAdapter) Tier(deviceID int64) (collector.Tier, bool) {
 func (f fleetAdapter) Quiesced(deviceID int64) bool {
 	c := f.d.collectorRef()
 	return c != nil && c.Quiesced(deviceID)
+}
+
+func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
+	return f.d.liveClients(deviceID)
 }
 
 // healthz reports liveness: unauthenticated, and it says nothing about the

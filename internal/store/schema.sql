@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS changesets (
 -- ===== clients =====
 CREATE TABLE IF NOT EXISTS clients (
   mac TEXT PRIMARY KEY, name TEXT, note TEXT,
+  ip TEXT,                             -- last observed address (migration v2)
   fixed_ip TEXT, blocked INTEGER NOT NULL DEFAULT 0,
   grp TEXT, first_seen INTEGER, last_seen INTEGER,
   fingerprint_json TEXT NOT NULL DEFAULT '{}'

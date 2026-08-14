@@ -1,0 +1,6 @@
+node_modules/
+tsconfig.tsbuildinfo
+# The build output is generated, but the directory must exist for go:embed —
+# see ui/embed.go. Keeping .gitkeep means `go build` works without Node.
+dist/*
+!dist/.gitkeep
