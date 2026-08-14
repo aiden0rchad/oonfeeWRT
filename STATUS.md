@@ -197,6 +197,21 @@ collects** — inventory, telemetry, API, UI — with the gaps below.
    every row; fine at 8 clients, not at the 10k the spec anticipates for Logs
    and Flows.
 
+**Pending hardware re-verification.** Ten defects found by an adversarial
+review were fixed after the last hardware run (commit `3c6b859`), and the
+ethernet adapter to the device was unplugged before they could be re-checked
+against it. Everything is green on the mock. The changes that touch device
+behaviour and want a real run:
+
+- the wrap guard's new gigabit bound (`internal/telemetry/counter.go`),
+- a required call that fails to decode now failing the whole poll
+  (`internal/collector/poll.go`) — worth confirming no real device response
+  trips it,
+- `system.info` with no `load` array now being a decode failure.
+
+Re-run: plug the adapter back in, confirm `192.168.1.1` responds, then the
+`-tags=integration -p 1` line in §2.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there.
@@ -246,6 +261,12 @@ written and believed.
   and says nothing about whether the value can be trusted — which, on the 2.4
   GHz radio, it cannot, from either source. The advice was not wrong; it was
   answering a different question than the one a reader would use it for.
+- **A guard that cannot fire is worse than no guard.** The 32-bit wrap check
+  was tested against a bound so loose it could only reject readings 1.7 seconds
+  apart, while the comment beside it claimed it "bites at the focused rate".
+  Both the code and the prose read as protection; neither was. When a bound is
+  written down, do the arithmetic on the range of inputs that can actually
+  reach it.
 - **Run it and look at it.** Four defects in Phase 1 survived a green test
   suite and died within minutes of a browser pointing at the real thing:
   firmware never persisted, client IPs collected and dropped, every page load
