@@ -49,7 +49,80 @@ func (db *DB) Site(ctx context.Context) (model.Site, error) {
 	if s.WLANs, err = db.wlans(ctx); err != nil {
 		return model.Site{}, err
 	}
+	if s.Overrides, err = db.Overrides(ctx); err != nil {
+		return model.Site{}, err
+	}
 	return s, nil
+}
+
+// ---- per-device overrides ----
+
+// Overrides loads every device's deviations from the site model.
+//
+// A row whose path this build does not understand is SKIPPED rather than
+// failing the load, and that asymmetry with the WLAN loader is deliberate. An
+// unreadable security blob would mean publishing a network with unknown
+// security, so it must fail; an unknown override key means one setting is not
+// applied on one device, which is recoverable and much less bad than a
+// controller that will not start because of a row from a newer version.
+func (db *DB) Overrides(ctx context.Context) (model.Overrides, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT device_id, path, value_json FROM device_overrides
+		  ORDER BY device_id, path`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list device overrides: %w", err)
+	}
+	defer rows.Close()
+	out := model.Overrides{}
+	for rows.Next() {
+		var deviceID int64
+		var path, raw string
+		if err := rows.Scan(&deviceID, &path, &raw); err != nil {
+			return nil, err
+		}
+		wlanID, key, err := model.ParseOverridePath(path)
+		if err != nil {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			continue
+		}
+		out[deviceID] = append(out[deviceID], model.Override{
+			DeviceID: deviceID, WLANID: wlanID, Key: key, Value: value,
+		})
+	}
+	return out, rows.Err()
+}
+
+// SetOverride records one deviation. An empty value removes it.
+func (db *DB) SetOverride(ctx context.Context, o model.Override) error {
+	if !o.Key.Valid() {
+		return fmt.Errorf("store: %q is not an overridable setting", o.Key)
+	}
+	if o.Value == "" {
+		return db.ClearOverride(ctx, o.DeviceID, o.Path())
+	}
+	raw, err := json.Marshal(o.Value)
+	if err != nil {
+		return err
+	}
+	_, err = db.sql.ExecContext(ctx,
+		`INSERT INTO device_overrides (device_id, path, value_json) VALUES (?,?,?)
+		 ON CONFLICT(device_id, path) DO UPDATE SET value_json = excluded.value_json`,
+		o.DeviceID, o.Path(), string(raw))
+	if err != nil {
+		return fmt.Errorf("store: set override %s on device %d: %w",
+			o.Path(), o.DeviceID, err)
+	}
+	return nil
+}
+
+// ClearOverride removes one deviation, returning the device to the site model.
+func (db *DB) ClearOverride(ctx context.Context, deviceID int64, path string) error {
+	_, err := db.sql.ExecContext(ctx,
+		`DELETE FROM device_overrides WHERE device_id=? AND path=?`, deviceID, path)
+	return err
 }
 
 // createSite writes the singleton row.

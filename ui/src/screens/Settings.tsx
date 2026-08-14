@@ -164,6 +164,7 @@ export function Settings({ devices }: { devices: Device[] }) {
       </Card>
 
       <Groups site={site} devices={devices} onChanged={load} />
+      <Deviations site={site} devices={devices} onChanged={load} />
       <Networks site={site} onChanged={load} />
 
       {/* The pending-changes flow. Preview is a read; apply is the only thing
@@ -578,6 +579,101 @@ function Groups({
   )
 }
 
+/**
+ * Per-device overrides.
+ *
+ * The list of what can be overridden is short on purpose, and the note says
+ * why: SSID, passphrase, security mode and roaming are not on it. Keeping those
+ * identical across every AP is what a controller is for, and a client roaming
+ * between APs that disagree about them does not fail cleanly — it fails
+ * intermittently, which is far worse to debug.
+ *
+ * Everything set here is listed back in one place, because the danger of
+ * overrides is never a single one. It is a fleet that drifts apart device by
+ * device until nobody can say what is actually deployed.
+ */
+function Deviations({
+  site,
+  devices,
+  onChanged,
+}: {
+  site: Site
+  devices: Device[]
+  onChanged: () => void
+}) {
+  const [deviceID, setDeviceID] = useState<number | null>(null)
+  const adopted = devices.filter((d) => d.adopted)
+  const target = deviceID ?? adopted[0]?.id ?? null
+
+  if (site.wlans.length === 0 || adopted.length === 0) return null
+
+  const forDevice = site.overrides.filter((o) => o.device_id === target)
+  const valueOf = (wlanID: number, key: string) =>
+    forDevice.find((o) => o.wlan_id === wlanID && o.key === key)?.value ?? ''
+
+  async function set(wlanID: number, key: string, value: string) {
+    await api.setOverride(target!, wlanID, key, value)
+    onChanged()
+  }
+
+  return (
+    <Card title="Per-device overrides">
+      <div style={{ display: 'grid', gap: 10 }}>
+        {site.overrides.length > 0 && (
+          <div style={{ fontSize: 11 }}>
+            <strong>{new Set(site.overrides.map((o) => o.device_id)).size}</strong>{' '}
+            device
+            {new Set(site.overrides.map((o) => o.device_id)).size === 1 ? '' : 's'}{' '}
+            currently deviate from the site model:
+            <ul style={{ margin: '4px 0 0', paddingLeft: 18, color: 'var(--text-secondary)' }}>
+              {site.overrides.map((o) => (
+                <li key={`${o.device_id}.${o.wlan_id}.${o.key}`}>
+                  {devices.find((d) => d.id === o.device_id)?.name ?? o.device_id}:{' '}
+                  {o.describe}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <Choice
+          label="Device"
+          options={adopted.map((d) => ({ v: String(d.id), l: d.name }))}
+          value={[String(target ?? '')]}
+          onChange={([v]) => setDeviceID(Number(v))}
+        />
+
+        {site.wlans.map((w) => (
+          <div key={w.id} style={{ fontSize: 12 }}>
+            <div style={{ fontWeight: 600 }}>{w.ssid}</div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
+              <Toggle
+                label="Do not publish here"
+                on={valueOf(w.id, 'disabled') === '1'}
+                onChange={(v) => set(w.id, 'disabled', v ? '1' : '')}
+              />
+              <Toggle
+                label="Hide here"
+                on={valueOf(w.id, 'hidden') === '1'}
+                onChange={(v) => set(w.id, 'hidden', v ? '1' : '')}
+              />
+              <Toggle
+                label="Isolate clients here"
+                on={valueOf(w.id, 'isolate') === '1'}
+                onChange={(v) => set(w.id, 'isolate', v ? '1' : '')}
+              />
+            </div>
+          </div>
+        ))}
+
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          {site.override_note}.
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
   const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '' })
   return (
@@ -746,6 +842,17 @@ function Preview({ p }: { p: PreviewResult }) {
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {d.omitted.map((o) => (
                   <li key={o}>{o}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {d.deviations && d.deviations.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              This device deviates from the site model on purpose:
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {d.deviations.map((x) => (
+                  <li key={x}>{x}</li>
                 ))}
               </ul>
             </div>

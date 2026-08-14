@@ -794,3 +794,38 @@ which is exactly the right relationship.
   it solves the multi-site/NAT problem with a device-side pull agent, which is
   precisely the design we've ruled out. Read it to understand what that choice
   buys and costs, then stay on your side of the line.
+
+---
+
+## 6.2 Per-device overrides — and what they deliberately cannot reach
+
+A device may deviate from the site model in four ways, and only four:
+
+| overridable | not overridable |
+|---|---|
+| whether a WLAN is published on this AP | SSID |
+| whether it beacons its name here | passphrase |
+| whether clients here are isolated | security mode, PMF |
+| how many clients may associate here | 802.11r/k/v and the derived mobility domain |
+
+The right-hand column is not an oversight and is not a "not yet". Keeping those
+settings identical across every AP is the guarantee this system exists to
+provide: they are the ones that are miserable to maintain by hand, and they fail
+*confusingly* rather than cleanly when they drift. A client roaming between two
+APs that disagree about the key does not get an error — it gets an intermittent
+drop that looks like interference.
+
+An escape hatch that can break the one guarantee the product offers is not an
+escape hatch, it is a slow leak. So those keys are absent from the override
+vocabulary entirely rather than present behind a warning, and the API refuses an
+unknown key by name with the reason.
+
+**Every deviation is surfaced**, in the settings screen, on the device's row in
+the apply preview, and in a site-level summary. The danger of overrides is never
+a single one; it is a fleet drifting apart device by device until nobody can say
+what is deployed.
+
+Implementation note: overrides are folded into a **copy** of the WLAN during
+render. Mutating the site model would leak one device's deviations into the next
+device rendered — which, given renders are per device in a loop, would be a bug
+that only appears with two or more APs.

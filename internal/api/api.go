@@ -171,6 +171,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/site/networks", s.handleSaveNetwork)
 	private.HandleFunc("POST /api/v1/site/networks/{id}", s.handleSaveNetwork)
 	private.HandleFunc("DELETE /api/v1/site/networks/{id}", s.handleDeleteNetwork)
+	private.HandleFunc("POST /api/v1/site/devices/{id}/override", s.handleSetOverride)
 	private.HandleFunc("GET /api/v1/site/preview", s.handlePreview)
 	private.HandleFunc("POST /api/v1/site/apply", s.handleApply)
 

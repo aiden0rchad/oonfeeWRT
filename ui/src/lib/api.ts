@@ -303,6 +303,17 @@ export interface SiteNetwork {
   enabled: boolean
 }
 
+/** One device's deviation from the site model. */
+export interface SiteOverride {
+  device_id: number
+  wlan_id: number
+  key: string
+  value: string
+  /** The sentence to show. Built server-side so a deviation reads the same
+   *  everywhere it appears. */
+  describe: string
+}
+
 export interface Site {
   name: string
   /** Seeds the mobility-domain derivation, so every AP computes the same
@@ -312,6 +323,14 @@ export interface Site {
   groups: APGroup[]
   networks: SiteNetwork[]
   problems: string[]
+  /** Every per-device deviation, listed. The risk of overrides is not any one
+   *  of them; it is a fleet drifting apart until nobody can say what is
+   *  deployed. */
+  overrides: SiteOverride[]
+  /** The settings that may be overridden. Security, SSID and roaming are
+   *  deliberately absent. */
+  overridable: string[]
+  override_note: string
 }
 
 export interface Change {
@@ -337,6 +356,9 @@ export interface DevicePreview {
   /** A section we own whose value on the device no longer matches what we
    *  applied. Surfaced, never silently corrected. */
   drift?: string[]
+  /** Per-device overrides in force here, shown at the moment someone is
+   *  deciding what to push. */
+  deviations?: string[]
   /** This device could not be planned. The others are still reported. */
   error?: string
 }
@@ -464,6 +486,8 @@ export const api = {
   saveNetwork: (n: Partial<SiteNetwork> & { id?: number }) =>
     post<SiteNetwork>(n.id ? `/site/networks/${n.id}` : '/site/networks', n),
   deleteNetwork: (id: number) => del<{ deleted: number }>(`/site/networks/${id}`),
+  setOverride: (deviceID: number, wlan_id: number, key: string, value: string) =>
+    post<{ note: string }>(`/site/devices/${deviceID}/override`, { wlan_id, key, value }),
   preview: () => get<PreviewResult>('/site/preview'),
   applySite: (device_ids?: number[]) =>
     post<ApplyResult>('/site/apply', device_ids ? { device_ids } : {}),

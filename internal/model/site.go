@@ -156,6 +156,9 @@ type Site struct {
 	Networks []Network
 	WLANs    []WLAN
 	Groups   []APGroup
+	// Overrides are the places individual devices are allowed to differ. See
+	// override.go for what is overridable and, more importantly, what is not.
+	Overrides Overrides
 }
 
 // NetworkByID looks up a network.

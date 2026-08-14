@@ -106,6 +106,14 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 	for _, dr := range plan.Drift {
 		p.Drift = append(p.Drift, dr.String())
 	}
+	ssidOf := map[int]string{}
+	for _, w := range site.WLANs {
+		ssidOf[w.ID] = w.SSID
+	}
+	for _, ov := range site.Overrides[dev.ID] {
+		p.Deviations = append(p.Deviations, ov.Describe(ssidOf[ov.WLANID]))
+	}
+	sort.Strings(p.Deviations)
 	return p
 }
 

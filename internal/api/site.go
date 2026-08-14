@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -55,6 +56,11 @@ type DevicePreview struct {
 	// Drift is a section we own whose value on the device no longer matches
 	// what we applied — surfaced, never silently corrected.
 	Drift []string `json:"drift,omitempty"`
+	// Deviations are the per-device overrides in force here. Listed on the
+	// preview because a device that differs from the site model should be
+	// visible as differing at exactly the moment someone is deciding what to
+	// push — not only on a settings screen they may never open.
+	Deviations []string `json:"deviations,omitempty"`
 	// Error means this device could not be planned at all. The others are still
 	// reported: one unreachable AP must not blank the whole screen.
 	Error string `json:"error,omitempty"`
@@ -172,6 +178,17 @@ func (v wlanView) toModel() model.WLAN {
 	return w
 }
 
+// overrideView is one device's deviation from the site model.
+type overrideView struct {
+	DeviceID int64  `json:"device_id"`
+	WLANID   int    `json:"wlan_id"`
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	// Describe is the sentence the UI shows. Built server-side so the reason a
+	// device differs reads the same everywhere it appears.
+	Describe string `json:"describe"`
+}
+
 type groupView struct {
 	ID        int     `json:"id"`
 	Name      string  `json:"name"`
@@ -215,12 +232,48 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 	for _, e := range site.Validate() {
 		problems = append(problems, e.Error())
 	}
+	// Every deviation, listed. The risk of per-device overrides is not any one
+	// of them; it is a fleet that drifts apart device by device until nobody
+	// can say what is deployed. So they are surfaced wherever the site model
+	// is, not hidden behind a per-device screen.
+	ssidOf := map[int]string{}
+	for _, x := range site.WLANs {
+		ssidOf[x.ID] = x.SSID
+	}
+	deviations := []overrideView{}
+	for deviceID, list := range site.Overrides {
+		for _, o := range list {
+			deviations = append(deviations, overrideView{
+				DeviceID: deviceID, WLANID: o.WLANID, Key: string(o.Key),
+				Value: o.Value, Describe: o.Describe(ssidOf[o.WLANID]),
+			})
+		}
+	}
+	sort.Slice(deviations, func(i, j int) bool {
+		if deviations[i].DeviceID != deviations[j].DeviceID {
+			return deviations[i].DeviceID < deviations[j].DeviceID
+		}
+		if deviations[i].WLANID != deviations[j].WLANID {
+			return deviations[i].WLANID < deviations[j].WLANID
+		}
+		return deviations[i].Key < deviations[j].Key
+	})
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":     site.Name,
-		"wlans":    wlans,
-		"groups":   groups,
-		"networks": nets,
-		"problems": problems,
+		"name":      site.Name,
+		"wlans":     wlans,
+		"groups":    groups,
+		"networks":  nets,
+		"problems":  problems,
+		"overrides": deviations,
+		"overridable": []string{
+			string(model.OverrideDisabled), string(model.OverrideHidden),
+			string(model.OverrideIsolate), string(model.OverrideMaxAssoc),
+		},
+		"override_note": "SSID, passphrase, security mode and roaming are " +
+			"deliberately not overridable. Keeping them identical across every AP " +
+			"is what a controller is for, and a client roaming between APs that " +
+			"disagree about them does not fail cleanly — it fails intermittently",
 		// The UUID is shown because it is what makes roaming consistent across
 		// APs, and an operator debugging fast transition needs to see that
 		// every device derived its mobility domain from the same seed.
@@ -406,6 +459,47 @@ func (s *Server) handleDeleteNetwork(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logSiteChange(r.Context(), "site.network_deleted", map[string]any{"network": id})
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+func (s *Server) handleSetOverride(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		WLANID int    `json:"wlan_id"`
+		Key    string `json:"key"`
+		Value  string `json:"value"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	o := model.Override{
+		DeviceID: id, WLANID: req.WLANID,
+		Key: model.OverrideKey(req.Key), Value: req.Value,
+	}
+	if !o.Key.Valid() {
+		writeErr(w, http.StatusBadRequest, "\""+req.Key+"\" is not an "+
+			"overridable setting. SSID, passphrase, security mode and roaming are "+
+			"deliberately not overridable — keeping them identical across every AP "+
+			"is what a controller is for")
+		return
+	}
+	if req.WLANID <= 0 {
+		writeErr(w, http.StatusBadRequest, "wlan_id is required")
+		return
+	}
+	if err := s.Store.SetOverride(r.Context(), o); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logSiteChange(r.Context(), "site.override_set", map[string]any{
+		"device": id, "wlan": req.WLANID, "key": req.Key, "value": req.Value,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": id, "wlan_id": req.WLANID, "key": req.Key, "value": req.Value,
+		"note": "recorded. Nothing changed on the device until you preview and apply",
+	})
 }
 
 // ---- preview and apply ----

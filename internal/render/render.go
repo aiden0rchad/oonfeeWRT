@@ -109,7 +109,17 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	doc := Doc{DeviceID: dev.ID}
 
 	radios := radiosByBand(caps)
-	for _, w := range site.WLANsFor(dev.ID) {
+	for _, base := range site.WLANsFor(dev.ID) {
+		// Per-device overrides are folded in here, on a copy. Mutating the site
+		// model would leak one device's overrides into the next device rendered.
+		w, published := site.Overrides.Apply(dev.ID, base)
+		if !published {
+			rep.Omissions = append(rep.Omissions, Omission{
+				WLAN:   base.SSID,
+				Reason: "not published on this device (per-device override)",
+			})
+			continue
+		}
 		net, _ := site.NetworkByID(w.NetworkID)
 		rendered := 0
 		for _, band := range orderedBands(w.Bands) {

@@ -231,15 +231,19 @@ changes how to reason about poll cost.
 see §5e. The site model persists, has screens, and reaches hardware through a
 preview-then-apply flow.
 
+**Per-device overrides landed 2026-08-14** — see §5f. The interesting part is
+what is deliberately *not* overridable.
+
 **Phase 2, what remains:**
 
 - **Networks and zones on the device.** The site model holds networks and the
   renderer's worked example 2 (bridge-VLAN, interface, DHCP, firewall zone) is
   specified but not built — only wireless renders today. That is Phase 3's
-  territory as much as Phase 2's.
-- **Per-device overrides.** The `device_overrides` table exists and nothing
-  reads it. UI-SPEC wants explicit conflict surfacing on top.
-- **`usteer` / `dawn` configuration and state readout.**
+  territory as much as Phase 2's, and it is the largest remaining piece.
+- **`usteer` / `dawn` configuration and state readout.** Neither is installed on
+  the reference device and both are in the official feeds — so this is blocked
+  behind the package-installation flow ARCHITECTURE §6 step 3 describes and
+  nothing has built. Writing config for an absent package would be untestable.
 - **A second AP.** The fan-out is proven across two bands of one device; three
   APs is the ROADMAP sentence and needs hardware.
 
@@ -482,6 +486,49 @@ the first hour, all of them invisible to a mock, and then met the proof.
 Nothing in the pipeline is per-device — render is driven by group membership and
 the mobility domain is derived rather than agreed — so a second AP needs no new
 mechanism, only a second AP.
+
+### 5f. What per-device overrides deliberately cannot do
+
+The `device_overrides` table had been in the schema since the beginning with
+nothing reading it. It now works, and the design decision worth defending is the
+short list of what may be overridden:
+
+| overridable | not overridable |
+|---|---|
+| whether a WLAN is published on this AP | SSID |
+| whether it beacons its name here | passphrase |
+| whether clients here are isolated | security mode, PMF |
+| how many clients may associate here | 802.11r/k/v and the mobility domain |
+
+The right-hand column is the product. A controller exists to keep exactly those
+settings identical across every AP, because they are miserable to maintain by
+hand and they fail *confusingly* when they drift — a client roaming between two
+APs that disagree about the key does not fail cleanly, it fails intermittently,
+and the resulting support question is "why does WiFi drop when I walk down the
+hall".
+
+So they are absent from the vocabulary rather than present with a warning. An
+escape hatch that can break the one guarantee the system offers is not an escape
+hatch; it is a slow leak. The API refuses an unknown key by name and says why.
+
+The left-hand column all vary legitimately per AP — a guest network in the lobby
+and not the server room is a real requirement — and none of them can
+desynchronise a client's view of a network it is already associated with.
+
+Two implementation points that needed care. Overrides are applied to a **copy**
+of the WLAN, or the second device rendered inherits the first device's
+deviations. And malformed values fail closed: anything but `1`/`true` reads as
+false, so a corrupt row cannot quietly switch something on.
+
+Verified on hardware: a forbidden key refused with its reason; `disabled` on one
+device rendered nothing there and reported both an omission and a deviation;
+`hidden` applied to both radios while `encryption`, the key and the mobility
+domain stayed identical across them.
+
+Every deviation is listed in three places — the settings screen, the per-device
+preview row, and a site-level summary — because the risk of overrides is never
+any single one. It is a fleet that drifts apart device by device until nobody
+can say what is actually deployed.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
