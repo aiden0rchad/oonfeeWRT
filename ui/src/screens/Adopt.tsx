@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { AdoptResult } from '../lib/api'
 import { Button, Field, Banner, Card, Prop } from '../components/ui'
+import { Discover } from './Discover'
 
 /**
  * Bring a device under management.
@@ -25,6 +26,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<AdoptResult | null>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -91,7 +93,19 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   }
 
   return (
-    <form onSubmit={submit} style={{ display: 'grid', gap: 14, maxWidth: 460 }}>
+    <form onSubmit={submit} style={{ display: 'grid', gap: 14, maxWidth: 620 }}>
+      {/* Above the form, not instead of it. Discovery cannot see the LAN from a
+          bridged container, so add-by-address stays the path that always
+          works — a scan that comes up empty must not look like a dead end. */}
+      <Discover
+        onPick={(h) => {
+          setHost(h)
+          setErr('')
+          // Straight to the credential: the address came from the scan, so the
+          // only thing still missing is the one thing a scan must never ask for.
+          passwordRef.current?.focus()
+        }}
+      />
       <Card title="Adopt a device">
         <div style={{ display: 'grid', gap: 12 }}>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
@@ -152,6 +166,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
           <Field
             label="Device password"
             type="password"
+            ref={passwordRef}
             value={password}
             autoComplete="off"
             onChange={(e) => setPassword(e.target.value)}

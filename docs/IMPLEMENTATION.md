@@ -996,3 +996,39 @@ Also measured, and worth carrying into the design:
   foreign ones, and deleting only the owned section left the section count
   unchanged at 87. The coexistence rule in the README is implementable exactly
   as stated.
+
+### Pre-auth behaviour of the ubus endpoint (measured 2026-08-14)
+
+Both findings came from writing discovery and checking the spec against the
+device instead of trusting it. Both contradicted a documented claim.
+
+- **`ubus list` needs no credential.** `{"method":"list","params":["*"]}` with no
+  session returns the device's complete object graph — 13,113 bytes and 39
+  objects on the reference device. This is stock uhttpd-mod-ubus behaviour, not
+  something adoption enables, and it is what discovery fingerprints on. It also
+  carries usable pre-auth structure: `hostapd.phy0-ap0` / `hostapd.phy1-ap0`
+  give the number of radios with a BSS up (count distinct **PHYs**, not BSSes —
+  three SSIDs on one radio is one radio), `network.interface.wan` marks a
+  gateway, `dnsmasq` marks a DHCP server.
+
+- **`system.board` is refused pre-auth.** The same null session gets
+  `-32002 Access denied`. ARCHITECTURE §6 previously said a pending device's
+  model, MAC and firmware could be read "pre-auth where possible"; they cannot,
+  ever. Both the doc and the UI now say the model is unknown until a credential
+  is supplied.
+
+- **A `session.login` probe is not safe on a passwordless device.** ARCHITECTURE
+  §6 specified probing for a login that fails, on the grounds that the failure
+  alone proves rpcd. On a device with no root password the login *succeeds* —
+  status 0, a session token, and an ACL set with `uci` write and `file` exec, for
+  the password `definitely-not-the-password-9f3a`. A sweep built on that probe
+  would mint a root session on every passwordless host in the subnet on every
+  scan. Corrected in ARCHITECTURE §6; `internal/discovery` never authenticates,
+  and a test asserts the probe issues exactly one request and that it is a
+  `list`.
+
+Sweep cost, same day: 508 addresses across two /24s in **4.8 s** at 128
+concurrent probes, 12 hosts answering TCP, 1 fingerprinting as OpenWrt. Wall
+time is set almost entirely by dead addresses — a live host answers in under
+5 ms, a dead one costs the full dial timeout — so it is
+`(addresses / workers) x DialTimeout` and nothing else.

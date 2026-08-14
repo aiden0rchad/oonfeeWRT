@@ -128,8 +128,32 @@ go build -o oonfeewrtd ./cmd/oonfeewrtd
 
 On first start it asks for an **operator passphrase**, twice. That passphrase
 encrypts every device credential at rest; there is no recovery if it is lost.
-Then open the address, create the administrator account the UI asks for, and
-adopt a device by address.
+Then open the address and create the administrator account the UI asks for.
+
+### Finding the device
+
+The adopt screen has a **Scan** button that sweeps the networks this host is
+attached to and lists what answers as OpenWrt. It tells you how many addresses
+it will probe before it probes them, and what it is *not* covering and why —
+because a controller that quietly skipped your subnet would report "no devices
+found", which reads as a fact about your network rather than about itself.
+
+The probe sends **no password and creates no session**. It is one
+unauthenticated request asking the device to list what it can do, which stock
+OpenWrt answers to anyone who can reach the port. Scanning is on demand only:
+there is no periodic rescan, because sweeping your subnet on a timer forever is
+not something a controller should do unasked.
+
+It will not tell you the model. That needs a credential — stock OpenWrt refuses
+`system.board` to an unauthenticated caller — so the list shows the address and
+the shape of the device (radios up, gateway, DHCP server) and says the model is
+unknown until you sign in. Better a blank than a guess.
+
+**Add-by-address stays first-class**, and you will need it if the controller
+runs in a container on a bridge network or on Docker Desktop: there is no LAN
+layer 2 to sweep from there, so the scan will come up empty while adoption by
+address works perfectly. Discovery is a convenience; adoption never depends on
+it.
 
 For an unattended host (a container, a systemd unit) supply the passphrase from
 a file instead:

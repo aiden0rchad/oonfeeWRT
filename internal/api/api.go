@@ -61,6 +61,7 @@ type Server struct {
 	Store  *store.DB
 	Fleet  Fleet
 	Enroll Enroller
+	Scan   Scanner
 	Hub    *Hub
 	Log    *slog.Logger
 
@@ -146,6 +147,11 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
+	private.HandleFunc("GET /api/v1/discovery", s.handleScanPlan)
+	// A POST because it makes the controller emit traffic across a subnet.
+	// requireAuth enforces the CSRF token on it for that reason: a GET would be
+	// reachable from any page the operator has open.
+	private.HandleFunc("POST /api/v1/discovery/scan", s.handleScan)
 	private.HandleFunc("GET /api/v1/stats/{kind}", s.handleStats)
 	private.HandleFunc("GET /api/v1/clients", s.handleClients)
 	private.HandleFunc("GET /api/v1/events", s.handleEvents)

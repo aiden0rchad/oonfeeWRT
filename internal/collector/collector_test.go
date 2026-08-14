@@ -687,3 +687,55 @@ func TestShippedDefaultsMeetTheStatedBudget(t *testing.T) {
 		t.Errorf("focused default is %.2f req/min, over the 1/10s budget", perMin)
 	}
 }
+
+// A request made outside the poll loop still costs the device, so the readout
+// that claims to say what the controller costs it has to include it.
+//
+// The discovery sweep is the case: it probes by address with its own HTTP
+// client, so without this its request would be invisible in a number an
+// operator reads as complete.
+func TestExternalRequestsAreCounted(t *testing.T) {
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa:bb:cc:dd:ee:ff", Name: "ap1",
+		Connect: mockConnect(t)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Start(ctx)
+	defer c.Stop()
+
+	rec.nextWithAPs(t, 5*time.Second)
+	before, ok := c.Overhead(1)
+	if !ok {
+		t.Fatal("no overhead recorded")
+	}
+
+	c.NoteExternalRequest(1, 55)
+
+	after, _ := c.Overhead(1)
+	if after.Requests != before.Requests+1 {
+		t.Errorf("requests went %d -> %d, want +1", before.Requests, after.Requests)
+	}
+	if after.BytesOut != before.BytesOut+55 {
+		t.Errorf("bytes went %d -> %d, want +55", before.BytesOut, after.BytesOut)
+	}
+	// It is not a poll, so it must land in the non-poll bucket rather than
+	// inflating the poll rate the budget is written in.
+	if after.NonPollRequests != before.NonPollRequests+1 {
+		t.Errorf("non-poll requests went %d -> %d, want +1",
+			before.NonPollRequests, after.NonPollRequests)
+	}
+	if after.Polls != before.Polls {
+		t.Errorf("an external request was counted as a poll (%d -> %d)",
+			before.Polls, after.Polls)
+	}
+}
+
+// An unknown device must not panic or invent a poller.
+func TestExternalRequestForAnUnknownDeviceIsIgnored(t *testing.T) {
+	c := New(newRecorder(), fastOptions())
+	c.NoteExternalRequest(999, 55)
+	if _, ok := c.Overhead(999); ok {
+		t.Error("noting a request created a poller for a device that is not polled")
+	}
+}

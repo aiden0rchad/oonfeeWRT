@@ -14,6 +14,11 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", d.healthz)
 
 	d.api = api.New(d.Store, fleetAdapter{d}, d, d.Log)
+	// Set rather than passed to New: discovery is optional to the API — it
+	// serves the fleet perfectly well without one — and growing the constructor
+	// for every optional collaborator is how a constructor becomes a config
+	// struct nobody reads.
+	d.api.Scan = d
 	mux.Handle("/api/v1/", d.api.Routes())
 	d.mountUI(mux)
 	return mux

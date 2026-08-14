@@ -501,17 +501,55 @@ number is a black box. Make the tooltip show the four components.
 
 ## 6. Discovery, adoption, identity
 
-**Discovery (LAN):** sweep the management subnet (or the ARP table) probing
-TCP/80,443 for a `/ubus` endpoint that answers `session.login` with an auth
-failure — that response alone proves it's OpenWrt rpcd, without logging in.
+**Discovery (LAN):** sweep the management subnet probing TCP/80 for a `/ubus`
+endpoint, and fingerprint it with **`list` on the null session** — an
+unauthenticated call that stock OpenWrt answers with its full ubus object graph.
+Require several objects together (`session.login`, `uci`, `system.board`) before
+calling a host a device; one is not enough to justify putting an address in
+front of someone as "type your router password here". Implemented in
+`internal/discovery`.
+
+> **Corrected 2026-08-14 — the probe this section used to specify was unsafe.**
+> It said to probe with "a `session.login` that answers with an auth failure —
+> that response alone proves it's OpenWrt rpcd, without logging in". It does not.
+> On a stock device with no root password, `session.login` **succeeds** for any
+> password at all: rpcd resolves the account through `/etc/shadow` and an empty
+> entry matches everything. Measured on the reference device — logging in as
+> root with `definitely-not-the-password-9f3a` returned status 0, a session
+> token, and an ACL set including `uci` write and `file` exec.
+>
+> So the specified probe would have minted a **root session on every
+> passwordless device in the subnet, on every scan**. `list` needs no credential
+> guess, creates no session, writes no failed-login record, cannot lock an
+> account out, and returns strictly more information.
+
 Optionally also listen for mDNS if `umdns` is running, but don't depend on it:
 stock OpenWrt doesn't advertise anything useful for us, and making it do so would
-mean config we'd have to own.
+mean config we'd have to own. **Not implemented for that reason** — the subnet
+sweep finds everything mDNS would and needs nothing installed on the device.
+
+Discovery is **on demand only**: no periodic rescan, no background timer. A
+controller that sweeps someone's subnet on a schedule generates unsolicited
+traffic against hosts nobody asked it to touch, forever, and noticing a device
+that appeared while nobody was looking does not pay for that. The sweep refuses
+anything wider than a **/22**, skips point-to-point and tunnel interfaces (their
+far side is routed, not local), and never touches IPv6 — a /64 is 1.8e19
+addresses. Everything it declines to look at is **reported**, because a
+controller that quietly skipped the operator's subnet reports "no devices
+found", which reads as a fact about their network rather than about itself.
 
 **Adoption flow** (the UniFi one-click adopt feel, without an agent):
 
-1. Device appears in **Pending** with model, MAC, firmware, IP — all read from
-   `system.board` / `system.info` pre-auth where possible, post-auth otherwise.
+1. Device appears in **Pending** with its IP and the shape the object list
+   reveals — how many radios have a BSS up, whether it routes, whether it serves
+   DHCP.
+
+   **Not model, MAC or firmware: those cannot be read pre-auth.** This step used
+   to say they came from `system.board` / `system.info` "pre-auth where
+   possible". Measured 2026-08-14: never possible. Stock rpcd answers
+   `system.board` on the null session with JSON-RPC `-32002, Access denied`. The
+   UI therefore says the model is unknown until a credential is supplied, rather
+   than inventing one from the object list.
 2. Operator supplies device credentials **once**.
 3. Controller, in one transaction:
    - offers to install any missing official-feed packages, itemized, with a

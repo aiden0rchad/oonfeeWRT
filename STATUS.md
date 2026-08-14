@@ -2,8 +2,9 @@
 
 Written 2026-08-13 as a handoff. Updated when Phase 0 finished, when Phase 1's
 read-only fleet view came up, and again on 2026-08-14 after adoption, the
-budget harness, the live channel and un-adoption landed. Everything below is
-either committed or measured on real hardware; nothing here is aspiration.
+budget harness, the live channel, un-adoption and network discovery landed.
+Everything below is either committed or measured on real hardware; nothing here
+is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -207,23 +208,65 @@ for someone picking the work up.
 
 Phase 0 is done. Phase 1 is done except for the list below.
 
+**Discovery landed 2026-08-14** (`internal/discovery`, `Discover.tsx`). The
+adopt screen scans the host's attached networks and lists what answers as
+OpenWrt; add-by-address is unchanged and still first-class, because discovery
+cannot work at all from a bridged container. Two documented claims were refuted
+building it — see §5a below, they are the interesting part.
+
 **Finish Phase 1** (in the order I would do them):
 
-1. **Discovery.** Adoption works by address; nothing scans for candidates. mDNS
-   or an ARP sweep of the management subnet. Add-by-address must stay, since it
-   is the only thing that works across subnets.
-2. **Grid virtualization and column customization** (UI-SPEC §5). The grid
+1. **Grid virtualization and column customization** (UI-SPEC §5). The grid
    renders every row — fine at 13 clients, not at the 10k the spec anticipates
    for Logs and Flows. Also the filter rail with live counts, which only the
    Logs screen has.
-3. **Client-list scoping.** The grid lists every host the device sees, which on
+2. **Client-list scoping.** The grid lists every host the device sees, which on
    a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
    from WAN needs the site model to know what a LAN is, so it is really a
    Phase 3 dependency — but it is visible now and will confuse people.
-4. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
+3. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
    CPU percent (needs a control measurement to be honest — the device only
    reports total), the list of packages we installed (nothing installs any yet),
    and the control to loosen the poll interval.
+
+### 5a. What discovery corrected
+
+Both found by checking the spec against the device instead of implementing it,
+and both are recorded in IMPLEMENTATION §14 and fixed in ARCHITECTURE §6.
+
+- **The specified probe was unsafe.** ARCHITECTURE §6 said to fingerprint a
+  device by a `session.login` that fails, "without logging in". On a device with
+  no root password that login **succeeds** — status 0, a session token, an ACL
+  set with `uci` write and `file` exec, for the password
+  `definitely-not-the-password-9f3a`. The specified sweep would have minted a
+  root session on every passwordless host in the subnet, on every scan. The
+  probe used instead is `list` on the null session: no credential, no session,
+  no failed-login record, and a much stronger fingerprint because it returns the
+  whole object graph. A test asserts the probe makes exactly one request and
+  that it is a `list`.
+- **Nothing identifying is readable pre-auth.** §6 expected a pending device to
+  show model, MAC and firmware "from `system.board` / `system.info` pre-auth
+  where possible". Never possible: stock rpcd answers `system.board` on the null
+  session with `-32002 Access denied`. The object list does carry the device's
+  *shape* — radios with a BSS up (count PHYs, not BSSes), a wan interface, a
+  DHCP server — so the UI shows that and says the model is unknown until you
+  sign in.
+
+mDNS was deliberately **not** built. ARCHITECTURE already said not to depend on
+it because stock OpenWrt advertises nothing useful, and the subnet sweep finds
+everything it would without needing anything installed on the device.
+
+Measured: 508 addresses across two /24s in 4.8 s at 128 concurrent probes.
+Sweep time is `(addresses / workers) x DialTimeout` and essentially nothing
+else — a live host answers in under 5 ms, a dead one costs the full timeout.
+The scan refuses anything wider than a /22, skips tunnel interfaces and IPv6,
+is on demand only with no background timer, and **reports everything it
+declined to look at** — a controller that silently skips the operator's subnet
+reports "no devices found", which reads as a fact about their network rather
+than about itself. Its one request against an already-managed device is
+attributed to that device's Management Overhead readout
+(`Collector.NoteExternalRequest`), because "negligible, therefore uncounted" is
+how a readout stops being trustworthy.
 
 **Then Phase 2**, which is where this becomes a controller rather than a nicer
 LuCI: the site model → render → apply pipeline is already built and tested
@@ -257,8 +300,11 @@ refused. If any of those decisions change, that table is the thing to update.
 - `internal/model` has no tests of its own (it is exercised through `render`).
 - `reconcile` is mock-verified only.
 - The UI has no automated tests. It has been driven in a browser against the
-  real device, which has now caught six defects no unit test would have — but
-  that is a manual step someone has to remember.
+  real device, which has now caught nine defects no unit test would have — the
+  latest three from the discovery screen: a "not scanned" list rendered twice,
+  a candidate row that printed "model unknown until you sign in" directly beside
+  "already managed as Linksys WRT3200ACM", and that same label wrapping into the
+  text under it. But that is a manual step someone has to remember.
 - Nothing re-probes capabilities after adoption. A firmware upgrade is detected
   and logged as a warning, and the stale registry is left in place.
 
@@ -315,6 +361,17 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **A probe is only read-only if it cannot succeed.** ARCHITECTURE specified
+  fingerprinting devices with a `session.login` that fails, on the reasoning
+  that a failed login reads nothing and writes nothing. The reasoning is sound
+  and the probe is not, because it assumes the login fails. On a device with no
+  root password it succeeds, and the "read-only" sweep becomes a sweep that
+  mints a root session on every passwordless host in the subnet. The design
+  error is the same shape as reading a denial as an absence: an operation was
+  classified by its *intended* outcome rather than by the outcomes it can
+  actually have. The fix — `list`, which has no success case worth having —
+  turned out to be cheaper, faster and more informative than the thing it
+  replaced, which is usually what happens when the honest version is found.
 - **Say what a check proves, not what it suggests.** The noise-stability
   detector fires on a disagreement and stays silent on agreement, so silence is
   not evidence. On one hardware run the survey pair agreed while the
@@ -331,7 +388,9 @@ written and believed.
   `IMPLEMENTATION.md` §1's stated "Go ≥ 1.23" floor.
 - `CGO_ENABLED=0` cross-compiles cleanly for `linux/amd64` and `linux/arm64` —
   verified, and the reason decision D3 chose that driver.
-- The device credential lives in the session scratchpad. If lost, delete
+- The device credential lives in the session scratchpad
+  (`oonfeewrt-device-password.txt`), rotated 2026-08-14 to
+  `oonfeewrt / TcjryvybreWy_gRKIM15uFh5RBMTwWP_`. If lost, delete
   `rpcd.oonfeewrt` on the device and re-run adoption, or regenerate a `$6$` hash
   with `internal/crypt` and write it into `/etc/config/rpcd`.
 - Running the daemon from a checkout:

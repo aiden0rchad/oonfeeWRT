@@ -196,6 +196,50 @@ export interface UnadoptResult {
   needs_operator_credential: boolean
 }
 
+/** What a scan would cover, before running one. */
+export interface ScanPlan {
+  networks: string[]
+  /** How many addresses would be probed. Shown before scanning, because a
+   *  sweep is unsolicited traffic on the operator's own network. */
+  hosts: number
+  /** Why a network is NOT in the list. Without this, a controller that
+   *  declined to look at the operator's subnet reports "nothing found", which
+   *  reads as a fact about their network rather than about itself. */
+  skipped?: string[]
+}
+
+export interface Discovered {
+  host: string
+  port: number
+  scheme: string
+  verdict: 'openwrt' | 'reachable' | 'silent'
+  signals: {
+    objects: number
+    /** Distinct hostapd PHYs with a running BSS — configured radios, not
+     *  installed silicon. */
+    radios: number
+    gateway: boolean
+    dhcp: boolean
+    wireless: boolean
+  }
+  note?: string
+  /** Set when an adopted device currently has this address. Matched on address,
+   *  which is a hint: identity is the MAC, and the MAC cannot be read before
+   *  authenticating. */
+  known_device_id?: number
+  known_name?: string
+}
+
+export interface ScanResult {
+  found: Discovered[]
+  /** swept/answered make an empty `found` legible. */
+  swept: number
+  answered: number
+  networks: string[]
+  skipped?: string[]
+  elapsed_ms: number
+}
+
 /** What the controller costs one device (DEVICE-BUDGET §7). */
 export interface Overhead {
   device_id: number
@@ -253,6 +297,9 @@ export const api = {
   }) => post<AdoptResult>('/devices/adopt', req),
   unadopt: (id: number, req?: { username?: string; password?: string; force?: boolean }) =>
     post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),
+  scanPlan: () => get<ScanPlan>('/discovery'),
+  scan: (req?: { networks?: string[]; https?: boolean }) =>
+    post<ScanResult>('/discovery/scan', req ?? {}),
   events: (limit = 200) => get<{ events: EventRow[] | null }>(`/events?limit=${limit}`),
   stats: (kind: string, deviceID: number, key: string, from: number, to: number) =>
     get<Series>(

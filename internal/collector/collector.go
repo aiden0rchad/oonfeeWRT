@@ -356,6 +356,31 @@ func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	return o, true
 }
 
+// NoteExternalRequest attributes a request made outside the poll loop to a
+// device, so the Management Overhead readout counts it.
+//
+// The discovery sweep is the case this exists for. It probes by address with
+// its own HTTP client rather than the device's ubus client, so its one request
+// per address would otherwise be invisible in a readout that claims to say what
+// the controller costs this device. One request per operator-initiated scan is
+// negligible — and "negligible, therefore uncounted" is exactly how a readout
+// stops being trustworthy, so it is counted instead.
+//
+// It lands in NonPollRequests, which is where a request that is not a poll
+// belongs.
+func (c *Collector) NoteExternalRequest(deviceID int64, bytesOut int64) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.requestsBase++
+	p.bytesBase += bytesOut
+}
+
 // Tier reports how a device is currently being polled, for the UI.
 func (c *Collector) Tier(deviceID int64) (Tier, bool) {
 	c.mu.Lock()

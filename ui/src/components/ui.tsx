@@ -139,10 +139,12 @@ export function Button({
   )
 }
 
+// React 19 passes `ref` through as an ordinary prop on function components, so
+// the spread below forwards it without forwardRef. The type has to say so.
 export function Field({
   label,
   ...props
-}: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+}: { label: string } & React.ComponentPropsWithRef<'input'>) {
   return (
     <label style={{ display: 'block' }}>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
