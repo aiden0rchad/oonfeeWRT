@@ -1,7 +1,8 @@
 # Where this project is
 
-Written 2026-08-13 as a handoff. Updated the same day when Phase 0 finished,
-and again when Phase 1's read-only fleet view came up. Everything below is
+Written 2026-08-13 as a handoff. Updated when Phase 0 finished, when Phase 1's
+read-only fleet view came up, and again on 2026-08-14 after adoption, the
+budget harness and the live channel landed. Everything below is
 either committed or measured on real hardware; nothing here is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
@@ -18,13 +19,15 @@ those findings.
 **Phase 0 is complete** — transport, capability probing, adoption, the
 apply/rollback/confirm cycle, the credential store, the poll loop.
 
-**Phase 1's read-only fleet view runs end to end.** Poll a real device, roll the
-samples into SQLite, serve them through an authenticated API, and render them in
-a browser: dashboard, devices with charts, the client grid, logs. 92 KB of UI
-gzipped against a 1.5 MB budget.
+**Phase 1 is nearly complete.** The whole path runs against real hardware:
+adopt a device from the UI, poll it, roll the samples into SQLite, serve them
+through an authenticated API, push live updates over a WebSocket, and render it
+in a browser — dashboard, devices with charts, client grid, logs. 94 KB of UI
+gzipped against a 1.5 MB budget, and the resource budget is measured rather
+than asserted.
 
-Thirteen Go packages plus a UI, all tested; nine verified against the device
-rather than only against the mock.
+Fifteen Go packages plus a UI. Everything that touches a device has been
+verified against one.
 
 ---
 
@@ -64,21 +67,22 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 
 | Package | What it is | Hardware-verified |
 |---|---|---|
-| `internal/ubus` | JSON-RPC transport, denial channels, batching, TLS pinning | ✅ |
+| `internal/ubus` | JSON-RPC transport, denial channels, batching, TLS pinning, request accounting | ✅ |
 | `internal/applyengine` | APPLY → HEALTH → CONFIRM, three outcomes, PREFLIGHT | ✅ |
 | `internal/capability` | Three-state probe + registry, driver quirk list | ✅ |
-| `internal/store` | SQLite schema, migrations, rollups, inventory | ✅ (through the API) |
-| `internal/crypt` | SHA-512 crypt (`$6$`) for rpcd | ✅ accepted by real rpcd |
-| `internal/adoption` | Adopt / un-adopt, the two-credential split | mock only |
+| `internal/store` | SQLite schema, migrations, rollups, inventory, operators | ✅ |
+| `internal/crypt` | SHA-512 crypt (`$6$`) for rpcd | ✅ |
+| `internal/adoption` | Adopt / un-adopt, the SSH bootstrap, the two-credential split | ✅ |
 | `internal/model` | Site model: networks, WLANs, AP groups | pure |
 | `internal/render` | Site model → per-device UCI, deterministic | pure |
 | `internal/reconcile` | Read → render → diff → apply → record | mock only |
-| `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ end to end |
-| `internal/collector` | The poll loop: two tiers, batching, backoff, quiesce | ✅ |
+| `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ |
+| `internal/collector` | Two-tier poll loop, batching, backoff, quiesce, overhead | ✅ |
 | `internal/telemetry` | RAM ring → 5m → 1h, counter/ratio arithmetic | ✅ |
-| `internal/api` | REST, session auth, CSRF, login throttle | ✅ |
+| `internal/api` | REST, session auth, CSRF, throttle, adoption, WebSocket | ✅ |
 | `internal/daemon` | Lifecycle, shutdown ordering, fleet wiring, static serving | ✅ |
-| `cmd/oonfeewrtd` | The entrypoint | ✅ runs |
+| `deploy` | The embedded ACL — the entire device-side footprint | ✅ |
+| `cmd/oonfeewrtd` | The entrypoint | ✅ |
 | `ui/` | Vite + React SPA, embedded via `go:embed` | ✅ driven in a browser |
 
 Also: `tools/probe.py` (hardware validation), `tools/mock_ubus.py` (the contract
@@ -155,6 +159,10 @@ for someone picking the work up.
   against delta **73.3 %** — the dangerous one, because 25.9 % looks entirely
   reasonable and is wrong by 3×. hostapd's independent BSS-load reading settled
   it. This corrected a claim asserted as verified in three documents.
+- **A WebSocket handshake is not protected by the CSRF token.** The same-origin
+  policy does not apply to WebSockets: any page anywhere can open one to the
+  controller and the browser attaches the session cookie, and the upgrade is a
+  GET so no mutating-request check fires. `/api/v1/live` checks Origin itself.
 - **The shipped defaults now meet the shipped budget, because the harness
   checked.** Measured through the real collector: **idle 1.00 polls/min (60
   requests/hour), observed 6.00 req/min, zero flash writes**, 0.49% device CPU
@@ -193,31 +201,36 @@ for someone picking the work up.
 
 ## 5. What to do next
 
-Phase 0 is done. **Phase 1 is functionally done for the data the controller
-collects** — inventory, telemetry, API, UI — with the gaps below.
+Phase 0 is done. Phase 1 is done except for the list below.
 
-**Finish Phase 1:**
+**Finish Phase 1** (in the order I would do them):
 
-1. **The WebSocket** (`/api/v1/live`, IMPLEMENTATION §8). The UI polls the API
-   every 10 s, which is honest but wasteful and adds latency the focused tier
-   was supposed to remove.
-2. **Discovery.** Adoption works by address; nothing scans for candidates.
-4. **Un-adopt has no UI.** The endpoint, the two-phase flow and the residue
-   reporting all exist and are tested; no screen calls them.
-5. **Client-list scoping.** The grid lists every host the device sees, which on
+1. **Un-adopt has no UI.** The endpoint, the two-phase flow, the SSH removal and
+   the residue reporting all exist and are tested; nothing calls them from a
+   screen. Smallest remaining item and it completes the adoption story — a
+   controller that cannot cleanly remove itself does not get trusted
+   (ROADMAP Phase 0's second proof).
+2. **Discovery.** Adoption works by address; nothing scans for candidates. mDNS
+   or an ARP sweep of the management subnet. Add-by-address must stay, since it
+   is the only thing that works across subnets.
+3. **Grid virtualization and column customization** (UI-SPEC §5). The grid
+   renders every row — fine at 13 clients, not at the 10k the spec anticipates
+   for Logs and Flows. Also the filter rail with live counts, which only the
+   Logs screen has.
+4. **Client-list scoping.** The grid lists every host the device sees, which on
    a WAN-facing gateway includes the upstream network's neighbours. Telling LAN
    from WAN needs the site model to know what a LAN is, so it is really a
-   Phase 3 dependency — but it is visible now.
-6. **Virtualized rows and column customization** (UI-SPEC §5). The grid renders
-   every row; fine at 13 clients, not at the 10k the spec anticipates.
+   Phase 3 dependency — but it is visible now and will confuse people.
+5. **The remaining Management Overhead fields** (DEVICE-BUDGET §7): attributable
+   CPU percent (needs a control measurement to be honest — the device only
+   reports total), the list of packages we installed (nothing installs any yet),
+   and the control to loosen the poll interval.
 
-**The budget harness is built and green** (`internal/daemon/budget_integration_test.go`,
-`OONFEE_BUDGET_MINUTES=60` for the full run), and the Management Overhead
-readout is in the device slide-over. Three items from DEVICE-BUDGET §7's list
-are still missing: attributable CPU percent (the device reports total CPU, and
-attributing a share of it honestly needs a control measurement), the list of
-packages we installed (nothing installs any yet), and the control to loosen the
-poll interval.
+**Then Phase 2**, which is where this becomes a controller rather than a nicer
+LuCI: the site model → render → apply pipeline is already built and tested
+(`internal/model`, `internal/render`, `internal/reconcile`), so Phase 2 is
+largely the *screens* for it plus the pending-changes batching. Read
+ROADMAP.md Phase 2 and IMPLEMENTATION §5–6 before starting.
 
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
@@ -227,20 +240,20 @@ poll interval.
 - Hardware flow offload (mvebu has none), so the README's accounting tradeoff
   remains scoped to hardware offload and untested.
 - A second device, for genuine fleet behaviour. The stagger, the per-device
-  backoff and the "ten devices at 60 s is one request every 6 s" rule are all
-  unit-tested and none of them has met a second real router.
-- **A 32-bit interface counter.** The wrap-recovery path in
-  `internal/telemetry/counter.go` is unit-tested but has never seen a real wrap:
-  determining the reference device's counter width needed 3 GB pushed through
-  it. The code is written to be correct either way.
+  backoff and "ten devices at 60 s is one request every 6 s" are unit-tested and
+  none of them has met a second real router.
+- **A 32-bit interface counter.** The wrap-recovery path is unit-tested but has
+  never seen a real wrap: determining the reference device's counter width would
+  need 3 GB pushed through it. The code is written to be correct either way.
 
 **Known gaps worth closing cheaply:**
 - `internal/model` has no tests of its own (it is exercised through `render`).
-- `adoption` and `reconcile` are mock-verified only. An integration test for
-  adoption against the real device would be worth having, but it writes a real
-  login, so it needs a deliberate decision.
-- The UI has no tests. It was verified by driving a browser against the live
-  device, which caught two rendering bugs no unit test would have.
+- `reconcile` is mock-verified only.
+- The UI has no automated tests. It has been driven in a browser against the
+  real device, which has now caught six defects no unit test would have — but
+  that is a manual step someone has to remember.
+- Nothing re-probes capabilities after adoption. A firmware upgrade is detected
+  and logged as a warning, and the stale registry is left in place.
 
 ---
 
@@ -270,6 +283,13 @@ written and believed.
   and says nothing about whether the value can be trusted — which, on the 2.4
   GHz radio, it cannot, from either source. The advice was not wrong; it was
   answering a different question than the one a reader would use it for.
+- **A component that depends on another having run first has a bug waiting.**
+  The live channel's subscriber assumed something else had opened the
+  connection. When that assumption broke, the symptom was a panel that silently
+  showed nothing while the server pushed correctly — indistinguishable from a
+  server fault, and it cost an hour of looking in the wrong place. Making the
+  subscriber connect for itself removed the coupling and the whole class of
+  confusion.
 - **Test against a genuinely clean subject, not a convenient one.** The
   capability probe ran in the wrong order for the entire life of the project and
   every test passed, because a leftover ACL file was always already on disk and
@@ -346,6 +366,11 @@ written and believed.
   credential with `Keeper.SealCredential(mac, user, pass)` and writing a
   `store.Device` with `AdoptedAt` set. `internal/daemon/integration_test.go`
   does exactly that and is the shortest working example.
+
+- The device is left adopted with the credential in the session scratchpad
+  (`oonfeewrt-device-password.txt`). Re-adopting rotates it — the adoption
+  integration test prints the new one, and `STATUS.md` §7's grant command has to
+  be re-run afterwards for the applyengine hardware tests.
 
 - `docs/IMPLEMENTATION.md` §14 is the authoritative record of measured
   behaviour. When code and docs disagree, the measurement wins — and if neither
