@@ -159,6 +159,34 @@ export interface Dashboard {
   series_count: number
 }
 
+export interface AdoptResult {
+  device_id: number
+  mac: string
+  name: string
+  model: string
+  class: string
+  firmware: string
+  cert_fp?: string
+  features?: string[]
+  /** Checks that were REFUSED, not features the hardware lacks. */
+  unobservable?: string[]
+  quirks?: string[]
+  notes?: string[]
+  /** Facts about the DEVICE worth knowing — not controller problems. */
+  warnings?: string[]
+}
+
+export interface UnadoptResult {
+  removed_from_inventory: boolean
+  reverted_sections: number
+  login_removed: boolean
+  acl_removed: boolean
+  footprint_remains: boolean
+  residue?: string[]
+  errors?: string[]
+  needs_operator_credential: boolean
+}
+
 export interface SessionInfo {
   username: string
   csrf: string
@@ -186,6 +214,17 @@ export const api = {
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
   clients: () => get<{ clients: Client[]; note: string }>('/clients'),
+  adopt: (req: {
+    host: string
+    name?: string
+    username: string
+    password: string
+    scheme?: 'http' | 'https'
+    port?: number
+    role?: string
+  }) => post<AdoptResult>('/devices/adopt', req),
+  unadopt: (id: number, req?: { username?: string; password?: string; force?: boolean }) =>
+    post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),
   events: (limit = 200) => get<{ events: EventRow[] | null }>(`/events?limit=${limit}`),
   stats: (kind: string, deviceID: number, key: string, from: number, to: number) =>
     get<Series>(

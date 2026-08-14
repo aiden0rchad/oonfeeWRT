@@ -93,6 +93,80 @@ func testAdopter() *Adopter {
 	return &Adopter{ACL: []byte(`{"oonfeewrt":{"description":"test"}}`)}
 }
 
+// fakeBoot stands in for the SSH channel. It records the footprint, which makes
+// these tests assert on what adoption INSTALLED rather than on what one
+// transport happened to report.
+type fakeBoot struct {
+	// mirror writes the login into the mock's rpcd config, the way the real SSH
+	// bootstrap writes it into the device's. Without it the verification step —
+	// "log in with the credential we just created" — has nothing to verify
+	// against, and the most important assertion in adoption would pass
+	// vacuously.
+	mirror *ubus.Client
+
+	acl       map[string][]byte
+	login     string
+	passHash  string
+	groups    []string
+	installed bool
+	failACL   error
+	failLogin error
+	closed    bool
+}
+
+func newBoot() *fakeBoot { return &fakeBoot{acl: map[string][]byte{}} }
+
+// newBootFor mirrors into the mock so the created credential really works.
+func newBootFor(c *ubus.Client) *fakeBoot {
+	return &fakeBoot{acl: map[string][]byte{}, mirror: c}
+}
+
+func (b *fakeBoot) InstallACL(_ context.Context, path string, content []byte) error {
+	if b.failACL != nil {
+		return b.failACL
+	}
+	b.acl[path] = append([]byte(nil), content...)
+	b.installed = true
+	return nil
+}
+
+func (b *fakeBoot) CreateLogin(_ context.Context, user, passHash string, groups []string) error {
+	if b.failLogin != nil {
+		return b.failLogin
+	}
+	b.login, b.passHash, b.groups = user, passHash, groups
+	if b.mirror != nil {
+		if err := b.mirror.Call(context.Background(), "uci", "set", map[string]any{
+			"config": "rpcd", "section": user, "type": "login",
+			"values": map[string]any{
+				"username": user, "password": passHash,
+				"read": groups, "write": groups,
+			},
+		}, nil); err != nil {
+			return err
+		}
+		return b.mirror.Call(context.Background(), "uci", "commit",
+			map[string]any{"config": "rpcd"}, nil)
+	}
+	return nil
+}
+
+func (b *fakeBoot) RemoveFootprint(ctx context.Context, aclPath, user string) error {
+	delete(b.acl, aclPath)
+	if b.login == user {
+		b.login, b.passHash, b.groups = "", "", nil
+	}
+	if b.mirror != nil {
+		_ = b.mirror.Call(ctx, "uci", "delete",
+			map[string]any{"config": "rpcd", "section": user}, nil)
+		_ = b.mirror.Call(ctx, "uci", "commit", map[string]any{"config": "rpcd"}, nil)
+	}
+	return nil
+}
+
+func (b *fakeBoot) Fingerprint() string { return "SHA256:test-host-key" }
+func (b *fakeBoot) Close() error        { b.closed = true; return nil }
+
 // written asks the mock what adoption actually put on the device.
 func written(t *testing.T, c *ubus.Client, path string) (paths []string, content string) {
 	t.Helper()
@@ -111,7 +185,8 @@ func TestAdoptInstallsExactlyOneFileAndOneLogin(t *testing.T) {
 	ctx := context.Background()
 	op := operatorClient(t)
 
-	res, err := testAdopter().Adopt(ctx, op)
+	boot := newBootFor(op)
+	res, err := testAdopter().Adopt(ctx, op, boot)
 	if err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
@@ -125,13 +200,27 @@ func TestAdoptInstallsExactlyOneFileAndOneLogin(t *testing.T) {
 		t.Error("adoption should carry the capability snapshot it probed")
 	}
 
-	// The entire device-side footprint: one file.
-	paths, content := written(t, op, DefaultACLPath)
-	if len(paths) != 1 || paths[0] != DefaultACLPath {
-		t.Fatalf("footprint should be exactly one file at %s, got %v", DefaultACLPath, paths)
+	if res.HostKeyFP == "" {
+		t.Error("the bootstrap channel's host key was not captured for pinning")
 	}
+
+	// The entire device-side footprint: one file and one login.
+	if len(boot.acl) != 1 {
+		t.Fatalf("footprint should be exactly one file, got %v", boot.acl)
+	}
+	content := string(boot.acl[DefaultACLPath])
 	if !strings.Contains(content, `"oonfeewrt"`) {
 		t.Errorf("ACL content did not survive the write: %q", content)
+	}
+	if boot.login != DefaultUser {
+		t.Errorf("login = %q, want %q", boot.login, DefaultUser)
+	}
+	// rpcd rejects a plaintext password outright, so this must be a crypt hash.
+	if !strings.HasPrefix(boot.passHash, "$6$") {
+		t.Errorf("the login was created with %q, not a SHA-512 crypt hash", boot.passHash)
+	}
+	if boot.passHash == res.Credential.Password {
+		t.Error("the plaintext password was written to the device")
 	}
 }
 
@@ -167,7 +256,7 @@ func TestAdoptVerifiesTheCredentialItCreated(t *testing.T) {
 	})
 
 	a := testAdopter()
-	if _, err := a.Adopt(ctx, op); err == nil {
+	if _, err := a.Adopt(ctx, op, newBootFor(op)); err == nil {
 		t.Fatal("Adopt should fail when the new credential cannot log in")
 	} else if !strings.Contains(err.Error(), "does not work") {
 		t.Fatalf("error should name the verification failure, got: %v", err)
@@ -177,7 +266,7 @@ func TestAdoptVerifiesTheCredentialItCreated(t *testing.T) {
 func TestAdoptRefusesWithoutACLContent(t *testing.T) {
 	op := operatorClient(t)
 	a := &Adopter{}
-	if _, err := a.Adopt(context.Background(), op); err == nil {
+	if _, err := a.Adopt(context.Background(), op, newBoot()); err == nil {
 		t.Fatal("adopting with no ACL content must fail")
 	}
 }
@@ -189,7 +278,7 @@ func TestUnadoptWithoutOperatorStopsAndReportsResidue(t *testing.T) {
 	ctx := context.Background()
 	op := operatorClient(t)
 	a := testAdopter()
-	if _, err := a.Adopt(ctx, op); err != nil {
+	if _, err := a.Adopt(ctx, op, newBootFor(op)); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
 
@@ -227,14 +316,15 @@ func TestUnadoptWithOperatorRemovesTheFootprint(t *testing.T) {
 	ctx := context.Background()
 	op := operatorClient(t)
 	a := testAdopter()
-	if _, err := a.Adopt(ctx, op); err != nil {
+	boot := newBootFor(op)
+	if _, err := a.Adopt(ctx, op, boot); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
-	if paths, _ := written(t, op, DefaultACLPath); len(paths) == 0 {
+	if len(boot.acl) == 0 {
 		t.Fatal("precondition: the ACL should be on the device")
 	}
 
-	rep, err := a.Unadopt(ctx, op, op, []Section{
+	rep, err := a.Unadopt(ctx, op, boot, []Section{
 		{Config: "wireless", Section: "default_radio0"}})
 	if err != nil {
 		t.Fatalf("Unadopt: %v (%v)", err, rep.Errors)
@@ -248,8 +338,11 @@ func TestUnadoptWithOperatorRemovesTheFootprint(t *testing.T) {
 	if len(rep.Residue()) != 0 {
 		t.Errorf("residue should be empty, got %v", rep.Residue())
 	}
-	if paths, _ := written(t, op, DefaultACLPath); len(paths) != 0 {
-		t.Errorf("ACL file should be removed from the device, still have %v", paths)
+	if len(boot.acl) != 0 {
+		t.Errorf("ACL file should be removed from the device, still have %v", boot.acl)
+	}
+	if boot.login != "" {
+		t.Errorf("the login should be gone, still have %q", boot.login)
 	}
 }
 
@@ -258,17 +351,63 @@ func TestUnadoptIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	op := operatorClient(t)
 	a := testAdopter()
-	if _, err := a.Adopt(ctx, op); err != nil {
+	boot := newBootFor(op)
+	if _, err := a.Adopt(ctx, op, boot); err != nil {
 		t.Fatalf("Adopt: %v", err)
 	}
-	if _, err := a.Unadopt(ctx, op, op, nil); err != nil {
+	if _, err := a.Unadopt(ctx, op, boot, nil); err != nil {
 		t.Fatalf("first Unadopt: %v", err)
 	}
-	rep, err := a.Unadopt(ctx, op, op, nil)
+	rep, err := a.Unadopt(ctx, op, boot, nil)
 	if err != nil {
 		t.Fatalf("second Unadopt should be a no-op, got %v (%v)", err, rep.Errors)
 	}
 	if rep.FootprintRemains {
 		t.Error("nothing left to remove, so no footprint should be reported")
+	}
+}
+
+// Adoption cannot proceed without a channel that can actually install the
+// footprint. ubus refuses both writes even to root, so a nil bootstrap is a
+// hard error rather than something to attempt and fail at halfway.
+func TestAdoptRefusesWithoutABootstrap(t *testing.T) {
+	op := operatorClient(t)
+	if _, err := testAdopter().Adopt(context.Background(), op, nil); !errors.Is(err, ErrNoBootstrap) {
+		t.Fatalf("got %v, want ErrNoBootstrap", err)
+	}
+}
+
+// A failure installing the ACL must stop before the login is created. A login
+// pointing at access-groups that do not exist is a credential that authenticates
+// and can do nothing — the most confusing possible half-state.
+func TestAdoptDoesNotCreateALoginIfTheACLFails(t *testing.T) {
+	op := operatorClient(t)
+	boot := newBoot()
+	boot.failACL = errors.New("no space left on device")
+
+	if _, err := testAdopter().Adopt(context.Background(), op, boot); err == nil {
+		t.Fatal("Adopt succeeded despite the ACL write failing")
+	}
+	if boot.login != "" {
+		t.Fatalf("a login %q was created after the ACL write failed", boot.login)
+	}
+}
+
+// The reverse ordering check: if the login fails, the ACL file is already there.
+// That is a residue un-adopt must still be able to describe.
+func TestAdoptReportsALoginFailureAfterTheACLLanded(t *testing.T) {
+	op := operatorClient(t)
+	boot := newBoot()
+	boot.failLogin = errors.New("uci: entry not found")
+
+	_, err := testAdopter().Adopt(context.Background(), op, boot)
+	if err == nil {
+		t.Fatal("Adopt succeeded despite the login failing")
+	}
+	if !strings.Contains(err.Error(), "create login") {
+		t.Errorf("the error does not name the failed step: %v", err)
+	}
+	if len(boot.acl) == 0 {
+		t.Error("the ACL should still be on the device, so un-adopt can remove it")
 	}
 }

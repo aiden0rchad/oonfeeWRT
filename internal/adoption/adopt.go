@@ -58,11 +58,20 @@ type Credential struct {
 type Result struct {
 	Credential Credential
 	CertFP     string
-	Caps       *capability.Registry
+	// HostKeyFP is the bootstrap channel's peer identity, for pinning. Adoption
+	// is the one moment we see it with no prior expectation.
+	HostKeyFP string
+	Caps      *capability.Registry
 }
 
-// Adopt runs the whole flow using the OPERATOR's session, then verifies the
-// controller credential it created actually works and is properly scoped.
+// Adopt runs the whole flow, then verifies the controller credential it created
+// actually works and is properly scoped.
+//
+// It needs TWO channels, and that is a correction rather than a design choice.
+// The probe and the verification run over ubus with the operator's session. The
+// two writes — the ACL file and the rpcd login — cannot: measured on stock
+// OpenWrt 25.12.5, root over ubus is refused both (see Bootstrap). So they go
+// through the bootstrap channel, once, and nothing else ever does.
 //
 // The operator credential is used here and nowhere else. It is never persisted:
 // it is requested again at un-adopt, because a controller that could remove its
@@ -75,9 +84,12 @@ type Result struct {
 // matters beyond tidiness — restarting rpcd destroys every session on the
 // device, including any armed rollback's, so adoption must never do it
 // casually.
-func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client) (*Result, error) {
+func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstrap) (*Result, error) {
 	if len(a.ACL) == 0 {
 		return nil, errors.New("adoption: no ACL content supplied")
+	}
+	if boot == nil {
+		return nil, ErrNoBootstrap
 	}
 	aclPath, user, groups := a.aclPath(), a.user(), a.groups()
 
@@ -102,12 +114,12 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client) (*Result, er
 
 	// 3. Install the ACL file BEFORE the login, so the login never exists with
 	//    its access-groups undefined.
-	if err := writeFile(ctx, operator, aclPath, a.ACL); err != nil {
+	if err := boot.InstallACL(ctx, aclPath, a.ACL); err != nil {
 		return nil, fmt.Errorf("adoption: write %s: %w", aclPath, err)
 	}
 
 	// 4. Create the login.
-	if err := a.writeLogin(ctx, operator, user, hashed, groups); err != nil {
+	if err := boot.CreateLogin(ctx, user, hashed, groups); err != nil {
 		return nil, fmt.Errorf("adoption: create login %q: %w", user, err)
 	}
 
@@ -127,6 +139,7 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client) (*Result, er
 	return &Result{
 		Credential: Credential{Username: user, Password: password},
 		CertFP:     operator.PinnedCert(),
+		HostKeyFP:  boot.Fingerprint(),
 		Caps:       caps,
 	}, nil
 }
@@ -169,7 +182,7 @@ func (a *Adopter) writeLogin(ctx context.Context, c *ubus.Client, user, hashed s
 // returned — the caller should then prompt and call again. That is the honest
 // degradation: a device whose admin password is lost keeps a visible, documented
 // residue rather than a silently half-removed one.
-func (a *Adopter) Unadopt(ctx context.Context, controller, operator *ubus.Client, owned []Section) (*UnadoptReport, error) {
+func (a *Adopter) Unadopt(ctx context.Context, controller *ubus.Client, boot Bootstrap, owned []Section) (*UnadoptReport, error) {
 	rep := &UnadoptReport{ACLPath: a.aclPath(), User: a.user()}
 
 	// ---- phase 1: give the user's config back ----
@@ -193,27 +206,20 @@ func (a *Adopter) Unadopt(ctx context.Context, controller, operator *ubus.Client
 	}
 
 	// ---- phase 2: remove the footprint ----
-	if operator == nil {
+	//
+	// Over the bootstrap channel, for the same reason it was installed that
+	// way: ubus refuses both the rpcd config and the ACL directory even to
+	// root. The login and the file go together in one command, so a device is
+	// never left with a live credential pointing at access-groups that no
+	// longer exist.
+	if boot == nil {
 		rep.FootprintRemains = true
 		return rep, ErrOperatorRequired
 	}
-
-	// Login first, then the ACL file. Reversing the order would leave a live
-	// credential pointing at access-groups that no longer exist.
-	if err := operator.Call(ctx, "uci", "delete", map[string]any{
-		"config": "rpcd", "section": a.user()}, nil); err != nil && !isMissing(err) {
-		rep.Errors = append(rep.Errors, fmt.Errorf("delete login: %w", err))
-	} else if err := operator.Call(ctx, "uci", "commit",
-		map[string]any{"config": "rpcd"}, nil); err != nil {
-		rep.Errors = append(rep.Errors, fmt.Errorf("commit rpcd: %w", err))
+	if err := boot.RemoveFootprint(ctx, a.aclPath(), a.user()); err != nil {
+		rep.Errors = append(rep.Errors, err)
 	} else {
 		rep.LoginRemoved = true
-	}
-
-	if err := operator.Call(ctx, "file", "remove",
-		map[string]any{"path": a.aclPath()}, nil); err != nil && !isMissing(err) {
-		rep.Errors = append(rep.Errors, fmt.Errorf("remove ACL: %w", err))
-	} else {
 		rep.ACLRemoved = true
 	}
 

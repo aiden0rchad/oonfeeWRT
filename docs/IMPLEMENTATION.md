@@ -757,7 +757,47 @@ Settled 2026-08-13 by `probe.py --write-tests` against the real WRT3200ACM
    rates, where the previous reading is in hand. A single survey read produces
    no utilization sample, exactly like a single interface byte counter produces
    no throughput.
-7. **The two poll tiers are worth the complexity — measured through the real
+7. **Adoption cannot bootstrap over ubus. Root over ubus is not root.**
+   Measured 2026-08-14 on stock OpenWrt 25.12.5, signed in as root:
+
+   | call | result |
+   |---|---|
+   | `uci.get rpcd` | status 6 — refused |
+   | `uci.set rpcd.<login>` | status 6 — refused |
+   | `file.write /usr/share/rpcd/acl.d/*.json` | status 6 — refused |
+   | `file.read /etc/rc.local` | status 0 — granted |
+
+   rpcd's own ACL files bound what `/ubus` can reach, and stock OpenWrt grants
+   write access to neither the `rpcd` config nor the ACL directory. That is a
+   deliberate security property — it is what stops a compromised LuCI session
+   widening its own permissions — and it means the design's "written via
+   `file.write`" was impossible, not merely untested. No access group on the
+   device grants it, and adding one would require writing to the directory we
+   cannot write to.
+
+   The footprint therefore arrives over **SSH, twice in a device's lifetime**:
+   adoption and un-adoption. Everything else stays on ubus. Device-side
+   assumptions, checked on that build rather than assumed:
+
+   - **no `base64`**, so content is piped to `cat` over the SSH session's
+     stdin — which also means it is never a shell argument and needs no
+     quoting;
+   - **no `sftp-server`**, so scp and sftp are unavailable;
+   - `uci`, `cat`, `mktemp` and `sha256sum` are present, and the write is
+     verified by hash rather than assumed from a zero exit.
+
+   Verified end to end on hardware: the installed ACL's sha256 matched the
+   source byte for byte, the created login authenticated, and re-adoption was
+   refused.
+8. **A stock device with no root password accepts anything.** The same device
+   authenticated `root` over ubus with an empty password, the correct password
+   and a deliberately wrong one, and over SSH with the `none` method. rpcd's
+   `$p$root` resolves against `/etc/shadow`, and an empty entry matches
+   everything. Adoption now probes for this with one deliberately-wrong login
+   and surfaces it as a warning — not a refusal, since an operator may knowingly
+   run that way on a trusted LAN, but the credential they typed proved nothing
+   and they should know it.
+9. **The two poll tiers are worth the complexity — measured through the real
    collector, under the scoped credential.** Best of five polls each, both
    batched into a single request:
 

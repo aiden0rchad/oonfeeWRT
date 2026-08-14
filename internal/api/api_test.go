@@ -114,7 +114,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { db.Close() })
 
 	fleet := newStubFleet()
-	srv := New(db, fleet, quiet())
+	srv := New(db, fleet, nil, quiet())
 	return &harness{t: t, srv: srv, mux: srv.Routes(), db: db, fleet: fleet}
 }
 

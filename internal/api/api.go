@@ -55,9 +55,10 @@ type Fleet interface {
 
 // Server serves /api/v1.
 type Server struct {
-	Store *store.DB
-	Fleet Fleet
-	Log   *slog.Logger
+	Store  *store.DB
+	Fleet  Fleet
+	Enroll Enroller
+	Log    *slog.Logger
 
 	// Now is injectable for tests.
 	Now func() time.Time
@@ -74,12 +75,12 @@ type Server struct {
 }
 
 // New builds a Server.
-func New(db *store.DB, fleet Fleet, log *slog.Logger) *Server {
+func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
 	srv := &Server{
-		Store: db, Fleet: fleet, Log: log, Now: time.Now,
+		Store: db, Fleet: fleet, Enroll: enroll, Log: log, Now: time.Now,
 		sessions: newSessions(),
 		throttle: newThrottle(),
 		hashing:  make(chan struct{}, hashSlots),
@@ -137,6 +138,8 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/devices/{id}", s.handleDevice)
 	private.HandleFunc("GET /api/v1/devices/{id}/series", s.handleDeviceSeries)
 	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
+	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
+	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("GET /api/v1/stats/{kind}", s.handleStats)
 	private.HandleFunc("GET /api/v1/clients", s.handleClients)
 	private.HandleFunc("GET /api/v1/events", s.handleEvents)

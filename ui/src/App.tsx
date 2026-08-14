@@ -6,14 +6,16 @@ import { Dashboard } from './screens/Dashboard'
 import { Devices } from './screens/Devices'
 import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
+import { Adopt } from './screens/Adopt'
 import { Banner } from './components/ui'
 
-type Screen = 'dashboard' | 'devices' | 'clients' | 'logs'
+type Screen = 'dashboard' | 'devices' | 'clients' | 'adopt' | 'logs'
 
 const NAV: { id: Screen; label: string; glyph: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◱' },
   { id: 'devices', label: 'Devices', glyph: '⬡' },
   { id: 'clients', label: 'Client Devices', glyph: '⬤' },
+  { id: 'adopt', label: 'Adopt a device', glyph: '＋' },
   { id: 'logs', label: 'Logs', glyph: '≣' },
 ]
 
@@ -190,8 +192,11 @@ export function App() {
             </div>
           )}
           {screen === 'dashboard' && dash && <Dashboard data={dash} />}
-          {screen === 'devices' && <Devices devices={devices} />}
+          {screen === 'devices' && (
+            <Devices devices={devices} onAdopt={() => setScreen('adopt')} />
+          )}
           {screen === 'clients' && <Clients clients={clients} note={clientNote} />}
+          {screen === 'adopt' && <Adopt onAdopted={refresh} />}
           {screen === 'logs' && <Logs events={events} />}
         </main>
       </div>

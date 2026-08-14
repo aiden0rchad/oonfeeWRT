@@ -46,6 +46,19 @@ func realSeed(t *testing.T, c *ubus.Client, marker string) {
 	if err := c.Call(ctx, "uci", "add", map[string]any{
 		"config": "oonfeewrt_probe", "type": "probe", "name": "probe",
 		"values": map[string]string{"marker": marker}}, nil); err != nil {
+		// The scratch config lives in the ACL's `oonfeewrt-probe` group, which
+		// adoption deliberately does NOT grant: production scope is production
+		// scope, and widening it so a test can run would be exactly the wrong
+		// trade. Grant it to the test login by hand instead.
+		if ubus.IsPermanent(err) {
+			t.Skipf("the login is not granted the scratch config this test "+
+				"writes to (%v).\n"+
+				"These tests write only to oonfeewrt_probe, which no service "+
+				"reads. To enable them on a test device:\n"+
+				"  ssh root@<device> \"uci add_list rpcd.oonfeewrt.read=oonfeewrt-probe; "+
+				"uci add_list rpcd.oonfeewrt.write=oonfeewrt-probe; uci commit rpcd\"",
+				err)
+		}
 		t.Fatalf("seed add: %v", err)
 	}
 	if err := c.Call(ctx, "uci", "commit",

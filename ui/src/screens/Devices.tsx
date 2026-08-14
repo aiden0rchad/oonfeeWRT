@@ -7,7 +7,13 @@ import {
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
 
-export function Devices({ devices }: { devices: Device[] }) {
+export function Devices({
+  devices,
+  onAdopt,
+}: {
+  devices: Device[]
+  onAdopt?: () => void
+}) {
   const [openID, setOpenID] = useState<number | null>(null)
 
   const columns: Column<Device>[] = [
@@ -55,13 +61,17 @@ export function Devices({ devices }: { devices: Device[] }) {
 
   return (
     <>
-      <Card title={`Devices (${devices.length})`} pad={false}>
+      <Card
+        title={`Devices (${devices.length})`}
+        actions={onAdopt && <Button onClick={onAdopt}>Adopt a device</Button>}
+        pad={false}
+      >
         <DataGrid
           rows={devices}
           columns={columns}
           rowKey={(d) => d.mac}
           onRowClick={(d) => setOpenID(d.id)}
-          empty="No devices yet. Adoption has no UI in this phase — seed one with the integration test helper."
+          empty="No devices yet. Adopt one to get started."
         />
       </Card>
       {openID !== null && (

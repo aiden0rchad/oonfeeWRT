@@ -13,7 +13,7 @@ func (d *Daemon) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", d.healthz)
 
-	d.api = api.New(d.Store, fleetAdapter{d}, d.Log)
+	d.api = api.New(d.Store, fleetAdapter{d}, d, d.Log)
 	mux.Handle("/api/v1/", d.api.Routes())
 	d.mountUI(mux)
 	return mux
