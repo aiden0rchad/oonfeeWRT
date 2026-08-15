@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
 
 // Enroller brings devices under management and takes them back out.
@@ -127,6 +129,18 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "port is out of range")
 		return
 	}
+	// The role decides what the renderer will and will not send to this device,
+	// so an unrecognised one is refused here — at the boundary, before anything
+	// contacts the device. It used to be stored verbatim and compared later
+	// with an exact string match, so "Gateway" adopted a router as an access
+	// point: no addressing, no DHCP, no firewall zone, and nothing saying why.
+	// Normalised on the way through so the stored value is canonical.
+	role, err := model.ParseRole(req.Role)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Role = string(role)
 
 	res, err := s.Enroll.Adopt(r.Context(), req)
 	if err != nil {

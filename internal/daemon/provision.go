@@ -71,7 +71,8 @@ func (d *Daemon) Preview(ctx context.Context) (*api.PreviewResult, error) {
 // applying to the others is usually still right — so it becomes a row that says
 // so, not a 502 for the whole screen.
 func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.Device) api.DevicePreview {
-	p := api.DevicePreview{DeviceID: dev.ID, Name: dev.Name, Role: dev.Role}
+	p := api.DevicePreview{DeviceID: dev.ID, Name: dev.Name,
+		Role: string(model.RoleOf(dev.Role))}
 
 	caps, err := deviceCaps(dev)
 	if err != nil {
@@ -87,7 +88,7 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 
 	r := reconcile.New(d.Store)
 	plan, err := r.PlanDevice(ctx, c, site, model.Device{
-		ID: dev.ID, Name: dev.Name, Role: dev.Role,
+		ID: dev.ID, Name: dev.Name, Role: model.RoleOf(dev.Role),
 	}, caps)
 	if err != nil {
 		p.Error = err.Error()
@@ -236,7 +237,7 @@ func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.De
 
 		r := reconcile.New(d.Store)
 		plan, err := r.PlanDevice(ctx, c, site, model.Device{
-			ID: dev.ID, Name: dev.Name, Role: dev.Role,
+			ID: dev.ID, Name: dev.Name, Role: model.RoleOf(dev.Role),
 		}, caps)
 		if err != nil {
 			return err
@@ -416,7 +417,8 @@ func touchesTraversal(p *reconcile.DevicePlan) bool {
 func applyOrder(devices []*store.Device) []*store.Device {
 	out := append([]*store.Device(nil), devices...)
 	sort.SliceStable(out, func(i, j int) bool {
-		gi, gj := out[i].Role == "gateway", out[j].Role == "gateway"
+		gi := model.RoleOf(out[i].Role).Routes()
+		gj := model.RoleOf(out[j].Role).Routes()
 		if gi != gj {
 			return !gi
 		}

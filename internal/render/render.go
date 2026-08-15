@@ -195,6 +195,27 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		rep.Omissions = append(rep.Omissions, oms...)
 	}
 
+	// A role that does not publish WLANs gets none, even where the hardware
+	// could carry them and the site model asks for them.
+	//
+	// This is the point of the role rather than an edge case. An old router
+	// repurposed as a switch almost always still has radios, and "has radios"
+	// is not "should be broadcasting". Before roles were a closed vocabulary
+	// this branch did not exist: a device adopted as a switch was an access
+	// point in every respect that mattered, silently.
+	if !dev.Role.Wireless() {
+		for _, w := range site.WLANsFor(dev.ID) {
+			rep.Omissions = append(rep.Omissions, Omission{
+				WLAN: w.SSID,
+				Reason: fmt.Sprintf("this device's role is %q, which does not "+
+					"publish WLANs (%s). Change the role, or take it out of the "+
+					"AP group, depending on which one is wrong",
+					dev.Role, dev.Role.Describe()),
+			})
+		}
+		return doc, rep, nil
+	}
+
 	radios := radiosByBand(caps)
 	for _, base := range site.WLANsFor(dev.ID) {
 		// Per-device overrides are folded in here, on a copy. Mutating the site

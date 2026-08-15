@@ -245,6 +245,11 @@ export interface Dashboard {
   series_count: number
 }
 
+/** What a device is for. A closed vocabulary — the API refuses anything else
+ *  rather than storing it, because the role decides what gets sent to the
+ *  device and a typo used to mean "silently an access point". */
+export type DeviceRole = 'gateway' | 'ap' | 'switch'
+
 export interface AdoptResult {
   device_id: number
   mac: string
@@ -540,7 +545,7 @@ export const api = {
     password: string
     scheme?: 'http' | 'https'
     port?: number
-    role?: string
+    role?: DeviceRole
   }) => post<AdoptResult>('/devices/adopt', req),
   unadopt: (id: number, req?: { username?: string; password?: string; force?: boolean }) =>
     post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),

@@ -142,7 +142,7 @@ func (g APGroup) Contains(deviceID int64) bool {
 type Device struct {
 	ID   int64
 	Name string
-	Role string // gateway|ap|switch
+	Role Role
 }
 
 // Site is the whole desired state.

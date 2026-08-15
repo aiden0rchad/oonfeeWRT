@@ -13,6 +13,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/deploy"
 	"github.com/aiden0rchad/oonfeewrt/internal/adoption"
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
@@ -39,6 +40,15 @@ const adoptTimeout = 90 * time.Second
 func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, adoptTimeout)
 	defer cancel()
+
+	// Before touching the device: an unrecognised role is rejected here rather
+	// than stored verbatim. It used to be stored, and compared later with an
+	// exact string match, so "Gateway" adopted a router as an access point —
+	// no addressing, no DHCP, no firewall zone, and nothing anywhere saying so.
+	role, err := model.ParseRole(req.Role)
+	if err != nil {
+		return nil, err
+	}
 
 	https := req.Scheme == "https"
 	host := req.Host
@@ -126,7 +136,7 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	now := time.Now().Unix()
 	dev := &store.Device{
 		MAC: mac, Host: req.Host, Port: req.Port, Name: name,
-		Role: req.Role, CertFP: res.CertFP,
+		Role: string(role), CertFP: res.CertFP,
 		AdoptedAt: &now, CredEnc: blob,
 		Class: string(res.Caps.Class), CapsJSON: string(caps),
 		FWRelease: res.Caps.Board.Release,

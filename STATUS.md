@@ -321,6 +321,7 @@ the useful part — the code is in git either way.
 | §5j | Re-probing — and the difference between losing a feature and losing sight of it |
 | §5k | What diffing two probes found in the probe itself |
 | §5l | Column reorder, and getting UI logic under a check without a test runner |
+| §5m | **Hardware breadth** — the stated direction, what it needs, and what assumed otherwise |
 
 ### 5a. What discovery corrected
 
@@ -914,6 +915,81 @@ Rules worth keeping, each of which the checks pin down:
 The picker's ◀ ▶ arrows are not a fallback for the drag — they are the only
 path that works without a mouse, and the only one that can move a *hidden*
 column, which dragging cannot because there is no header to grab.
+
+### 5m. Hardware breadth: the direction, and the audit
+
+**The stated goal**, 2026-08-14: support as much hardware as possible —
+whatever old router is lying around, flashed with OpenWrt and adopted off the
+network the way a UniFi device is, working as an access point, a switch, or a
+bridge/mesh node with switch support. So anyone can extend their network with
+hardware they already own.
+
+That reframes several things that looked settled. This is the audit.
+
+#### What already generalises
+
+- **Poll cadence is not class-dependent.** One conservative default (60 s) for
+  everything, plus adaptive widening when a device reports it is busy. The
+  DEVICE-BUDGET ceiling is applied to every device rather than computed per
+  class, which is the right shape for unknown hardware — a device nobody has
+  measured is not polled harder than one that has been.
+- **Capability probing is three-state and now structurally cannot invent an
+  absence** (§5k). This matters far more with varied hardware than with one
+  reference device: everything the controller offers is gated on what the probe
+  demonstrated, so a driver nobody has seen degrades to "we could not tell"
+  rather than to a wrong claim.
+- **Discovery fingerprints on `ubus list`**, which any OpenWrt with rpcd
+  answers. No model list to maintain.
+
+#### Fixed here: the role was free text
+
+`Role` was a string, stored exactly as the API received it and compared with
+`dev.Role != "gateway"`. Three consequences, all silent:
+
+- `"Gateway"` is not `"gateway"`, so the obvious capitalisation adopted a router
+  as an access point — no address, no DHCP, no firewall zone, no forwarding.
+- A typo did the same, and the only clue was a preview that did less than
+  expected.
+- **`"switch"` was accepted and then never consulted.** A device adopted as a
+  switch was an access point in every respect that mattered, and would happily
+  be sent WLANs.
+
+It is a closed vocabulary now (`internal/model/role.go`), refused at the API
+boundary before anything contacts the device, normalised on the way out of the
+database, and the renderer asks it what it licenses rather than comparing
+strings. A non-wireless role gets no WLANs even where the hardware could carry
+them and the site model asks — with an omission naming *both* ways out, since
+either the role or the AP-group membership is wrong and the controller cannot
+tell which.
+
+**The Adopt screen had no role field at all**, which made a gateway impossible
+to adopt from the UI. It has one now, defaulting to access point — the role
+that changes least about a device.
+
+#### What is still missing, in the order it matters
+
+1. **Bridge and mesh are not modelled.** `Roles` is gateway/ap/switch. The goal
+   names "AP bridge mesh with switch support", which is at least two more
+   things: a WDS/relay bridge, and 802.11s mesh. Neither exists in the site
+   model, the renderer, or the capability probe — there is no `FeatMesh`, and
+   `iw` mesh support is not interrogated. This is the largest piece.
+2. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
+   everything else is `ClassUnknown`, which is *most* old routers: ath79,
+   ramips/MT7620, ipq40xx, bcm53xx, lantiq. The consequence today is mild
+   (Management Overhead reports no CPU figure, correctly, because none has been
+   measured) but a "support old hardware" controller that shrugs at ath79 is
+   not finished. **Adding targets to that map without measuring them would be a
+   guess wearing a measurement's clothes** — the fix is to measure, or to
+   surface the board target so an operator can see what the controller is
+   looking at.
+3. **Nothing enforces role against capability.** A device with no radios can be
+   adopted as an access point, and will simply render nothing. The probe knows
+   it has no radios; adoption could say so.
+4. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
+   every number in this project comes from class A. The budget harness runs
+   anywhere; it has only ever run against the comfortable class — and §5k is
+   the standing reminder that one reference device hides whole categories of
+   bug.
 
 ---
 

@@ -824,3 +824,64 @@ func TestPlanMatchesAgainstFlattenedLists(t *testing.T) {
 		t.Errorf("a changed port list produced %d op(s), want 1", len(ops))
 	}
 }
+
+// A role that does not publish WLANs gets none, even where the hardware could
+// carry them and the site model asks for them.
+//
+// This is what the role is FOR. An old router repurposed as a switch almost
+// always still has radios, and "has radios" is not "should be broadcasting".
+// Before roles were a closed vocabulary this branch did not exist: a device
+// adopted as a switch was an access point in every respect that mattered.
+func TestASwitchIsSentNoWLANsEvenWithRadios(t *testing.T) {
+	doc, rep, err := Render(testSite(),
+		model.Device{ID: 7, Role: model.RoleSwitch}, dualBandCaps(), Existing{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range doc.Sections {
+		if s.Config == "wireless" {
+			t.Errorf("a switch was sent %s.%s", s.Config, s.Name)
+		}
+	}
+	if len(rep.Omissions) == 0 {
+		t.Fatal("nothing explained why the WLANs are missing; a silently empty " +
+			"plan is the defect this replaced")
+	}
+	// The message has to name both ways out, because either the role or the
+	// group membership is wrong and the controller cannot tell which. Searched
+	// rather than indexed: the network omissions come first and are unrelated.
+	var msg string
+	for _, om := range rep.Omissions {
+		if strings.Contains(om.Reason, "role") {
+			msg = om.Reason
+		}
+	}
+	if msg == "" {
+		t.Fatalf("no omission explains the role: %+v", rep.Omissions)
+	}
+	for _, want := range []string{"switch", "role", "AP group"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the omission %q does not mention %q", msg, want)
+		}
+	}
+}
+
+// And the roles that do publish still do.
+func TestAnAccessPointStillGetsItsWLANs(t *testing.T) {
+	for _, role := range []model.Role{model.RoleAP, model.RoleGateway, ""} {
+		doc, _, err := Render(testSite(),
+			model.Device{ID: 7, Role: role}, dualBandCaps(), Existing{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wireless := 0
+		for _, s := range doc.Sections {
+			if s.Config == "wireless" {
+				wireless++
+			}
+		}
+		if wireless == 0 {
+			t.Errorf("role %q rendered no wireless sections", role)
+		}
+	}
+}

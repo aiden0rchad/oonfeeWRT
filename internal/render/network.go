@@ -150,7 +150,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		Lists: map[string][]string{"ports": tagged},
 	})
 
-	if dev.Role != "gateway" {
+	if !dev.Role.Routes() {
 		// An AP stops here. The VLAN exists on its bridge so tagged frames pass
 		// through to the gateway; addressing, DHCP and firewalling are the
 		// gateway's job and doing them twice is worse than not doing them.

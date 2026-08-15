@@ -1278,3 +1278,34 @@ func TestEventFilterAppliesBeforeTheLimit(t *testing.T) {
 			"absent; the filter ran after the LIMIT")
 	}
 }
+
+// An unrecognised role is refused at the API, before anything reaches a device.
+//
+// It used to be stored verbatim and compared later with an exact string match,
+// so "Gateway" adopted a router as an access point: no addressing, no DHCP, no
+// firewall zone, and nothing anywhere saying why. The rejection has to name the
+// valid roles, because an operator who typed "router" needs to be told the word
+// is "gateway".
+func TestAdoptRefusesAnUnknownRole(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	e := &stubEnroller{}
+	h.srv.Enroll = e
+
+	w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
+		"host": "192.0.2.1", "username": "root", "password": "x", "role": "router",
+	})
+	if w.Code == http.StatusOK {
+		t.Fatal("an unknown role was accepted")
+	}
+	body := w.Body.String()
+	for _, want := range []string{"gateway", "ap", "switch"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the rejection %q does not name %q as a valid role", body, want)
+		}
+	}
+	if len(e.adopted) != 0 {
+		t.Error("the device was contacted despite an invalid role; validation " +
+			"must happen before anything is written")
+	}
+}

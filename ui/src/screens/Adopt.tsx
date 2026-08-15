@@ -2,6 +2,27 @@ import { useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { AdoptResult } from '../lib/api'
 import { Button, Field, Banner, Card, Prop } from '../components/ui'
+import type { DeviceRole } from '../lib/api'
+
+/** Kept in step with internal/model/role.go, which is where the rule lives:
+ *  an unrecognised role is refused by the API rather than stored. */
+const ROLES: { value: DeviceRole; describe: string }[] = [
+  {
+    value: 'gateway',
+    describe:
+      'Routes between networks and to the internet. Gets addressing, DHCP and firewall rules.',
+  },
+  {
+    value: 'ap',
+    describe:
+      'Publishes WLANs and passes tagged traffic through. Does not route or serve DHCP.',
+  },
+  {
+    value: 'switch',
+    describe:
+      'Passes tagged traffic only. No WLANs are sent to it even if it has radios.',
+  },
+]
 import { Discover } from './Discover'
 
 /**
@@ -23,6 +44,10 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [username, setUsername] = useState('root')
   const [password, setPassword] = useState('')
   const [scheme, setScheme] = useState<'http' | 'https'>('http')
+  // Defaults to an access point: the role that changes least about a device.
+  // Defaulting to gateway would hand an unlabelled router addressing, DHCP and
+  // firewall rules nobody asked for.
+  const [role, setRole] = useState<DeviceRole>('ap')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<AdoptResult | null>(null)
@@ -33,7 +58,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     setErr('')
     setBusy(true)
     try {
-      const res = await api.adopt({ host, name, username, password, scheme })
+      const res = await api.adopt({ host, name, username, password, scheme, role })
       setResult(res)
       // The password is gone from this component the moment it is not needed.
       setPassword('')
@@ -132,6 +157,41 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
+          {/* The role decides what the controller will and will not send to
+              this device, so it is asked at adoption rather than assumed. The
+              screen had no field for it at all, which made a gateway
+              impossible to adopt from the UI — and setting it through the API
+              was worse, because an unrecognised value was stored verbatim and
+              silently behaved as an access point. */}
+          <label style={{ display: 'block' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+              Role
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {ROLES.map((r) => (
+                <button
+                  key={r.value}
+                  type="button"
+                  title={r.describe}
+                  onClick={() => setRole(r.value)}
+                  style={{
+                    fontSize: 12,
+                    padding: '4px 10px',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    border: '1px solid var(--border-strong)',
+                    background: role === r.value ? 'var(--accent-soft)' : 'transparent',
+                    color: 'var(--text-primary)',
+                  }}
+                >
+                  {r.value}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              {ROLES.find((r) => r.value === role)?.describe}
+            </div>
+          </label>
           <label style={{ display: 'block' }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
               Protocol
