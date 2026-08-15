@@ -1,36 +1,26 @@
 /**
- * Assertions for columns.ts.
+ * The rules behind column ordering and stored preferences.
  *
- * Not a test suite — the UI has no test runner, and adding one is a toolchain
- * decision nobody has made. This is the next best thing and needs nothing new:
- * plain TypeScript with no imports beyond the module under test, compiled by
- * the repo's own tsc and run under node.
+ * These started life as `columns.check.ts`, a script run under plain node
+ * because the UI had no test runner. It has one now, and keeping two parallel
+ * ways to test the same code is how the two stop agreeing — so this is the
+ * same assertions, in the runner.
  *
- *   npm --prefix ui run check:columns
- *
- * It covers the rules that are easy to get wrong and invisible when they are:
- * the asymmetry of moving right versus left, hidden columns keeping their
- * place, and old stored preferences surviving a format change.
+ * They cover what is easy to get wrong and invisible when it is: the asymmetry
+ * of moving right versus left, hidden columns keeping their place, and old
+ * stored preferences surviving a format change.
  */
-import { moveColumn, orderColumns, parsePrefs } from './columns.js'
-
-let failures = 0
+import { expect, it } from 'vitest'
+import { moveColumn, orderColumns, parsePrefs } from './columns'
 
 function check(name: string, got: unknown, want: unknown) {
-  const a = JSON.stringify(got)
-  const b = JSON.stringify(want)
-  if (a !== b) {
-    failures++
-    console.error(`FAIL ${name}\n  got  ${a}\n  want ${b}`)
-  } else {
-    console.log(`ok   ${name}`)
-  }
+  it(name, () => expect(got).toEqual(want))
 }
 
 const cols = [{ key: 'a' }, { key: 'b' }, { key: 'c' }, { key: 'd' }]
 const keys = (cs: { key: string }[]) => cs.map((c) => c.key)
 
-// --- orderColumns -----------------------------------------------------------
+// --- orderColumns ---
 
 check('no saved order keeps the built-in one', keys(orderColumns(cols, [])), [
   'a',
@@ -155,11 +145,3 @@ check('a JSON scalar is not preferences', parsePrefs('42'), {
   hidden: [],
   order: [],
 })
-
-// Throwing rather than process.exit: `process` needs @types/node, and adding a
-// dependency to report a failure would defeat the point of a check that runs
-// on the toolchain already here. An uncaught throw is a non-zero exit anyway.
-if (failures > 0) {
-  throw new Error(`${failures} column check(s) failed`)
-}
-console.log('\nall column checks passed')

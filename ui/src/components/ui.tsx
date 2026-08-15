@@ -741,9 +741,7 @@ export function useColumnPrefs(
   gridKey: string,
 ): [ColumnPrefs, (v: ColumnPrefs) => void] {
   const storageKey = `oonfee.columns.${gridKey}`
-  const [prefs, setPrefs] = useState<ColumnPrefs>(() =>
-    parsePrefs(localStorage.getItem(storageKey)),
-  )
+  const [prefs, setPrefs] = useState<ColumnPrefs>(() => parsePrefs(read(storageKey)))
   const set = (v: ColumnPrefs) => {
     setPrefs(v)
     try {
@@ -753,6 +751,24 @@ export function useColumnPrefs(
     }
   }
   return [prefs, set]
+}
+
+/**
+ * Read one key, tolerating a localStorage that is not there.
+ *
+ * The guard is around the ACCESS, not just the parse. Reaching for
+ * localStorage throws outright in some browsers — Safari's private mode
+ * historically, and any profile with site data blocked — and this runs inside a
+ * useState initialiser, so an exception does not degrade a preference: it
+ * unmounts the screen. A grid that forgets which columns you hid is a small
+ * annoyance; a blank page is not.
+ */
+function read(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
 }
 
 /** Slide-over detail panel — 370px, enters from the right (UI-SPEC §1). */

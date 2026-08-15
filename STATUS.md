@@ -28,12 +28,10 @@ To run the tests:
 go test ./internal/...
 ```
 
-The UI has no test runner. The one piece of it with rules rather than rendering —
-column ordering and preference parsing — lives in `ui/src/lib/columns.ts` with
-no React import, so it compiles and runs on the toolchain already here:
+And the UI:
 
 ```bash
-npm --prefix ui run check:columns
+npm --prefix ui test
 ```
 
 The hardware suite needs the device and a credential — §7 explains the rotation
@@ -267,14 +265,14 @@ most-worth-doing first.
    (§5i, §5j) and verified from unit tests up through the real device, but
    nobody has *looked* at either. Every UI defect this project has found was
    found by looking — see the standing gap below.
-2. **Decide whether the UI gets a test runner.** This is a toolchain decision
-   and nobody has made it, so nothing here has. `vitest` is the natural pairing
-   with vite and would cover the component behaviour that `check:columns`
-   cannot — see §5l for what the stopgap does and does not reach. Until then,
-   every UI change needs a human at a browser, which is why item 1 keeps
-   appearing.
-3. **Nothing else pressing.** The rest of §5's list is hardware- or
-   package-blocked (below).
+2. **Broaden hardware support** — the stated direction: any old router flashed
+   with OpenWrt, adopted from the network like a UniFi device, working as an AP,
+   a switch, or a bridge/mesh node. §5m is the audit of what that needs and what
+   currently assumes otherwise. It is the largest remaining piece of work and
+   most of it needs no hardware to start.
+3. **Extend the UI tests to the screens.** §5l set the runner up and covered the
+   shared grid. `Clients`, `Devices` and `Settings` have none, and they are
+   where the fetch-and-filter logic now lives.
 
 ### Blocked, and by what
 
@@ -865,16 +863,39 @@ feature is small; what it ran into is not.
 **There is no way to click anything here.** Every UI defect this project has
 found was found by a human looking at a screen, and shipping a drag interaction
 that nobody has dragged is exactly the pattern that produced a sticky header
-which had never once been sticky. So the parts with *rules* were separated from
-the parts with *rendering*: `ui/src/lib/columns.ts` holds the ordering and the
-preference parsing, imports nothing, and is compiled and run by
-`npm --prefix ui run check:columns` — the repo's own `tsc`, then `node`. Twenty
-assertions against the real shipped code, no new dependency.
+which had never once been sticky.
 
-What that reaches: the move arithmetic, the storage-format migration, and the
-tolerance for junk in `localStorage`. What it does not reach: whether a drag
-actually starts, whether the arrows are where you would look for them, whether
-any of it is usable. That still needs a person.
+So the UI got a test runner: **vitest**, with **happy-dom** and
+`@testing-library/react`. Vitest because it reuses the existing vite config and
+TypeScript setup rather than needing a parallel one; happy-dom over jsdom for a
+materially smaller dependency tree, which matters in a public repo where every
+dev dependency is surface. Both packages shipped with critical advisories at the
+versions npm resolved first — `npm audit` is worth running after any install
+here, and the pinned versions are the patched ones.
+
+**The runner found a real bug within minutes of existing.** happy-dom provides a
+`localStorage` object with none of the Storage methods on it, which surfaced
+that `useColumnPrefs` read `localStorage.getItem` outside a `try`. Reaching for
+localStorage *throws* in some browsers — Safari private mode historically, any
+profile with site data blocked — and that read runs inside a `useState`
+initialiser. So the failure mode was not "forgets which columns you hid", it was
+"blank screen". The guard now wraps the access, not just the parse.
+
+It also cost an hour to a hook-ordering trap worth knowing: **vitest runs
+`afterEach` in reverse registration order**, so a teardown hook that throws
+stops the ones registered before it from running at all. A broken localStorage
+teardown therefore prevented `cleanup` from unmounting, and every test after the
+first saw the previous test's DOM — producing failures that pointed everywhere
+except at the cause.
+
+38 tests now. What they reach: windowing engaging on a large grid, required
+columns resisting being hidden, saved order and hidden-column positions
+surviving a remount, a drop not also sorting the column it landed on, and
+`Unknown` staying distinguishable from zero. What they do **not** reach: row
+height and the sticky header, because happy-dom has no layout engine and
+`getBoundingClientRect` returns zeros — the two defects §5b found by eye are
+precisely the two this cannot catch. And nothing here says whether a drag
+actually starts or whether any of it is usable. That still needs a person.
 
 Rules worth keeping, each of which the checks pin down:
 

@@ -16,4 +16,15 @@ export default defineConfig({
     // `npm run dev` talks to a locally running daemon.
     proxy: { '/api': 'http://127.0.0.1:8080' },
   },
+  test: {
+    // happy-dom rather than jsdom: same job, materially smaller dependency
+    // tree, and this repo is public — every dev dependency is surface.
+    environment: 'happy-dom',
+    globals: true,
+    setupFiles: ['./src/test-setup.ts'],
+    // Only real test files. `*.check.ts` is the no-runner stopgap that predates
+    // this and runs under plain node; picking it up here would run its
+    // assertions twice and report zero tests for the file.
+    include: ['src/**/*.test.{ts,tsx}'],
+  },
 })

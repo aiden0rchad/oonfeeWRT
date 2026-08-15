@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "check:columns": "tsc src/lib/columns.ts src/lib/columns.check.ts --module nodenext --target es2022 --strict --outDir .check && node .check/columns.check.js"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "react": "^19.2.0",
@@ -15,10 +16,13 @@
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "@testing-library/react": "16.3.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "happy-dom": "20.11.2",
     "typescript": "^5.9.0",
-    "vite": "^7.1.0"
+    "vite": "^7.1.0",
+    "vitest": "3.2.7"
   }
 }
