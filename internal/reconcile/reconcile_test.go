@@ -529,3 +529,135 @@ func TestFlattenFormatsNumbersWithoutADecimalPoint(t *testing.T) {
 			"the string we applied and would report drift on every poll", got["n"])
 	}
 }
+
+// meshCaps is caps() with 802.11s available, which the mesh renderer gates on.
+func meshCaps() *capability.Registry {
+	r := caps()
+	r.Set(capability.FeatMesh, capability.Present)
+	return r
+}
+
+// siteMesh is a site carrying one mesh and no WLAN, with ids distinct from the
+// other tests in this package — they share one mock process, so a section an
+// earlier test confirmed would otherwise be found by a later one.
+func siteMesh(deviceID int64, meshID int) model.Site {
+	s := baseSite(deviceID)
+	s.WLANs = nil
+	s.Meshes = []model.Mesh{{
+		ID: meshID, MeshID: fmt.Sprintf("backhaul%d", meshID),
+		NetworkID: 1, GroupID: 1, Band: model.Band5G,
+		Key: "a-mesh-passphrase", Enabled: true,
+	}}
+	return s
+}
+
+// A mesh applies and is recorded as ours, like any other section we write.
+//
+// The whole apply path had never carried one: mesh landed as model, renderer
+// and storage, verified by preview. Preview reads; this is what writes.
+func TestAMeshAppliesAndIsRecordedAsOurs(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	p, err := r.PlanDevice(ctx, c, siteMesh(dev.ID, 41), model.Device{ID: dev.ID}, meshCaps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	if p.Blocked() {
+		t.Fatalf("unexpected conflicts: %v", p.Report.Conflicts)
+	}
+	if p.Empty() {
+		t.Fatal("a mesh on a fresh device produced no plan")
+	}
+
+	res, err := r.Apply(ctx, c, dev.ID, p, func(context.Context, *ubus.Client) error { return nil })
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.Outcome != applyengine.Applied {
+		t.Fatalf("want Applied, got %s", res)
+	}
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned) != 1 {
+		t.Fatalf("want one owned section, got %d: %+v", len(owned), owned)
+	}
+	if !strings.Contains(owned[0].Section, "_mesh41_") {
+		t.Errorf("the owned section is %q, not the mesh", owned[0].Section)
+	}
+	if owned[0].Config != "wireless" {
+		t.Errorf("mesh recorded under config %q", owned[0].Config)
+	}
+}
+
+// Applying an unchanged mesh twice must do nothing the second time.
+//
+// A mesh section carries a passphrase, and a plan that never converges would
+// rewrite it on every apply — churn on the device for no change, on the one
+// kind of section where a rewrite briefly drops the interface.
+func TestASecondMeshApplyIsANoOp(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	first, err := r.PlanDevice(ctx, c, siteMesh(dev.ID, 42), model.Device{ID: dev.ID}, meshCaps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, first,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := r.PlanDevice(ctx, c, siteMesh(dev.ID, 42), model.Device{ID: dev.ID}, meshCaps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Empty() {
+		t.Errorf("re-planning an unchanged mesh produced %d op(s): %+v",
+			len(again.Plan.Ops), again.Plan.Ops)
+	}
+}
+
+// Removing a mesh from the model removes it from the device.
+//
+// Prune is what makes a delete mean anything: the model no longer wants the
+// section, we own it, so it goes. Without this a deleted mesh keeps running on
+// every AP that carries it — a backhaul nobody can see in the controller.
+func TestDeletingAMeshPrunesItFromTheDevice(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	p, err := r.PlanDevice(ctx, c, siteMesh(dev.ID, 43), model.Device{ID: dev.ID}, meshCaps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	// The mesh is gone from the site model. Everything else is unchanged.
+	empty := baseSite(dev.ID)
+	empty.WLANs = nil
+	gone, err := r.PlanDevice(ctx, c, empty, model.Device{ID: dev.ID}, meshCaps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed bool
+	for _, op := range gone.Plan.Ops {
+		if op.Kind == applyengine.OpDelete && strings.Contains(op.Section, "_mesh43_") {
+			removed = true
+		}
+	}
+	if !removed {
+		t.Fatalf("deleting the mesh planned no removal: %+v", gone.Plan.Ops)
+	}
+}

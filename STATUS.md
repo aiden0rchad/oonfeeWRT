@@ -1118,6 +1118,13 @@ is that the plan is built from what the device actually reported: real radios,
 real wpad build, real existing config. Result: `oowrt_mesh1_radio0` planned,
 flagged as writing a key, with the passphrase itself kept out of the preview.
 
+**The apply and prune path is covered against the mock**, which the preview
+could not reach: a mesh applies and is recorded as ours, a second apply of an
+unchanged mesh is a no-op, and deleting it from the model plans its removal.
+The no-op matters more here than for a WLAN — a mesh section carries a
+passphrase, so a plan that never converged would rewrite it on every apply, and
+a rewrite briefly drops the interface. Which on a backhaul is the link.
+
 ### 5o. What mesh support broke in the collector
 
 Adding a feature creates the conditions for bugs elsewhere, so the question
