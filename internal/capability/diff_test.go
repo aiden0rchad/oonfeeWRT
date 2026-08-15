@@ -224,3 +224,77 @@ func TestIdleChannelDoesNotProveTheAirtimeSplitIsBroken(t *testing.T) {
 }
 
 var errNoSecondSample = errors.New("second sample failed")
+
+// A radio that is switched off says nothing about whether its driver can
+// survey.
+//
+// Same defect as the airtime split, found by auditing for it rather than by
+// tripping over it: `active_time == 0` fell through to an Absent default, so a
+// device with every radio disabled reported that its driver cannot do channel
+// utilization. Enabling a radio would then make the device appear to GAIN the
+// feature. The reference hardware never exercised it — both radios are up, and
+// one radio with active time is enough to set the device-wide state.
+func TestASwitchedOffRadioDoesNotProveTheDriverCannotSurvey(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		row  surveyRow
+		err  error
+		want surveyJudgement
+	}{
+		{"radio off", surveyRow{ActiveTime: 0}, nil, surveyIdle},
+		{"no rows at all", surveyRow{}, nil, surveyIdle},
+		{"counters running", surveyRow{ActiveTime: 5000, BusyTime: 900}, nil, surveyUsable},
+		// A real failure IS a determination: the driver was asked and could not.
+		{"driver failed", surveyRow{}, errNoSecondSample, surveyUnsupported},
+	} {
+		if got := judgeSurvey(tc.row, tc.err); got != tc.want {
+			t.Errorf("%s: judged %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The accumulator that makes the rule structural.
+//
+// Three features on the radio path had the same bug written three times: a
+// State initialised to Absent and at least one branch that reached the end
+// without demonstrating anything. This is that rule in one place, so the next
+// feature added to probeRadios cannot reintroduce it by omission.
+func TestVerdictNeverInventsAnAbsence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fill func(v *verdict)
+		want State
+	}{
+		{"nothing demonstrated, one radio could not tell",
+			func(v *verdict) { v.undecided() }, NotObservable},
+		{"nothing demonstrated, one check refused",
+			func(v *verdict) { v.refuse() }, NotObservable},
+		{"one radio has it",
+			func(v *verdict) { v.demonstrated(Present) }, Present},
+		{"one radio demonstrably lacks it",
+			func(v *verdict) { v.demonstrated(Absent) }, Absent},
+		// Present wins: one radio that has it settles the device.
+		{"one has it, another could not tell", func(v *verdict) {
+			v.demonstrated(Present)
+			v.undecided()
+		}, Present},
+		{"one has it, another lacks it", func(v *verdict) {
+			v.demonstrated(Absent)
+			v.demonstrated(Present)
+		}, Present},
+		// Evidence beats the absence of evidence.
+		{"one demonstrably lacks it, another could not tell", func(v *verdict) {
+			v.demonstrated(Absent)
+			v.undecided()
+		}, Absent},
+		// Nothing was recorded at all: the device reported no radios, so there
+		// is genuinely nothing here. Absent, not "re-probe your switch".
+		{"no radios at all", func(*verdict) {}, Absent},
+	} {
+		var v verdict
+		tc.fill(&v)
+		if got := v.state(); got != tc.want {
+			t.Errorf("%s: state = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

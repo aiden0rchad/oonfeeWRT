@@ -243,6 +243,50 @@ const (
 	splitBroken
 )
 
+// surveyJudgement is what one radio's survey call demonstrated about channel
+// utilization.
+type surveyJudgement int
+
+const (
+	// surveyIdle: the call answered and reported no active time. Almost always
+	// a radio that is not running — disabled, or up but never brought online.
+	// It says nothing about whether the driver can survey.
+	surveyIdle surveyJudgement = iota
+	// surveyUsable: counters are there and moving.
+	surveyUsable
+	// surveyRefused: the ACL blocked the call.
+	surveyRefused
+	// surveyUnsupported: the call answered with a real failure. That IS a
+	// determination — the driver was asked and could not.
+	surveyUnsupported
+)
+
+// judgeSurvey classifies one radio's survey read.
+//
+// The same three-way shape as judgeSplit, and for the same reason found the
+// same way. `active_time == 0` used to fall through to the caller's Absent
+// default, so a device whose radios were all disabled reported that its driver
+// cannot do channel utilization. A radio that is switched off has not
+// demonstrated anything about its driver, and the claim would flip back the
+// moment someone enabled it — which a re-probe would then report as the device
+// gaining a feature.
+//
+// It survived until now because the reference device has both radios up: one
+// radio with active time is enough to set the device-wide state, so the
+// hardware never exercised the path.
+func judgeSurvey(row surveyRow, err error) surveyJudgement {
+	switch {
+	case err != nil && isDenied(err):
+		return surveyRefused
+	case err != nil:
+		return surveyUnsupported
+	case row.ActiveTime > 0:
+		return surveyUsable
+	default:
+		return surveyIdle
+	}
+}
+
 // judgeSplit classifies a pair of survey samples.
 //
 // A function rather than an inline switch because the three outcomes are the
@@ -263,6 +307,59 @@ func judgeSplit(first, second surveyRow, err2 error) splitJudgement {
 	}
 }
 
+// verdict accumulates one feature's determination across several radios.
+//
+// It exists because three features on this path had the same bug, written three
+// times: a State variable initialised to Absent, and at least one branch that
+// could reach the end without demonstrating anything. The default then asserts
+// the device lacks a capability that was never actually tested — the collapse
+// of NotObservable into Absent that this package exists to prevent, and which
+// it is apparently easy to reintroduce one feature at a time.
+//
+// Encoding it once makes the rule structural rather than remembered: you cannot
+// accidentally get an Absent out of this without calling demonstrated(Absent).
+type verdict struct {
+	present      bool
+	absent       bool // some radio demonstrated it is not there
+	refused      bool // some radio's check was blocked
+	undetermined bool // some radio could not tell either way
+}
+
+func (v *verdict) demonstrated(s State) {
+	switch s {
+	case Present:
+		v.present = true
+	case Absent:
+		v.absent = true
+	}
+}
+
+func (v *verdict) refuse()    { v.refused = true }
+func (v *verdict) undecided() { v.undetermined = true }
+
+// state resolves the accumulated evidence.
+//
+// Present wins: one radio that demonstrably has the capability settles it for
+// the device. A demonstrated absence beats an inconclusive check, because it is
+// evidence and the other is not. Anything else that was tried but unresolved is
+// NotObservable.
+//
+// With nothing recorded at all the answer is Absent, which is the device that
+// reported no radios: there is genuinely nothing here to survey or control, and
+// telling an operator to re-probe a switch would be nonsense.
+func (v verdict) state() State {
+	switch {
+	case v.present:
+		return Present
+	case v.absent:
+		return Absent
+	case v.refused, v.undetermined:
+		return NotObservable
+	default:
+		return Absent
+	}
+}
+
 // probeRadios records per-radio capability and the mwlwifi quirks.
 func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	var devs struct {
@@ -276,25 +373,16 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		return
 	}
 
-	surveyOK, splitOK := Absent, Absent
-	surveyUnreachable := false
-	// The airtime split is decided by watching two counters advance, which some
-	// probes cannot decide at all: on an idle channel busy_time does not move,
-	// so nothing is demonstrated either way. splitOK starts at Absent, so
-	// without these two flags an inconclusive probe ASSERTS the driver cannot
-	// supply the split — the exact collapse of NotObservable into Absent this
-	// package exists to prevent, and the branch below even says "this sample
-	// proves nothing" while leaving the default in place.
-	//
-	// Found by diffing two probes: on a driver whose counters work, this makes
-	// the feature Present when the channel happened to be busy and Absent when
-	// it happened to be quiet, so re-probing reports the device gaining and
-	// losing airtime-split at random. The reference device hides it — mwlwifi's
-	// counters are genuinely broken, so it is stably Absent for a real reason.
-	splitDecided := false // some radio gave a real answer, either way
-	splitUndecidable := false
+	// Three features, one accumulator each. All three previously defaulted to
+	// Absent and all three had a path that reached the end without
+	// demonstrating anything — see verdict.
+	var survey, split, hostapd verdict
+
 	for _, dev := range devs.Devices {
-		radio := Radio{Device: dev, SurveyUsest: Absent}
+		// SurveyUsest starts Unknown, not Absent: the switch below sets it from
+		// what the call actually showed, and a default of Absent is a claim
+		// about a radio nobody has asked yet.
+		radio := Radio{Device: dev}
 
 		info, infoErr := readInfo(ctx, c, dev)
 		if infoErr == nil {
@@ -311,19 +399,39 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		// "interference" label, which is exactly the confidently-wrong number
 		// UI-SPEC §7 forbids.
 		first, surveyErr := readSurvey(ctx, c, dev)
-		if surveyErr != nil {
+		verdictSurvey := judgeSurvey(first, surveyErr)
+		// Whether this radio was actually running, which several checks below
+		// need in order to tell "not there" from "not switched on".
+		radioLive := verdictSurvey == surveyUsable
+
+		switch verdictSurvey {
+		case surveyUsable:
+			survey.demonstrated(Present)
+			radio.SurveyUsest = Present
+		case surveyRefused:
 			// Refused is not "this driver has no survey". Record why, and let
-			// the aggregate below stay NotObservable rather than Absent.
-			if isDenied(surveyErr) {
-				surveyUnreachable = true
-				r.Note("%s: iwinfo.survey denied; channel utilization "+
-					"undetermined rather than absent (%v)", dev, surveyErr)
-			}
-		} else {
-			if first.ActiveTime > 0 {
-				surveyOK = Present
-				radio.SurveyUsest = Present
-			}
+			// the aggregate stay NotObservable rather than Absent. The split is
+			// read from the same call, so it is equally unreachable.
+			survey.refuse()
+			split.refuse()
+			radio.SurveyUsest = NotObservable
+			r.Note("%s: iwinfo.survey denied; channel utilization "+
+				"undetermined rather than absent (%v)", dev, surveyErr)
+		case surveyUnsupported:
+			// Asked and could not answer: a real determination.
+			survey.demonstrated(Absent)
+			radio.SurveyUsest = Absent
+			r.Note("%s: iwinfo.survey failed (%v); channel utilization is not "+
+				"available from this driver", dev, surveyErr)
+		case surveyIdle:
+			survey.undecided()
+			radio.SurveyUsest = NotObservable
+			r.Note("%s: reported no active time, so nothing was demonstrated "+
+				"about channel utilization here. The usual cause is a radio "+
+				"that is switched off — which is not the same as a driver "+
+				"that cannot report it", dev)
+		}
+		if surveyErr == nil {
 			if first.Noise > 0 {
 				r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "noise",
 					Reason: "reported unsigned (161 for -95); iwinfo.info reports " +
@@ -333,7 +441,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			absurdTimers := first.RxTime > 1<<40 || first.TxTime > 1<<40
 			if absurdTimers {
 				// A real determination: the counters are visibly uninitialised.
-				splitDecided = true
+				split.demonstrated(Absent)
 				r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "rx_time/tx_time",
 					Reason: "uninitialised on this driver (absurd u64); the airtime split is not computable"})
 			}
@@ -347,57 +455,76 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			if !absurdTimers {
 				switch judgeSplit(first, second, err2) {
 				case splitUndemonstrated:
-					splitUndecidable = true
+					split.undecided()
 				case splitBroken:
-					splitDecided = true
 					// Present, typed, plausible — and not tracking reality. On
 					// mwlwifi rx_time never moves and tx_time crept 2ms while
 					// busy_time advanced ~3000ms, which would make the split a
 					// rounding error masquerading as a measurement.
+					split.demonstrated(Absent)
 					r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "rx_time/tx_time",
 						Reason: "do not track busy time (rx+tx advanced <10% of busy); the airtime split is not computable"})
 				case splitUsable:
-					splitOK = Present
-					splitDecided = true
+					split.demonstrated(Present)
 				}
 			}
 		}
 
 		// hostapd is the cheap per-AP source; its presence also gates the
 		// per-client reconnect/block actions.
-		if err := c.Call(ctx, "hostapd."+dev, "get_status", nil, nil); err == nil {
-			r.Set(FeatHostapdControl, Present)
-		} else if r.State(FeatHostapdControl) == Unknown {
-			if isDenied(err) {
-				r.Set(FeatHostapdControl, NotObservable)
-			} else {
-				r.Set(FeatHostapdControl, Absent)
-			}
+		//
+		// The `hostapd.<dev>` object only exists while a BSS is running on that
+		// radio, so a missing object has two completely different causes:
+		// hostapd is not managing this device, or the radio is switched off.
+		// The error looks identical. radioLive is what separates them — a radio
+		// that reported active time is up, so a missing object then really does
+		// mean no hostapd. Without that distinction, a device with its radios
+		// disabled reports the per-client controls as unavailable, and enabling
+		// a radio makes it look like the device gained a feature.
+		switch err := c.Call(ctx, "hostapd."+dev, "get_status", nil, nil); {
+		case err == nil:
+			hostapd.demonstrated(Present)
+		case isDenied(err):
+			hostapd.refuse()
+		case radioLive:
+			hostapd.demonstrated(Absent)
+		default:
+			hostapd.undecided()
 		}
 
 		r.Radios = append(r.Radios, radio)
 	}
 
-	if surveyUnreachable && surveyOK != Present {
-		surveyOK, splitOK = NotObservable, NotObservable
+	// A radio whose survey could not be read tells us nothing about the split
+	// either: they come from the same call.
+	if survey.undetermined {
+		split.undecided()
 	}
-	// Nothing demonstrated it either way, and something tried: undetermined,
-	// not absent. The UI gates the same on both — Buildable() accepts only
-	// Present — so this changes no screen. It changes what the device record
-	// CLAIMS, which is what a re-probe diff reads and what an operator is told.
-	if splitOK == Absent && !splitDecided && splitUndecidable {
-		splitOK = NotObservable
-		r.Note("the airtime split could not be determined: the channel was idle " +
-			"for the whole sample, so the counters demonstrated nothing either " +
-			"way. This is not a driver limitation — re-probe while there is " +
-			"traffic to settle it")
-	}
+
+	surveyOK := survey.state()
+	splitOK := split.state()
+
 	r.Set(FeatSurvey, surveyOK)
+	r.Set(FeatHostapdControl, hostapd.state())
+
+	// These notes are the operator-facing half of the distinction above. Both
+	// states gate the same — Buildable accepts only Present — so what changes is
+	// what the record CLAIMS, and what someone is told to do about it.
+	if surveyOK == NotObservable && !survey.refused {
+		r.Note("channel utilization could not be determined: no radio reported " +
+			"any active time. Enable a radio and re-probe — a switched-off " +
+			"radio demonstrates nothing about what its driver can do")
+	}
 	// A recorded quirk on these fields settles it for the whole device: one
 	// radio reporting a plausible-looking counter cannot license a metric the
 	// driver does not really supply.
 	if r.HasQuirk("iwinfo.survey", "rx_time/tx_time") {
 		splitOK = Absent
+	} else if splitOK == NotObservable && !split.refused {
+		r.Note("the airtime split could not be determined: the counters " +
+			"demonstrated nothing either way, usually because the channel was " +
+			"idle for the whole sample. This is not a driver limitation — " +
+			"re-probe while there is traffic to settle it")
 	}
 	r.Set(FeatAirtimeSplit, splitOK)
 	if splitOK != Present {

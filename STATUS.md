@@ -261,12 +261,10 @@ most-worth-doing first.
    found by looking — see the standing gap below.
 2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
-3. **Re-probe the other sampled determinations the way the airtime split now
-   is.** §5k found one feature whose state depended on whether the channel
-   happened to be busy. `FeatSurvey` is decided from a single `active_time > 0`
-   and the same question has not been asked of it, nor of the noise-stability
-   quirk, which is visibly non-deterministic across runs (it just does not
-   reach a feature).
+3. **Nothing pressing.** The rest of §5's list is hardware- or package-blocked
+   (below). If you want the highest-value non-blocked work, it is the browser
+   pass in item 1 — the API layers have tests and hardware coverage; the screens
+   have neither.
 
 ### Blocked, and by what
 
@@ -811,6 +809,34 @@ that happens to be busy, and an undetermined split records `NotObservable` with
 a note saying to re-probe while there is traffic. No screen changes: `Buildable`
 already accepted only `Present`. What changes is what the record *claims*, which
 is what a diff reads and what an operator is told.
+
+**Then the same bug twice more, found by looking for it.** Having seen the shape
+once, the other radio-derived features were audited rather than waited for:
+
+- **`FeatSurvey`** was decided by `active_time > 0` with the same `Absent`
+  default, so a device with every radio switched off reported that its driver
+  cannot do channel utilization — and enabling a radio would then look like the
+  device *gaining* a feature. The reference hardware could never show it: both
+  radios are up, and one radio with active time settles the device-wide state.
+- **`FeatHostapdControl`** was worse, because the two causes are genuinely
+  indistinguishable from the error alone. `hostapd.<dev>` only exists while a
+  BSS is running, so a missing object means either "hostapd is not managing
+  this radio" or "the radio is off". It now uses whether the radio reported
+  active time to tell them apart: a *running* radio with no hostapd object is a
+  real absence; a dead one demonstrates nothing.
+
+Three instances of one bug, written three times, is a structural problem rather
+than three mistakes. The rule is now a `verdict` accumulator — Present wins,
+demonstrated absence beats an inconclusive check, anything tried-but-unresolved
+is `NotObservable`, and you cannot get an `Absent` out of it without calling
+`demonstrated(Absent)`. A device that reports *no radios* still comes out
+`Absent`, which is right: there is nothing there to survey, and telling someone
+to re-probe their switch would be nonsense.
+
+The reference device reports exactly what it did before the change — survey
+present, split absent, hostapd-control present — which is the point. None of
+this was visible on hardware that has both radios up and a genuinely broken
+driver.
 
 **Also observed:** the reference device reported 2 quirks on one probe and 3 on
 the next. The extra one is `noise:stability`, which is decided by sampling the
