@@ -322,6 +322,7 @@ the useful part — the code is in git either way.
 | §5k | What diffing two probes found in the probe itself |
 | §5l | Column reorder, and getting UI logic under a check without a test runner |
 | §5m | **Hardware breadth** — the stated direction, what it needs, and what assumed otherwise |
+| §5n | 802.11s mesh — modelled as an interface mode, not a role |
 
 ### 5a. What discovery corrected
 
@@ -1025,13 +1026,16 @@ Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
 
 #### What is still missing, in the order it matters
 
-1. **Bridge and mesh are not modelled** — though mesh can now be *detected*.
-   `Roles` is gateway/ap/switch; the goal names "AP bridge mesh with switch
-   support", which is at least two more things: a WDS/relay bridge, and 802.11s
-   mesh. Neither exists in the site model or the renderer. What does exist now
-   is `FeatMesh`, so nothing has to guess whether a device could carry it — see
-   below for why that took measuring.
-2. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
+1. **Mesh has a model, a renderer and storage; it has no API or UI yet.**
+   `model.Mesh` + `render/mesh.go` + the `meshes` table are in and tested, and
+   previewed against real hardware. What is missing is the endpoints and the
+   form, so today a mesh can only be created by writing to the store. That is
+   the next increment and it is mechanical.
+2. **A WDS/relay bridge is still unmodelled.** The goal names "AP bridge mesh";
+   802.11s covers the mesh half, and a WDS bridge is a different mechanism
+   (`wds`/4addr rather than `mode mesh`) for the case where the far end is not
+   mesh-capable.
+3. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
    everything else is `ClassUnknown`, which is *most* old routers: ath79,
    ramips/MT7620, ipq40xx, bcm53xx, lantiq. The consequence today is mild
    (Management Overhead reports no CPU figure, correctly, because none has been
@@ -1040,11 +1044,54 @@ Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
    guess wearing a measurement's clothes** — the fix is to measure, or to
    surface the board target so an operator can see what the controller is
    looking at.
-3. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
+4. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
    every number in this project comes from class A. The budget harness runs
    anywhere; it has only ever run against the comfortable class — and §5k is
    the standing reminder that one reference device hides whole categories of
    bug.
+
+### 5n. Mesh, and why it is not a role
+
+The design decision worth not re-litigating: **a mesh point is a wifi-iface
+mode, not a device role.**
+
+The obvious modelling — "mesh" alongside gateway/ap/switch — is wrong in exactly
+the way that matters for the hardware this is aimed at. On OpenWrt a mesh point
+is a `wifi-iface` with `mode 'mesh'`, and a device carries one *at the same time*
+as an AP serving clients. That combination is the whole of "AP bridge mesh with
+switch support": an old router extending the network over the air while still
+serving clients and its wired ports. A role would make those mutually exclusive
+and force a choice between the two things an operator wants together.
+
+Three more rules, each encoded and tested:
+
+- **One band per mesh, not a list.** A WLAN publishes on several bands because a
+  client picks one and roams. Mesh nodes peer only within a band, so "the same
+  mesh" on 2.4 and 5 GHz is two disjoint backhauls whose halves each look
+  healthy. The band is a field, not a slice, and a device without that radio is
+  told *why* it cannot join rather than just that it has no 5 GHz.
+- **SAE implies required PMF.** 802.11s encryption is SAE, and SAE without
+  protected management frames gives peers that refuse each other for reasons
+  nobody enjoys debugging.
+- **An empty passphrase on update preserves the stored one.** Same rule as
+  `SaveWLAN` and sharper here: the API never sends a mesh key back out, so a
+  read-modify-write would silently convert an encrypted mesh into an open one —
+  and an open mesh is joinable by anyone in radio range, with access to the
+  network behind it. An open mesh is still *allowed* (a trusted segment is a
+  real case) but the renderer says what it means, once, on the preview.
+
+The capability gate is three-state for a concrete reason: rendering a mesh
+interface into a build that cannot carry it produces a radio that silently does
+not come up. "Your device cannot" and "we could not find out" send an operator
+to different places — different hardware versus a package or an ACL — so the
+omissions say which.
+
+**Verified on hardware, preview only.** Applying an 802.11s interface to the
+reference device would write wireless config to the router everything else is
+reached through, and a one-node mesh has nothing to peer with. What was checked
+is that the plan is built from what the device actually reported: real radios,
+real wpad build, real existing config. Result: `oowrt_mesh1_radio0` planned,
+flagged as writing a key, with the passphrase itself kept out of the preview.
 
 ---
 

@@ -75,6 +75,18 @@ CREATE TABLE IF NOT EXISTS wlans (
   options_json TEXT NOT NULL DEFAULT '{}',
   enabled INTEGER NOT NULL DEFAULT 1
 );
+-- 802.11s mesh backhauls (migration v7). Separate from wlans because a mesh
+-- point is a different interface mode, not a WLAN with a flag: a mesh ID rather
+-- than an SSID, exactly one band rather than a list, and none of the roaming or
+-- isolation options a WLAN carries.
+CREATE TABLE IF NOT EXISTS meshes (
+  id INTEGER PRIMARY KEY, mesh_id TEXT NOT NULL,
+  network_id INTEGER NOT NULL REFERENCES networks(id),
+  group_id INTEGER NOT NULL REFERENCES ap_groups(id),
+  band TEXT NOT NULL,
+  key TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS zones (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
   policy_json TEXT NOT NULL DEFAULT '{}'

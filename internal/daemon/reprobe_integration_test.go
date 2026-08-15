@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -290,5 +291,106 @@ func TestIntegrationRoleFitAgainstRealHardware(t *testing.T) {
 	// a second call.
 	if len(res.RoleFit) != 0 {
 		t.Errorf("the AP-role probe carried role-fit warnings: %v", res.RoleFit)
+	}
+}
+
+// A mesh backhaul, previewed against the real device.
+//
+// PREVIEW ONLY, deliberately. Applying an 802.11s interface to the reference
+// device would write wireless config to a router that is the path everything
+// else takes, and a mesh with one node is meaningless anyway — there is nothing
+// to peer with. What is worth checking on hardware is that the plan the
+// controller would send is built from what the device actually reported: its
+// real radios, its real wpad build, its real existing config.
+func TestIntegrationMeshPreviewsAgainstRealHardware(t *testing.T) {
+	host := os.Getenv("OONFEE_TEST_HOST")
+	user := os.Getenv("OONFEE_TEST_USER")
+	pass := os.Getenv("OONFEE_TEST_PASS")
+	if host == "" || user == "" {
+		t.Skip("set OONFEE_TEST_HOST and OONFEE_TEST_USER to run integration tests")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	const mac = "60:38:e0:00:00:06"
+	blob, err := d.Keys.SealCredential(mac, user, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := int64(1)
+	dev := &store.Device{MAC: mac, Host: host, Name: "wrt3200acm", Scheme: "http",
+		Role: string(model.RoleAP), AdoptedAt: &at, CredEnc: blob}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Reprobe(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if got := res.Registry.State(capability.FeatMesh); got != capability.Present {
+		t.Skipf("this device reports mesh %s; the preview assertions below "+
+			"assume a mesh-capable build", got)
+	}
+
+	group := &model.APGroup{Name: "all", DeviceIDs: []int64{dev.ID}}
+	if err := d.Store.SaveGroup(ctx, group); err != nil {
+		t.Fatal(err)
+	}
+	network := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	if err := d.Store.SaveNetwork(ctx, network); err != nil {
+		t.Fatal(err)
+	}
+	mesh := &model.Mesh{
+		MeshID: "oonfee-backhaul", NetworkID: network.ID, GroupID: group.ID,
+		Band: model.Band5G, Key: "a-mesh-passphrase", Enabled: true,
+	}
+	if err := d.Store.SaveMesh(ctx, mesh); err != nil {
+		t.Fatal(err)
+	}
+
+	prev, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if len(prev.Devices) != 1 {
+		t.Fatalf("devices = %+v", prev.Devices)
+	}
+	row := prev.Devices[0]
+	if row.Error != "" {
+		t.Fatalf("could not plan: %s", row.Error)
+	}
+	t.Logf("planned %d change(s); omitted %v", len(row.Changes), row.Omitted)
+
+	var meshSection string
+	for _, c := range row.Changes {
+		if c.Config == "wireless" && strings.Contains(c.Section, "_mesh") {
+			meshSection = c.Section
+			// The passphrase must never appear in a preview — the same rule the
+			// WLAN path follows, for a screen that ends up in screenshots.
+			for _, o := range c.Options {
+				if o == "key" {
+					t.Error("the preview lists the mesh passphrase key by name")
+				}
+			}
+			if !c.TouchesKey {
+				t.Error("the preview does not flag that this change writes a key")
+			}
+		}
+	}
+	if meshSection == "" {
+		t.Fatalf("no mesh section was planned against real hardware: %+v", row)
+	}
+	t.Logf("mesh section: %s", meshSection)
+
+	// Nothing was written. The device must be untouched by a preview — that is
+	// the entire contract of the pending-changes flow.
+	if len(row.Drift) != 0 {
+		t.Errorf("preview reported drift on an untouched device: %v", row.Drift)
 	}
 }

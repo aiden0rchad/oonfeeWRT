@@ -270,6 +270,36 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			})
 		}
 	}
+
+	// Mesh backhauls, alongside the APs rather than instead of them: a node
+	// carrying a mesh while still serving clients is the intended arrangement.
+	for _, m := range site.MeshesFor(dev.ID) {
+		net, _ := site.NetworkByID(m.NetworkID)
+		radio, ok := radios[m.Band]
+		if !ok {
+			rep.Omissions = append(rep.Omissions, Omission{
+				WLAN: m.MeshID,
+				Reason: fmt.Sprintf("device has no %s radio, and mesh nodes peer "+
+					"only with nodes on the same band — so this one cannot join "+
+					"that mesh", m.Band),
+			})
+			continue
+		}
+		name := meshIfaceName(m.ID, radio)
+		if vals, exists := existing.In("wireless")[name]; exists && vals[OwnershipTag] != "1" {
+			rep.Conflicts = append(rep.Conflicts, Conflict{
+				Config: "wireless", Section: name,
+				Reason: "a section with our name exists but is not ours; " +
+					"refusing to overwrite config we did not write",
+			})
+			continue
+		}
+		sec, omissions := renderMesh(m, net, radio, caps)
+		rep.Omissions = append(rep.Omissions, omissions...)
+		if sec.Name != "" {
+			doc.Sections = append(doc.Sections, sec)
+		}
+	}
 	return doc, rep, nil
 }
 

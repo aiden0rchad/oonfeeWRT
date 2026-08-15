@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -73,6 +73,22 @@ var migrations = map[int][]string{
 		// column — so a query that does not know the device cannot use it and
 		// scans the table once per client row.
 		`CREATE INDEX IF NOT EXISTS series_kind_key ON series(kind, key)`,
+	},
+	7: {
+		// 802.11s mesh backhauls. A separate table from wlans, not a column on
+		// it, because a mesh point is a different interface mode rather than a
+		// WLAN with a flag: it has a mesh ID instead of an SSID, exactly one
+		// band instead of a list (nodes peer only within a band), and no
+		// concept of the roaming or client-isolation options a WLAN carries.
+		`CREATE TABLE IF NOT EXISTS meshes (
+		   id INTEGER PRIMARY KEY,
+		   mesh_id TEXT NOT NULL,
+		   network_id INTEGER NOT NULL REFERENCES networks(id),
+		   group_id INTEGER NOT NULL REFERENCES ap_groups(id),
+		   band TEXT NOT NULL,
+		   key TEXT NOT NULL DEFAULT '',
+		   enabled INTEGER NOT NULL DEFAULT 1
+		 )`,
 	},
 }
 

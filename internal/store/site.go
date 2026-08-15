@@ -49,6 +49,9 @@ func (db *DB) Site(ctx context.Context) (model.Site, error) {
 	if s.WLANs, err = db.wlans(ctx); err != nil {
 		return model.Site{}, err
 	}
+	if s.Meshes, err = db.meshes(ctx); err != nil {
+		return model.Site{}, err
+	}
 	if s.Overrides, err = db.Overrides(ctx); err != nil {
 		return model.Site{}, err
 	}
@@ -482,4 +485,86 @@ func formatBands(bs []model.Band) string {
 	}
 	sort.Strings(parts) // stable storage, so a no-op save is a no-op
 	return strings.Join(parts, ",")
+}
+
+// ---- 802.11s mesh backhauls ----
+
+func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT id, mesh_id, network_id, group_id, band, key, enabled
+		   FROM meshes ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list meshes: %w", err)
+	}
+	defer rows.Close()
+	out := []model.Mesh{}
+	for rows.Next() {
+		var m model.Mesh
+		var band string
+		if err := rows.Scan(&m.ID, &m.MeshID, &m.NetworkID, &m.GroupID,
+			&band, &m.Key, &m.Enabled); err != nil {
+			return nil, err
+		}
+		m.Band = model.Band(band)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// SaveMesh inserts or updates a mesh backhaul.
+//
+// An empty Key on an update preserves the stored one, the same rule SaveWLAN
+// follows: the API never sends a passphrase back out, so a client that read a
+// mesh and wrote it back would otherwise silently convert an encrypted mesh
+// into an open one — and an open mesh is joinable by anyone in radio range.
+func (db *DB) SaveMesh(ctx context.Context, m *model.Mesh) error {
+	if strings.TrimSpace(m.MeshID) == "" {
+		return fmt.Errorf("store: a mesh needs a mesh ID")
+	}
+	if m.ID == 0 {
+		res, err := db.sql.ExecContext(ctx,
+			`INSERT INTO meshes (mesh_id, network_id, group_id, band, key, enabled)
+			 VALUES (?,?,?,?,?,?)`,
+			m.MeshID, m.NetworkID, m.GroupID, string(m.Band), m.Key, m.Enabled)
+		if err != nil {
+			return fmt.Errorf("store: create mesh: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		m.ID = int(id)
+		return nil
+	}
+	if m.Key == "" {
+		var prev string
+		if err := db.sql.QueryRowContext(ctx,
+			`SELECT key FROM meshes WHERE id=?`, m.ID).Scan(&prev); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrNotFound
+			}
+			return err
+		}
+		m.Key = prev
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE meshes SET mesh_id=?, network_id=?, group_id=?, band=?, key=?,
+		                   enabled=? WHERE id=?`,
+		m.MeshID, m.NetworkID, m.GroupID, string(m.Band), m.Key, m.Enabled, m.ID)
+	if err != nil {
+		return fmt.Errorf("store: update mesh %d: %w", m.ID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteMesh removes a mesh backhaul.
+func (db *DB) DeleteMesh(ctx context.Context, id int) error {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM meshes WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete mesh %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

@@ -18,6 +18,11 @@ const (
 	Band6G Band = "6g"
 )
 
+// Valid reports a band the model knows about.
+func (b Band) Valid() bool {
+	return b == Band2G || b == Band5G || b == Band6G
+}
+
 // BandForFrequency classifies a radio by its operating frequency in MHz.
 // Capability probing reports frequency; the site model speaks in bands.
 func BandForFrequency(mhz int) (Band, bool) {
@@ -155,7 +160,10 @@ type Site struct {
 	Name     string
 	Networks []Network
 	WLANs    []WLAN
-	Groups   []APGroup
+	// Meshes are 802.11s backhauls. Separate from WLANs because a mesh point is
+	// a different interface mode, not a WLAN with a flag — see mesh.go.
+	Meshes []Mesh
+	Groups []APGroup
 	// Overrides are the places individual devices are allowed to differ. See
 	// override.go for what is overridable and, more importantly, what is not.
 	Overrides Overrides
@@ -229,6 +237,30 @@ func (s Site) Validate() []error {
 		if w.Security.Mode.NeedsKey() && w.Security.Key == "" {
 			errs = append(errs, errf("WLAN %q uses %s but has no key", w.SSID, w.Security.Mode))
 		}
+	}
+	for _, m := range s.Meshes {
+		errs = append(errs, m.Validate()...)
+		if _, ok := s.NetworkByID(m.NetworkID); !ok {
+			errs = append(errs, errf("mesh %q references unknown network %d",
+				m.MeshID, m.NetworkID))
+		}
+		if _, ok := s.GroupByID(m.GroupID); !ok {
+			errs = append(errs, errf("mesh %q references unknown AP group %d",
+				m.MeshID, m.GroupID))
+		}
+	}
+	// Two meshes with the same ID on the same band are one mesh whose config
+	// disagrees with itself: nodes peer on the mesh ID, so whichever section
+	// hostapd reads last wins and the other's settings vanish silently.
+	seenMesh := map[string]bool{}
+	for _, m := range s.Meshes {
+		k := strings.ToLower(strings.TrimSpace(m.MeshID)) + "/" + string(m.Band)
+		if seenMesh[k] {
+			errs = append(errs, errf("mesh %q is defined twice on %s; nodes peer "+
+				"on the mesh ID, so these are one mesh with two conflicting "+
+				"configurations", m.MeshID, m.Band))
+		}
+		seenMesh[k] = true
 	}
 	return errs
 }

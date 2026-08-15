@@ -249,3 +249,84 @@ func wlanByID(t *testing.T, db *DB, id int) model.WLAN {
 	t.Fatalf("WLAN %d not found", id)
 	return model.WLAN{}
 }
+
+// An empty passphrase on update preserves the stored one.
+//
+// The same rule SaveWLAN follows, and for a sharper reason here: the API never
+// sends a mesh passphrase back out, so a client that read a mesh and wrote it
+// back would silently convert an encrypted mesh into an OPEN one — joinable by
+// anyone in radio range, with access to the network behind it.
+func TestSaveMeshPreservesTheKeyWhenNoneIsSupplied(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	if err := db.SaveNetwork(ctx, net); err != nil {
+		t.Fatal(err)
+	}
+	grp := &model.APGroup{Name: "all"}
+	if err := db.SaveGroup(ctx, grp); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &model.Mesh{MeshID: "backhaul", NetworkID: net.ID, GroupID: grp.ID,
+		Band: model.Band5G, Key: "a-mesh-passphrase", Enabled: true}
+	if err := db.SaveMesh(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if m.ID == 0 {
+		t.Fatal("insert did not populate the ID")
+	}
+
+	// A write-back with no key: rename only.
+	edit := &model.Mesh{ID: m.ID, MeshID: "backhaul-2", NetworkID: net.ID,
+		GroupID: grp.ID, Band: model.Band5G, Enabled: true}
+	if err := db.SaveMesh(ctx, edit); err != nil {
+		t.Fatal(err)
+	}
+	got := meshByID(t, db, m.ID)
+	if got.Key != "a-mesh-passphrase" {
+		t.Errorf("key = %q after a keyless update; the mesh silently became open",
+			got.Key)
+	}
+	if got.MeshID != "backhaul-2" {
+		t.Errorf("mesh ID = %q, want the edit to land", got.MeshID)
+	}
+	if got.Open() {
+		t.Error("Open() reports true for a mesh that still has a passphrase")
+	}
+}
+
+// A mesh reaches only the devices in its group, like a WLAN.
+func TestMeshesForFollowsGroupMembership(t *testing.T) {
+	site := model.Site{
+		Groups: []model.APGroup{{ID: 1, Name: "edge", DeviceIDs: []int64{7}}},
+		Meshes: []model.Mesh{
+			{ID: 1, MeshID: "backhaul", GroupID: 1, Band: model.Band5G, Enabled: true},
+			{ID: 2, MeshID: "disabled", GroupID: 1, Band: model.Band5G},
+			{ID: 3, MeshID: "elsewhere", GroupID: 2, Band: model.Band5G, Enabled: true},
+		},
+	}
+	got := site.MeshesFor(7)
+	if len(got) != 1 || got[0].MeshID != "backhaul" {
+		t.Errorf("MeshesFor(7) = %+v, want only the enabled in-group mesh", got)
+	}
+	if len(site.MeshesFor(9)) != 0 {
+		t.Error("a device in no group received a mesh")
+	}
+}
+
+func meshByID(t *testing.T, db *DB, id int) model.Mesh {
+	t.Helper()
+	s, err := db.Site(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range s.Meshes {
+		if m.ID == id {
+			return m
+		}
+	}
+	t.Fatalf("mesh %d not found", id)
+	return model.Mesh{}
+}
