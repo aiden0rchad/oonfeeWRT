@@ -227,3 +227,56 @@ func TestAForeignSectionWithTheMeshNameIsAConflict(t *testing.T) {
 		t.Errorf("a foreign section with our mesh name was not a conflict: %+v", rep)
 	}
 }
+
+// Absent has two causes and they send an operator to opposite places.
+//
+// A missing wpad-mesh package is fixable by installing one. A driver that
+// refuses to bring a mesh interface up is not — the daemon already supports
+// mesh, so the answer is different hardware. Telling someone to install a
+// package they already have is worse than saying nothing, and that is what
+// this message did until a real apply exposed it.
+func TestAnAbsentMeshSaysWhichKindOfAbsentItIs(t *testing.T) {
+	site := meshSite(model.Mesh{
+		ID: 1, MeshID: "backhaul", Band: model.Band5G,
+		Key: "a-mesh-passphrase", Enabled: true,
+	})
+
+	// Cause 1: the wpad build.
+	pkg := meshCaps(capability.Absent)
+	_, rep, err := Render(site, model.Device{ID: 7}, pkg, Existing{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasOmissionContaining(rep, "wpad-mesh-*") {
+		t.Errorf("a package-caused absence does not name the package: %+v", rep.Omissions)
+	}
+
+	// Cause 2: the driver. Same state, different reason, different advice.
+	drv := meshCaps(capability.Absent)
+	drv.AddQuirk(capability.Quirk{Source: "mac80211", Field: "mesh-point",
+		Reason: "the driver refuses to bring a mesh interface up"})
+	_, rep, err = Render(site, model.Device{ID: 7}, drv, Existing{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasOmissionContaining(rep, "wpad-mesh-*") {
+		t.Error("a driver-caused absence tells the operator to install a " +
+			"package they already have")
+	}
+	if !hasOmissionContaining(rep, "driver") {
+		t.Errorf("a driver-caused absence does not say so: %+v", rep.Omissions)
+	}
+	if !hasOmissionContaining(rep, "different radio") {
+		t.Errorf("nothing tells the operator what would actually fix it: %+v",
+			rep.Omissions)
+	}
+}
+
+func hasOmissionContaining(rep Report, sub string) bool {
+	for _, om := range rep.Omissions {
+		if strings.Contains(om.Reason, sub) {
+			return true
+		}
+	}
+	return false
+}

@@ -741,9 +741,67 @@ func probeMesh(ctx context.Context, c *ubus.Client, r *Registry) {
 	}
 
 	state := meshFromPackages(pkgs)
-	r.Set(FeatMesh, state)
-	r.Note("802.11s mesh %s (from the installed 802.11 daemon: %s)",
+	r.Note("802.11s mesh %s from the installed 802.11 daemon (%s)",
 		state, describeWpad(pkgs))
+
+	// The daemon having mesh does not mean the RADIO can run one.
+	//
+	// Measured on the reference device 2026-08-15, and it is the reason this
+	// check exists at all. mwlwifi (Marvell 88W8964) advertises "mesh point" in
+	// its supported interface modes AND permits it in its interface
+	// combinations — `#{ AP } <= 16, #{ mesh point } <= 1` — so every source a
+	// controller can consult says yes. Configure one and netifd creates the
+	// interface, `iw dev` reports `type mesh point`, and then:
+	//
+	//	wpa_supplicant: Could not set interface phy0-mesh0 flags (UP):
+	//	                Operation not permitted
+	//	wpa_supplicant: phy0-mesh0: Failed to initialize driver interface
+	//
+	// The interface sits at state DOWN. With the AP on the same phy disabled it
+	// still sits at DOWN, so it is not a combination limit — the driver simply
+	// will not bring a mesh point up.
+	//
+	// Nothing refuses the config: uci accepts it, the apply's health check
+	// passes (it asks whether the SSIDs are on air, and they are), and the
+	// confirm lands. A controller trusting the package list alone would report
+	// a healthy applied mesh that does not exist.
+	//
+	// This is the exact category Quirk was made for — present, correctly typed,
+	// plausible, and wrong — and the same driver already supplies three others.
+	if hw := marvellRadio(r); hw != "" {
+		r.AddQuirk(Quirk{
+			Source: "mac80211", Field: "mesh-point",
+			Reason: "advertised as a supported interface mode and permitted by " +
+				"the interface combinations, but the driver refuses to bring a " +
+				"mesh interface UP (\"Operation not permitted\"); measured on " +
+				hw + ". uci accepts the config and the apply reports success",
+		})
+		state = Absent
+		r.Note("802.11s mesh is gated OFF despite the daemon supporting it: %s "+
+			"creates the mesh interface and cannot bring it up. Configuring one "+
+			"would apply cleanly and never work", hw)
+	}
+	r.Set(FeatMesh, state)
+}
+
+// marvellRadio reports a radio whose driver is known not to run a mesh point,
+// or "" when none is.
+//
+// Keyed on the hardware name because the driver name lives in /sys, which rpcd
+// canonicalises out of reach (see the ACL's note). iwinfo reports
+// hardware.name, and on this board that is "Marvell 88W8964".
+//
+// Only what has been measured. A different Marvell part may well behave
+// differently, and the honest failure here is a device wrongly told it cannot
+// mesh — recoverable, and visible, because the note says exactly which chip the
+// judgement came from.
+func marvellRadio(r *Registry) string {
+	for _, radio := range r.Radios {
+		if strings.Contains(strings.ToLower(radio.Hardware), "marvell") {
+			return radio.Hardware
+		}
+	}
+	return ""
 }
 
 // meshFromPackages decides FeatMesh from an installed-package list.

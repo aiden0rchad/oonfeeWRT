@@ -130,10 +130,13 @@ func TestProbeMatchesTheReferenceDevice(t *testing.T) {
 		// mwlwifi leaves rx_time/tx_time uninitialised, so the split is not
 		// computable even though the fields are right there in the response.
 		{FeatAirtimeSplit, Absent},
-		// From the installed wpad build: nothing else on the device can answer
-		// it. The mock reports wpad-mesh-openssl because that is what the
-		// reference device reports.
-		{FeatMesh, Present},
+		// wpad-mesh-openssl IS installed — the daemon can do 802.11s — and this
+		// is still Absent, which is the whole finding. mwlwifi advertises mesh
+		// point and permits it in its interface combinations, then refuses to
+		// bring the interface UP. Measured by applying one: uci accepted it,
+		// the health check passed, the confirm landed, and `ip link` showed the
+		// interface DOWN. See probeMesh.
+		{FeatMesh, Absent},
 	}
 	for _, c := range checks {
 		if got := r.State(c.feat); got != c.want {

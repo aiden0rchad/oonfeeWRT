@@ -38,6 +38,24 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 				"can see, not a statement that the device lacks mesh",
 		}}
 	default:
+		// Absent has two causes and they send an operator to opposite places.
+		//
+		// The package cause is fixable: install wpad-mesh-*. The driver cause is
+		// not — the daemon already supports mesh and the radio will not run one,
+		// so the answer is different hardware. Telling someone to install a
+		// package they already have is worse than saying nothing, and that is
+		// exactly what this message did until a real apply exposed it.
+		if caps.HasQuirk("mac80211", "mesh-point") {
+			return Section{}, []Omission{{
+				WLAN: m.MeshID,
+				Reason: "this device's wireless driver will not run an 802.11s " +
+					"mesh point. It advertises the mode and accepts the config, " +
+					"and then refuses to bring the interface up — so a mesh here " +
+					"would apply cleanly and never carry traffic. The 802.11s " +
+					"daemon is installed and is not the problem; this needs a " +
+					"different radio",
+			}}
+		}
 		return Section{}, []Omission{{
 			WLAN: m.MeshID,
 			Reason: "this device's wpad build does not carry 802.11s. Installing " +

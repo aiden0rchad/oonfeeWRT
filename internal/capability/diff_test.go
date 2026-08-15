@@ -346,3 +346,35 @@ func TestMeshVerdictFromInstalledPackages(t *testing.T) {
 		}
 	}
 }
+
+// The daemon supporting mesh does not mean the radio can run one.
+//
+// Measured on the reference device: mwlwifi advertises "mesh point" in its
+// supported interface modes AND permits it in its interface combinations, so
+// every source a controller can consult says yes. Configure one and the driver
+// refuses to bring the interface UP — uci accepts the config, the apply's
+// health check passes, the confirm lands, and the mesh does not exist.
+//
+// A package list alone would report that as available.
+func TestAMarvellRadioGatesMeshOffDespiteTheDaemonSupportingIt(t *testing.T) {
+	r := NewRegistry()
+	r.Radios = []Radio{{Phy: "phy0", Hardware: "Marvell 88W8964"}}
+	if got := marvellRadio(r); got == "" {
+		t.Fatal("the Marvell radio was not recognised")
+	}
+
+	// And a radio that is not one is left alone: this is a measured quirk of
+	// one driver, not a blanket refusal.
+	other := NewRegistry()
+	other.Radios = []Radio{{Phy: "phy0", Hardware: "MediaTek MT7915E"}}
+	if got := marvellRadio(other); got != "" {
+		t.Errorf("a non-Marvell radio was gated: %q", got)
+	}
+
+	// Case-insensitively, since hardware names are free text from the driver.
+	lower := NewRegistry()
+	lower.Radios = []Radio{{Phy: "phy0", Hardware: "marvell 88w8964"}}
+	if marvellRadio(lower) == "" {
+		t.Error("the match is case-sensitive; hardware names are free text")
+	}
+}

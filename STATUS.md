@@ -322,6 +322,7 @@ the useful part — the code is in git either way.
 | §5m | **Hardware breadth** — the stated direction, what it needs, and what assumed otherwise |
 | §5n | 802.11s mesh — modelled as an interface mode, not a role |
 | §5o | The bug mesh support created in the collector, found by looking for it |
+| §5q | **Applying a mesh to real hardware** — and what every other source got wrong |
 
 ### 5a. What discovery corrected
 
@@ -1191,6 +1192,67 @@ This matters more as the fleet widens. Adopting whatever old routers are around
 means varied firmware, varied packages and varied ACLs, and "what can this
 controller not see on this device" stops being an edge case and becomes a
 routine question.
+
+### 5q. What applying a mesh to real hardware found
+
+Mesh had been verified by preview, by the mock, and by the apply/prune path
+against that mock. Then it was applied to the reference device, and the result
+is the most useful thing in this file.
+
+**It applied cleanly and did not exist.**
+
+    apply: wrt3200acm -> applied (1 changes) health passed and confirm landed
+    on device: oowrt_mesh1_radio0 mode=mesh mesh_id=oonfee-hw-mesh
+    interface modes after the apply: map[phy0-ap0:ap phy1-ap0:ap]
+
+uci accepted the config. The apply's health check passed — it asks whether the
+SSIDs are on air, and they were. The confirm landed. The section is on the
+device. And no mesh point is running.
+
+SSH answered what ubus cannot:
+
+    wpa_supplicant: Could not set interface phy0-mesh0 flags (UP):
+                    Operation not permitted
+    wpa_supplicant: phy0-mesh0: Failed to initialize driver interface
+
+`ip link` shows `phy0-mesh0 ... state DOWN`. netifd creates the interface and
+the driver refuses to raise it.
+
+**Every source a controller can consult said this would work:**
+
+| source | says |
+|---|---|
+| installed packages | `wpad-mesh-openssl` — the daemon does 802.11s |
+| `iw phy0 info` | supported interface modes include **mesh point** |
+| `iw phy0 info` | combinations allow `#{AP} <= 16, #{mesh point} <= 1` |
+| `uci`, apply, health check, confirm | all succeeded |
+
+Disabling the AP on the same phy changes nothing — it is not a combination
+limit. mwlwifi simply will not bring a mesh point up.
+
+This is precisely the category `Quirk` was made for: *present, correctly typed,
+plausible, and wrong*. The same driver already supplies three others. So mesh is
+gated off on Marvell radios with a quirk that records the measurement, and the
+capability is `Absent` on this board **even though the daemon supports it**.
+
+Two consequences worth keeping:
+
+- **A package list is not a capability.** `probeMesh` reads which wpad build is
+  installed because nothing else can answer, and that answer is necessary and
+  not sufficient. The daemon's capability and the radio's are different
+  questions.
+- **Absent has two causes, and they send an operator to opposite places.** A
+  missing wpad-mesh package is fixable by installing one; a driver that refuses
+  is fixable only with different hardware. The renderer's message said "install
+  wpad-mesh-*" for both — advice to install a package that was *already
+  installed*. It distinguishes them now, and there is a test for each.
+
+**The device was left byte-identical to how it was found**, all four managed
+configs, with a dead-man restore armed on the device before anything was written
+(§6) and disarmed afterwards. Worth noting that the disarm needed checking: the
+first `pkill` did not take, and a `sleep 1200` was still pending a `wifi reload`
+at an arbitrary future moment. Arming an undo is half the practice; confirming
+it is gone is the other half.
 
 ---
 

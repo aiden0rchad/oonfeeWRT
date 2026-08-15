@@ -570,6 +570,16 @@ func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, 
 // this exists for adoption and the integration tests, where "what is each of
 // these interfaces for" is a reasonable one-off question.
 func (p *poller) discoverIfaceModes(ctx context.Context, c *ubus.Client) (map[string]string, error) {
+	return IfaceModes(ctx, c)
+}
+
+// IfaceModes reads each wireless interface's configured mode over an existing
+// session.
+//
+// Exported because "did the mesh point actually come up" is a question worth
+// asking from outside this package — a config that uci accepted and hostapd
+// then refused looks identical in the config and completely different here.
+func IfaceModes(ctx context.Context, c *ubus.Client) (map[string]string, error) {
 	var raw json.RawMessage
 	if err := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &raw); err != nil {
 		return nil, err
