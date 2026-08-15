@@ -103,6 +103,48 @@ type deviceDetail struct {
 	Interfaces []string `json:"interfaces"`
 	Radios     []string `json:"radios"`
 	Stations   []string `json:"stations"`
+
+	// Degraded is what the last poll could not read on this device, and what
+	// each gap costs. A standing property of the device's ACL or driver rather
+	// than an event — which is exactly why it needs somewhere to be READ. A
+	// limitation the controller knows about and never shows is one an operator
+	// discovers from a number being quietly wrong.
+	Degraded []degradation `json:"degraded,omitempty"`
+}
+
+// degradation is one call the poll could not use, with the consequence spelled
+// out rather than left as an object and method name.
+type degradation struct {
+	Call string `json:"call"`
+	Err  string `json:"error"`
+	// Permanent marks a refusal retrying cannot fix — an ACL gap rather than a
+	// device that was busy. The two need different responses from a human.
+	Permanent bool   `json:"permanent"`
+	Costs     string `json:"costs,omitempty"`
+}
+
+// degradationCost explains what a missing call takes away.
+//
+// Only for the ones whose consequence is not obvious from the call name. The
+// point of the field is that "luci-rpc.getWirelessDevices: Permission denied"
+// tells an operator nothing about what they lost.
+func degradationCost(object, method string) string {
+	switch object + "." + method {
+	case "luci-rpc.getWirelessDevices":
+		return "the poll cannot tell a mesh point from an access point, so a " +
+			"mesh backhaul's peers are counted as clients"
+	case "luci-rpc.getHostHints", "luci-rpc.getDHCPLeases":
+		return "the client inventory is incomplete: hosts this device can see " +
+			"will not appear in the client list"
+	case "network.interface.dump":
+		return "clients cannot be scoped, so the list cannot separate this " +
+			"network's devices from neighbours on the uplink"
+	case "iwinfo.survey":
+		return "channel utilization is unavailable for this radio"
+	case "iwinfo.assoclist":
+		return "signal and rate are unavailable for clients on this radio"
+	}
+	return ""
 }
 
 func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +158,18 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	detail := deviceDetail{deviceView: s.viewDevice(d, s.now())}
+	if s.Fleet != nil {
+		if degs, ok := s.Fleet.Degraded(id); ok {
+			for _, g := range degs {
+				detail.Degraded = append(detail.Degraded, degradation{
+					Call:      g.Object + "." + g.Method,
+					Err:       g.Err,
+					Permanent: g.Permanent,
+					Costs:     degradationCost(g.Object, g.Method),
+				})
+			}
+		}
+	}
 	if d.CapsJSON != "" && d.CapsJSON != "{}" {
 		var caps capability.Registry
 		if err := json.Unmarshal([]byte(d.CapsJSON), &caps); err == nil {

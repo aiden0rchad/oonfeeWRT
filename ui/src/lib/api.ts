@@ -91,11 +91,26 @@ export interface Device {
   quiesced?: boolean
 }
 
+/** One call the last poll could not use, and what that costs.
+ *
+ *  A standing property of the device's ACL or driver rather than an event —
+ *  which is why it needs somewhere to be READ. A limitation the controller
+ *  knows about and never shows is one you discover from a number being quietly
+ *  wrong. */
+export interface Degradation {
+  call: string
+  error: string
+  /** A refusal retrying cannot fix — an ACL gap rather than a busy device. */
+  permanent: boolean
+  costs?: string
+}
+
 export interface DeviceDetail extends Device {
   capabilities: Registry | null
   interfaces: string[]
   radios: string[]
   stations: string[]
+  degraded?: Degradation[]
 }
 
 export interface Registry {

@@ -30,12 +30,14 @@ type stubFleet struct {
 	quiesced map[int64]bool
 	clients  map[int64]*int
 	overhead map[int64]collector.Overhead
+	degraded map[int64][]collector.Degradation
 }
 
 func newStubFleet() *stubFleet {
 	return &stubFleet{focused: map[int64]int{}, tier: map[int64]collector.Tier{},
 		quiesced: map[int64]bool{}, clients: map[int64]*int{},
-		overhead: map[int64]collector.Overhead{}}
+		overhead: map[int64]collector.Overhead{},
+		degraded: map[int64][]collector.Degradation{}}
 }
 
 func (f *stubFleet) Focus(deviceID int64) func() {
@@ -82,6 +84,19 @@ func (f *stubFleet) LiveClients(deviceID int64) (int, bool) {
 func (f *stubFleet) setClients(deviceID int64, n *int) {
 	f.mu.Lock()
 	f.clients[deviceID] = n
+	f.mu.Unlock()
+}
+
+func (f *stubFleet) Degraded(deviceID int64) ([]collector.Degradation, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.degraded[deviceID]
+	return d, ok
+}
+
+func (f *stubFleet) setDegraded(deviceID int64, d []collector.Degradation) {
+	f.mu.Lock()
+	f.degraded[deviceID] = d
 	f.mu.Unlock()
 }
 
@@ -1307,5 +1322,64 @@ func TestAdoptRefusesAnUnknownRole(t *testing.T) {
 	if len(e.adopted) != 0 {
 		t.Error("the device was contacted despite an invalid role; validation " +
 			"must happen before anything is written")
+	}
+}
+
+// A limitation the controller knows about must be readable somewhere.
+//
+// Degradations are logged at debug — deliberately, because they are a standing
+// property of a device's ACL rather than an event and logging them per poll
+// would bury everything else. That reasoning is right and it leaves the
+// operator with no way to see them at all. The device detail is where they go.
+func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-x", true, nil)
+	h.fleet.setDegraded(dev.ID, []collector.Degradation{
+		{Object: "luci-rpc", Method: "getWirelessDevices",
+			Err: "Permission denied", Permanent: true},
+		{Object: "iwinfo", Method: "survey", Err: "busy"},
+	})
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device: %d %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Degraded []struct {
+			Call      string `json:"call"`
+			Err       string `json:"error"`
+			Permanent bool   `json:"permanent"`
+			Costs     string `json:"costs"`
+		} `json:"degraded"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Degraded) != 2 {
+		t.Fatalf("degraded = %+v, want two", got.Degraded)
+	}
+	first := got.Degraded[0]
+	if first.Call != "luci-rpc.getWirelessDevices" || !first.Permanent {
+		t.Errorf("first degradation = %+v", first)
+	}
+	// The consequence, not just the call name. "luci-rpc.getWirelessDevices:
+	// Permission denied" tells an operator nothing about what they lost.
+	if !strings.Contains(first.Costs, "mesh") || !strings.Contains(first.Costs, "clients") {
+		t.Errorf("costs = %q; it does not say what the missing grant costs",
+			first.Costs)
+	}
+}
+
+// A device the collector has never polled reports no degradations rather than
+// an empty list, which would read as "everything is fine".
+func TestDeviceDetailOmitsDegradationsBeforeAnyPoll(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-y", true, nil)
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if strings.Contains(w.Body.String(), `"degraded"`) {
+		t.Errorf("an unpolled device reported a degradation list: %s", w.Body.String())
 	}
 }

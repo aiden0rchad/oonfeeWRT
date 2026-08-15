@@ -44,6 +44,10 @@ type Fleet interface {
 	// Overhead reports what the controller is costing this device.
 	Overhead(deviceID int64) (collector.Overhead, bool)
 
+	// Degraded reports what the last poll of this device could not read.
+	// Standing limitations rather than events — see collector.Degraded.
+	Degraded(deviceID int64) ([]collector.Degradation, bool)
+
 	// LiveClients reports the most recent associated-station count for a
 	// device, and whether it is known at all.
 	//

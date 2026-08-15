@@ -341,6 +341,38 @@ type Overhead struct {
 }
 
 // Overhead reports the controller's cost for one device.
+// Degraded reports the standing limitations of the last poll of a device: the
+// calls that were refused or unreadable, and what each one costs.
+//
+// Standing is the operative word. A degradation is a property of the device's
+// ACL, its driver or its firmware, not an event — it will be identical on the
+// next poll and the one after. That is why they are logged at debug rather than
+// raised per poll, and it is also why they have to be READABLE somewhere: a
+// limitation the controller knows about and never shows is one the operator
+// discovers from a number being quietly wrong.
+//
+// The particular case that prompted this: without luci-rpc.getWirelessDevices
+// the poll cannot tell a mesh point from an access point, so it falls back to
+// treating every interface as an AP and counts a mesh backhaul's peers as
+// clients. The fallback is the right one — the alternative silently stops
+// counting real clients — but it must not be invisible.
+func (c *Collector) Degraded(deviceID int64) ([]Degradation, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.degradedKnown {
+		return nil, false
+	}
+	out := make([]Degradation, len(p.degraded))
+	copy(out, p.degraded)
+	return out, true
+}
+
 func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -452,6 +484,11 @@ type poller struct {
 	client  *ubus.Client
 	ifaces  []string
 	ifaceAt time.Time
+	// degraded is the last poll's list of refused or unreadable calls, kept so
+	// a standing limitation can be shown rather than only logged. degradedKnown
+	// separates "the last poll found none" from "no poll has completed".
+	degraded      []Degradation
+	degradedKnown bool
 	// ifaceModes is each wireless interface's configured mode, cached beside
 	// the interface list and refreshed with it.
 	ifaceModes map[string]string
@@ -570,6 +607,10 @@ func (p *poller) tick(ctx context.Context) {
 	// device with no radios legitimately returns an empty list, which is why
 	// IfacesFresh is separate from len(Ifaces) — "asked and there are none" and
 	// "did not ask" are different, and only the first should update the cache.
+	p.mu.Lock()
+	p.degraded, p.degradedKnown = snap.Degraded, true
+	p.mu.Unlock()
+
 	if snap.IfacesFresh {
 		p.mu.Lock()
 		p.ifaces, p.ifaceAt = snap.Ifaces, p.c.now()

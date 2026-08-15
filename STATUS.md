@@ -1163,6 +1163,35 @@ Three things worth keeping:
   property of the radio's channel, not of what the interface is for, and a radio
   carrying only a mesh point would otherwise report none at all.
 
+### 5p. Standing limitations now have somewhere to be read
+
+The collector has always recorded a `Degradation` for every optional call that
+was refused or unreadable, and logged them at **debug**. The reason is sound —
+a degradation is a standing property of a device's ACL or driver, not an event,
+and logging it per poll would bury everything else. The consequence was that
+nobody could ever see one.
+
+That became load-bearing with §5o. Without `luci-rpc.getWirelessDevices` the
+poll cannot tell a mesh point from an access point, so it falls back to treating
+every interface as an AP — the right fallback, since the alternative silently
+stops counting real clients, but it means a device with a narrow ACL quietly
+gets the bug the fix was for.
+
+So the device detail carries them now, with **what each one costs**:
+`luci-rpc.getWirelessDevices: Permission denied` tells an operator nothing;
+"the poll cannot tell a mesh point from an access point, so a mesh backhaul's
+peers are counted as clients" tells them everything. Permanent refusals — an
+ACL gap — are marked apart from transient ones, because the two call for
+different responses.
+
+A device that has never been polled reports **no list at all** rather than an
+empty one, which would read as "everything is fine here".
+
+This matters more as the fleet widens. Adopting whatever old routers are around
+means varied firmware, varied packages and varied ACLs, and "what can this
+controller not see on this device" stops being an edge case and becomes a
+routine question.
+
 ---
 
 ## 6. Working practices that earned their place

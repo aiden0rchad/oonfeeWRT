@@ -330,6 +330,36 @@ function DeviceDetailPanel({
         />
       )}
 
+      {detail.degraded && detail.degraded.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+            What the controller cannot read here
+          </div>
+          <div style={{ display: 'grid', gap: 6 }}>
+            {detail.degraded.map((g) => (
+              <div
+                key={g.call}
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-secondary)',
+                  borderLeft: `2px solid ${g.permanent ? 'var(--warning)' : 'var(--border-strong)'}`,
+                  paddingLeft: 8,
+                }}
+              >
+                <code style={{ color: 'var(--text-primary)' }}>{g.call}</code>{' '}
+                — {g.error}
+                {g.costs && <div>{g.costs}</div>}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+            These are standing limits of this device's access-control file or
+            driver, not failures. Polling works; these particular answers are
+            unavailable, and each line says what that costs.
+          </div>
+        </div>
+      )}
+
       <Reprobe deviceID={id} onProbed={load} />
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
