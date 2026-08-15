@@ -183,9 +183,14 @@ export interface Dashboard {
    *  read — see wireless_clients_unknown_on. */
   wireless_clients: number | null
   wireless_clients_unknown_on?: string[]
-  /** Everything seen on the LAN. A different question from wireless_clients. */
+  /** Hosts on THIS network — a different question from wireless_clients, and
+   *  scoped to `local`: a gateway's neighbour tables also cover its uplink.
+   *  upstream_devices and unscoped_devices are the excluded remainder, so the
+   *  headline can say what it left out. */
   known_devices: number
   active_devices: number
+  upstream_devices: number
+  unscoped_devices: number
   focused_devices: number
   quiesced_devices: number
   recent_events: EventRow[] | null

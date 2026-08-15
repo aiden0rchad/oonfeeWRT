@@ -324,6 +324,8 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 		UnknownOn       []string                    `json:"wireless_clients_unknown_on"`
 		KnownDevices    int                         `json:"known_devices"`
 		ActiveDevices   int                         `json:"active_devices"`
+		UpstreamDevices int                         `json:"upstream_devices"`
+		UnscopedDevices int                         `json:"unscoped_devices"`
 	}
 	apiGet(t, client, base+"/api/v1/dashboard", &dash)
 	if dash.Devices.Total != 1 || dash.Devices.Online != 1 {
@@ -337,14 +339,60 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 		t.Fatalf("wireless_clients is unknown for a device that answered every "+
 			"poll; unreadable on: %v", dash.UnknownOn)
 	}
-	// The client inventory comes from the baseline poll, so a live LAN has some.
-	if dash.KnownDevices == 0 {
+	// The client inventory comes from the baseline poll, so a live LAN has some
+	// hosts SOMEWHERE. Asserted across all three scopes rather than on the local
+	// count alone: the reference device is WAN-facing behind another router, so
+	// most of what it can see is upstream, and a run that happened to observe
+	// only upstream neighbours would be a correct result, not a failure.
+	seen := dash.KnownDevices + dash.UpstreamDevices + dash.UnscopedDevices
+	if seen == 0 {
 		t.Error("no LAN devices recorded; the host-hint sources did not populate")
 	}
 	t.Logf("dashboard: %d device(s) online, %d wireless client(s), "+
-		"%d LAN device(s) (%d active)",
-		dash.Devices.Online, *dash.WirelessClients,
-		dash.KnownDevices, dash.ActiveDevices)
+		"%d on this network (%d active), %d upstream, %d unplaced",
+		dash.Devices.Online, *dash.WirelessClients, dash.KnownDevices,
+		dash.ActiveDevices, dash.UpstreamDevices, dash.UnscopedDevices)
+
+	// The dashboard headline and the client grid answer the same question and
+	// must not answer it differently. They did: the dashboard counted rows and
+	// the grid counted scopes, so on this device one screen said 14 devices and
+	// the other listed 3 — both captioned as this network's.
+	var cl struct {
+		Clients []struct {
+			MAC   string `json:"mac"`
+			Scope string `json:"scope"`
+		} `json:"clients"`
+		Scopes map[string]int `json:"scopes"`
+	}
+	apiGet(t, client, base+"/api/v1/clients?all=1", &cl)
+
+	// The rail's counts must match the rows it is filtering, or the numbers are
+	// decoration. Counted from the payload, since paging has not landed yet and
+	// this is the last point at which the two are directly comparable.
+	fromRows := map[string]int{}
+	for _, c := range cl.Clients {
+		fromRows[c.Scope]++
+	}
+	for _, scope := range []string{"local", "upstream", "unknown"} {
+		if cl.Scopes[scope] != fromRows[scope] {
+			t.Errorf("scope %q: rail says %d, rows say %d",
+				scope, cl.Scopes[scope], fromRows[scope])
+		}
+	}
+	if cl.Scopes["local"] != dash.KnownDevices {
+		t.Errorf("the client list says %d local, the dashboard says %d on this "+
+			"network — the two screens disagree about the same question",
+			cl.Scopes["local"], dash.KnownDevices)
+	}
+	// The regression itself: with anything on the other side of the router
+	// present, the headline must be strictly smaller than the row count.
+	if elsewhere := len(cl.Clients) - fromRows["local"]; elsewhere > 0 &&
+		dash.KnownDevices >= len(cl.Clients) {
+		t.Errorf("%d of %d known hosts are not on this network, but the "+
+			"dashboard still reports %d", elsewhere, len(cl.Clients),
+			dash.KnownDevices)
+	}
+	t.Logf("clients: %d row(s), scopes %v", len(cl.Clients), cl.Scopes)
 
 	_ = csrf
 	cancel()

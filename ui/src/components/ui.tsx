@@ -78,10 +78,15 @@ export function Stat({
   label,
   value,
   tone,
+  sub,
 }: {
   label: string
   value: ReactNode
   tone?: 'good' | 'warning' | 'critical' | 'muted'
+  /** A small line under the number, for what the number deliberately leaves
+   *  out. A count that excludes something should say what, next to itself —
+   *  an explanation two cards away does not get read. */
+  sub?: ReactNode
 }) {
   const colour = tone ? `var(--${tone === 'muted' ? 'text-muted' : tone})` : undefined
   return (
@@ -99,6 +104,11 @@ export function Stat({
       >
         {value}
       </div>
+      {sub != null && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+          {sub}
+        </div>
+      )}
     </div>
   )
 }

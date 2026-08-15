@@ -389,13 +389,22 @@ type dashboard struct {
 	WirelessClients *int     `json:"wireless_clients"`
 	ClientsUnsure   []string `json:"wireless_clients_unknown_on,omitempty"`
 
-	// KnownDevices counts everything seen on the LAN — wireless, wired and
-	// whatever else answers ARP. It is a different question from
-	// WirelessClients and is deliberately a separate number: showing one
-	// labelled "clients" next to a grid listing the other is how a dashboard
-	// gets quietly distrusted.
-	KnownDevices  int `json:"known_devices"`
-	ActiveDevices int `json:"active_devices"`
+	// KnownDevices counts hosts on THIS network — wireless, wired and whatever
+	// else answers ARP — and ActiveDevices is those seen recently. It is a
+	// different question from WirelessClients and is deliberately a separate
+	// number: showing one labelled "clients" next to a grid listing the other is
+	// how a dashboard gets quietly distrusted.
+	//
+	// Both are scoped to store.ScopeLocal. A gateway's neighbour tables cover
+	// every interface, so an unscoped count includes the neighbours on its
+	// uplink — on the reference device that was 11 of 14, none of them anything
+	// the operator owns. UpstreamDevices and UnscopedDevices carry the
+	// remainder so the headline is smaller *and* legible, rather than smaller
+	// for no visible reason.
+	KnownDevices    int `json:"known_devices"`
+	ActiveDevices   int `json:"active_devices"`
+	UpstreamDevices int `json:"upstream_devices"`
+	UnscopedDevices int `json:"unscoped_devices"`
 
 	Focused  int           `json:"focused_devices"`
 	Quiesced int           `json:"quiesced_devices"`
@@ -448,14 +457,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		d.WirelessClients = &total
 	}
 
-	if clients, err := s.Store.Clients(ctx, 0, 5000); err == nil {
-		d.KnownDevices = len(clients)
-		cutoff := now.Add(-clientActiveWindow).Unix()
-		for _, c := range clients {
-			if c.LastSeen != nil && *c.LastSeen >= cutoff {
-				d.ActiveDevices++
-			}
-		}
+	// Counted in SQL and by scope, using the same call the client grid's filter
+	// rail uses — see store.ClientCounts for why both go through one place.
+	if counts, err := s.Store.ClientCounts(ctx, 0,
+		now.Add(-clientActiveWindow).Unix()); err == nil {
+		d.KnownDevices = counts[store.ScopeLocal].Total
+		d.ActiveDevices = counts[store.ScopeLocal].Active
+		d.UpstreamDevices = counts[store.ScopeUpstream].Active
+		d.UnscopedDevices = counts[store.ScopeUnknown].Active
+	} else {
+		s.Log.Debug("could not count clients", "err", err)
 	}
 
 	if events, err := s.Store.RecentEvents(ctx, 20); err == nil {

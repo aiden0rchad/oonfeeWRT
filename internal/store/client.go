@@ -145,6 +145,64 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 	return out, rows.Err()
 }
 
+// ClientScopeCount is how many clients sit in one scope: how many have ever
+// been seen, and how many are current.
+type ClientScopeCount struct {
+	Total  int `json:"total"`
+	Active int `json:"active"`
+}
+
+// ClientCounts totals clients by scope, in one query.
+//
+// This exists because the local/upstream distinction has two callers — the
+// dashboard's headline number and the client grid's filter rail — and they must
+// not answer it differently. They did: the grid counted scopes and the
+// dashboard counted rows, so a fleet with 3 clients and 11 upstream neighbours
+// showed "3" on one screen and "14" on the other, both labelled as this
+// network's devices. Whichever a person read first was the one they distrusted
+// afterwards.
+//
+// Counting in SQL rather than over a fetched page is the other half. The
+// dashboard used to load up to 5000 client rows to call len() on them, which
+// also silently capped the total at 5000; the grid counted whatever page it had
+// received, which is correct only while the page is the whole table. Neither
+// survives server-side paging, and a count that changes when you turn to page 2
+// is worse than no count.
+//
+// seenSince bounds which clients are counted at all (0 = everything ever seen);
+// activeSince decides which of those count as Active. All three scopes are
+// always present in the result, zero-filled, so a caller never has to tell an
+// absent key from a genuine zero — "0 local, 11 upstream" is an answer, and a
+// missing key would render as an empty rail instead.
+func (db *DB) ClientCounts(ctx context.Context, seenSince, activeSince int64) (map[string]ClientScopeCount, error) {
+	out := map[string]ClientScopeCount{
+		ScopeLocal: {}, ScopeUpstream: {}, ScopeUnknown: {},
+	}
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT COALESCE(NULLIF(scope,''), ?) AS s,
+       COUNT(*),
+       COALESCE(SUM(CASE WHEN last_seen IS NOT NULL AND last_seen >= ?
+                         THEN 1 ELSE 0 END), 0)
+  FROM clients
+ WHERE (? = 0 OR last_seen >= ?)
+ GROUP BY s`, ScopeUnknown, activeSince, seenSince, seenSince)
+	if err != nil {
+		return nil, fmt.Errorf("store: count clients by scope: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var scope string
+		var c ClientScopeCount
+		if err := rows.Scan(&scope, &c.Total, &c.Active); err != nil {
+			return nil, err
+		}
+		// A scope this build does not know about is still counted rather than
+		// dropped: the alternative is a total that quietly omits rows.
+		out[scope] = c
+	}
+	return out, rows.Err()
+}
+
 // PruneClients forgets clients not seen for a long time.
 //
 // Without it the table grows forever on any network with randomised MACs, where

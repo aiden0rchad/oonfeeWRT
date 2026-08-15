@@ -255,20 +255,18 @@ most-worth-doing first.
 
 ### Do these next
 
-1. **Scope the fleet client total.** The dashboard's "Devices on the LAN" counts
-   every host including upstream neighbours, so it says 14 where the client grid
-   now correctly says 3. One query, but it is the second place the same
-   local/upstream distinction has to be made and it should be made deliberately
-   rather than patched — see §5c for the distinction itself.
-2. **Server-side paging for `/clients`.** The event log is paged and faceted in
+1. **Server-side paging for `/clients`.** The event log is paged and faceted in
    SQL; the client list still returns everything and filters in the browser.
    Correct today at 14 clients, and its filter rail says so rather than implying
    otherwise, but it does not survive a real fleet. §5b has the faceting rules
-   that took two attempts to get right — reuse them, do not re-derive them.
-3. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
+   that took two attempts to get right — reuse them, do not re-derive them. The
+   scope rail is already counted in SQL and page-independent (§5h); presence and
+   connection are not, and connection is derived from telemetry rather than
+   stored, which is the part that needs thought.
+2. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
    detected and logged as a warning and the stale registry is left in place, so
    a device that gained a radio or a feature never gets it.
-4. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+3. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
 
 ### Blocked, and by what
@@ -313,6 +311,7 @@ the useful part — the code is in git either way.
 | §5e | Phase 2's first contact with hardware — three defects a mock could not reach |
 | §5f | Per-device overrides — and the four things they deliberately cannot touch |
 | §5g | Networks — **read this one** |
+| §5h | The fleet client total — two screens answering one question two ways |
 
 ### 5a. What discovery corrected
 
@@ -665,7 +664,37 @@ new network defaults to exactly that.
 - Nothing re-probes capabilities after adoption. A firmware upgrade is detected
   and logged as a warning, and the stale registry is left in place. This one has
   grown teeth now that the renderer gates network rendering on the probed port
-  map — it is item 3 in the do-next list above.
+  map — it is item 2 in the do-next list above.
+
+### 5h. One question, two screens, two answers
+
+The client grid was scoped in §5c and the dashboard was not, so the same network
+was described as **14 devices** on one screen and **3** on the other, both
+captioned as this network's. That is worse than either number being wrong on its
+own: whichever a person reads first is the one they stop trusting.
+
+The fix worth noting is not the scoping — that was already done and measured —
+it is that the two counts came from two different mechanisms. The dashboard
+loaded up to 5000 client rows to call `len()` on them; the grid tallied whatever
+page the browser had received. Both are correct only while the page is the whole
+table, and neither survives the paging that is now item 1. They are one query
+now, `store.ClientCounts`, counted in SQL and shared by both callers.
+
+Two things fell out of doing it that way rather than patching the number:
+
+- **The headline says what it excludes.** "3" with "7 upstream, 4 unplaced"
+  under it. Without that line the count is simply smaller than the previous
+  build's, and nothing distinguishes a correct rescoping from lost devices.
+- **Every scope is always present in the result, zero-filled.** "0 local, 7
+  upstream" renders as a rail a person can click; a missing key renders as no
+  rail at all, which reads as "this build does not do scoping".
+
+Verified on hardware through the daemon integration test, which seeds the
+existing credential rather than adopting — so the check costs zero device
+writes. Real device, real client mix: `3 on this network (3 active), 7 upstream,
+4 unplaced` against a grid of `14 row(s), scopes map[local:3 unknown:4
+upstream:7]`. The test now asserts the two agree, so they cannot drift apart
+again silently.
 
 ---
 

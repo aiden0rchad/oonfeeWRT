@@ -727,9 +727,14 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	}
 
 	// The LAN inventory is a different question and must not be conflated with
-	// associated stations.
+	// associated stations — and it counts THIS network, not everything the
+	// device can see. A gateway's neighbour tables also cover its uplink.
 	if err := h.db.UpsertClients(ctx, []store.SeenClient{
-		{MAC: "11:11:11:11:11:11", Name: "wired-nas"},
+		{MAC: "11:11:11:11:11:11", Name: "wired-nas", IPv4: "192.168.1.20",
+			Scope: store.ScopeLocal},
+		{MAC: "22:22:22:22:22:22", Name: "upstream-router", IPv4: "10.7.46.1",
+			Scope: store.ScopeUpstream},
+		{MAC: "33:33:33:33:33:33", Name: "unplaced", Scope: store.ScopeUnknown},
 	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -738,10 +743,37 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.KnownDevices != 1 || d.ActiveDevices != 1 {
-		t.Errorf("known/active devices = %d/%d, want 1/1", d.KnownDevices, d.ActiveDevices)
+		t.Errorf("known/active devices = %d/%d, want 1/1 — the upstream "+
+			"neighbour and the unplaced host are not on this network",
+			d.KnownDevices, d.ActiveDevices)
+	}
+	if d.UpstreamDevices != 1 || d.UnscopedDevices != 1 {
+		t.Errorf("upstream/unscoped = %d/%d, want 1/1 — the excluded hosts must "+
+			"still be reported, or the headline is just quietly smaller",
+			d.UpstreamDevices, d.UnscopedDevices)
 	}
 	if d.WirelessClients == nil || *d.WirelessClients != 9 {
 		t.Errorf("the LAN inventory changed the wireless total: %v", d.WirelessClients)
+	}
+
+	// The client list's own scope counts must agree with the dashboard's: they
+	// are the same question and used to be computed two different ways.
+	w = h.do(http.MethodGet, "/api/v1/clients", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var cl struct {
+		Scopes map[string]int `json:"scopes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &cl); err != nil {
+		t.Fatal(err)
+	}
+	if cl.Scopes[store.ScopeLocal] != d.ActiveDevices {
+		t.Errorf("the client list says %d local, the dashboard says %d",
+			cl.Scopes[store.ScopeLocal], d.ActiveDevices)
+	}
+	if cl.Scopes[store.ScopeUpstream] != 1 || cl.Scopes[store.ScopeUnknown] != 1 {
+		t.Errorf("client scope counts = %v, want 1 upstream and 1 unknown", cl.Scopes)
 	}
 }
 

@@ -14,6 +14,16 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const d = data.devices
   const events = data.recent_events ?? []
 
+  // What "Devices on the LAN" leaves out, named under the number itself.
+  //
+  // The count is scoped to this network, so on a gateway it excludes the
+  // neighbours on the uplink — 11 of 14 on the reference device. Without this
+  // line the headline is simply smaller than the previous build's and the
+  // operator has no way to tell a correct rescoping from lost devices.
+  const elsewhere: string[] = []
+  if (data.upstream_devices > 0) elsewhere.push(`${data.upstream_devices} upstream`)
+  if (data.unscoped_devices > 0) elsewhere.push(`${data.unscoped_devices} unplaced`)
+
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
@@ -35,7 +45,11 @@ export function Dashboard({ data }: { data: DashboardData }) {
           />
         </Card>
         <Card>
-          <Stat label="Devices on the LAN" value={data.active_devices} />
+          <Stat
+            label="Devices on the LAN"
+            value={data.active_devices}
+            sub={elsewhere.length > 0 ? `${elsewhere.join(', ')} not counted` : undefined}
+          />
         </Card>
         <Card>
           <Stat label="Focused polls" value={data.focused_devices} />
@@ -56,8 +70,12 @@ export function Dashboard({ data }: { data: DashboardData }) {
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         “Wireless clients” counts stations associated to the radios, from
-        hostapd. “Devices on the LAN” counts everything that answered ARP or
-        DHCP, wired included. They are different questions and will not match.
+        hostapd. “Devices on the LAN” counts everything on <em>this</em> network
+        that answered ARP or DHCP, wired included — hosts on the uplink side of
+        a gateway are excluded, and “unplaced” means no address has been
+        observed to place them either way. They are different questions and will
+        not match. The client list uses the same scoping, so the two screens
+        agree.
       </div>
 
       {d.pending > 0 && (

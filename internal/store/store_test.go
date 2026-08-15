@@ -498,6 +498,96 @@ func TestClientWithNoStoredScopeReadsAsUnknown(t *testing.T) {
 	}
 }
 
+// The counts the dashboard and the client rail both read.
+//
+// The shape here is the one measured on the reference device and the reason the
+// count was wrong: a handful of local clients among a majority of upstream
+// neighbours, plus rows nothing has placed. Counting rows rather than scopes
+// reported 6 devices "on the LAN" where 2 were.
+func TestClientCountsByScope(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	// now = 10000; active means seen at or after 9000.
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:00:01", IPv4: "192.168.1.5", Scope: ScopeLocal},
+		{MAC: "aa:00:00:00:00:02", IPv4: "192.168.1.6", Scope: ScopeLocal},
+		{MAC: "aa:00:00:00:00:03", IPv4: "10.7.46.1", Scope: ScopeUpstream},
+		{MAC: "aa:00:00:00:00:04", IPv4: "10.7.46.2", Scope: ScopeUpstream},
+		{MAC: "aa:00:00:00:00:05", Scope: ScopeUnknown},
+	}, 9500); err != nil {
+		t.Fatal(err)
+	}
+	// One local client last seen long ago: known, but not active.
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:00:06", IPv4: "192.168.1.9", Scope: ScopeLocal},
+	}, 1000); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, err := db.ClientCounts(ctx, 0, 9000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := counts[ScopeLocal]; got.Total != 3 || got.Active != 2 {
+		t.Errorf("local = %+v, want {Total:3 Active:2}", got)
+	}
+	if got := counts[ScopeUpstream]; got.Total != 2 || got.Active != 2 {
+		t.Errorf("upstream = %+v, want {Total:2 Active:2}", got)
+	}
+	if got := counts[ScopeUnknown]; got.Total != 1 || got.Active != 1 {
+		t.Errorf("unknown = %+v, want {Total:1 Active:1}", got)
+	}
+
+	// seenSince bounds what is counted at all — the client list's 24h window.
+	recent, err := db.ClientCounts(ctx, 9000, 9000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recent[ScopeLocal].Total; got != 2 {
+		t.Errorf("local total within the seen window = %d, want 2 "+
+			"(the client last seen at t=1000 is outside it)", got)
+	}
+}
+
+// Every scope is present even when nothing is in it.
+//
+// "0 local, 4 upstream" is an answer and renders as a rail a person can click.
+// A missing key renders as no rail at all, which reads as "this build does not
+// do scoping" rather than "none of these are yours".
+func TestClientCountsAlwaysNamesEveryScope(t *testing.T) {
+	db := open(t)
+	counts, err := db.ClientCounts(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []string{ScopeLocal, ScopeUpstream, ScopeUnknown} {
+		if _, ok := counts[scope]; !ok {
+			t.Errorf("scope %q missing from an empty count", scope)
+		}
+	}
+}
+
+// A row written before the scope column existed counts as unplaced, not local —
+// the same rule Clients() applies when reading one.
+func TestClientCountsTreatsPreMigrationRowsAsUnknown(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO clients (mac, name, ip, first_seen, last_seen) VALUES (?,?,?,?,?)`,
+		"aa:00:00:00:00:07", "old row", "192.168.1.7", 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	counts, err := db.ClientCounts(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[ScopeLocal].Total != 0 || counts[ScopeUnknown].Total != 1 {
+		t.Errorf("pre-migration row counted as local=%d unknown=%d, want 0 and 1",
+			counts[ScopeLocal].Total, counts[ScopeUnknown].Total)
+	}
+}
+
 func clientByMAC(t *testing.T, db *DB, mac string) Client {
 	t.Helper()
 	cs, err := db.Clients(context.Background(), 0, 100)

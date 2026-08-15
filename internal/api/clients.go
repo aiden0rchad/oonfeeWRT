@@ -71,12 +71,18 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	// Count the scopes here so the UI's filter counts do not depend on the page
-	// it happened to receive, and so an empty local list is legible: "0 local,
-	// 8 upstream" is an answer, an empty grid on its own is not.
+	// Counted in SQL over the same `since` window this list uses, NOT over the
+	// rows above — so the counts do not depend on the page that happened to be
+	// returned, and an empty local list stays legible: "0 local, 11 upstream" is
+	// an answer, an empty grid on its own is not. Same call the dashboard makes,
+	// so the two screens cannot disagree about what is on this network.
 	scopes := map[string]int{}
-	for _, c := range out {
-		scopes[c.Scope]++
+	if counts, err := s.Store.ClientCounts(ctx, since, onlineCutoff); err == nil {
+		for scope, c := range counts {
+			scopes[scope] = c.Total
+		}
+	} else {
+		s.Log.Debug("could not count client scopes", "err", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
