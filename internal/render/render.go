@@ -37,6 +37,19 @@ type Section struct {
 	Type   string
 	Name   string
 	Values map[string]string
+
+	// Lists are UCI *list* options, which are not the same thing as a string
+	// with spaces in it.
+	//
+	// Writing `option ports 'lan1:u* lan2:u*'` where UCI wants
+	// `list ports 'lan1:u*'` is accepted by uci.set without complaint, stored
+	// without complaint, and then ignored by netifd. Measured: rendering a
+	// bridge-VLAN's ports that way produced a config the device kept and did
+	// not honour, VLAN filtering came on with no untagged membership, and the
+	// LAN went down after the apply had already been confirmed as healthy.
+	// There is no error anywhere in that chain — which is exactly why the
+	// distinction is a separate field rather than a convention.
+	Lists map[string][]string
 }
 
 // Doc is everything we intend to exist on one device.
@@ -85,15 +98,68 @@ type Report struct {
 func (r Report) HasConflicts() bool { return len(r.Conflicts) > 0 }
 
 // Existing describes what is already on the device, so the renderer can detect
-// collisions with foreign config. Supply what a `uci get wireless` returned.
+// collisions with foreign config.
+//
+// Keyed by UCI config then section, because the render spans four of them —
+// wireless, network, dhcp and firewall. It began as a bare map of wifi-ifaces
+// and grew a config dimension when networks arrived; the alternative was four
+// parallel maps and four nearly identical lookups.
 type Existing struct {
-	// WifiIfaces maps section name -> its values, including any ownership tag.
-	WifiIfaces map[string]map[string]string
+	// Configs maps config name -> section name -> its values, including any
+	// ownership tag.
+	Configs map[string]map[string]map[string]string
 }
 
-// Owned reports whether an existing section carries our marker.
+// WifiIfaces is the wireless config's wifi-iface sections.
+//
+// Filtered by .type on purpose: a wifi-device (a radio) is not an AP interface,
+// and the SSID-collision check below would otherwise be scanning sections that
+// cannot hold an SSID. Callers that need every wireless section — the
+// name-collision check does, since a foreign section could have our name and
+// any type at all — use In("wireless") instead.
+func (e Existing) WifiIfaces() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for name, vals := range e.In("wireless") {
+		if vals[".type"] == "wifi-iface" {
+			out[name] = vals
+		}
+	}
+	return out
+}
+
+// In returns one config's sections, never nil, so callers can index freely.
+func (e Existing) In(config string) map[string]map[string]string {
+	if e.Configs == nil {
+		return map[string]map[string]string{}
+	}
+	if c, ok := e.Configs[config]; ok {
+		return c
+	}
+	return map[string]map[string]string{}
+}
+
+// WirelessOnly builds an Existing holding just the wireless config, for callers
+// and tests that have read only that one.
+func WirelessOnly(ifaces map[string]map[string]string) Existing {
+	return Existing{Configs: map[string]map[string]map[string]string{"wireless": ifaces}}
+}
+
+// NewExisting builds an Existing from per-config section maps.
+func NewExisting(configs map[string]map[string]map[string]string) Existing {
+	return Existing{Configs: configs}
+}
+
+// Owned reports whether an existing wireless section carries our marker.
 func (e Existing) Owned(section string) bool {
-	return e.WifiIfaces[section][OwnershipTag] == "1"
+	return e.OwnedIn("wireless", section)
+}
+
+// OwnedIn reports whether a section in any config carries our marker.
+//
+// The marker is the whole ownership model: a section without it was written by
+// a human and is not ours to change, however much its name looks like ours.
+func (e Existing) OwnedIn(config, section string) bool {
+	return e.In(config)[section][OwnershipTag] == "1"
 }
 
 // Render produces the UCI document for one device.
@@ -107,6 +173,27 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		return Doc{}, rep, fmt.Errorf("render: site model is invalid: %v", errs[0])
 	}
 	doc := Doc{DeviceID: dev.ID}
+
+	// Networks first: a WLAN attaches to one, and a config file that declares
+	// the interface before the wireless section referencing it reads the way a
+	// human would write it.
+	for _, n := range site.Networks {
+		secs, oms := renderNetwork(n, dev, caps, existing)
+		for _, sec := range secs {
+			// Same ownership rule as wireless: a section with our name that is
+			// not ours aborts rather than being overwritten.
+			if vals, exists := existing.In(sec.Config)[sec.Name]; exists && vals[OwnershipTag] != "1" {
+				rep.Conflicts = append(rep.Conflicts, Conflict{
+					Config: sec.Config, Section: sec.Name,
+					Reason: "a section with our name exists but is not ours; " +
+						"refusing to overwrite config we did not write",
+				})
+				continue
+			}
+			doc.Sections = append(doc.Sections, sec)
+		}
+		rep.Omissions = append(rep.Omissions, oms...)
+	}
 
 	radios := radiosByBand(caps)
 	for _, base := range site.WLANsFor(dev.ID) {
@@ -132,7 +219,9 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 				continue
 			}
 			name := ifaceName(w.ID, radio)
-			if vals, exists := existing.WifiIfaces[name]; exists && vals[OwnershipTag] != "1" {
+			// Every wireless section, not only the ifaces: a foreign section
+			// could carry our name with any type, and we would still collide.
+			if vals, exists := existing.In("wireless")[name]; exists && vals[OwnershipTag] != "1" {
 				rep.Conflicts = append(rep.Conflicts, Conflict{
 					Config: "wireless", Section: name,
 					Reason: "a section with our name exists but is not ours; " +
@@ -245,8 +334,13 @@ func ifaceName(wlanID int, radio string) string {
 // genuinely confusing failure, so it is a conflict rather than a silent
 // duplicate.
 func foreignSSIDOnRadio(e Existing, radio, ssid, ours string) (string, bool) {
-	names := make([]string, 0, len(e.WifiIfaces))
-	for name := range e.WifiIfaces {
+	// Every wireless section, not only those typed wifi-iface. A section with a
+	// device and an ssid is publishing that SSID whatever its .type says, and a
+	// conflict check that can be dodged by a missing metadata key fails open on
+	// exactly the case it exists to catch.
+	ifaces := e.In("wireless")
+	names := make([]string, 0, len(ifaces))
+	for name := range ifaces {
 		names = append(names, name)
 	}
 	sort.Strings(names) // deterministic conflict reporting
@@ -254,7 +348,7 @@ func foreignSSIDOnRadio(e Existing, radio, ssid, ours string) (string, bool) {
 		if name == ours {
 			continue
 		}
-		vals := e.WifiIfaces[name]
+		vals := ifaces[name]
 		if vals[OwnershipTag] == "1" {
 			continue
 		}

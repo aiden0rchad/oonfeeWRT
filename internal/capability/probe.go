@@ -50,7 +50,43 @@ func probeBoard(ctx context.Context, c *ubus.Client, r *Registry) error {
 		Target: b.Release.Target, Release: b.Release.Description,
 		RootFSType: b.RootFSType,
 	}
+	probePorts(ctx, c, r)
 	return nil
+}
+
+// probePorts reads the wired layout from the device's own board description.
+//
+// Best effort, and deliberately not fatal. Ports are needed only to tag a VLAN
+// onto physical ports; a device that will not report them can still carry
+// wireless config perfectly well, and failing adoption over it would refuse a
+// device for lacking something most deployments never use. What must not
+// happen is inventing port names — the renderer reports the absence instead.
+func probePorts(ctx context.Context, c *ubus.Client, r *Registry) {
+	var out struct {
+		Network map[string]struct {
+			Ports  []string `json:"ports"`
+			Device string   `json:"device"`
+		} `json:"network"`
+	}
+	if err := c.Call(ctx, "luci-rpc", "getBoardJSON", nil, &out); err != nil {
+		r.Notes = append(r.Notes, "wired port layout could not be read "+
+			"(luci-rpc.getBoardJSON: "+err.Error()+"); VLANs cannot be tagged "+
+			"onto physical ports on this device until it can")
+		return
+	}
+	if lan, ok := out.Network["lan"]; ok {
+		r.Ports.LAN = lan.Ports
+		// A board with switch ports bridges them; one with a single lan device
+		// names it directly. Both are real layouts.
+		if len(lan.Ports) > 0 {
+			r.Ports.Bridge = "br-lan"
+		} else if lan.Device != "" {
+			r.Ports.Bridge = lan.Device
+		}
+	}
+	if wan, ok := out.Network["wan"]; ok {
+		r.Ports.WAN = wan.Device
+	}
 }
 
 // classify maps a target to a DEVICE-BUDGET class. Marketing names are useless

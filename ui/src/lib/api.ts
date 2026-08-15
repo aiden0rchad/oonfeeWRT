@@ -359,6 +359,9 @@ export interface DevicePreview {
   /** Per-device overrides in force here, shown at the moment someone is
    *  deciding what to push. */
   deviations?: string[]
+  /** The change edits network or firewall config — the path the controller
+   *  reaches this device through. Applying needs an explicit acknowledgment. */
+  touches_traversal?: boolean
   /** This device could not be planned. The others are still reported. */
   error?: string
 }
@@ -489,8 +492,8 @@ export const api = {
   setOverride: (deviceID: number, wlan_id: number, key: string, value: string) =>
     post<{ note: string }>(`/site/devices/${deviceID}/override`, { wlan_id, key, value }),
   preview: () => get<PreviewResult>('/site/preview'),
-  applySite: (device_ids?: number[]) =>
-    post<ApplyResult>('/site/apply', device_ids ? { device_ids } : {}),
+  applySite: (opts: { device_ids?: number[]; acknowledge_traversal?: boolean } = {}) =>
+    post<ApplyResult>('/site/apply', opts),
 
   scanPlan: () => get<ScanPlan>('/discovery'),
   scan: (req?: { networks?: string[]; https?: boolean }) =>

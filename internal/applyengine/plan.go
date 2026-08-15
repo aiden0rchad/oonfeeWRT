@@ -28,7 +28,11 @@ type Op struct {
 	Type    string            // Add only
 	Name    string            // Add only; named sections keep diffs readable
 	Values  map[string]string // Add and Set
-	Option  string            // Delete of a single option
+	// Lists are UCI list options. A list is NOT a string with spaces in it:
+	// uci.set accepts the string form silently, stores it, and netifd then
+	// ignores it — a failure with no error anywhere in the chain.
+	Lists  map[string][]string
+	Option string // Delete of a single option
 }
 
 type OpKind string

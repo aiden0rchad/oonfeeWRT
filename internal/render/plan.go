@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 )
@@ -23,11 +24,11 @@ import (
 func (d Doc) Plan(existing Existing) applyengine.Plan {
 	ops := make([]applyengine.Op, 0, len(d.Sections))
 	for _, s := range sortedSections(d.Sections) {
-		current, present := existing.WifiIfaces[s.Name]
+		current, present := existing.In(s.Config)[s.Name]
 		if !present {
 			ops = append(ops, applyengine.Op{
 				Kind: applyengine.OpAdd, Config: s.Config, Type: s.Type,
-				Name: s.Name, Section: s.Name, Values: s.Values,
+				Name: s.Name, Section: s.Name, Values: s.Values, Lists: s.Lists,
 			})
 			continue
 		}
@@ -45,7 +46,7 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 		// alone rather than being silently dropped.
 		ops = append(ops, applyengine.Op{
 			Kind: applyengine.OpSet, Config: s.Config, Type: s.Type,
-			Name: s.Name, Section: s.Name, Values: s.Values,
+			Name: s.Name, Section: s.Name, Values: s.Values, Lists: s.Lists,
 		})
 	}
 	return applyengine.Plan{Ops: ops}
@@ -63,6 +64,13 @@ func matches(s Section, current map[string]string) bool {
 			return false
 		}
 	}
+	// Lists come back from the device space-joined (see reconcile.flatten), so
+	// compare in that form rather than round-tripping through a parser.
+	for k, v := range s.Lists {
+		if current[k] != strings.Join(v, " ") {
+			return false
+		}
+	}
 	return true
 }
 
@@ -73,22 +81,33 @@ func matches(s Section, current map[string]string) bool {
 // Only ever sections carrying our marker. A section without it was written by a
 // human and is not ours to delete, however much it looks like ours.
 func (d Doc) Prune(existing Existing) []applyengine.Op {
-	wanted := map[string]bool{}
+	// Keyed by config as well as name: two configs can hold sections with the
+	// same name, and pruning "everything called oowrt_net_iot" would reach
+	// across from network into dhcp.
+	type ref struct{ config, section string }
+	wanted := map[ref]bool{}
 	for _, s := range d.Sections {
-		wanted[s.Name] = true
+		wanted[ref{s.Config, s.Name}] = true
 	}
-	var stale []string
-	for name := range existing.WifiIfaces {
-		if wanted[name] || !existing.Owned(name) {
-			continue
+	var stale []ref
+	for config, sections := range existing.Configs {
+		for name := range sections {
+			if wanted[ref{config, name}] || !existing.OwnedIn(config, name) {
+				continue
+			}
+			stale = append(stale, ref{config, name})
 		}
-		stale = append(stale, name)
 	}
-	sort.Strings(stale) // deterministic diffs
+	sort.Slice(stale, func(i, j int) bool { // deterministic diffs
+		if stale[i].config != stale[j].config {
+			return stale[i].config < stale[j].config
+		}
+		return stale[i].section < stale[j].section
+	})
 	ops := make([]applyengine.Op, 0, len(stale))
-	for _, name := range stale {
+	for _, r := range stale {
 		ops = append(ops, applyengine.Op{
-			Kind: applyengine.OpDelete, Config: "wireless", Section: name,
+			Kind: applyengine.OpDelete, Config: r.config, Section: r.section,
 		})
 	}
 	return ops
@@ -109,6 +128,16 @@ func (s Section) Hash() string {
 	fmt.Fprintf(h, "%s\x00%s\x00%s\x00", s.Config, s.Type, s.Name)
 	for _, k := range keys {
 		fmt.Fprintf(h, "%s\x00%s\x00", k, s.Values[k])
+	}
+	// Lists are part of the section's identity too: a bridge-VLAN whose port
+	// membership changed but whose options did not is a real change.
+	lkeys := make([]string, 0, len(s.Lists))
+	for k := range s.Lists {
+		lkeys = append(lkeys, k)
+	}
+	sort.Strings(lkeys)
+	for _, k := range lkeys {
+		fmt.Fprintf(h, "%s\x00%s\x00", k, strings.Join(s.Lists[k], "\x1f"))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

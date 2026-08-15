@@ -448,20 +448,32 @@ func TestNoOpPlanShortCircuits(t *testing.T) {
 	}
 }
 
-func TestReadExistingSeesOnlyWifiIfaces(t *testing.T) {
+// ReadExisting reads every config the renderer can write, and the WifiIfaces
+// accessor narrows to AP interfaces.
+//
+// Reading exactly the managed set is what makes Prune safe: it removes owned
+// sections the model no longer produces, so a config we render into but never
+// read would leave orphans behind.
+func TestReadExistingCoversEveryManagedConfig(t *testing.T) {
 	ctx := context.Background()
 	existing, err := ReadExisting(ctx, dial(t))
 	if err != nil {
 		t.Fatalf("ReadExisting: %v", err)
 	}
-	for name, vals := range existing.WifiIfaces {
+	if _, ok := existing.Configs["wireless"]; !ok {
+		t.Fatal("wireless was not read")
+	}
+	// Radios are wireless sections but not AP interfaces.
+	if _, present := existing.In("wireless")["radio0"]; !present {
+		t.Error("the raw wireless config should contain the radio sections")
+	}
+	for name, vals := range existing.WifiIfaces() {
 		if vals[".type"] != "wifi-iface" {
 			t.Errorf("%s is not a wifi-iface: %v", name, vals)
 		}
 	}
-	// The fixture ships a wifi-device section, which must not appear here.
-	if _, leaked := existing.WifiIfaces["radio0"]; leaked {
-		t.Error("wifi-device sections must not be treated as wifi-ifaces")
+	if _, leaked := existing.WifiIfaces()["radio0"]; leaked {
+		t.Error("WifiIfaces must not report a wifi-device as an AP interface")
 	}
 }
 

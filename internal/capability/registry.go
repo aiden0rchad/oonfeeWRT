@@ -107,6 +107,28 @@ type Board struct {
 	RootFSType string
 }
 
+// Ports is the device's wired layer-2 layout, as its own board description
+// reports it.
+//
+// Needed because a VLAN has to be tagged onto real ports, and the port names
+// are hardware — `lan1..lan4` on this board, `lan1..lan8` or `eth0` on
+// another. Reading it at adoption rather than at render time keeps the
+// renderer a pure function: it is given the device's shape, it does not go and
+// ask.
+//
+// An empty LAN list is a real state, not a failure: a device whose board file
+// declares no switch ports (a pure AP on a single ethernet) can still carry a
+// tagged VLAN on its uplink, and the renderer says what it could not do rather
+// than inventing port names.
+type Ports struct {
+	// Bridge is the L2 device the LAN ports are members of, e.g. "br-lan".
+	Bridge string
+	// LAN are the switch port names, in board order.
+	LAN []string
+	// WAN is the uplink device name, when the board declares one.
+	WAN string
+}
+
 // Radio is one PHY as the UI needs to know it.
 type Radio struct {
 	Device      string // e.g. phy0-ap0
@@ -138,6 +160,7 @@ type Registry struct {
 	Features map[Feature]State
 	Quirks   []Quirk
 	Radios   []Radio
+	Ports    Ports
 
 	// Binaries reachable through the ACL's file.exec grants. Absent entries may
 	// mean "not installed" OR "not granted" — Notes records which.

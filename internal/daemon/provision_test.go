@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -154,5 +156,41 @@ func TestPreviewReportsAnUnreachableDeviceAsARow(t *testing.T) {
 	}
 	if res.Devices[0].Error == "" {
 		t.Error("an unreachable device reported no error on its row")
+	}
+}
+
+// A change to network or firewall config needs an explicit acknowledgment.
+//
+// Those configs carry the path the controller reaches the device through. The
+// rollback still protects the change — that is what applying with one armed is
+// for — but an operator should be told they are editing the road before driving
+// down it, rather than learning from a device that stopped answering.
+func TestTraversalDetection(t *testing.T) {
+	wireless := &reconcile.DevicePlan{Plan: applyengine.Plan{Ops: []applyengine.Op{
+		{Kind: applyengine.OpAdd, Config: "wireless", Section: "oowrt_wlan1_radio0"},
+	}}}
+	if touchesTraversal(wireless) {
+		t.Error("a wireless-only change was flagged as touching the management path")
+	}
+
+	for _, config := range []string{"network", "firewall"} {
+		p := &reconcile.DevicePlan{Plan: applyengine.Plan{Ops: []applyengine.Op{
+			{Kind: applyengine.OpAdd, Config: "wireless", Section: "oowrt_wlan1_radio0"},
+			{Kind: applyengine.OpAdd, Config: config, Section: "oowrt_bv45"},
+		}}}
+		if !touchesTraversal(p) {
+			t.Errorf("a change to %s was not flagged; it carries the path the "+
+				"controller reaches the device through", config)
+		}
+	}
+
+	// dhcp is not traversal: losing a lease server does not cut a controller
+	// that reaches the device by its static address.
+	dhcp := &reconcile.DevicePlan{Plan: applyengine.Plan{Ops: []applyengine.Op{
+		{Kind: applyengine.OpAdd, Config: "dhcp", Section: "oowrt_dhcp_iot"},
+	}}}
+	if touchesTraversal(dhcp) {
+		t.Error("a dhcp-only change was flagged; the controller reaches devices " +
+			"by address, not by lease")
 	}
 }

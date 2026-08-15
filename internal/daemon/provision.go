@@ -96,6 +96,7 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 
 	p.Changes = summarise(plan)
 	p.Blocked = plan.Blocked()
+	p.TouchesTraversal = touchesTraversal(plan)
 	for _, cf := range plan.Report.Conflicts {
 		p.Conflicts = append(p.Conflicts,
 			fmt.Sprintf("%s.%s: %s", cf.Config, cf.Section, cf.Reason))
@@ -185,7 +186,7 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 		if !dev.Adopted() || (len(want) > 0 && !want[dev.ID]) {
 			continue
 		}
-		res := d.applyDevice(ctx, site, dev)
+		res := d.applyDevice(ctx, site, dev, req.AcknowledgeTraversal)
 		out.Devices = append(out.Devices, res)
 		if res.Outcome != string(applyengine.Applied) {
 			// First failure stops the queue. Continuing would apply a
@@ -199,7 +200,8 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 	return out, nil
 }
 
-func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.Device) api.DeviceApply {
+func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.Device,
+	ackTraversal bool) api.DeviceApply {
 	out := api.DeviceApply{DeviceID: dev.ID, Name: dev.Name}
 
 	caps, err := deviceCaps(dev)
@@ -226,6 +228,17 @@ func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.De
 			out.Outcome = string(applyengine.Applied)
 			out.Reason = "already matches the site model"
 			return nil
+		}
+		// Pass the acknowledgment down: the engine gates on it too, and a
+		// preflight refusal at that depth reads as a bug rather than a policy.
+		plan.Plan.AcknowledgeTraversal = ackTraversal
+		if touchesTraversal(plan) && !ackTraversal {
+			return fmt.Errorf("this change edits %s's network or firewall "+
+				"configuration, which carries the path the controller reaches it "+
+				"through. Re-run the apply with the traversal acknowledgment to "+
+				"proceed — the change is applied with a rollback armed either way, "+
+				"but you should know you are editing the road before driving "+
+				"down it", dev.Name)
 		}
 		res, err := r.Apply(ctx, c, dev.ID, plan, healthCheck(plan))
 		out.Outcome = string(res.Outcome)
@@ -363,6 +376,17 @@ func missingFrom(found, want map[string]bool) []string {
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+// touchesTraversal delegates to the apply engine's own definition.
+//
+// Deliberately not a second copy. This layer warns the operator before they
+// click; the engine refuses mechanically at preflight. Two guards for one
+// concern is reasonable defence in depth, two DEFINITIONS of it is not — they
+// drift, and then the warning and the refusal disagree about which changes are
+// dangerous.
+func touchesTraversal(p *reconcile.DevicePlan) bool {
+	return applyengine.TouchesManagementPath(p.Plan)
 }
 
 // applyOrder puts gateways last.

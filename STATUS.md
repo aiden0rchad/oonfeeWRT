@@ -234,12 +234,11 @@ preview-then-apply flow.
 **Per-device overrides landed 2026-08-14** — see §5f. The interesting part is
 what is deliberately *not* overridable.
 
-**Phase 2, what remains:**
+**Networks render to devices as of 2026-08-14** — bridge-VLAN, interface, DHCP,
+firewall zone and forwarding, role-aware. It also found the sharpest limit in
+the project so far; see §5g, which is the one to read.
 
-- **Networks and zones on the device.** The site model holds networks and the
-  renderer's worked example 2 (bridge-VLAN, interface, DHCP, firewall zone) is
-  specified but not built — only wireless renders today. That is Phase 3's
-  territory as much as Phase 2's, and it is the largest remaining piece.
+**Phase 2, what remains:**
 - **`usteer` / `dawn` configuration and state readout.** Neither is installed on
   the reference device and both are in the official feeds — so this is blocked
   behind the package-installation flow ARCHITECTURE §6 step 3 describes and
@@ -530,6 +529,56 @@ preview row, and a site-level summary — because the risk of overrides is never
 any single one. It is a fleet that drifts apart device by device until nobody
 can say what is actually deployed.
 
+### 5g. The limit that networks ran into
+
+IMPLEMENTATION §5's worked example 2 shows a network rendering as a
+bridge-VLAN, an interface, a DHCP server and a firewall zone. All of it is now
+built. The worked example is also **incomplete in a way that takes the LAN
+down**, and it took three outages of the reference device to pin down why.
+
+**Adding any `bridge-vlan` switches the bridge to VLAN filtering**, and a stock
+`br-lan` is not ready for that. Measured:
+
+| | |
+|---|---|
+| `vlan_filtering` | 0 → 1 |
+| `br-lan` | UP, still holding `192.168.1.1/24` |
+| `ip neigh show dev br-lan` | **empty — not one neighbour** |
+| the apply engine's verdict | `applied — health passed and confirm landed` |
+| actual reachability | gone, until a pre-armed restore fired |
+
+Read that table twice. The health check passed because it asks whether the
+`lan` interface is up — and it was. The confirm landed. **A confirmed,
+"healthy", network-severing change, with no error anywhere in the chain.**
+
+Connectivity survives only if the operator's own `lan` interface moves from
+`br-lan` to `br-lan.1`. Verified: with that one edit, filtering on, `br-lan.1`
+held the address and this machine stayed `REACHABLE` in the device's neighbour
+table. But that section is the operator's, and rewriting the interface we reach
+a device through — on a device we might then be unable to reach — is exactly
+what ARCHITECTURE §0 forbids.
+
+So the controller **refuses**, and names the one-time change. Once an operator
+has made it, VLANs are managed normally: verified end to end, then pruned,
+leaving `/etc/config/{network,firewall,dhcp}` byte-identical to their pre-test
+md5s.
+
+Two other things fell out of the same sequence.
+
+**A UCI list is not a string with spaces in it.** `uci.set` accepts
+`option ports 'lan1:u* lan2:u*'` where UCI wants `list ports`, stores it, and
+netifd ignores it — no error at any layer. `Section` and `Op` now carry `Lists`
+separately.
+
+**Two guards for one concern is defence in depth; two definitions of it is a
+bug.** The apply engine already had a management-path gate covering `network`;
+the daemon grew its own covering `network` and `firewall`. They would have
+drifted — an operator warned about a change the engine then allowed, or worse
+the reverse. There is now one exported definition, `applyengine.TouchesManagementPath`,
+and it covers both configs: a zone whose input policy is REJECT blocks the
+controller as effectively as a broken interface, and the zone we render for a
+new network defaults to exactly that.
+
 **Open items that need hardware I do not have:**
 - Class B/C devices. **Class C (MT7621) sets the budget** and every number so
   far comes from the comfortable class — TLS alone doubled poll CPU there. The
@@ -612,6 +661,19 @@ written and believed.
   301-ing, and a chart axis labelled with years for data from that afternoon.
   Tests check what you thought to assert; opening the page checks what is
   actually there.
+- **A health check can only fail on what it looks at.** The VLAN change passed
+  health, landed its confirm, and severed the network. The check asked "is the
+  lan interface up" and the interface was up — address intact, state UP, and
+  zero neighbours. Liveness of an interface is not connectivity through it, and
+  the gap between those two is exactly where a confirmed change can still be
+  catastrophic. When a health check gates something irreversible, ask what
+  passing it actually proves.
+- **Arm the undo before the experiment, not after.** Three times a change took
+  the device off the network mid-command, and three times a pre-armed
+  `sleep N; restore` running locally on the device brought it back. A recovery
+  path that depends on the connection you are about to break is not a recovery
+  path. This is also why the apply engine's rollback lives on the device rather
+  than in the controller.
 - **A mock that is easier to write than the real thing is testing the wrong
   thing.** `internal/reconcile` was mock-verified and green for weeks. Its mock
   returned `map[string]string` because that is the obvious shape for UCI values,

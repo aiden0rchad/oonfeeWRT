@@ -61,6 +61,10 @@ type DevicePreview struct {
 	// visible as differing at exactly the moment someone is deciding what to
 	// push — not only on a settings screen they may never open.
 	Deviations []string `json:"deviations,omitempty"`
+	// TouchesTraversal marks a change to the network or firewall config — the
+	// configs carrying the path the controller reaches this device through.
+	// Applying it needs an explicit acknowledgment.
+	TouchesTraversal bool `json:"touches_traversal,omitempty"`
 	// Error means this device could not be planned at all. The others are still
 	// reported: one unreachable AP must not blank the whole screen.
 	Error string `json:"error,omitempty"`
@@ -79,6 +83,16 @@ type PreviewResult struct {
 type ApplyRequest struct {
 	// DeviceIDs limits the apply. Empty means every adopted device.
 	DeviceIDs []int64 `json:"device_ids,omitempty"`
+	// AcknowledgeTraversal is required when a change touches the network or
+	// firewall config of a device — IMPLEMENTATION §6's traversal
+	// acknowledgment.
+	//
+	// Those are the configs that carry the path the controller reaches the
+	// device through. A change there is applied with a rollback armed like any
+	// other, and the rollback is exactly what protects it — but an operator
+	// should know they are editing the road before driving down it, rather than
+	// finding out from a device that stopped answering.
+	AcknowledgeTraversal bool `json:"acknowledge_traversal,omitempty"`
 }
 
 // DeviceApply is one device's outcome.

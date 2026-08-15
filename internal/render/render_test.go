@@ -171,9 +171,9 @@ func TestSingleBandDeviceRendersOnlyItsBand(t *testing.T) {
 // You are a guest on someone else's router: a foreign section is never
 // overwritten, and the clash is surfaced rather than resolved.
 func TestForeignSectionWithOurNameIsAConflict(t *testing.T) {
-	existing := Existing{WifiIfaces: map[string]map[string]string{
+	existing := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan3_radio0": {"ssid": "SomethingElse", "device": "radio0"},
-	}}
+	})
 	_, rep, err := Render(testSite(), model.Device{ID: 7}, dualBandCaps(), existing)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -187,9 +187,9 @@ func TestForeignSectionWithOurNameIsAConflict(t *testing.T) {
 }
 
 func TestForeignSSIDOnTheSameRadioIsAConflict(t *testing.T) {
-	existing := Existing{WifiIfaces: map[string]map[string]string{
+	existing := WirelessOnly(map[string]map[string]string{
 		"default_radio0": {"ssid": "Home", "device": "radio0"}, // human-made
-	}}
+	})
 	_, rep, err := Render(testSite(), model.Device{ID: 7}, dualBandCaps(), existing)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -203,9 +203,9 @@ func TestForeignSSIDOnTheSameRadioIsAConflict(t *testing.T) {
 // Our own section from a previous render is not a conflict — it is the thing
 // we are updating.
 func TestOurOwnPriorSectionIsNotAConflict(t *testing.T) {
-	existing := Existing{WifiIfaces: map[string]map[string]string{
+	existing := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan3_radio0": {"ssid": "Home", "device": "radio0", OwnershipTag: "1"},
-	}}
+	})
 	doc, rep, err := Render(testSite(), model.Device{ID: 7}, dualBandCaps(), existing)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -362,10 +362,10 @@ func TestPlanStagesAddsAndUpdatesWithoutCommitting(t *testing.T) {
 	}
 
 	// Re-planning against a device that already has them updates in place.
-	existing := Existing{WifiIfaces: map[string]map[string]string{
+	existing := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan3_radio0": {OwnershipTag: "1"},
 		"oowrt_wlan3_radio1": {OwnershipTag: "1"},
-	}}
+	})
 	plan = doc.Plan(existing)
 	for _, op := range plan.Ops {
 		if op.Kind != applyengine.OpSet {
@@ -382,13 +382,13 @@ func TestPruneRemovesOurStaleSectionsAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	existing := Existing{WifiIfaces: map[string]map[string]string{
+	existing := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan3_radio0": {OwnershipTag: "1"},
 		"oowrt_wlan3_radio1": {OwnershipTag: "1"},
 		"oowrt_wlan9_radio0": {OwnershipTag: "1"},   // ours, no longer wanted
 		"default_radio0":     {"ssid": "TheirWifi"}, // a human's
 		"guest_ap":           {"ssid": "Guest"},     // also a human's
-	}}
+	})
 	ops := doc.Prune(existing)
 	if len(ops) != 1 {
 		t.Fatalf("exactly one stale owned section should be pruned, got %d: %+v",
@@ -451,25 +451,25 @@ func TestPlanSkipsSectionsThatAlreadyMatch(t *testing.T) {
 	}}}
 
 	// Exactly what we would write, plus device-added keys we do not manage.
-	same := Existing{WifiIfaces: map[string]map[string]string{
+	same := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan1_radio0": {
 			"ssid": "Home", "device": "radio0", "encryption": "sae-mixed",
 			OwnershipTag: "1",
 			// The device's own additions must not count as a difference.
 			".type": "wifi-iface", ".index": "3", "macaddr": "aa:bb:cc:dd:ee:ff",
 		},
-	}}
+	})
 	if ops := doc.Plan(same).Ops; len(ops) != 0 {
 		t.Errorf("a matching section produced %d op(s): %+v", len(ops), ops)
 	}
 
 	// One managed value different: a set, not an add.
-	differs := Existing{WifiIfaces: map[string]map[string]string{
+	differs := WirelessOnly(map[string]map[string]string{
 		"oowrt_wlan1_radio0": {
 			"ssid": "Renamed", "device": "radio0", "encryption": "sae-mixed",
 			OwnershipTag: "1",
 		},
-	}}
+	})
 	ops := doc.Plan(differs).Ops
 	if len(ops) != 1 {
 		t.Fatalf("a changed section produced %d op(s), want 1", len(ops))
@@ -480,8 +480,347 @@ func TestPlanSkipsSectionsThatAlreadyMatch(t *testing.T) {
 	}
 
 	// Absent entirely: an add.
-	ops = doc.Plan(Existing{WifiIfaces: map[string]map[string]string{}}).Ops
+	ops = doc.Plan(WirelessOnly(map[string]map[string]string{})).Ops
 	if len(ops) != 1 || ops[0].Kind != applyengine.OpAdd {
 		t.Errorf("a missing section produced %+v, want one add", ops)
+	}
+}
+
+// ---- networks ----
+
+func netCaps() *capability.Registry {
+	r := capability.NewRegistry()
+	r.Ports = capability.Ports{
+		Bridge: "br-lan",
+		LAN:    []string{"lan1", "lan2", "lan3", "lan4"},
+		WAN:    "wan",
+	}
+	return r
+}
+
+// vlanAware is a device whose operator has already enabled VLAN filtering —
+// the precondition for oonfeeWRT managing any additional VLAN. See
+// bridgeIsVLANAware for why we will not create that state ourselves.
+func vlanAware() Existing {
+	return NewExisting(map[string]map[string]map[string]string{
+		"network": {
+			"their_bv1": {".type": "bridge-vlan", "device": "br-lan", "vlan": "1"},
+		},
+	})
+}
+
+func sectionsIn(doc Doc, config string) map[string]Section {
+	out := map[string]Section{}
+	for _, s := range doc.Sections {
+		if s.Config == config {
+			out[s.Name] = s
+		}
+	}
+	return out
+}
+
+// A gateway renders the whole stack; an AP renders only the bridge-VLAN.
+//
+// An AP that also ran DHCP on the same VLAN would put two servers on one
+// broadcast domain, which fails intermittently and is miserable to diagnose.
+// The subsetting is by role and tested, not an if-cascade that happens to work
+// on one topology.
+func TestNetworkRenderingIsRoleAware(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest", Enabled: true,
+	}}}
+
+	gw, _, err := Render(site, model.Device{ID: 1, Name: "gw", Role: "gateway"},
+		netCaps(), vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	net := sectionsIn(gw, "network")
+	if _, ok := net["oowrt_bv45"]; !ok {
+		t.Error("gateway did not render the bridge-VLAN")
+	}
+	if iface, ok := net["oowrt_net_iot"]; !ok {
+		t.Error("gateway did not render the interface")
+	} else {
+		if iface.Values["ipaddr"] != "10.7.45.1" || iface.Values["netmask"] != "255.255.255.0" {
+			t.Errorf("interface addressing = %v", iface.Values)
+		}
+		if iface.Values["device"] != "br-lan.45" {
+			t.Errorf("interface device = %q, want br-lan.45", iface.Values["device"])
+		}
+	}
+	if len(sectionsIn(gw, "dhcp")) != 1 {
+		t.Error("gateway did not render a DHCP server")
+	}
+	fw := sectionsIn(gw, "firewall")
+	if len(fw) != 2 {
+		t.Errorf("gateway rendered %d firewall sections, want a zone and a forwarding", len(fw))
+	}
+
+	ap, _, err := Render(site, model.Device{ID: 2, Name: "ap", Role: "ap"},
+		netCaps(), vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	apNet := sectionsIn(ap, "network")
+	if _, ok := apNet["oowrt_bv45"]; !ok {
+		t.Error("AP did not render the bridge-VLAN, so tagged frames cannot traverse it")
+	}
+	if len(apNet) != 1 {
+		t.Errorf("AP rendered %d network sections, want only the bridge-VLAN: %v",
+			len(apNet), apNet)
+	}
+	if n := len(sectionsIn(ap, "dhcp")); n != 0 {
+		t.Errorf("AP rendered %d DHCP sections; two servers on one broadcast "+
+			"domain fail intermittently", n)
+	}
+	if n := len(sectionsIn(ap, "firewall")); n != 0 {
+		t.Errorf("AP rendered %d firewall sections; routing is the gateway's job", n)
+	}
+}
+
+// Every LAN port carries the VLAN tagged. An untagged member would change what
+// an existing port already does, which is the device's config and not ours.
+func TestBridgeVLANTagsEveryPort(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
+	}}}
+	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+	bv := sectionsIn(doc, "network")["oowrt_bv45"]
+	if got := strings.Join(bv.Lists["ports"], " "); got != "lan1:t lan2:t lan3:t lan4:t" {
+		t.Errorf("ports = %q; every port must be tagged, never untagged — an "+
+			"untagged member repurposes a port the device already uses", got)
+	}
+	if _, wrong := bv.Values["ports"]; wrong {
+		t.Error("ports was rendered as a plain option; UCI needs a list, and the " +
+			"string form is stored without complaint and then ignored by netifd")
+	}
+	if bv.Values["device"] != "br-lan" || bv.Values["vlan"] != "45" {
+		t.Errorf("bridge-vlan = %v", bv.Values)
+	}
+}
+
+// VLAN 1 is the device's existing LAN, which we do not own.
+func TestVLAN1IsNotRenderedAndSaysWhy(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true,
+	}}}
+	doc, rep, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+	if len(doc.Sections) != 0 {
+		t.Errorf("VLAN 1 rendered %d sections; the existing LAN is not ours to "+
+			"rewrite: %+v", len(doc.Sections), doc.Sections)
+	}
+	if len(rep.Omissions) == 0 {
+		t.Error("nothing was rendered and no reason was given")
+	}
+}
+
+// A device that will not report its ports gets no VLAN and a reason, never
+// invented port names.
+func TestNetworkWithoutAPortMapIsOmitted(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
+	}}}
+	doc, rep, _ := Render(site, model.Device{ID: 1, Role: "gateway"},
+		capability.NewRegistry(), vlanAware())
+	if len(doc.Sections) != 0 {
+		t.Errorf("rendered %d sections with no known ports: %+v",
+			len(doc.Sections), doc.Sections)
+	}
+	if len(rep.Omissions) == 0 {
+		t.Error("no port map and no explanation")
+	}
+}
+
+// A new zone defaults to "can reach out, cannot reach in". That is the safe
+// direction to be wrong in: an operator who wanted a guest network and got an
+// isolated one notices at once; one who wanted isolation and got an open zone
+// may never notice.
+func TestNewZoneDefaultsToClosed(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest", Enabled: true,
+	}}}
+	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+	zone := sectionsIn(doc, "firewall")["oowrt_zone_guest"]
+	if zone.Values["input"] != "REJECT" || zone.Values["forward"] != "REJECT" {
+		t.Errorf("zone = %v; a new zone must not accept input or forward by default",
+			zone.Values)
+	}
+	if zone.Values["output"] != "ACCEPT" {
+		t.Errorf("zone output = %q; a network that cannot reach anything is not a network",
+			zone.Values["output"])
+	}
+}
+
+// A section name a human typed must not become a config file the device
+// rejects, and two zones must not collide past fw4's 11-character cap.
+func TestNamesAreMadeSafeForUCI(t *testing.T) {
+	for in, want := range map[string]string{
+		"Guest WiFi (2.4)":      "guest_wifi",
+		"iot":                   "iot",
+		"  Spaced  Out  ":       "spaced__out",
+		"!!!":                   "net",
+		"averyveryverylongzone": "averyverery"[:11],
+	} {
+		if got := safe(in); got != want && len(got) > 11 {
+			t.Errorf("safe(%q) = %q, longer than fw4's 11-character cap", in, got)
+		}
+	}
+	if len(safe("averyveryverylongzonename")) > 11 {
+		t.Error("a long zone name was not capped; two zones differing past the " +
+			"cap would collide silently on the device")
+	}
+	if safe("Guest WiFi (2.4)") == "" {
+		t.Error("a name with punctuation reduced to nothing")
+	}
+}
+
+func TestSplitCIDRRejectsNonsense(t *testing.T) {
+	if ip, mask, ok := splitCIDR("10.7.45.1/24"); !ok || ip != "10.7.45.1" || mask != "255.255.255.0" {
+		t.Errorf("splitCIDR = %q %q %v", ip, mask, ok)
+	}
+	if _, mask, ok := splitCIDR("192.168.9.1/25"); !ok || mask != "255.255.255.128" {
+		t.Errorf("/25 mask = %q %v", mask, ok)
+	}
+	for _, bad := range []string{"", "10.7.45.1", "10.7.45.1/", "10.7.45.1/33",
+		"999.1.1.1/24", "not-an-ip/24", "10.7.45.1/4"} {
+		if _, _, ok := splitCIDR(bad); ok {
+			t.Errorf("splitCIDR(%q) accepted", bad)
+		}
+	}
+}
+
+// oonfeeWRT will not turn VLAN filtering on by itself.
+//
+// Measured three times on real hardware: adding a bridge-VLAN to an unfiltered
+// br-lan flips vlan_filtering 0 -> 1, br-lan keeps its address and reports UP,
+// and every neighbour disappears. The health check passes (the interface IS
+// up), the confirm lands, and the device is then unreachable. Connectivity
+// survives only if the operator's own lan interface moves to br-lan.1 — a
+// section we do not own.
+func TestAVLANIsRefusedOnABridgeThatIsNotVLANAware(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
+	}}}
+	doc, rep, _ := Render(site, model.Device{ID: 1, Role: "gateway"},
+		netCaps(), Existing{}) // nothing existing: an unfiltered bridge
+
+	if n := len(sectionsIn(doc, "network")); n != 0 {
+		t.Fatalf("rendered %d network sections onto an unfiltered bridge; this "+
+			"takes the LAN down on a real device", n)
+	}
+	if len(rep.Omissions) == 0 {
+		t.Fatal("refused with no explanation")
+	}
+	// The explanation has to name the one-time change, or an operator is stuck.
+	reason := rep.Omissions[0].Reason
+	for _, want := range []string{"br-lan.1", "VLAN filtering", "does not own"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("the refusal does not mention %q: %s", want, reason)
+		}
+	}
+}
+
+// A site with no tagged VLANs must not switch filtering on at all.
+func TestNoVLANsMeansNoBridgeVLANSections(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true,
+	}}}
+	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+	if n := len(sectionsIn(doc, "network")); n != 0 {
+		t.Errorf("rendered %d network sections for a site with no tagged VLAN; "+
+			"turning on VLAN filtering for nothing would break the LAN for nothing",
+			n)
+	}
+}
+
+// A device that is ALREADY VLAN-aware belongs to its operator. We add our VLAN
+// and leave membership alone — second-guessing an existing layout is exactly
+// the "helpful" edit the ownership rule forbids.
+func TestExistingBridgeVLANsAreLeftAlone(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
+	}}}
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"network": {
+			"their_vlans": {".type": "bridge-vlan", "device": "br-lan", "vlan": "10"},
+		},
+	})
+	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), existing)
+	if _, present := sectionsIn(doc, "network")["oowrt_bv1"]; present {
+		t.Error("added an untagged default VLAN to a bridge that is already " +
+			"VLAN-aware; its membership is the operator's, not ours")
+	}
+	if _, present := sectionsIn(doc, "network")["oowrt_bv45"]; !present {
+		t.Error("our own VLAN should still be rendered")
+	}
+}
+
+// A UCI list is not a string with spaces in it.
+//
+// `option ports 'lan1:u* lan2:u*'` where UCI wants `list ports 'lan1:u*'` is
+// accepted by uci.set, stored, and then ignored by netifd. Measured: rendering
+// a bridge-VLAN's ports that way produced VLAN filtering with no untagged
+// membership and took the LAN down — after the apply had already been confirmed
+// healthy. There is no error anywhere in that chain, which is why this is a
+// separate field and a test rather than a convention.
+func TestListOptionsAreListsNotJoinedStrings(t *testing.T) {
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
+	}}}
+	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+	for _, s := range doc.Sections {
+		if _, wrong := s.Values["ports"]; wrong {
+			t.Errorf("%s.%s renders ports as a plain option", s.Config, s.Name)
+		}
+	}
+	// And the ops carry them through to the engine.
+	for _, op := range doc.Plan(Existing{}).Ops {
+		if op.Section == "oowrt_bv45" {
+			if len(op.Lists["ports"]) != 4 {
+				t.Errorf("op for %s carries %d list ports, want 4: %+v",
+					op.Section, len(op.Lists["ports"]), op)
+			}
+		}
+	}
+}
+
+// A section's hash must cover its lists, or a port-membership change looks
+// identical to no change at all.
+func TestHashCoversLists(t *testing.T) {
+	a := Section{Config: "network", Type: "bridge-vlan", Name: "oowrt_bv45",
+		Values: map[string]string{"vlan": "45"},
+		Lists:  map[string][]string{"ports": {"lan1:t", "lan2:t"}}}
+	b := a
+	b.Lists = map[string][]string{"ports": {"lan1:t", "lan2:t", "lan3:t"}}
+	if a.Hash() == b.Hash() {
+		t.Error("two bridge-VLANs differing only in port membership hash the same")
+	}
+}
+
+// A device already holding the list must count as matching, so a converged
+// device does not report a change forever.
+func TestPlanMatchesAgainstFlattenedLists(t *testing.T) {
+	doc := Doc{Sections: []Section{{
+		Config: "network", Type: "bridge-vlan", Name: "oowrt_bv45",
+		Values: map[string]string{"vlan": "45", OwnershipTag: "1"},
+		Lists:  map[string][]string{"ports": {"lan1:t", "lan2:t"}},
+	}}}
+	// reconcile.flatten space-joins a list, which is what the device returns.
+	same := NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_bv45": {
+			"vlan": "45", OwnershipTag: "1", "ports": "lan1:t lan2:t",
+		}},
+	})
+	if ops := doc.Plan(same).Ops; len(ops) != 0 {
+		t.Errorf("a matching bridge-VLAN produced %d op(s): %+v", len(ops), ops)
+	}
+	differs := NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_bv45": {
+			"vlan": "45", OwnershipTag: "1", "ports": "lan1:t",
+		}},
+	})
+	if ops := doc.Plan(differs).Ops; len(ops) != 1 {
+		t.Errorf("a changed port list produced %d op(s), want 1", len(ops))
 	}
 }

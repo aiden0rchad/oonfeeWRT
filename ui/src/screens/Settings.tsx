@@ -23,6 +23,7 @@ export function Settings({ devices }: { devices: Device[] }) {
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
   const [applied, setApplied] = useState<string | null>(null)
+  const [ackTraversal, setAckTraversal] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -53,7 +54,7 @@ export function Settings({ devices }: { devices: Device[] }) {
   async function runApply() {
     setBusy('apply')
     try {
-      const res = await api.applySite()
+      const res = await api.applySite({ acknowledge_traversal: ackTraversal })
       const ok = res.devices.filter((d) => d.outcome === 'applied').length
       setApplied(
         res.aborted
@@ -82,6 +83,7 @@ export function Settings({ devices }: { devices: Device[] }) {
   }
 
   const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
+  const traversal = preview?.devices.filter((d) => d.touches_traversal) ?? []
 
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
@@ -182,7 +184,8 @@ export function Settings({ devices }: { devices: Device[] }) {
               !preview ||
               pending === 0 ||
               (preview.site_errors?.length ?? 0) > 0 ||
-              preview.devices.some((d) => d.blocked)
+              preview.devices.some((d) => d.blocked) ||
+              (traversal.length > 0 && !ackTraversal)
             }
             onClick={runApply}
           >
@@ -197,6 +200,33 @@ export function Settings({ devices }: { devices: Device[] }) {
           converted. Every change is applied with a rollback armed — a device
           that comes back unhealthy reverts itself.
         </div>
+
+        {/* IMPLEMENTATION §6's traversal acknowledgment. The rollback protects
+            this change like any other — that is what applying with one armed is
+            for — but an operator should be told they are editing the road
+            before driving down it. */}
+        {traversal.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Banner tone="warning">
+              <div>
+                This change edits the network or firewall configuration of{' '}
+                <strong>{traversal.map((d) => d.name).join(', ')}</strong> — the
+                path this controller reaches {traversal.length === 1 ? 'it' : 'them'}{' '}
+                through.
+              </div>
+              <div style={{ marginTop: 4, fontSize: 11 }}>
+                It is applied with a rollback armed, so a device that comes back
+                unreachable restores itself within 90 seconds. You should still
+                know before, not after.
+              </div>
+              <Toggle
+                label="I understand — apply the network changes"
+                on={ackTraversal}
+                onChange={setAckTraversal}
+              />
+            </Banner>
+          </div>
+        )}
 
         {preview && <Preview p={preview} />}
       </Card>
@@ -844,6 +874,12 @@ function Preview({ p }: { p: PreviewResult }) {
                   <li key={o}>{o}</li>
                 ))}
               </ul>
+            </div>
+          )}
+
+          {d.touches_traversal && (
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
+              Edits this device's network or firewall configuration.
             </div>
           )}
 

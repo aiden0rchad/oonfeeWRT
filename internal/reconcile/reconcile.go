@@ -11,6 +11,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -90,20 +91,45 @@ func ReadExisting(ctx context.Context, c *ubus.Client) (render.Existing, error) 
 	// failed the WHOLE read with "cannot unmarshal bool", so every device
 	// reported as unplannable. The mock returned strings throughout, which is
 	// why this survived until a preview ran against hardware.
-	var out struct {
-		Values map[string]map[string]any `json:"values"`
-	}
-	if err := c.Call(ctx, "uci", "get", map[string]any{"config": "wireless"}, &out); err != nil {
-		return render.Existing{}, fmt.Errorf("reconcile: read wireless config: %w", err)
-	}
-	ifaces := map[string]map[string]string{}
-	for name, vals := range out.Values {
-		flat := flatten(vals)
-		if flat[".type"] == "wifi-iface" {
-			ifaces[name] = flat
+	configs := map[string]map[string]map[string]string{}
+	for _, config := range ManagedConfigs {
+		var out struct {
+			Values map[string]map[string]any `json:"values"`
 		}
+		if err := c.Call(ctx, "uci", "get", map[string]any{"config": config}, &out); err != nil {
+			// A config that does not exist on this device is not a failure. A
+			// pure AP may have no firewall config at all, and refusing to plan
+			// it because of that would refuse the device.
+			if isMissingConfig(err) {
+				continue
+			}
+			return render.Existing{}, fmt.Errorf("reconcile: read %s config: %w", config, err)
+		}
+		sections := map[string]map[string]string{}
+		for name, vals := range out.Values {
+			sections[name] = flatten(vals)
+		}
+		configs[config] = sections
 	}
-	return render.Existing{WifiIfaces: ifaces}, nil
+	return render.NewExisting(configs), nil
+}
+
+// ManagedConfigs are the UCI configs the renderer can write, and therefore the
+// ones that must be read before planning.
+//
+// Reading exactly this set is what makes Prune safe: it deletes owned sections
+// the model no longer produces, so a config we render into but never read would
+// leave orphans, and one we read but never render into is not in the set at all.
+var ManagedConfigs = []string{"wireless", "network", "dhcp", "firewall"}
+
+// isMissingConfig reports the device saying "no such config", which is a real
+// and unremarkable state rather than an error.
+func isMissingConfig(err error) bool {
+	var se *ubus.StatusError
+	if errors.As(err, &se) {
+		return se.Status == ubus.StatusNotFound
+	}
+	return false
 }
 
 // flatten coerces one section's values to the strings the renderer compares.
@@ -178,7 +204,7 @@ func (r *Reconciler) PlanDevice(ctx context.Context, c *ubus.Client, site model.
 func detectDrift(doc render.Doc, existing render.Existing) []Drift {
 	var out []Drift
 	for _, s := range doc.Sections {
-		current, present := existing.WifiIfaces[s.Name]
+		current, present := existing.In(s.Config)[s.Name]
 		if !present || current[render.OwnershipTag] != "1" {
 			continue // not ours yet, or not ours at all: not drift
 		}

@@ -1120,3 +1120,53 @@ the fan-out is across two bands of one AP. That is the same open hardware item
 `STATUS.md` already tracks, and nothing in the pipeline is per-device: the
 render is driven by group membership, and the mobility domain is derived rather
 than coordinated precisely so that adding an AP needs no new mechanism.
+
+### Networks on the device, and the limit that stops them (measured 2026-08-14)
+
+§5's worked example 2 shows a network rendering as a `bridge-vlan`, an
+`interface`, a `dhcp` and a firewall `zone` + `forwarding`. All of that is now
+built and verified on hardware. The worked example is also **incomplete in a way
+that takes the LAN down**, and it took three separate outages of the reference
+device to establish exactly why.
+
+**Adding any `bridge-vlan` section switches the bridge to VLAN filtering.** A
+stock `br-lan` runs with `vlan_filtering = 0` — one flat domain, `config
+interface 'lan'` pointing straight at `br-lan`. The moment a bridge-vlan exists,
+filtering comes on and `br-lan` stops being the untagged view of the LAN.
+
+What that looks like, measured:
+
+| observation | value |
+|---|---|
+| `vlan_filtering` | 0 → 1 |
+| `br-lan` state | UP, still holding `192.168.1.1/24` |
+| `ip neigh show dev br-lan` | **empty — not one neighbour** |
+| apply engine's verdict | `applied — health passed and confirm landed` |
+| actual device reachability | gone, until a pre-armed restore ran |
+
+The health check passed because it asks whether the `lan` interface is up, and
+it *was* up. The confirm landed. A confirmed, "healthy", network-severing
+change. Nothing in the chain reported an error.
+
+**The fix is not ours to apply.** Connectivity survives only if the existing
+`lan` interface moves from `br-lan` to `br-lan.1` — verified the same way: with
+that one edit, filtering on, `br-lan.1` held the address and the controller's
+own host stayed `REACHABLE` in the neighbour table. But `config interface 'lan'`
+is the operator's section, and rewriting the interface we reach the device
+through, on a device we might then be unable to reach, is exactly what
+ARCHITECTURE §0 forbids.
+
+So: **a device whose bridge is not already VLAN-aware is refused, with an
+explanation naming the one-time change.** Once an operator has made it, VLANs
+are managed from the controller normally — verified end to end: bridge-VLAN,
+interface at `10.7.45.1/24`, DHCP, a closed-by-default zone and its forwarding,
+all applied and confirmed with the LAN intact, then pruned cleanly, leaving
+`/etc/config/{network,firewall,dhcp}` byte-identical to their pre-test md5s.
+
+**A UCI list is not a string with spaces in it.** Found in the same sequence.
+`uci.set` accepts `option ports 'lan1:u* lan2:u*'` where UCI wants
+`list ports 'lan1:u*'`, stores it without complaint, and netifd then ignores it.
+No error at any layer. `render.Section` and `applyengine.Op` now carry `Lists`
+separately, staged as JSON arrays, and the section hash covers them — a
+bridge-VLAN whose port membership changed but whose options did not is a real
+change.

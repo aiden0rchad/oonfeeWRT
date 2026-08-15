@@ -161,7 +161,7 @@ func (e *Engine) preflight(ctx context.Context, c *ubus.Client, plan Plan) error
 	if len(dirty) > 0 {
 		return &DirtyError{Configs: dirty}
 	}
-	if touchesManagementPath(plan) && !plan.AcknowledgeTraversal {
+	if TouchesManagementPath(plan) && !plan.AcknowledgeTraversal {
 		return errors.New("preflight: this change touches the management path; " +
 			"set AcknowledgeTraversal to proceed")
 	}
@@ -201,13 +201,41 @@ func ForeignDirtyConfigs(ctx context.Context, c *ubus.Client) ([]string, error) 
 
 // touchesManagementPath is conservative: any change to the network config can
 // move the address we are talking to.
-func touchesManagementPath(plan Plan) bool {
+// TouchesManagementPath reports a change to the configs that carry the path the
+// controller reaches this device through.
+//
+// Exported so callers use THIS definition rather than writing their own. The
+// daemon had its own copy briefly, with a wider set than this one had, and two
+// guards that disagree about what they guard is worse than one — the operator
+// gets warned about a change the engine then refuses for a different reason, or
+// worse, is not warned about one it allows.
+//
+// `firewall` counts alongside `network`: a zone whose input policy is REJECT
+// blocks the controller just as effectively as a broken interface does, and the
+// zone we render for a new network defaults to exactly that.
+func TouchesManagementPath(plan Plan) bool {
 	for _, op := range plan.Ops {
-		if op.Config == "network" {
+		if op.Config == "network" || op.Config == "firewall" {
 			return true
 		}
 	}
 	return false
+}
+
+// withLists folds list options into the values map as JSON arrays, which is how
+// rpcd's uci.set expresses `list foo 'a'` / `list foo 'b'`.
+//
+// The alternative — a single space-joined string — is accepted and stored and
+// then silently ignored by the consumer. See Op.Lists.
+func withLists(values map[string]string, lists map[string][]string) map[string]any {
+	out := make(map[string]any, len(values)+len(lists))
+	for k, v := range values {
+		out[k] = v
+	}
+	for k, v := range lists {
+		out[k] = v
+	}
+	return out
 }
 
 func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
@@ -220,10 +248,10 @@ func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
 			if op.Name != "" {
 				args["name"] = op.Name
 			}
-			args["values"] = withOwnership(op.Values)
+			args["values"] = withLists(withOwnership(op.Values), op.Lists)
 		case OpSet:
 			args["section"] = op.Section
-			args["values"] = withOwnership(op.Values)
+			args["values"] = withLists(withOwnership(op.Values), op.Lists)
 		case OpDelete:
 			args["section"] = op.Section
 			if op.Option != "" {
