@@ -252,6 +252,10 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 	for _, x := range site.WLANs {
 		wlans = append(wlans, viewWLAN(x, false))
 	}
+	meshes := make([]meshView, 0, len(site.Meshes))
+	for _, x := range site.Meshes {
+		meshes = append(meshes, viewMesh(x, false))
+	}
 	groups := make([]groupView, 0, len(site.Groups))
 	for _, g := range site.Groups {
 		ids := g.DeviceIDs
@@ -299,6 +303,7 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":      site.Name,
 		"wlans":     wlans,
+		"meshes":    meshes,
 		"groups":    groups,
 		"networks":  nets,
 		"problems":  problems,

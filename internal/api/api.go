@@ -69,8 +69,8 @@ type Server struct {
 	// record is whatever adoption found, which is the behaviour that made a
 	// firmware upgrade leave a device permanently misdescribed.
 	Reprobe Reprober
-	Hub       *Hub
-	Log       *slog.Logger
+	Hub     *Hub
+	Log     *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -170,6 +170,10 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/site/wlans", s.handleSaveWLAN)
 	private.HandleFunc("POST /api/v1/site/wlans/{id}", s.handleSaveWLAN)
 	private.HandleFunc("DELETE /api/v1/site/wlans/{id}", s.handleDeleteWLAN)
+	private.HandleFunc("GET /api/v1/site/meshes/{id}", s.handleGetMesh)
+	private.HandleFunc("POST /api/v1/site/meshes", s.handleSaveMesh)
+	private.HandleFunc("POST /api/v1/site/meshes/{id}", s.handleSaveMesh)
+	private.HandleFunc("DELETE /api/v1/site/meshes/{id}", s.handleDeleteMesh)
 	private.HandleFunc("POST /api/v1/site/groups", s.handleSaveGroup)
 	private.HandleFunc("POST /api/v1/site/groups/{id}", s.handleSaveGroup)
 	private.HandleFunc("DELETE /api/v1/site/groups/{id}", s.handleDeleteGroup)

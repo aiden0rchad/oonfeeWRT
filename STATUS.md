@@ -1026,15 +1026,15 @@ Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
 
 #### What is still missing, in the order it matters
 
-1. **Mesh has a model, a renderer and storage; it has no API or UI yet.**
-   `model.Mesh` + `render/mesh.go` + the `meshes` table are in and tested, and
-   previewed against real hardware. What is missing is the endpoints and the
-   form, so today a mesh can only be created by writing to the store. That is
-   the next increment and it is mechanical.
-2. **A WDS/relay bridge is still unmodelled.** The goal names "AP bridge mesh";
+1. **A WDS/relay bridge is still unmodelled.** The goal names "AP bridge mesh";
    802.11s covers the mesh half, and a WDS bridge is a different mechanism
    (`wds`/4addr rather than `mode mesh`) for the case where the far end is not
    mesh-capable.
+2. **Nothing verifies a mesh actually peers.** The controller can configure one
+   and can see `mode mesh` on a radio, but there is no mesh-neighbour readout —
+   `iw dev <if> mpath dump` / `station dump` would give it, and neither is in
+   the ACL. A backhaul you cannot see the health of is half a feature, and this
+   is the first thing worth building once there are two nodes.
 3. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
    everything else is `ClassUnknown`, which is *most* old routers: ath79,
    ramips/MT7620, ipq40xx, bcm53xx, lantiq. The consequence today is mild
@@ -1085,6 +1085,15 @@ interface into a build that cannot carry it produces a radio that silently does
 not come up. "Your device cannot" and "we could not find out" send an operator
 to different places — different hardware versus a package or an ACL — so the
 omissions say which.
+
+**API and UI landed with it.** `GET/POST/DELETE /site/meshes`, and a "Mesh
+backhauls" card on the settings screen. The passphrase rule is the one worth
+checking: the listing carries `has_key` and never the key, the single-mesh
+endpoint reveals it as a deliberate separate request, and an update with an
+empty key preserves the stored one. Verified against a running controller —
+create, list, rename-without-key, reveal — because the failure it prevents is
+silent and severe: a rename that quietly drops encryption leaves a backhaul
+anyone in radio range can join.
 
 **Verified on hardware, preview only.** Applying an 802.11s interface to the
 reference device would write wireless config to the router everything else is

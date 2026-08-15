@@ -376,12 +376,32 @@ export interface SiteOverride {
   describe: string
 }
 
+/** An 802.11s mesh backhaul.
+ *
+ *  Not a WLAN with a flag: a mesh point is a different interface mode. It has a
+ *  mesh ID rather than an SSID (it is not beaconed for clients), and exactly ONE
+ *  band rather than a list — nodes peer only with nodes on the same band, so
+ *  "one mesh" on two bands would be two disjoint backhauls. */
+export interface Mesh {
+  id: number
+  mesh_id: string
+  network_id: number
+  group_id: number
+  band: '2g' | '5g' | '6g'
+  /** The passphrase is never sent in a list. has_key is what a list screen
+   *  needs: an open mesh is joinable by anyone in radio range. */
+  has_key: boolean
+  key?: string
+  enabled: boolean
+}
+
 export interface Site {
   name: string
   /** Seeds the mobility-domain derivation, so every AP computes the same
    *  802.11r domain. Shown because that is what makes roaming consistent. */
   uuid: string
   wlans: WLAN[]
+  meshes: Mesh[]
   groups: APGroup[]
   networks: SiteNetwork[]
   problems: string[]
@@ -561,6 +581,11 @@ export const api = {
     post<{ wlan: WLAN; problems: string[] }>(
       w.id ? `/site/wlans/${w.id}` : '/site/wlans', w),
   deleteWLAN: (id: number) => del<{ deleted: number; note: string }>(`/site/wlans/${id}`),
+  mesh: (id: number) => get<Mesh>(`/site/meshes/${id}`),
+  saveMesh: (m: Partial<Mesh> & { id?: number }) =>
+    post<{ mesh: Mesh; problems: string[] }>(
+      m.id ? `/site/meshes/${m.id}` : '/site/meshes', m),
+  deleteMesh: (id: number) => del<{ deleted: number; note: string }>(`/site/meshes/${id}`),
   saveGroup: (g: Partial<APGroup> & { id?: number }) =>
     post<APGroup>(g.id ? `/site/groups/${g.id}` : '/site/groups', g),
   deleteGroup: (id: number) => del<{ deleted: number }>(`/site/groups/${id}`),

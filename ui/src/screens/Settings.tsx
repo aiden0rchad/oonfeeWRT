@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { APGroup, Device, PreviewResult, Site, WLAN } from '../lib/api'
+import type { APGroup, Device, Mesh, PreviewResult, Site, WLAN } from '../lib/api'
 import { Banner, Button, Card, Field, Prop } from '../components/ui'
 import { ago } from '../components/Chart'
 
@@ -20,6 +20,7 @@ import { ago } from '../components/Chart'
 export function Settings({ devices }: { devices: Device[] }) {
   const [site, setSite] = useState<Site | null>(null)
   const [editing, setEditing] = useState<Partial<WLAN> | null>(null)
+  const [editingMesh, setEditingMesh] = useState<Partial<Mesh> | null>(null)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
@@ -166,6 +167,53 @@ export function Settings({ devices }: { devices: Device[] }) {
         )}
       </Card>
 
+      <Card
+        title="Mesh backhauls"
+        actions={
+          <Button
+            onClick={() =>
+              setEditingMesh({
+                mesh_id: '',
+                band: '5g',
+                enabled: true,
+                network_id: site.networks[0]?.id ?? 0,
+                group_id: site.groups[0]?.id ?? 0,
+              })
+            }
+          >
+            Add a mesh
+          </Button>
+        }
+        pad={false}
+      >
+        {site.networks.length === 0 || site.groups.length === 0 ? (
+          <div style={{ padding: 14 }}>
+            <Banner>
+              A mesh needs a network to bridge and an AP group to carry it.
+              Create one of each below first.
+            </Banner>
+          </div>
+        ) : site.meshes.length === 0 ? (
+          <div style={{ padding: 14, fontSize: 12, color: 'var(--text-secondary)' }}>
+            No mesh backhauls. A mesh links APs over the air where you cannot run
+            a cable — the devices still serve clients and their wired ports at the
+            same time.
+          </div>
+        ) : (
+          <div>
+            {site.meshes.map((m) => (
+              <MeshRow
+                key={m.id}
+                m={m}
+                site={site}
+                onEdit={() => setEditingMesh(m)}
+                onDeleted={load}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+
       <Groups site={site} devices={devices} onChanged={load} />
       <Deviations site={site} devices={devices} onChanged={load} />
       <Networks site={site} onChanged={load} />
@@ -231,6 +279,21 @@ export function Settings({ devices }: { devices: Device[] }) {
 
         {preview && <Preview p={preview} />}
       </Card>
+
+      {editingMesh && (
+        <MeshEditor
+          m={editingMesh}
+          site={site}
+          onClose={() => setEditingMesh(null)}
+          onSaved={async () => {
+            setEditingMesh(null)
+            // A saved mesh makes the previous preview stale, and a stale
+            // preview is the one thing this screen must never show.
+            setPreview(null)
+            await load()
+          }}
+        />
+      )}
 
       {editing && (
         <WLANEditor
@@ -1011,5 +1074,195 @@ function Toggle({
       <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
+  )
+}
+
+/** One mesh in the list. */
+function MeshRow({
+  m,
+  site,
+  onEdit,
+  onDeleted,
+}: {
+  m: Mesh
+  site: Site
+  onEdit: () => void
+  onDeleted: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const group = site.groups.find((g) => g.id === m.group_id)
+  const net = site.networks.find((n) => n.id === m.network_id)
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 14px',
+        borderTop: '1px solid var(--border)',
+      }}
+    >
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>
+          {m.mesh_id}
+          {!m.enabled && (
+            <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
+              {' '}· disabled
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          {m.band} · {group?.name ?? 'no group'} · {net?.name ?? 'no network'} ·{' '}
+          {m.has_key ? (
+            'encrypted (SAE)'
+          ) : (
+            <span style={{ color: 'var(--warning)' }}>
+              open — anyone in range can join
+            </span>
+          )}
+        </div>
+      </div>
+      <Button onClick={onEdit}>Edit</Button>
+      <Button
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await api.deleteMesh(m.id)
+            onDeleted()
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        Delete
+      </Button>
+    </div>
+  )
+}
+
+/**
+ * The mesh editor.
+ *
+ * The passphrase starts empty on an edit and is only sent when typed — the
+ * server treats an empty key on an update as "leave it alone". That matters
+ * more here than for a WLAN: if an empty key meant "open", renaming a mesh
+ * would silently drop its encryption, and an open mesh is joinable by anyone in
+ * radio range with access to the network behind it.
+ */
+function MeshEditor({
+  m,
+  site,
+  onClose,
+  onSaved,
+}: {
+  m: Partial<Mesh>
+  site: Site
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [draft, setDraft] = useState<Partial<Mesh>>({ ...m, key: '' })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (patch: Partial<Mesh>) => setDraft((d) => ({ ...d, ...patch }))
+
+  // An existing mesh keeps its stored key unless one is typed. A NEW one with
+  // no key really is open, and says so rather than letting it pass unremarked.
+  const willBeOpen = m.id ? !m.has_key && !draft.key : !draft.key
+
+  async function save() {
+    setSaving(true)
+    try {
+      await api.saveMesh(draft)
+      onSaved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title={m.id ? `Edit ${m.mesh_id}` : 'New mesh backhaul'}>
+      <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
+        {err && <Banner tone="critical">{err}</Banner>}
+
+        <Field
+          label="Mesh ID"
+          value={draft.mesh_id ?? ''}
+          placeholder="e.g. backhaul"
+          onChange={(e) => set({ mesh_id: e.target.value })}
+        />
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -8 }}>
+          Not an SSID — it is not broadcast for clients. Nodes match on it to
+          peer, so every device in the mesh must use the same one.
+        </div>
+
+        <Choice
+          label="Band"
+          options={[
+            { v: '2g', l: '2.4 GHz' },
+            { v: '5g', l: '5 GHz' },
+            { v: '6g', l: '6 GHz' },
+          ]}
+          value={[draft.band ?? '5g']}
+          onChange={([b]) => set({ band: b as Mesh['band'] })}
+        />
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -8 }}>
+          One band, not several. Nodes peer only with nodes on the same band, so
+          the same mesh on two bands would be two separate backhauls that cannot
+          see each other.
+        </div>
+
+        <Field
+          label={m.id ? 'Passphrase (leave blank to keep the current one)' : 'Passphrase'}
+          type="password"
+          value={draft.key ?? ''}
+          placeholder={m.has_key ? '••••••••' : 'blank leaves the mesh open'}
+          onChange={(e) => set({ key: e.target.value })}
+        />
+        {willBeOpen && (
+          <Banner tone="warning">
+            With no passphrase this mesh is open: any device in radio range can
+            peer with it and reach the network behind it. Encrypted meshes use
+            WPA3-SAE.
+          </Banner>
+        )}
+
+        <Choice
+          label="Network"
+          options={site.networks.map((n) => ({ v: String(n.id), l: n.name }))}
+          value={[String(draft.network_id ?? '')]}
+          onChange={([v]) => set({ network_id: Number(v) })}
+        />
+        <Choice
+          label="AP group"
+          options={site.groups.map((g) => ({ v: String(g.id), l: g.name }))}
+          value={[String(draft.group_id ?? '')]}
+          onChange={([v]) => set({ group_id: Number(v) })}
+        />
+        <Toggle
+          label="Enabled"
+          on={draft.enabled ?? true}
+          onChange={(v) => set({ enabled: v })}
+        />
+
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          Devices carrying this mesh keep serving clients and their wired ports.
+          A mesh point is an extra interface, not a different kind of device.
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button kind="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+          <Button onClick={onClose}>Cancel</Button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          Saving changes nothing on any device. Preview and apply is what writes.
+        </div>
+      </div>
+    </Card>
   )
 }
