@@ -1,0 +1,352 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+
+/**
+ * Screen-level tests.
+ *
+ * The shared grid has its own file; these cover rules that live in the screens
+ * and had no coverage at all — including one that is security-relevant, where
+ * getting it wrong silently removes encryption from a wireless backhaul.
+ *
+ * The api module is mocked rather than a server stubbed: what is under test is
+ * the screen's behaviour given a response, and every response shape here is one
+ * the Go tests already pin down on the other side.
+ */
+
+const api = {
+  clients: vi.fn(),
+  site: vi.fn(),
+  saveMesh: vi.fn(),
+  deleteMesh: vi.fn(),
+  preview: vi.fn(),
+  applySite: vi.fn(),
+  device: vi.fn(),
+  deviceSeries: vi.fn(),
+  overhead: vi.fn(),
+  reprobe: vi.fn(),
+}
+vi.mock('../lib/api', () => ({
+  api,
+  ApiError: class extends Error {},
+  onUnauthorized: new Set<() => void>(),
+}))
+vi.mock('../lib/live', () => ({
+  live: { watch: () => () => {}, on: () => () => {}, connect: () => {} },
+}))
+
+const { Clients } = await import('./Clients')
+const { Settings } = await import('./Settings')
+
+const emptyFacets = { presence: [], connection: [], scope: [] }
+
+function clientPage(over: Record<string, unknown> = {}) {
+  return {
+    clients: [],
+    total: 0,
+    limit: 500,
+    offset: 0,
+    facets: emptyFacets,
+    note: 'signal comes from the focused tier',
+    scope_note: '',
+    ...over,
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('Clients', () => {
+  // Page 4 of the unfiltered list is not page 4 of the filtered one. Keeping
+  // the offset lands on an empty page, which reads as "no matches" — a wrong
+  // answer produced by a stale number rather than by the data.
+  it('resets the offset when a filter changes', async () => {
+    api.clients.mockResolvedValue(
+      clientPage({
+        total: 900,
+        facets: {
+          ...emptyFacets,
+          scope: [
+            { value: 'local', count: 3 },
+            { value: 'upstream', count: 7 },
+          ],
+        },
+      }),
+    )
+    render(<Clients />)
+    await waitFor(() => expect(api.clients).toHaveBeenCalled())
+
+    // Turn a page, then change a filter.
+    fireEvent.click(screen.getByText('Next'))
+    await waitFor(() =>
+      expect(api.clients.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(0),
+    )
+    fireEvent.click(screen.getByText('upstream'))
+
+    await waitFor(() => {
+      const last = api.clients.mock.calls.at(-1)?.[0]
+      expect(last.scope).toBe('upstream')
+      expect(last.offset).toBe(0)
+    })
+  })
+
+  // A dropped request must not blank the grid: "no clients" is a different
+  // claim from "the last fetch failed", and only one of them is true.
+  it('keeps the last good page when a refresh fails', async () => {
+    api.clients.mockResolvedValueOnce(
+      clientPage({
+        total: 1,
+        clients: [
+          {
+            mac: 'aa:bb:cc:dd:ee:ff',
+            name: 'laptop',
+            first_seen: 1,
+            last_seen: 2,
+            blocked: false,
+            connection: 'unknown',
+            online: true,
+            scope: 'local',
+          },
+        ],
+      }),
+    )
+    render(<Clients />)
+    await waitFor(() => expect(screen.getByText('laptop')).toBeTruthy())
+
+    api.clients.mockRejectedValueOnce(new Error('network down'))
+    // Any filter change refetches. "All" in the first rail group, rather than a
+    // named option: "online" appears both as a rail option and as a row's
+    // status pill, so matching it by text is ambiguous.
+    fireEvent.click(screen.getAllByText('All')[0])
+
+    await waitFor(() => expect(screen.getByText('network down')).toBeTruthy())
+    // Still there.
+    expect(screen.getByText('laptop')).toBeTruthy()
+  })
+})
+
+describe('Settings — mesh editor', () => {
+  const site = {
+    name: 'Site',
+    uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
+    wlans: [],
+    meshes: [
+      {
+        id: 1,
+        mesh_id: 'backhaul',
+        network_id: 1,
+        group_id: 1,
+        band: '5g' as const,
+        has_key: true,
+        enabled: true,
+      },
+    ],
+    groups: [{ id: 1, name: 'all', device_ids: [] }],
+    networks: [
+      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+    ],
+    problems: [],
+    overrides: [],
+    overridable: [],
+    override_note: '',
+  }
+
+  beforeEach(() => {
+    api.site.mockResolvedValue(site)
+  })
+
+  // The rule this whole design rests on: editing an encrypted mesh without
+  // retyping the passphrase must NOT read as "make it open". The list omits the
+  // key, so a round-trip sends an empty one — and treating that as open would
+  // strip encryption from a backhaul during a rename.
+  it('does not warn about an open mesh when editing an encrypted one', async () => {
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('backhaul')).toBeTruthy())
+
+    fireEvent.click(screen.getAllByText('Edit')[0])
+    await waitFor(() => expect(screen.getByText(/Edit backhaul/)).toBeTruthy())
+
+    expect(screen.queryByText(/this mesh is open/i)).toBeNull()
+    expect(screen.queryByText(/anyone in radio range/i)).toBeNull()
+  })
+
+  // And a NEW mesh with no passphrase really will be open, so it says so before
+  // the fact rather than after.
+  it('warns that a new mesh with no passphrase will be open', async () => {
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Add a mesh')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Add a mesh'))
+    await waitFor(() => expect(screen.getByText('New mesh backhaul')).toBeTruthy())
+
+    expect(screen.getByText(/any device in radio range/i)).toBeTruthy()
+  })
+
+  // The editor must send an empty key rather than the stored one — it never
+  // holds the secret, which is why a round-trip is safe in the first place.
+  it('sends no passphrase when the field is untouched', async () => {
+    api.saveMesh.mockResolvedValue({ mesh: site.meshes[0], problems: [] })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('backhaul')).toBeTruthy())
+
+    fireEvent.click(screen.getAllByText('Edit')[0])
+    await waitFor(() => expect(screen.getByText(/Edit backhaul/)).toBeTruthy())
+    fireEvent.click(screen.getByText('Save'))
+
+    await waitFor(() => expect(api.saveMesh).toHaveBeenCalled())
+    expect(api.saveMesh.mock.calls[0][0].key).toBe('')
+  })
+
+  // An open mesh has to be visible as open in the LIST, not only in the editor.
+  // The list is where someone scans for what is wrong.
+  it('marks an open mesh in the list', async () => {
+    api.site.mockResolvedValue({
+      ...site,
+      meshes: [{ ...site.meshes[0], has_key: false }],
+    })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText(/anyone in range can join/i)).toBeTruthy())
+  })
+})
+
+describe('Devices — re-probe panel', () => {
+  const detail = {
+    id: 1,
+    mac: '60:38:e0:00:00:01',
+    name: 'ap-1',
+    host: '192.168.1.1',
+    role: 'ap',
+    adopted: true,
+    adopted_at: 1,
+    class: 'A',
+    firmware: 'OpenWrt 24.10',
+    last_seen: 2,
+    poll_state: 'baseline',
+    status: 'online' as const,
+    capabilities: null,
+    interfaces: ['wan'],
+    radios: [],
+    stations: [],
+  }
+
+  beforeEach(() => {
+    api.device.mockResolvedValue(detail)
+    api.deviceSeries.mockResolvedValue({ series: {} })
+    api.overhead.mockRejectedValue(new Error('none'))
+  })
+
+  async function openPanel() {
+    const { Devices } = await import('./Devices')
+    render(
+      <Devices
+        devices={[{ ...detail, quiesced: false } as never]}
+        onAdopt={() => {}}
+        onChanged={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByText('ap-1'))
+    await waitFor(() => expect(screen.getByText('Re-probe capabilities')).toBeTruthy())
+  }
+
+  // The rule the whole capability-diff design protects: a check that stopped
+  // being POSSIBLE is not a capability that stopped EXISTING. Rendering the two
+  // the same way recreates, in the UI, the bug the three-state model exists to
+  // prevent — and sends someone hunting a hardware fault that is not there.
+  it('labels a visibility change as not a loss', async () => {
+    api.reprobe.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      summary: 'class A',
+      unchanged: false,
+      actionable: 0,
+      capabilities: null,
+      note: '',
+      changes: [
+        {
+          kind: 'feature',
+          name: 'hostapd-control',
+          from: 'present',
+          to: 'not-observable',
+          effect: 'no-longer-observable',
+          detail: 'hostapd-control can no longer be checked',
+        },
+      ],
+    })
+    await openPanel()
+    fireEvent.click(screen.getByText('Re-probe capabilities'))
+
+    await waitFor(() => expect(screen.getByText(/not a loss/i)).toBeTruthy())
+    // And the summary line says none of it changes what may be sent.
+    expect(screen.getByText(/changes in what the controller can see/i)).toBeTruthy()
+  })
+
+  // A real loss must still read as one, or the caution above becomes a blanket
+  // excuse and the panel stops reporting anything.
+  it('does not soften a genuine loss', async () => {
+    api.reprobe.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      summary: 'class A',
+      unchanged: false,
+      actionable: 1,
+      capabilities: null,
+      note: '',
+      changes: [
+        {
+          kind: 'radio',
+          name: 'phy1',
+          from: 'a,n,ac',
+          to: '',
+          effect: 'lost',
+          detail: 'radio phy1 is gone',
+        },
+      ],
+    })
+    await openPanel()
+    fireEvent.click(screen.getByText('Re-probe capabilities'))
+
+    await waitFor(() => expect(screen.getByText('radio phy1 is gone')).toBeTruthy())
+    expect(screen.queryByText(/changes in what the controller can see/i)).toBeNull()
+  })
+
+  // "Nothing changed" is a RESULT. An empty list reads as a failure, and after
+  // pressing a button that is the worse of the two readings.
+  it('says so when a probe found nothing', async () => {
+    api.reprobe.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      summary: 'class A Linksys WRT3200ACM',
+      unchanged: true,
+      actionable: 0,
+      capabilities: null,
+      note: '',
+      changes: [],
+    })
+    await openPanel()
+    fireEvent.click(screen.getByText('Re-probe capabilities'))
+
+    await waitFor(() => expect(screen.getByText(/nothing changed/i)).toBeTruthy())
+  })
+
+  // A role that no longer fits the hardware is a warning, shown where the probe
+  // result is — it is exactly when that fact can change.
+  it('surfaces a role that no longer fits', async () => {
+    api.reprobe.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      summary: 'class A',
+      unchanged: true,
+      actionable: 0,
+      capabilities: null,
+      note: '',
+      changes: [],
+      role_fit: ['adopted as "ap", but this device reported no radios'],
+    })
+    await openPanel()
+    fireEvent.click(screen.getByText('Re-probe capabilities'))
+
+    await waitFor(() =>
+      expect(screen.getByText(/reported no radios/i)).toBeTruthy(),
+    )
+  })
+})

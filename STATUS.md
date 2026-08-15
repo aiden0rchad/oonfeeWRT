@@ -270,9 +270,7 @@ most-worth-doing first.
    a switch, or a bridge/mesh node. §5m is the audit of what that needs and what
    currently assumes otherwise. It is the largest remaining piece of work and
    most of it needs no hardware to start.
-3. **Extend the UI tests to the screens.** §5l set the runner up and covered the
-   shared grid. `Clients`, `Devices` and `Settings` have none, and they are
-   where the fetch-and-filter logic now lives.
+3. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
 
 ### Blocked, and by what
 
@@ -890,10 +888,25 @@ teardown therefore prevented `cleanup` from unmounting, and every test after the
 first saw the previous test's DOM — producing failures that pointed everywhere
 except at the cause.
 
-38 tests now. What they reach: windowing engaging on a large grid, required
-columns resisting being hidden, saved order and hidden-column positions
-surviving a remount, a drop not also sorting the column it landed on, and
-`Unknown` staying distinguishable from zero. What they do **not** reach: row
+**48 tests now**, across the shared grid and the screens. The grid file covers
+windowing engaging on a large grid, required columns resisting being hidden,
+saved order and hidden-column positions surviving a remount, a drop not also
+sorting the column it landed on, and `Unknown` staying distinguishable from
+zero. The screen file covers the rules that live above it, and it is worth
+saying which ones were worth writing:
+
+- **The mesh editor must not warn "this will be open" when editing an encrypted
+  mesh.** The list omits the passphrase, so a round-trip sends an empty one; if
+  the editor read that as "open", a rename would strip encryption from a
+  wireless backhaul. Both directions are tested — silence on an edit, a warning
+  on a genuinely new open mesh — because getting either wrong is bad in a
+  different way.
+- **A visibility change renders as "not a loss".** The three-state rule at the
+  UI layer: rendering `no-longer-observable` the same as `lost` recreates, on
+  screen, exactly the bug the capability model exists to prevent.
+- **A filter change resets the paging offset**, and a failed refresh keeps the
+  last good page rather than blanking the grid — "no clients" and "the fetch
+  failed" are different claims. What they do **not** reach: row
 height and the sticky header, because happy-dom has no layout engine and
 `getBoundingClientRect` returns zeros — the two defects §5b found by eye are
 precisely the two this cannot catch. And nothing here says whether a drag
