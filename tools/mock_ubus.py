@@ -343,7 +343,8 @@ OBJECTS = {
 
 WHICH = {"iw": "/usr/sbin/iw", "iwinfo": "/usr/bin/iwinfo",
          "df": "/bin/df", "ip": "/sbin/ip", "nft": "/usr/sbin/nft",
-         "opkg": "/bin/opkg", "ethtool": "/usr/sbin/ethtool",
+         "opkg": "/bin/opkg", "apk": "/usr/bin/apk",
+         "ethtool": "/usr/sbin/ethtool",
          "bridge": "/usr/sbin/bridge"}
 
 OPKG_INSTALLED = """rpcd - 2024.09.01
@@ -358,6 +359,22 @@ px5g-mbedtls - 10
 firewall4 - 2024.10.1
 nftables - 1.0.9
 umdns - 2024.3"""
+
+# The reference device runs apk, not opkg — opkg exits 4 (not found) there — and
+# apk glues the version onto the name with a hyphen. Both matter: the capability
+# probe reads this list to decide 802.11s mesh support, since nothing else can
+# answer it (iwinfo reports PHY modes, not interface modes, and `iw phy` is not
+# in the ACL). wpad-mesh-openssl is what the reference device actually reports.
+APK_INSTALLED = """rpcd-2024.09.01-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+rpcd-mod-file-2024.09.01-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+rpcd-mod-iwinfo-2024.09.01-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+rpcd-mod-luci-24.1-r1 arm_cortex-a9_vfpv3-d16 {feeds/luci} (Apache-2.0) [installed]
+uhttpd-2024.10.1-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+uhttpd-mod-ubus-2024.10.1-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+firewall4-2024.10.1-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+nftables-1.0.9-r1 arm_cortex-a9_vfpv3-d16 {feeds/base} (ISC) [installed]
+hostapd-common-2025.08.26~ca266cc2-r2 arm_cortex-a9_vfpv3-d16 {feeds/base} (BSD-3-Clause) [installed]
+wpad-mesh-openssl-2025.08.26~ca266cc2-r2 arm_cortex-a9_vfpv3-d16 {feeds/base} (BSD-3-Clause) [installed]"""
 
 # Shape captured from real associated stations on mwlwifi. The per-direction
 # counters are NESTED — retries/failed/packets/bytes live inside rx/tx, not as
@@ -431,7 +448,11 @@ def exec_cmd(rid, cmd, params):
     if cmd == "which":
         p = WHICH.get(params[0] if params else "")
         return out(0 if p else 1, (p + "\n") if p else "")
+    if cmd == "apk":
+        return out(0, APK_INSTALLED + "\n")
     if cmd == "opkg":
+        # The reference device does not have opkg at all — it exits 4. Kept
+        # answering here so the older-format parsing path stays exercised.
         return out(0, OPKG_INSTALLED + "\n")
     if cmd == "df":
         return out(0, "Filesystem 1K-blocks Used Available Use% Mounted on\n"

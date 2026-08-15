@@ -69,6 +69,9 @@ const (
 	FeatHostapdControl Feature = "hostapd-control"
 	// FeatAccounting gates per-client bandwidth (needs nlbwmon).
 	FeatAccounting Feature = "per-client-accounting"
+	// FeatMesh gates 802.11s. Determined from which wpad build is installed —
+	// see probeMesh, which records why no other source can answer it.
+	FeatMesh Feature = "mesh-80211s"
 	// FeatPreflightDirty gates the "unsaved changes on device" guard. Without
 	// it the apply path cannot detect a human mid-edit in LuCI.
 	FeatPreflightDirty Feature = "preflight-dirty-check"

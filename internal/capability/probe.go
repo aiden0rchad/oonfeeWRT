@@ -27,6 +27,7 @@ func Probe(ctx context.Context, c *ubus.Client) (*Registry, error) {
 	probeRadios(ctx, c, r)
 	probePreflight(ctx, c, r)
 	probeAccounting(ctx, c, r)
+	probeMesh(ctx, c, r)
 
 	return r, nil
 }
@@ -701,4 +702,155 @@ func checkNoiseStability(ctx context.Context, c *ubus.Client, r *Registry, dev s
 		return Absent
 	}
 	return stable
+}
+
+// FeatMesh gating: can this device run an 802.11s mesh point?
+//
+// # Why the package list and not the driver
+//
+// Measured on the reference device 2026-08-14, because the obvious sources do
+// not answer it:
+//
+//	iwinfo.info / luci-rpc.getWirelessDevices  hwmodes are PHY modes (n, ac);
+//	                                           no supported-interface-mode list
+//	hostapd.<dev> get_features                 {ht_supported, vht_supported} only
+//	file.exec /usr/sbin/iw phy <phy> info      ubus status 6 — not in the ACL,
+//	                                           and status 6 is permanent
+//
+// What does answer it is which wpad build is installed, and that grant already
+// exists. On OpenWrt the 802.11s mesh daemon is a build of wpad: `wpad-mesh-*`
+// carries mesh with SAE, `wpad-basic-*` and `wpad-mini` deliberately do not.
+// The reference device reports `wpad-mesh-openssl`.
+//
+// # Why some builds come back NotObservable
+//
+// The full wpad variants — `wpad-openssl` and friends — are not named for their
+// feature set, and this has not been verified against one. Claiming Present
+// from a package name that does not settle it would be exactly the guess this
+// package exists to refuse, so those record NotObservable with the package
+// named, and an operator can widen or correct it from evidence.
+func probeMesh(ctx context.Context, c *ubus.Client, r *Registry) {
+	pkgs, err := installedPackages(ctx, c)
+	if err != nil {
+		r.Set(FeatMesh, NotObservable)
+		r.Note("802.11s mesh support undetermined: the installed-package list "+
+			"could not be read (%v). It is the only source that answers this — "+
+			"iwinfo reports PHY modes rather than interface modes, and "+
+			"`iw phy` is not in the ACL", err)
+		return
+	}
+
+	state := meshFromPackages(pkgs)
+	r.Set(FeatMesh, state)
+	r.Note("802.11s mesh %s (from the installed 802.11 daemon: %s)",
+		state, describeWpad(pkgs))
+}
+
+// meshFromPackages decides FeatMesh from an installed-package list.
+//
+// Split out from the call so the rule is testable without a device, and because
+// the rule is the whole content of the check.
+func meshFromPackages(pkgs []string) State {
+	var wpad []string
+	for _, p := range pkgs {
+		if strings.HasPrefix(p, "wpad") || strings.HasPrefix(p, "hostapd") {
+			wpad = append(wpad, p)
+		}
+	}
+	for _, p := range wpad {
+		if strings.HasPrefix(p, "wpad-mesh") {
+			return Present
+		}
+	}
+	for _, p := range wpad {
+		// Builds named for lacking it.
+		if strings.HasPrefix(p, "wpad-basic") || strings.HasPrefix(p, "wpad-mini") {
+			return Absent
+		}
+	}
+	if len(wpad) == 0 {
+		// No 802.11 daemon at all: this device cannot run an AP either.
+		return Absent
+	}
+	// A full build — wpad-openssl and friends — is not named for its feature
+	// set, and this has not been verified against one. Claiming Present from a
+	// package name that does not settle it is the guess this package refuses.
+	return NotObservable
+}
+
+func describeWpad(pkgs []string) string {
+	var wpad []string
+	for _, p := range pkgs {
+		if strings.HasPrefix(p, "wpad") || strings.HasPrefix(p, "hostapd") {
+			wpad = append(wpad, p)
+		}
+	}
+	if len(wpad) == 0 {
+		return "none installed"
+	}
+	return strings.Join(wpad, ", ")
+}
+
+// installedPackages reads the package list from whichever manager this build
+// uses.
+//
+// Both are tried because OpenWrt is mid-migration: the reference device answers
+// apk and returns "not found" for opkg. Trying one and reporting its absence as
+// a failure would make the whole check unavailable on half the fleet.
+func installedPackages(ctx context.Context, c *ubus.Client) ([]string, error) {
+	type run struct {
+		cmd    string
+		params []string
+	}
+	var lastErr error
+	for _, r := range []run{
+		{"/usr/bin/apk", []string{"list", "--installed"}},
+		{"/bin/opkg", []string{"list-installed"}},
+	} {
+		var out struct {
+			Code   int    `json:"code"`
+			Stdout string `json:"stdout"`
+		}
+		err := c.Call(ctx, "file", "exec",
+			map[string]any{"command": r.cmd, "params": r.params}, &out)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if out.Code != 0 || strings.TrimSpace(out.Stdout) == "" {
+			lastErr = fmt.Errorf("%s exited %d", r.cmd, out.Code)
+			continue
+		}
+		return packageNames(out.Stdout), nil
+	}
+	return nil, lastErr
+}
+
+// packageNames pulls package names out of either manager's output.
+//
+//	apk:  wpad-mesh-openssl-2025.08.26~ca266cc2-r2 arm_cortex-a9 {feeds/...} ...
+//	opkg: wpad-mesh-openssl - 2025.08.26-r2
+//
+// Both put the name first, and apk glues the version on with a hyphen — so the
+// name is taken up to the first hyphen-digit boundary rather than the first
+// hyphen, which would truncate "wpad-mesh-openssl" to "wpad".
+func packageNames(stdout string) []string {
+	var out []string
+	for _, line := range strings.Split(stdout, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) == 0 {
+			continue
+		}
+		out = append(out, trimVersion(f[0]))
+	}
+	return out
+}
+
+func trimVersion(s string) string {
+	for i := 1; i < len(s); i++ {
+		if s[i-1] == '-' && s[i] >= '0' && s[i] <= '9' {
+			return s[:i-1]
+		}
+	}
+	return s
 }

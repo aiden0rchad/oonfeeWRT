@@ -298,3 +298,51 @@ func TestVerdictNeverInventsAnAbsence(t *testing.T) {
 		}
 	}
 }
+
+// The package-name parsing that the mesh probe rests on.
+//
+// apk glues the version onto the name with a hyphen, so taking the name up to
+// the first hyphen truncates "wpad-mesh-openssl" to "wpad" — which would report
+// a mesh-capable device as one whose build cannot be classified.
+func TestPackageNamesSurviveBothManagersFormats(t *testing.T) {
+	apk := `wpad-mesh-openssl-2025.08.26~ca266cc2-r2 arm_cortex-a9_vfpv3-d16 {feeds/base} (BSD-3-Clause) [installed]
+hostapd-common-2025.08.26~ca266cc2-r2 arm_cortex-a9_vfpv3-d16 {feeds/base} (BSD-3-Clause) [installed]`
+	got := packageNames(apk)
+	want := []string{"wpad-mesh-openssl", "hostapd-common"}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("apk names = %v, want %v", got, want)
+		}
+	}
+
+	opkg := "wpad-basic-mbedtls - 2024.03.15-r1\nkmod-cfg80211 - 6.6.63-r1"
+	got = packageNames(opkg)
+	if len(got) != 2 || got[0] != "wpad-basic-mbedtls" {
+		t.Fatalf("opkg names = %v", got)
+	}
+}
+
+// The mesh determination, over the shapes a real fleet produces.
+func TestMeshVerdictFromInstalledPackages(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pkgs []string
+		want State
+	}{
+		// The reference device.
+		{"wpad-mesh build", []string{"hostapd-common", "wpad-mesh-openssl"}, Present},
+		// Named for lacking it: OpenWrt's default on constrained targets.
+		{"wpad-basic build", []string{"wpad-basic-mbedtls"}, Absent},
+		{"wpad-mini build", []string{"wpad-mini"}, Absent},
+		// No 802.11 daemon at all: it cannot run an AP either.
+		{"no wpad or hostapd", []string{"kmod-cfg80211", "luci"}, Absent},
+		// A full build whose name does not settle its feature set. Claiming
+		// Present here would be a guess from a package name — exactly what this
+		// package refuses to do.
+		{"unnamed full build", []string{"wpad-openssl"}, NotObservable},
+	} {
+		if got := meshFromPackages(tc.pkgs); got != tc.want {
+			t.Errorf("%s: %v -> %s, want %s", tc.name, tc.pkgs, got, tc.want)
+		}
+	}
+}

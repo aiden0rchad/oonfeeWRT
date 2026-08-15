@@ -991,13 +991,46 @@ present, `br-lan` and `wan` declared — so the premise is checked on real shape
 rather than only on hand-built fixtures: an AP role is silent, a switch role
 says plainly that nothing will broadcast.
 
+#### Added here: 802.11s mesh can be detected
+
+The first honest step toward mesh is knowing which devices could carry it, and
+that turned out to need measuring rather than reading. Three obvious sources
+**cannot** answer it, checked on the reference device 2026-08-14:
+
+| source | what it gives |
+|---|---|
+| `iwinfo.info`, `luci-rpc.getWirelessDevices` | `hwmodes` are PHY modes (`n`, `ac`) — no supported-interface-mode list |
+| `hostapd.<dev> get_features` | `{ht_supported, vht_supported}` and nothing else |
+| `file.exec /usr/sbin/iw phy <phy> info` | **ubus status 6** — not in the ACL, and status 6 is permanent |
+
+What does answer it is which **wpad build** is installed, and that grant already
+exists. On OpenWrt the 802.11s daemon is a build of wpad: `wpad-mesh-*` carries
+mesh with SAE, `wpad-basic-*` and `wpad-mini` deliberately do not. So no ACL
+widening was needed — which matters, because a new grant only reaches devices
+adopted *after* it, and existing ones would have reported NotObservable forever.
+
+Two things fell out of doing it this way:
+
+- **The reference device uses `apk`, not `opkg`** — `opkg` exits 4 there. The
+  probe tries both. And apk glues the version onto the name with a hyphen, so
+  splitting on the first hyphen truncates `wpad-mesh-openssl` to `wpad`, which
+  would report a mesh-capable device as unclassifiable. The mock now answers
+  `apk` in apk format, so that path is exercised without hardware.
+- **A full build such as `wpad-openssl` records `NotObservable`, not Present.**
+  Those are not named for their feature set and none has been verified here.
+  Claiming mesh from a package name that does not settle it is precisely the
+  guess §5k caught the probe making elsewhere.
+
+Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
+
 #### What is still missing, in the order it matters
 
-1. **Bridge and mesh are not modelled.** `Roles` is gateway/ap/switch. The goal
-   names "AP bridge mesh with switch support", which is at least two more
-   things: a WDS/relay bridge, and 802.11s mesh. Neither exists in the site
-   model, the renderer, or the capability probe — there is no `FeatMesh`, and
-   `iw` mesh support is not interrogated. This is the largest piece.
+1. **Bridge and mesh are not modelled** — though mesh can now be *detected*.
+   `Roles` is gateway/ap/switch; the goal names "AP bridge mesh with switch
+   support", which is at least two more things: a WDS/relay bridge, and 802.11s
+   mesh. Neither exists in the site model or the renderer. What does exist now
+   is `FeatMesh`, so nothing has to guess whether a device could carry it — see
+   below for why that took measuring.
 2. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
    everything else is `ClassUnknown`, which is *most* old routers: ath79,
    ramips/MT7620, ipq40xx, bcm53xx, lantiq. The consequence today is mild
