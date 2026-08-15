@@ -55,6 +55,21 @@ type Snapshot struct {
 	Ifaces      []string
 	IfacesFresh bool
 
+	// IfaceModes is each wireless interface's CONFIGURED mode — "ap", "mesh",
+	// "sta" — read on the same slow cadence as the list itself.
+	//
+	// It exists because "which interfaces exist" is not "which interfaces have
+	// clients". An 802.11s mesh point is a wireless interface like any other,
+	// and `iwinfo assoclist` on one returns its PEERS: other access points. Ask
+	// it without checking the mode and the controller reports the backhaul as
+	// connected users — infrastructure in a list captioned "your devices",
+	// which is the same complaint scoping fixed for upstream neighbours.
+	//
+	// An interface missing from this map is treated as an AP, which is what the
+	// controller did before the map existed. Deciding the other way would let a
+	// denied call silently stop counting real clients.
+	IfaceModes map[string]string
+
 	// Networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// carried forward on every poll in between — the hosts they classify arrive
 	// every poll, so a snapshot without them could not scope its own clients.

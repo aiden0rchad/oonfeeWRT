@@ -623,7 +623,7 @@ func TestUnreadableRequiredCallFailsThePoll(t *testing.T) {
 		t.Fatal("fixture assumption broken")
 	}
 	// And the required-vs-optional split is what turns that into a failed poll.
-	calls := p.buildCalls(Baseline, nil)
+	calls := p.buildCalls(Baseline, nil, nil)
 	if calls[0].inv.Object != "system" || calls[0].inv.Method != "info" {
 		t.Fatalf("expected system.info first, got %+v", calls[0].inv)
 	}
@@ -954,4 +954,120 @@ func TestUnmeasuredClassReportsNoCPUFigure(t *testing.T) {
 	if o.CPUBasis == "" {
 		t.Error("no figure and no reason is the worst of both")
 	}
+}
+
+// A mesh point's peers are other access points, not clients.
+//
+// `iwinfo assoclist` on an 802.11s interface returns its PEERS, and hostapd's
+// get_clients would report them as connected users. Without a mode check the
+// controller counts the backhaul as clients — infrastructure in a list
+// captioned "your devices", which is the complaint client scoping already
+// fixed once for upstream neighbours.
+func TestMeshInterfacesAreNotAskedForClients(t *testing.T) {
+	p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+	ifaces := []string{"phy0-ap0", "phy0-mesh0"}
+	modes := map[string]string{"phy0-ap0": "ap", "phy0-mesh0": "mesh"}
+
+	for _, tier := range []Tier{Baseline, Focused} {
+		var asked []string
+		for _, c := range p.buildCalls(tier, ifaces, modes) {
+			switch {
+			case c.inv.Object == "hostapd.phy0-mesh0",
+				c.inv.Method == "assoclist" && argDevice(c.inv.Args) == "phy0-mesh0":
+				asked = append(asked, c.inv.Object+"."+c.inv.Method)
+			}
+		}
+		if len(asked) != 0 {
+			t.Errorf("%s tier asked the mesh interface for clients: %v", tier, asked)
+		}
+	}
+
+	// And the AP on the same radio is still asked, or the fix has traded one
+	// wrong number for a missing one.
+	var apAsked bool
+	for _, c := range p.buildCalls(Focused, ifaces, modes) {
+		if c.inv.Method == "assoclist" && argDevice(c.inv.Args) == "phy0-ap0" {
+			apAsked = true
+		}
+	}
+	if !apAsked {
+		t.Error("the AP interface stopped being asked for its stations")
+	}
+}
+
+// Channel utilization is a property of the radio's channel, not of what the
+// interface is for. A radio carrying only a mesh point would otherwise report
+// no utilization at all.
+func TestSurveyIsStillAskedOfAMeshInterface(t *testing.T) {
+	p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+	var surveyed bool
+	for _, c := range p.buildCalls(Focused, []string{"phy0-mesh0"},
+		map[string]string{"phy0-mesh0": "mesh"}) {
+		if c.inv.Method == "survey" && argDevice(c.inv.Args) == "phy0-mesh0" {
+			surveyed = true
+		}
+	}
+	if !surveyed {
+		t.Error("a mesh-only radio reports no channel utilization")
+	}
+}
+
+// An interface whose mode was never established is treated as an AP.
+//
+// That is the behaviour that existed before modes were read at all. Answering
+// "not an AP" for an unread interface would let a denied call quietly stop
+// counting real clients — a number that is too low, with nothing saying so.
+func TestAnInterfaceWithNoKnownModeIsStillAskedForClients(t *testing.T) {
+	for _, modes := range []map[string]string{nil, {}, {"other": "ap"}} {
+		p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+		var asked bool
+		for _, c := range p.buildCalls(Focused, []string{"phy0-ap0"}, modes) {
+			if c.inv.Method == "assoclist" && argDevice(c.inv.Args) == "phy0-ap0" {
+				asked = true
+			}
+		}
+		if !asked {
+			t.Errorf("modes=%v: an interface of unknown mode stopped being polled "+
+				"for clients", modes)
+		}
+	}
+}
+
+// The decode takes two fields and leaves the rest.
+//
+// getWirelessDevices returns each interface's whole UCI config, INCLUDING the
+// wireless passphrase in plaintext. Nothing here needs it and nothing here
+// should hold it.
+func TestIfaceModeDecodeDoesNotCarryThePassphrase(t *testing.T) {
+	// The shape the reference device returns, key included.
+	raw := []byte(`{"radio0":{"interfaces":[{"ifname":"phy0-ap0","section":"default_radio0",
+	  "config":{"mode":"ap","ssid":"net","encryption":"psk2","key":"Ys5bKIiUDYmRK66ZXSGq"}}]},
+	  "radio1":{"interfaces":[{"ifname":"phy1-mesh0","config":{"mode":"mesh","key":"another"}}]}}`)
+	var snap Snapshot
+	if err := decodeIfaceModes(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.IfaceModes["phy0-ap0"] != "ap" || snap.IfaceModes["phy1-mesh0"] != "mesh" {
+		t.Fatalf("modes = %v", snap.IfaceModes)
+	}
+	for iface, mode := range snap.IfaceModes {
+		if mode == "Ys5bKIiUDYmRK66ZXSGq" || mode == "another" {
+			t.Fatalf("%s carried a passphrase into the snapshot", iface)
+		}
+	}
+	// Nothing else from the response survives: the struct names two fields.
+	if len(snap.IfaceModes) != 2 {
+		t.Errorf("the decode kept %d entries, want exactly the two interfaces",
+			len(snap.IfaceModes))
+	}
+}
+
+// argDevice reads the "device" argument of an invocation, whose Args is `any`.
+func argDevice(args any) string {
+	m, ok := args.(map[string]any)
+	if !ok {
+		return ""
+	}
+	s, _ := m["device"].(string)
+	return s
 }

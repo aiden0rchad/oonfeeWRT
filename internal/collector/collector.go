@@ -452,7 +452,10 @@ type poller struct {
 	client  *ubus.Client
 	ifaces  []string
 	ifaceAt time.Time
-	boardAt time.Time
+	// ifaceModes is each wireless interface's configured mode, cached beside
+	// the interface list and refreshed with it.
+	ifaceModes map[string]string
+	boardAt    time.Time
 
 	// networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// stamped onto every poll in between. Without carrying them forward, only
@@ -542,6 +545,7 @@ func (p *poller) tick(ctx context.Context) {
 	tier := p.tierLocked()
 	target := p.target
 	ifaces := p.ifaces
+	modes := p.ifaceModes
 	p.mu.Unlock()
 
 	// Bound the poll by its own interval so a slow device produces gaps rather
@@ -557,7 +561,7 @@ func (p *poller) tick(ctx context.Context) {
 		})
 		return
 	}
-	snap := p.poll(pctx, client, tier, ifaces)
+	snap := p.poll(pctx, client, tier, ifaces, modes)
 	if snap.Err != nil {
 		p.fail(ctx, snap)
 		return
@@ -569,6 +573,13 @@ func (p *poller) tick(ctx context.Context) {
 	if snap.IfacesFresh {
 		p.mu.Lock()
 		p.ifaces, p.ifaceAt = snap.Ifaces, p.c.now()
+		// Modes are cached only when they were actually read. A device whose
+		// ACL refuses getWirelessDevices keeps whatever it knew rather than
+		// forgetting, and a device that has never answered keeps an empty map —
+		// which servesClients reads as "assume AP", the prior behaviour.
+		if snap.IfaceModes != nil {
+			p.ifaceModes = snap.IfaceModes
+		}
 		p.mu.Unlock()
 	}
 	// The subnets, likewise. A device with no IPv4 address at all returns an

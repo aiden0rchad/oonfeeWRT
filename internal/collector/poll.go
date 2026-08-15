@@ -34,7 +34,8 @@ type call struct {
 // ~0.5 ms per call from ten calls up, and a 60 s baseline poll never reuses its
 // connection anyway (uhttpd's keep-alive is 20 s), so every call it does not
 // batch costs another handshake.
-func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier, ifaces []string) Snapshot {
+func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
+	ifaces []string, modes map[string]string) Snapshot {
 	snap := Snapshot{
 		DeviceID: p.target.DeviceID,
 		MAC:      p.target.MAC,
@@ -42,7 +43,7 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier, ifaces []s
 		Tier:     tier,
 		At:       p.c.now(),
 	}
-	calls := p.buildCalls(tier, ifaces)
+	calls := p.buildCalls(tier, ifaces, modes)
 	invs := make([]ubus.Invocation, len(calls))
 	for i, c := range calls {
 		invs[i] = c.inv
@@ -110,7 +111,7 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier, ifaces []s
 // what needs unbroken history; everything driver-expensive waits until somebody
 // is actually looking. Measured: iwinfo is ~92% of a focused poll (194 ms vs
 // 15.8 ms without it), and hostapd answers the per-AP questions ~30× faster.
-func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
+func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string) []call {
 	calls := []call{
 		{inv: ubus.Invocation{Object: "system", Method: "info"}, decode: decodeInfo},
 		{
@@ -149,6 +150,14 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 			decode:   decodeIfaces,
 			optional: true,
 		})
+		// And what each of them is FOR, from the one call that answers it for
+		// every interface at once. iwinfo.info would need one call per
+		// interface; this needs one per device, on the 15-minute cadence.
+		calls = append(calls, call{
+			inv:      ubus.Invocation{Object: "luci-rpc", Method: "getWirelessDevices"},
+			decode:   decodeIfaceModes,
+			optional: true,
+		})
 	}
 	if p.needNetworks() {
 		// Same reasoning as the radio list: in the batch, on the slow cadence,
@@ -178,6 +187,11 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 		})
 	}
 	for _, iface := range ifaces {
+		// A mesh point's peers are other access points, not clients. Asking
+		// hostapd for its "clients" reports the backhaul as connected users.
+		if !servesClients(modes, iface) {
+			continue
+		}
 		obj := "hostapd." + iface
 		calls = append(calls,
 			call{
@@ -196,19 +210,26 @@ func (p *poller) buildCalls(tier Tier, ifaces []string) []call {
 		return calls
 	}
 	for _, iface := range ifaces {
-		calls = append(calls,
-			call{
+		// assoclist on a mesh point returns its peers, which would land in the
+		// station telemetry and then in the client grid as wireless clients.
+		if servesClients(modes, iface) {
+			calls = append(calls, call{
 				inv: ubus.Invocation{Object: "iwinfo", Method: "assoclist",
 					Args: map[string]any{"device": iface}},
 				decode:   decodeAssoclist(iface),
 				optional: true,
-			},
-			call{
-				inv: ubus.Invocation{Object: "iwinfo", Method: "survey",
-					Args: map[string]any{"device": iface}},
-				decode:   decodeSurvey(iface),
-				optional: true,
 			})
+		}
+		// The survey is asked of every interface regardless. Channel
+		// utilization is a property of the radio's channel, not of what the
+		// interface is for, and a radio carrying only a mesh point would
+		// otherwise report no utilization at all.
+		calls = append(calls, call{
+			inv: ubus.Invocation{Object: "iwinfo", Method: "survey",
+				Args: map[string]any{"device": iface}},
+			decode:   decodeSurvey(iface),
+			optional: true,
+		})
 	}
 	return calls
 }
@@ -479,6 +500,54 @@ func decodeIfaces(raw json.RawMessage, s *Snapshot) error {
 	return nil
 }
 
+// decodeIfaceModes records what each wireless interface is configured as.
+//
+// # The decode is deliberately narrow
+//
+// getWirelessDevices returns each interface's whole UCI config — including
+// `key`, the wireless passphrase, in plaintext. Nothing here needs it and
+// nothing here should hold it, so the struct below names exactly two fields and
+// the rest of the response is discarded by the JSON decoder rather than being
+// carried around in a map[string]any that some later log line might print.
+func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
+	var v map[string]struct {
+		Interfaces []struct {
+			IfName string `json:"ifname"`
+			Config struct {
+				Mode string `json:"mode"`
+			} `json:"config"`
+		} `json:"interfaces"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	modes := map[string]string{}
+	for _, radio := range v {
+		for _, i := range radio.Interfaces {
+			if i.IfName != "" && i.Config.Mode != "" {
+				modes[i.IfName] = i.Config.Mode
+			}
+		}
+	}
+	s.IfaceModes = modes
+	return nil
+}
+
+// servesClients reports whether an interface is one whose associated stations
+// are CLIENTS.
+//
+// Unknown means yes, which is the behaviour that existed before modes were
+// read at all. Answering "no" for an interface whose mode was never read would
+// let a denied call quietly stop counting real clients — the failure would be a
+// number that is too low, with nothing anywhere saying so.
+func servesClients(modes map[string]string, iface string) bool {
+	m, known := modes[iface]
+	if !known {
+		return true
+	}
+	return m == "ap"
+}
+
 // discoverIfaces lists the wireless interfaces in a single call.
 //
 // Only adoption and the integration tests use it — the poll loop gets the same
@@ -492,6 +561,24 @@ func (p *poller) discoverIfaces(ctx context.Context, c *ubus.Client) ([]string, 
 		return nil, err
 	}
 	return v.Devices, nil
+}
+
+// discoverIfaceModes reads each wireless interface's configured mode in one
+// call.
+//
+// Like discoverIfaces, the poll loop gets the same answer inside its batch;
+// this exists for adoption and the integration tests, where "what is each of
+// these interfaces for" is a reasonable one-off question.
+func (p *poller) discoverIfaceModes(ctx context.Context, c *ubus.Client) (map[string]string, error) {
+	var raw json.RawMessage
+	if err := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &raw); err != nil {
+		return nil, err
+	}
+	var snap Snapshot
+	if err := decodeIfaceModes(raw, &snap); err != nil {
+		return nil, err
+	}
+	return snap.IfaceModes, nil
 }
 
 // needIfaces reports whether this poll should re-read the radio list.

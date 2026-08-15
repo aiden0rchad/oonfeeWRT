@@ -61,9 +61,24 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 	}
 	t.Logf("interfaces: %v", ifaces)
 
+	// What each interface is FOR. The poll uses this to avoid asking a mesh
+	// point for its "clients" — a mesh point's peers are other access points,
+	// and counting them would report the backhaul as connected users.
+	modes, err := p.discoverIfaceModes(ctx, client)
+	if err != nil {
+		t.Fatalf("luci-rpc.getWirelessDevices under the scoped credential: %v", err)
+	}
+	t.Logf("interface modes: %v", modes)
+	for _, iface := range ifaces {
+		if _, ok := modes[iface]; !ok {
+			t.Errorf("%s has no mode; it will be polled for clients on the "+
+				"assumption that it is an AP", iface)
+		}
+	}
+
 	for _, tier := range []Tier{Baseline, Focused} {
 		p.boardAt = time.Time{} // force the board read on both, to exercise it
-		snap := p.poll(ctx, client, tier, ifaces)
+		snap := p.poll(ctx, client, tier, ifaces, modes)
 		if !snap.OK() {
 			t.Fatalf("%s poll failed: %v", tier, snap.Err)
 		}
@@ -72,7 +87,7 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 		}
 		t.Logf("%s: %v, %d calls' worth — uptime=%ds load1=%.2f mem_used=%dMiB "+
 			"ifaces=%d aps=%d stations=%d surveys=%d",
-			tier, snap.Duration.Round(time.Millisecond), len(p.buildCalls(tier, ifaces)),
+			tier, snap.Duration.Round(time.Millisecond), len(p.buildCalls(tier, ifaces, modes)),
 			snap.Uptime, snap.Load[0], snap.Memory.Used()/(1<<20),
 			len(snap.Interfaces), len(snap.APs), len(snap.Stations), len(snap.Surveys))
 
@@ -140,12 +155,16 @@ func TestIntegrationBaselineIsMuchCheaperThanFocused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("iwinfo.devices: %v", err)
 	}
+	modes, err := p.discoverIfaceModes(ctx, client)
+	if err != nil {
+		t.Fatalf("luci-rpc.getWirelessDevices: %v", err)
+	}
 
 	median := func(tier Tier) time.Duration {
 		var best time.Duration
 		for i := range 5 {
 			p.boardAt = time.Now() // steady state: no board read
-			snap := p.poll(ctx, client, tier, ifaces)
+			snap := p.poll(ctx, client, tier, ifaces, modes)
 			if snap.Err != nil {
 				t.Fatalf("%s poll %d: %v", tier, i, snap.Err)
 			}

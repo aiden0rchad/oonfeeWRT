@@ -321,6 +321,7 @@ the useful part — the code is in git either way.
 | §5l | Column reorder, and getting UI logic under a check without a test runner |
 | §5m | **Hardware breadth** — the stated direction, what it needs, and what assumed otherwise |
 | §5n | 802.11s mesh — modelled as an interface mode, not a role |
+| §5o | The bug mesh support created in the collector, found by looking for it |
 
 ### 5a. What discovery corrected
 
@@ -1043,7 +1044,9 @@ Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
    802.11s covers the mesh half, and a WDS bridge is a different mechanism
    (`wds`/4addr rather than `mode mesh`) for the case where the far end is not
    mesh-capable.
-2. **Nothing verifies a mesh actually peers.** The controller can configure one
+2. **The collector now knows what each wireless interface is FOR** — see §5o.
+   Applying a mesh would otherwise have reported the backhaul as clients.
+3. **Nothing verifies a mesh actually peers.** The controller can configure one
    and can see `mode mesh` on a radio, but there is no mesh-neighbour readout —
    `iw dev <if> mpath dump` / `station dump` would give it, and neither is in
    the ACL. A backhaul you cannot see the health of is half a feature, and this
@@ -1114,6 +1117,44 @@ reached through, and a one-node mesh has nothing to peer with. What was checked
 is that the plan is built from what the device actually reported: real radios,
 real wpad build, real existing config. Result: `oowrt_mesh1_radio0` planned,
 flagged as writing a key, with the passphrase itself kept out of the preview.
+
+### 5o. What mesh support broke in the collector
+
+Adding a feature creates the conditions for bugs elsewhere, so the question
+after landing mesh was what it had just made reachable. One thing, and it was
+real.
+
+`discoverIfaces` uses `iwinfo devices`, which lists **every** wireless
+interface. The poll then asks each one for `hostapd get_clients`, and on the
+focused tier `iwinfo assoclist`. **A mesh point's associated stations are its
+peers — other access points.** So the first time anyone applied a mesh, the
+backhaul would have been counted as connected users: infrastructure in a list
+captioned "your devices", which is the identical complaint client scoping (§5c)
+already fixed once for upstream neighbours.
+
+Nothing had gone wrong yet — no mesh has been applied — but the feature that
+makes it possible shipped an hour earlier.
+
+The fix needed to know each interface's mode, and the source took measuring
+again. `iwinfo.info` reports it per interface (`"Master"` for an AP) but that is
+one call per interface. `luci-rpc.getWirelessDevices` gives every interface's
+`ifname` and configured `mode` in **one** call, and is already granted — so this
+costs one extra call per 15-minute rediscovery, on the cadence that already
+exists for the board and the radio list.
+
+Three things worth keeping:
+
+- **The decode is deliberately narrow.** `getWirelessDevices` returns each
+  interface's whole UCI config *including `key`, the wireless passphrase, in
+  plaintext*. The struct names exactly two fields so the rest is discarded by
+  the decoder rather than carried around where a later log line could print it.
+  There is a test asserting no passphrase reaches the snapshot.
+- **An unknown mode means "assume AP"**, which is what the controller did before
+  modes existed. Answering the other way would let a denied call quietly stop
+  counting real clients — a number that is too low, with nothing saying so.
+- **The survey is still asked of every interface.** Channel utilization is a
+  property of the radio's channel, not of what the interface is for, and a radio
+  carrying only a mesh point would otherwise report none at all.
 
 ---
 
