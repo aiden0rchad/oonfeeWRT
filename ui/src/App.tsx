@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, onUnauthorized } from './lib/api'
-import type { Client, Dashboard as DashboardData, Device } from './lib/api'
+import type { Dashboard as DashboardData, Device } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
 import { Devices } from './screens/Devices'
@@ -31,8 +31,6 @@ export function App() {
 
   const [dash, setDash] = useState<DashboardData | null>(null)
   const [devices, setDevices] = useState<Device[]>([])
-  const [clients, setClients] = useState<Client[]>([])
-  const [clientNote, setClientNote] = useState('')
   const [err, setErr] = useState('')
 
   useEffect(() => {
@@ -73,15 +71,9 @@ export function App() {
   const refresh = useCallback(async () => {
     if (!username) return
     try {
-      const [d, dv, cl] = await Promise.all([
-        api.dashboard(),
-        api.devices(),
-        api.clients(),
-      ])
+      const [d, dv] = await Promise.all([api.dashboard(), api.devices()])
       setDash(d)
       setDevices(dv.devices)
-      setClients(cl.clients)
-      setClientNote(cl.note)
       setErr('')
     } catch (e) {
       // A failed refresh keeps the last good data on screen and says so. Blanking
@@ -211,7 +203,7 @@ export function App() {
               onChanged={refresh}
             />
           )}
-          {screen === 'clients' && <Clients clients={clients} note={clientNote} />}
+          {screen === 'clients' && <Clients />}
           {screen === 'settings' && <Settings devices={devices} />}
           {screen === 'adopt' && <Adopt onAdopted={refresh} />}
           {screen === 'logs' && <Logs />}

@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS rollup_1h (
 -- 5m->1h fold would otherwise scan the whole table every five minutes.
 CREATE INDEX IF NOT EXISTS rollup_5m_ts ON rollup_5m(ts);
 CREATE INDEX IF NOT EXISTS rollup_1h_ts ON rollup_1h(ts);
+-- The client list asks "has this MAC any recent station telemetry" without
+-- knowing which device saw it. The UNIQUE constraint above leads with
+-- device_id, so that question cannot use it. (migration v6)
+CREATE INDEX IF NOT EXISTS series_kind_key ON series(kind, key);
 
 -- ===== events =====
 CREATE TABLE IF NOT EXISTS events (

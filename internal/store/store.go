@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -65,6 +65,14 @@ var migrations = map[int][]string{
 		   uuid TEXT NOT NULL,
 		   name TEXT NOT NULL DEFAULT 'Site'
 		 )`,
+	},
+	6: {
+		// The client list's "connection" rail asks whether a MAC has recent
+		// station telemetry, which is a lookup by (kind, key). series' only
+		// index is UNIQUE(device_id, kind, key), and device_id is the leftmost
+		// column — so a query that does not know the device cannot use it and
+		// scans the table once per client row.
+		`CREATE INDEX IF NOT EXISTS series_kind_key ON series(kind, key)`,
 	},
 }
 

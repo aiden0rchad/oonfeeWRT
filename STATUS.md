@@ -255,17 +255,13 @@ most-worth-doing first.
 
 ### Do these next
 
-1. **Server-side paging for `/clients`.** The event log is paged and faceted in
-   SQL; the client list still returns everything and filters in the browser.
-   Correct today at 14 clients, and its filter rail says so rather than implying
-   otherwise, but it does not survive a real fleet. §5b has the faceting rules
-   that took two attempts to get right — reuse them, do not re-derive them. The
-   scope rail is already counted in SQL and page-independent (§5h); presence and
-   connection are not, and connection is derived from telemetry rather than
-   stored, which is the part that needs thought.
-2. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
+1. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
    detected and logged as a warning and the stale registry is left in place, so
    a device that gained a radio or a feature never gets it.
+2. **Look at the client grid in a browser.** Paging and faceting moved
+   server-side (§5i) and the API is verified from unit tests up through the real
+   device, but nobody has *looked* at the screen since. Every UI defect this
+   project has found was found by looking — see the standing gap below.
 3. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
 
@@ -312,6 +308,7 @@ the useful part — the code is in git either way.
 | §5f | Per-device overrides — and the four things they deliberately cannot touch |
 | §5g | Networks — **read this one** |
 | §5h | The fleet client total — two screens answering one question two ways |
+| §5i | Client paging — and the one rail that is not a column |
 
 ### 5a. What discovery corrected
 
@@ -695,6 +692,44 @@ writes. Real device, real client mix: `3 on this network (3 active), 7 upstream,
 4 unplaced` against a grid of `14 row(s), scopes map[local:3 unknown:4
 upstream:7]`. The test now asserts the two agree, so they cannot drift apart
 again silently.
+
+### 5i. Client paging, and the one rail that is not a column
+
+The client list now pages and facets in SQL, the way the event log does. The
+mechanical half followed §5b's rules directly. The interesting half was
+**Connection**, which is the only rail whose value is not a column: a client is
+"wireless" because recent station telemetry carries its MAC, which had been
+computed in Go over the fetched rows. That cannot survive paging, so it is an
+SQL expression now — a correlated `EXISTS` against the station series.
+
+Three things that came out of it:
+
+- **The derivation exists twice, deliberately, and is tested for agreement.**
+  The facet and filter are in SQL; the per-row `connection` field stays in Go
+  because it also carries signal and retry. Two definitions of "wireless" is
+  precisely how a grid lists a row its own rail did not count, so the wireless
+  kind list is one variable passed into both, and both an API test and the
+  hardware test assert the counts match the rows.
+- **It needed an index nothing else needed.** `series` is uniquely indexed on
+  `(device_id, kind, key)` and this query does not know the device, so it could
+  not use the leftmost column and scanned `series` once per client row. Migration
+  6 adds `series(kind, key)`; the plan now shows a covering index search. The
+  test asserts the index exists, because without it nothing fails — it only gets
+  slow, and slow is not something a test notices.
+- **Measured at 13,000 clients**, seeded locally: 30 ms for a page, 68 ms for
+  the wireless filter (which runs the `EXISTS` for both the rows and the
+  facets), 28 ms at offset 8500. Verified on the device too: 14 of 14, and the
+  facets identical between the full list and a one-row page.
+
+`/clients` no longer returns a `scopes` map — the counts are in `facets` beside
+the other two rails, and the response carries `total`, `limit` and `offset`. The
+screen fetches its own page now, so `App.tsx` no longer pulls the whole client
+inventory every 30 seconds for a screen that is usually not open.
+
+**Also fixed here:** `.run/` was not in `.gitignore`, and `.run/` is the path
+§0 tells a reader to run the controller with. Following the documented command
+left `keyring.json` untracked in a public repo, one `git add -A` from being
+published. `data/` was ignored; the name in the docs was not.
 
 ---
 

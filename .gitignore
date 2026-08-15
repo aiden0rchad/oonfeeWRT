@@ -7,8 +7,12 @@ passphrase
 report.json
 probe-*.json
 
-# Controller runtime state
+# Controller runtime state. Both names: deploy/ uses data/, and the command
+# STATUS §0 tells a reader to run uses .run/ — which was NOT ignored, so
+# following the documented instructions left a keyring.json sitting untracked
+# in a public repo, one `git add -A` from being published.
 data/
+.run/
 
 __pycache__/
 *.pyc

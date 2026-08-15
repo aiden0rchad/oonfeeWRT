@@ -35,6 +35,14 @@ type clientView struct {
 // is still on the network in every sense a user cares about.
 const clientActiveWindow = 15 * time.Minute
 
+// wirelessKinds are the series whose presence means a MAC was associated to a
+// radio. One list, used both by the SQL that facets and pages the grid and by
+// recentStations, which enriches the rows it returns — two definitions of
+// "wireless" would put a row in the list that its own rail does not count.
+var wirelessKinds = []string{
+	string(telemetry.KindStaRSSI), string(telemetry.KindStaRetry),
+}
+
 func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.now()
@@ -43,9 +51,25 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("all") != "1" {
 		since = now.Add(-24 * time.Hour).Unix()
 	}
+	onlineCutoff := now.Add(-clientActiveWindow).Unix()
 	limit := queryInt(r, "limit", 500, 1, 5000)
+	offset := queryInt(r, "offset", 0, 0, 1<<30)
 
-	clients, err := s.Store.Clients(ctx, since, limit)
+	// Filters, paging and facet counts all go to the database. The grid used to
+	// receive every client and narrow them in the browser, which is correct
+	// only while the page is the whole table — and the rail counted the page it
+	// held, so on a paged fleet it would report "4 wireless" from a page of 100
+	// while the table held four hundred.
+	page, err := s.Store.ClientsPage(ctx, store.ClientFilter{
+		SeenSince:     since,
+		ActiveSince:   onlineCutoff,
+		WirelessKinds: wirelessKinds,
+		Presence:      r.URL.Query().Get("presence"),
+		Connection:    r.URL.Query().Get("connection"),
+		Scope:         r.URL.Query().Get("scope"),
+		Limit:         limit,
+		Offset:        offset,
+	})
 	if handleStoreErr(w, err, "clients") {
 		return
 	}
@@ -55,9 +79,8 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	// network would otherwise issue 40 round trips to render one screen.
 	rf := s.recentStations(ctx, now)
 
-	out := make([]clientView, 0, len(clients))
-	onlineCutoff := now.Add(-clientActiveWindow).Unix()
-	for _, c := range clients {
+	out := make([]clientView, 0, len(page.Clients))
+	for _, c := range page.Clients {
 		v := clientView{Client: c, Connection: "unknown"}
 		v.Online = c.LastSeen != nil && *c.LastSeen >= onlineCutoff
 		if st, ok := rf[c.MAC]; ok {
@@ -71,23 +94,20 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, v)
 	}
-	// Counted in SQL over the same `since` window this list uses, NOT over the
-	// rows above — so the counts do not depend on the page that happened to be
-	// returned, and an empty local list stays legible: "0 local, 11 upstream" is
-	// an answer, an empty grid on its own is not. Same call the dashboard makes,
-	// so the two screens cannot disagree about what is on this network.
-	scopes := map[string]int{}
-	if counts, err := s.Store.ClientCounts(ctx, since, onlineCutoff); err == nil {
-		for scope, c := range counts {
-			scopes[scope] = c.Total
-		}
-	} else {
-		s.Log.Debug("could not count client scopes", "err", err)
-	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"clients": out,
-		"scopes":  scopes,
+		"total":   page.Total,
+		"limit":   limit,
+		"offset":  offset,
+		// Counted over the whole filtered table, each rail with the OTHER
+		// filters applied but not its own — so every option answers "how many
+		// would I get if I clicked that instead?".
+		"facets": map[string]any{
+			"presence":   page.Presence,
+			"connection": page.Connection,
+			"scope":      page.Scope,
+		},
 		// Says plainly why most rows have no RF data, so the UI can explain it
 		// rather than leaving a column mysteriously empty.
 		"note": "signal and retry data come from the focused poll tier, so they " +

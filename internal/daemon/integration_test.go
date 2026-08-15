@@ -359,30 +359,62 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 	// the other listed 3 — both captioned as this network's.
 	var cl struct {
 		Clients []struct {
-			MAC   string `json:"mac"`
-			Scope string `json:"scope"`
+			MAC        string `json:"mac"`
+			Scope      string `json:"scope"`
+			Connection string `json:"connection"`
 		} `json:"clients"`
-		Scopes map[string]int `json:"scopes"`
+		Total  int `json:"total"`
+		Facets struct {
+			Scope      []store.Facet `json:"scope"`
+			Connection []store.Facet `json:"connection"`
+		} `json:"facets"`
 	}
-	apiGet(t, client, base+"/api/v1/clients?all=1", &cl)
+	// A limit above the fleet's client count, so the page IS the table and the
+	// server's counts can be checked against the rows for once. Above that size
+	// the rail is the only thing that knows the totals, which is the point of
+	// counting it server-side — but it is also why it has to be verified here.
+	apiGet(t, client, base+"/api/v1/clients?all=1&limit=5000", &cl)
+
+	scopeFacet := map[string]int{}
+	for _, f := range cl.Facets.Scope {
+		scopeFacet[f.Value] = f.Count
+	}
+	connFacet := map[string]int{}
+	for _, f := range cl.Facets.Connection {
+		connFacet[f.Value] = f.Count
+	}
 
 	// The rail's counts must match the rows it is filtering, or the numbers are
-	// decoration. Counted from the payload, since paging has not landed yet and
-	// this is the last point at which the two are directly comparable.
+	// decoration.
 	fromRows := map[string]int{}
+	connRows := map[string]int{}
 	for _, c := range cl.Clients {
 		fromRows[c.Scope]++
+		connRows[c.Connection]++
+	}
+	if cl.Total != len(cl.Clients) {
+		t.Errorf("total = %d but %d rows returned under a limit of 5000",
+			cl.Total, len(cl.Clients))
 	}
 	for _, scope := range []string{"local", "upstream", "unknown"} {
-		if cl.Scopes[scope] != fromRows[scope] {
+		if scopeFacet[scope] != fromRows[scope] {
 			t.Errorf("scope %q: rail says %d, rows say %d",
-				scope, cl.Scopes[scope], fromRows[scope])
+				scope, scopeFacet[scope], fromRows[scope])
 		}
 	}
-	if cl.Scopes["local"] != dash.KnownDevices {
+	// The connection rail is computed in SQL and the rows' connection field in
+	// Go, from the same station telemetry. On real data they must still agree.
+	for _, conn := range []string{"wireless", "unknown"} {
+		if connFacet[conn] != connRows[conn] {
+			t.Errorf("connection %q: rail says %d, rows say %d — the SQL "+
+				"derivation and the row enrichment disagree on live data",
+				conn, connFacet[conn], connRows[conn])
+		}
+	}
+	if scopeFacet["local"] != dash.KnownDevices {
 		t.Errorf("the client list says %d local, the dashboard says %d on this "+
 			"network — the two screens disagree about the same question",
-			cl.Scopes["local"], dash.KnownDevices)
+			scopeFacet["local"], dash.KnownDevices)
 	}
 	// The regression itself: with anything on the other side of the router
 	// present, the headline must be strictly smaller than the row count.
@@ -392,7 +424,42 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 			"dashboard still reports %d", elsewhere, len(cl.Clients),
 			dash.KnownDevices)
 	}
-	t.Logf("clients: %d row(s), scopes %v", len(cl.Clients), cl.Scopes)
+	t.Logf("clients: %d row(s) of %d, scopes %v, connection %v",
+		len(cl.Clients), cl.Total, scopeFacet, connFacet)
+
+	// And a real second page: the total and the facets must not move when the
+	// window does, which is the whole reason they are counted in SQL.
+	if len(cl.Clients) > 1 {
+		var p2 struct {
+			Clients []struct {
+				MAC string `json:"mac"`
+			} `json:"clients"`
+			Total  int `json:"total"`
+			Facets struct {
+				Scope []store.Facet `json:"scope"`
+			} `json:"facets"`
+		}
+		apiGet(t, client, base+"/api/v1/clients?all=1&limit=1&offset=1", &p2)
+		if len(p2.Clients) != 1 {
+			t.Errorf("page 2 held %d rows, want 1", len(p2.Clients))
+		}
+		if p2.Total != cl.Total {
+			t.Errorf("total changed with the page: %d then %d", cl.Total, p2.Total)
+		}
+		p2Scope := map[string]int{}
+		for _, f := range p2.Facets.Scope {
+			p2Scope[f.Value] = f.Count
+		}
+		for k, v := range scopeFacet {
+			if p2Scope[k] != v {
+				t.Errorf("scope %q counted %d on the full list and %d on a "+
+					"one-row page — the rail is counting the page", k, v, p2Scope[k])
+			}
+		}
+		if p2.Clients[0].MAC == cl.Clients[0].MAC {
+			t.Error("offset=1 returned the same row as offset=0")
+		}
+	}
 
 	_ = csrf
 	cancel()

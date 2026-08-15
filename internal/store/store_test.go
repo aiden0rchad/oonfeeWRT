@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -547,6 +548,283 @@ func TestClientCountsByScope(t *testing.T) {
 	if got := recent[ScopeLocal].Total; got != 2 {
 		t.Errorf("local total within the seen window = %d, want 2 "+
 			"(the client last seen at t=1000 is outside it)", got)
+	}
+}
+
+// The index the client list's connection rail depends on must exist, whether
+// the database was created fresh or migrated.
+//
+// It is declared in both schema.sql and migration 6 — fresh databases get it
+// from the former and existing ones from either, which is the same
+// belt-and-braces the tables use. Asserted rather than assumed because the
+// query works without it: it just scans series once per client row, so nothing
+// fails, it only gets slow, and slow is not something a test notices.
+func TestSeriesKindKeyIndexExists(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		prep func(t *testing.T, path string)
+	}{
+		{"fresh", func(*testing.T, string) {}},
+		{"migrated from v5", func(t *testing.T, path string) {
+			db, err := Open(ctx, driver, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.SQL().ExecContext(ctx,
+				`DROP INDEX IF EXISTS series_kind_key`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.SQL().ExecContext(ctx,
+				`DELETE FROM schema_version;
+				 INSERT INTO schema_version (version, applied_at) VALUES (5, 0)`); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "oonfee.db")
+			tc.prep(t, path)
+			db, err := Open(ctx, driver, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			var n int
+			if err := db.SQL().QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM sqlite_master
+				  WHERE type='index' AND name='series_kind_key'`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if n != 1 {
+				t.Error("series_kind_key is missing; the connection facet " +
+					"falls back to scanning series once per client row")
+			}
+		})
+	}
+}
+
+// Filtering must happen in the database, not on the page it returned.
+//
+// This is the defect the event log had: filtering a fetched page selects from
+// the newest N rows overall rather than the newest N matching, so a view
+// filtered to a rare value comes back empty while rows with that value exist.
+// Here the one upstream host is the OLDEST, so a client-side filter over a
+// page of 2 would find nothing.
+func TestClientsPageFiltersInTheDatabase(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:01:01", IPv4: "10.7.46.1", Scope: ScopeUpstream},
+	}, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:01:02", IPv4: "192.168.1.5", Scope: ScopeLocal},
+		{MAC: "aa:00:00:00:01:03", IPv4: "192.168.1.6", Scope: ScopeLocal},
+	}, 9000); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.ClientsPage(ctx, ClientFilter{Scope: ScopeUpstream, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Clients) != 1 || page.Clients[0].MAC != "aa:00:00:00:01:01" {
+		t.Fatalf("filtered page = %+v, want the one upstream host — filtering "+
+			"after the fetch would have returned nothing", page.Clients)
+	}
+	if page.Total != 1 {
+		t.Errorf("total = %d, want 1: the total counts matches, not rows fetched",
+			page.Total)
+	}
+}
+
+// The rail counts the whole filtered table, not the page.
+//
+// A rail counted over the returned page reports "1 upstream" from a page of 1
+// while the table holds three — in the same typeface as a true number.
+func TestClientsPageFacetsCountBeyondThePage(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	seen := []SeenClient{}
+	for i := 0; i < 5; i++ {
+		seen = append(seen, SeenClient{
+			MAC: fmt.Sprintf("aa:00:00:00:02:%02d", i), Scope: ScopeUpstream,
+		})
+	}
+	seen = append(seen, SeenClient{MAC: "aa:00:00:00:02:99", Scope: ScopeLocal})
+	if err := db.UpsertClients(ctx, seen, 9000); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.ClientsPage(ctx, ClientFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Clients) != 2 {
+		t.Fatalf("page held %d rows, want 2", len(page.Clients))
+	}
+	if page.Total != 6 {
+		t.Errorf("total = %d, want 6", page.Total)
+	}
+	got := map[string]int{}
+	for _, f := range page.Scope {
+		got[f.Value] = f.Count
+	}
+	if got[ScopeUpstream] != 5 || got[ScopeLocal] != 1 {
+		t.Errorf("scope facet = %v, want 5 upstream and 1 local from a 2-row page", got)
+	}
+}
+
+// Each rail counts with the OTHER filters applied but not its own.
+//
+// Applying a facet's own filter to its own count shows the selected value and
+// zero beside everything else — a rail that can only ever narrow, and gives no
+// answer to "how many would I get if I clicked that instead?".
+func TestClientsPageFacetsExcludeTheirOwnFilter(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	// Two local (one current, one stale) and two upstream (both current).
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:03:01", Scope: ScopeLocal},
+		{MAC: "aa:00:00:00:03:02", Scope: ScopeUpstream},
+		{MAC: "aa:00:00:00:03:03", Scope: ScopeUpstream},
+	}, 9000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:03:04", Scope: ScopeLocal},
+	}, 1000); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.ClientsPage(ctx, ClientFilter{
+		ActiveSince: 5000, Scope: ScopeLocal, Limit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The scope rail ignores the scope filter, so upstream is still offered.
+	scope := map[string]int{}
+	for _, f := range page.Scope {
+		scope[f.Value] = f.Count
+	}
+	if scope[ScopeUpstream] != 2 {
+		t.Errorf("scope facet = %v; with 'local' selected it must still count "+
+			"the 2 upstream hosts, or the rail cannot be un-narrowed", scope)
+	}
+
+	// The presence rail DOES respect the scope filter: of the two local hosts,
+	// one is current and one is stale.
+	presence := map[string]int{}
+	for _, f := range page.Presence {
+		presence[f.Value] = f.Count
+	}
+	if presence["online"] != 1 || presence["offline"] != 1 {
+		t.Errorf("presence facet = %v, want 1 online and 1 offline among the "+
+			"local hosts — the other rails' filters must apply", presence)
+	}
+}
+
+// "Connection" is derived from telemetry, and it has to be derivable in SQL.
+//
+// It is the only rail whose value is not a column: a client is "wireless"
+// because recent station telemetry carries its MAC. That had been computed in
+// Go over the fetched rows, which cannot survive paging — so it is an
+// expression now, and this pins the three things that expression must get
+// right: a MAC with recent station telemetry is wireless, a MAC with only
+// STALE telemetry is not, and a MAC with none is "unknown" rather than "wired".
+func TestClientsPageConnectionComesFromTelemetry(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	dev := &Device{MAC: "60:38:e0:00:00:01", Host: "192.168.1.1", Name: "ap"}
+	if err := db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:04:01", Scope: ScopeLocal}, // associated, recently
+		{MAC: "aa:00:00:00:04:02", Scope: ScopeLocal}, // associated, long ago
+		{MAC: "aa:00:00:00:04:03", Scope: ScopeLocal}, // never seen on a radio
+	}, 9000); err != nil {
+		t.Fatal(err)
+	}
+
+	station := func(mac string, ts int64) {
+		t.Helper()
+		var id int64
+		if err := db.SQL().QueryRowContext(ctx,
+			`INSERT INTO series (device_id, kind, key) VALUES (?,?,?) RETURNING id`,
+			dev.ID, "sta_rssi", mac).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.SQL().ExecContext(ctx,
+			`INSERT INTO rollup_5m (series_id, ts, avg, min, max, cnt)
+			 VALUES (?,?,?,?,?,?)`, id, ts, -52.0, -55.0, -50.0, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	station("aa:00:00:00:04:01", 9500)
+	// Stale: a station series persists for the whole retention period, so
+	// without a recency bound this client reads as associated-at-−52-dBm weeks
+	// after it left.
+	station("aa:00:00:00:04:02", 100)
+
+	page, err := db.ClientsPage(ctx, ClientFilter{
+		ActiveSince:   9000,
+		WirelessKinds: []string{"sta_rssi", "sta_retry"},
+		Limit:         50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, f := range page.Connection {
+		got[f.Value] = f.Count
+	}
+	if got["wireless"] != 1 || got["unknown"] != 2 {
+		t.Errorf("connection facet = %v, want 1 wireless and 2 unknown", got)
+	}
+
+	// And filtering on it must select the right row, not merely count it.
+	page, err = db.ClientsPage(ctx, ClientFilter{
+		ActiveSince:   9000,
+		WirelessKinds: []string{"sta_rssi", "sta_retry"},
+		Connection:    "wireless",
+		Limit:         50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Clients) != 1 || page.Clients[0].MAC != "aa:00:00:00:04:01" {
+		t.Errorf("wireless filter returned %+v, want only the recently "+
+			"associated client", page.Clients)
+	}
+}
+
+// With no telemetry kinds supplied, nothing can be shown to be wireless — and
+// the rail still exists, saying so.
+//
+// The alternative, omitting the dimension, makes the rail vanish, which reads
+// as a build that does not know about wireless at all.
+func TestClientsPageWithNoWirelessKindsCallsEverythingUnknown(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "aa:00:00:00:05:01", Scope: ScopeLocal},
+	}, 9000); err != nil {
+		t.Fatal(err)
+	}
+	page, err := db.ClientsPage(ctx, ClientFilter{ActiveSince: 9000, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Connection) != 1 || page.Connection[0].Value != "unknown" ||
+		page.Connection[0].Count != 1 {
+		t.Errorf("connection facet = %+v, want a single 'unknown: 1'", page.Connection)
 	}
 }
 

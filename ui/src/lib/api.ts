@@ -171,6 +171,19 @@ export interface EventPage {
   facets: { category: Facet[]; severity: Facet[] }
 }
 
+/** One page of the client grid. Same shape as EventPage and for the same
+ *  reason: filters, paging and facet counts are all server-side, so the rail
+ *  counts the whole filtered table rather than the rows that arrived. */
+export interface ClientPage {
+  clients: Client[] | null
+  total: number
+  limit: number
+  offset: number
+  facets: { presence: Facet[]; connection: Facet[]; scope: Facet[] }
+  note: string
+  scope_note: string
+}
+
 export interface Dashboard {
   devices: {
     total: number
@@ -460,15 +473,24 @@ export const api = {
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
-  clients: () =>
-    get<{
-      clients: Client[]
-      /** Counts per scope, from the server, so the rail does not depend on
-       *  which rows the page happened to receive. */
-      scopes: Record<string, number>
-      note: string
-      scope_note: string
-    }>('/clients'),
+  clients: (q: {
+    limit?: number
+    offset?: number
+    presence?: string
+    connection?: string
+    scope?: string
+    all?: boolean
+  } = {}) => {
+    const p = new URLSearchParams()
+    if (q.limit != null) p.set('limit', String(q.limit))
+    if (q.offset) p.set('offset', String(q.offset))
+    if (q.presence) p.set('presence', q.presence)
+    if (q.connection) p.set('connection', q.connection)
+    if (q.scope) p.set('scope', q.scope)
+    if (q.all) p.set('all', '1')
+    const qs = p.toString()
+    return get<ClientPage>(`/clients${qs ? `?${qs}` : ''}`)
+  },
   adopt: (req: {
     host: string
     name?: string

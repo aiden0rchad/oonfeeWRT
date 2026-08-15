@@ -757,23 +757,31 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	}
 
 	// The client list's own scope counts must agree with the dashboard's: they
-	// are the same question and used to be computed two different ways.
-	w = h.do(http.MethodGet, "/api/v1/clients", nil)
+	// are the same question and used to be computed two different ways. Asked
+	// with all=1 so both cover the same set — the grid's default view is the
+	// last 24 hours, the dashboard's totals are all-time.
+	w = h.do(http.MethodGet, "/api/v1/clients?all=1", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
 	}
 	var cl struct {
-		Scopes map[string]int `json:"scopes"`
+		Facets struct {
+			Scope []store.Facet `json:"scope"`
+		} `json:"facets"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &cl); err != nil {
 		t.Fatal(err)
 	}
-	if cl.Scopes[store.ScopeLocal] != d.ActiveDevices {
-		t.Errorf("the client list says %d local, the dashboard says %d",
-			cl.Scopes[store.ScopeLocal], d.ActiveDevices)
+	scopes := map[string]int{}
+	for _, f := range cl.Facets.Scope {
+		scopes[f.Value] = f.Count
 	}
-	if cl.Scopes[store.ScopeUpstream] != 1 || cl.Scopes[store.ScopeUnknown] != 1 {
-		t.Errorf("client scope counts = %v, want 1 upstream and 1 unknown", cl.Scopes)
+	if scopes[store.ScopeLocal] != d.KnownDevices {
+		t.Errorf("the client list says %d local, the dashboard says %d",
+			scopes[store.ScopeLocal], d.KnownDevices)
+	}
+	if scopes[store.ScopeUpstream] != 1 || scopes[store.ScopeUnknown] != 1 {
+		t.Errorf("client scope counts = %v, want 1 upstream and 1 unknown", scopes)
 	}
 }
 
@@ -909,6 +917,71 @@ func TestClientsGrid(t *testing.T) {
 	}
 	if unseen.Signal != nil {
 		t.Errorf("signal = %v for a client no focused poll has covered", *unseen.Signal)
+	}
+}
+
+// The rail's idea of "wireless" and the row's must be the same idea.
+//
+// They are computed in two places — the facet and filter in SQL, the per-row
+// Connection field in Go from the station series — because one of them has to
+// survive paging and the other carries the signal and retry values. Two
+// definitions is exactly how a grid ends up listing a row its own rail did not
+// count, so this asserts they agree on the same data.
+func TestClientsFilterAndRowsAgreeOnWireless(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+
+	dev := h.seedDevice("ap-e", true, nil)
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{
+		{MAC: "aa:bb:cc:00:00:aa", Name: "phone", Scope: store.ScopeLocal},
+		{MAC: "aa:bb:cc:00:00:bb", Name: "nas", Scope: store.ScopeLocal},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	base := now.Truncate(5 * time.Minute).Unix()
+	if err := h.db.WriteRollups(ctx, []store.RollupRow{
+		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb:cc:00:00:aa",
+			TS: base, Avg: -61, Cnt: 9},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var resp struct {
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+		Facets  struct {
+			Connection []store.Facet `json:"connection"`
+		} `json:"facets"`
+	}
+	w := h.do(http.MethodGet, "/api/v1/clients?connection=wireless", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Total != 1 || len(resp.Clients) != 1 {
+		t.Fatalf("wireless filter returned %d of %d, want 1 of 1",
+			len(resp.Clients), resp.Total)
+	}
+	// The row the SQL selected must also render as wireless. If these two
+	// disagree the grid shows a row labelled "unknown" under a filter that says
+	// wireless, and nothing in the response admits which one is wrong.
+	if got := resp.Clients[0]; got.Connection != "wireless" ||
+		got.MAC != "aa:bb:cc:00:00:aa" {
+		t.Errorf("the wireless filter selected %s rendered as %q",
+			got.MAC, got.Connection)
+	}
+	counts := map[string]int{}
+	for _, f := range resp.Facets.Connection {
+		counts[f.Value] = f.Count
+	}
+	if counts["wireless"] != 1 || counts["unknown"] != 1 {
+		t.Errorf("connection facet = %v, want 1 wireless and 1 unknown even "+
+			"while filtered to wireless", counts)
 	}
 }
 

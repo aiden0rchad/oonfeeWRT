@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -126,6 +128,11 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 	if err != nil {
 		return nil, fmt.Errorf("store: list clients: %w", err)
 	}
+	return scanClients(rows)
+}
+
+// scanClients reads the client column list, which two queries share.
+func scanClients(rows *sql.Rows) ([]Client, error) {
 	defer rows.Close()
 	out := []Client{}
 	for rows.Next() {
@@ -141,6 +148,223 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 			c.Scope = ScopeUnknown
 		}
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ClientFilter narrows the client list to one page.
+//
+// The three filters are the grid's three rails. Two of them are answered by the
+// clients table; Connection is not, and that is the interesting one — see
+// ClientsPage.
+type ClientFilter struct {
+	// SeenSince bounds the list to clients seen since then; 0 is everything
+	// ever seen, which is the grid's "show offline clients" toggle.
+	SeenSince int64
+	// ActiveSince is the line between online and offline.
+	ActiveSince int64
+
+	// WirelessKinds are the telemetry series kinds whose presence means "this
+	// MAC was associated to a radio". Supplied by the caller rather than
+	// hardcoded here: the store does not own the telemetry vocabulary, and the
+	// same list has to drive both this query and the per-row enrichment the API
+	// does, or the rail and the rows disagree about what "wireless" means.
+	WirelessKinds []string
+
+	Presence   string // "", "online", "offline"
+	Connection string // "", "wireless", "unknown"
+	Scope      string // "", "local", "upstream", "unknown"
+
+	Limit, Offset int
+}
+
+// ClientPage is one page of the client list, and the counts its filter rail
+// needs to be honest about what is off the page.
+type ClientPage struct {
+	Clients    []Client `json:"clients"`
+	Total      int      `json:"total"`
+	Presence   []Facet  `json:"presence"`
+	Connection []Facet  `json:"connection"`
+	Scope      []Facet  `json:"scope"`
+}
+
+// clientDim is one facetable dimension: an expression that yields its value for
+// a row, and the arguments that expression needs.
+type clientDim struct {
+	expr string
+	args []any
+	sel  string // the currently selected value, "" for no filter
+}
+
+// pred renders this dimension as a WHERE predicate, or nothing when unselected.
+func (d clientDim) pred() (string, []any) {
+	if d.sel == "" {
+		return "", nil
+	}
+	return d.expr + " = ?", append(append([]any{}, d.args...), d.sel)
+}
+
+// dims builds the three facetable dimensions as SQL expressions.
+//
+// Writing them as expressions rather than as three bespoke queries is what
+// makes the faceting rule enforceable in one place: every facet is "group by my
+// expression, filter by everybody else's".
+func (f ClientFilter) dims() (presence, connection, scope clientDim) {
+	presence = clientDim{
+		expr: `CASE WHEN last_seen IS NOT NULL AND last_seen >= ?
+		            THEN 'online' ELSE 'offline' END`,
+		args: []any{f.ActiveSince},
+		sel:  f.Presence,
+	}
+
+	// Connection is derived from telemetry, not stored on the client row, and
+	// that is why it is expressed in SQL rather than computed after the fetch.
+	// A rail counted over the returned page reports "4 wireless" from a page of
+	// 100 while the table holds four hundred — in the same typeface as a true
+	// number. Deriving it here keeps one source (the station series) and one
+	// definition, at the cost of a correlated EXISTS per row, which the
+	// series(kind, key) index serves.
+	//
+	// The value for "no wireless evidence" is "unknown", never "wired": a
+	// client the focused tier has never covered has not been shown to be on a
+	// cable, and labelling it as such invents a fact.
+	connection = clientDim{
+		expr: `CASE WHEN ` + f.wirelessExists() + ` THEN 'wireless' ELSE 'unknown' END`,
+		args: f.wirelessArgs(),
+		sel:  f.Connection,
+	}
+
+	scope = clientDim{
+		expr: `COALESCE(NULLIF(scope,''), '` + ScopeUnknown + `')`,
+		sel:  f.Scope,
+	}
+	return presence, connection, scope
+}
+
+func (f ClientFilter) wirelessExists() string {
+	if len(f.WirelessKinds) == 0 {
+		// No kinds means nothing can be shown to be wireless. Rendering this as
+		// a constant false keeps the column present and every row "unknown",
+		// which is the honest reading; omitting the dimension would instead
+		// make the rail disappear.
+		return `0`
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(f.WirelessKinds)), ",")
+	return `EXISTS (SELECT 1 FROM rollup_5m r
+	                  JOIN series se ON se.id = r.series_id
+	                 WHERE se.kind IN (` + ph + `)
+	                   AND se.key = clients.mac AND r.ts >= ?)`
+}
+
+func (f ClientFilter) wirelessArgs() []any {
+	if len(f.WirelessKinds) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(f.WirelessKinds)+1)
+	for _, k := range f.WirelessKinds {
+		args = append(args, k)
+	}
+	return append(args, f.ActiveSince)
+}
+
+// ClientsPage returns one page of clients and the counts for all three rails.
+//
+// Filters go to the database, not to the page it returned. Filtering a fetched
+// page selects from the newest N clients overall rather than the newest N
+// matching, so a view filtered to "wireless" can come back empty while wireless
+// clients exist — the same defect the event log had before it was paged in SQL.
+//
+// Each facet is counted with the OTHER filters applied but not its own, so
+// every option answers "how many would I get if I clicked that instead?".
+// Counting each with its own filter applied would show its selected value and
+// zero beside everything else, which is a rail that can only ever narrow.
+func (db *DB) ClientsPage(ctx context.Context, f ClientFilter) (ClientPage, error) {
+	if f.Limit <= 0 {
+		f.Limit = 500
+	}
+	presence, connection, scope := f.dims()
+
+	// The base predicate applies to everything, facets included: it is the
+	// list's scope, not one of its rails.
+	base := `(? = 0 OR last_seen >= ?)`
+	baseArgs := []any{f.SeenSince, f.SeenSince}
+
+	where := func(dims ...clientDim) (string, []any) {
+		sql := base
+		args := append([]any{}, baseArgs...)
+		for _, d := range dims {
+			p, a := d.pred()
+			if p == "" {
+				continue
+			}
+			sql += " AND " + p
+			args = append(args, a...)
+		}
+		return sql, args
+	}
+
+	var page ClientPage
+
+	sel, args := where(presence, connection, scope)
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
+       COALESCE(ip,''), blocked, COALESCE(grp,''), first_seen, last_seen,
+       COALESCE(scope,'')
+  FROM clients
+ WHERE `+sel+`
+ ORDER BY last_seen DESC, mac
+ LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
+	if err != nil {
+		return page, fmt.Errorf("store: list clients: %w", err)
+	}
+	page.Clients, err = scanClients(rows)
+	if err != nil {
+		return page, err
+	}
+
+	if err := db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM clients WHERE `+sel, args...).Scan(&page.Total); err != nil {
+		return page, fmt.Errorf("store: count clients: %w", err)
+	}
+
+	for _, d := range []struct {
+		dim   clientDim
+		other []clientDim
+		out   *[]Facet
+	}{
+		{presence, []clientDim{connection, scope}, &page.Presence},
+		{connection, []clientDim{presence, scope}, &page.Connection},
+		{scope, []clientDim{presence, connection}, &page.Scope},
+	} {
+		w, wargs := where(d.other...)
+		facets, err := db.clientFacet(ctx, d.dim, w, wargs)
+		if err != nil {
+			return page, err
+		}
+		*d.out = facets
+	}
+	return page, nil
+}
+
+func (db *DB) clientFacet(ctx context.Context, d clientDim, where string, whereArgs []any) ([]Facet, error) {
+	// The dimension's own arguments come first: it appears in the SELECT list
+	// and the GROUP BY, both ahead of the WHERE clause.
+	args := append(append([]any{}, d.args...), whereArgs...)
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT `+d.expr+` AS v, COUNT(*) FROM clients
+		  WHERE `+where+`
+		  GROUP BY v ORDER BY COUNT(*) DESC, v`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: facet clients: %w", err)
+	}
+	defer rows.Close()
+	out := []Facet{}
+	for rows.Next() {
+		var f Facet
+		if err := rows.Scan(&f.Value, &f.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }

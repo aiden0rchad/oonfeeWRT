@@ -1,9 +1,11 @@
-import { useState } from 'react'
-import type { Client } from '../lib/api'
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../lib/api'
+import type { Client, ClientPage } from '../lib/api'
 import {
   Card,
   DataGrid,
   FilterRail,
+  Pager,
   Status,
   Unknown,
   Banner,
@@ -21,33 +23,58 @@ import { ago } from '../components/Chart'
  * time, have no RF data — and they show a dash with an explanation rather than
  * a zero. A grid full of "0 dBm" would be worse than one that admits it does
  * not know.
+ *
+ * Fetches its own page, like the log. It used to be handed the whole inventory
+ * and filter it here, which is correct only while one response holds the whole
+ * table: past that, filtering the fetched window selects from the newest N
+ * clients overall rather than the newest N matching, and the rail counts the
+ * page instead of the table.
  */
-export function Clients({ clients, note }: { clients: Client[]; note: string }) {
+export function Clients() {
   const [presence, setPresence] = useState('online')
   const [connection, setConnection] = useState('')
   // Defaults to the network this controller manages.
   //
   // A gateway's neighbour tables cover every interface, so an unscoped list
   // mixes the operator's devices with whatever is on the other side of the WAN
-  // port — measured 8 of 16 on the reference device, including the upstream
+  // port — measured 11 of 14 on the reference device, including the upstream
   // router itself. Those are not this network's clients by any definition a
   // user has. They stay reachable through the rail rather than being dropped,
   // because "where did my device go" needs an answer that is not silence.
   const [scope, setScope] = useState('local')
+  const [limit, setLimit] = useState(500)
+  const [offset, setOffset] = useState(0)
+  const [page, setPage] = useState<ClientPage | null>(null)
+  const [err, setErr] = useState('')
   const [hidden, setHidden] = useHiddenColumns('clients')
-  const withRF = clients.filter((c) => c.signal != null).length
 
-  // Faceted the same way the server does it for the log: each rail counts with
-  // the OTHER filter applied but not its own, so every option answers "how many
-  // would I get if I clicked that instead?" rather than showing 0 beside
-  // everything not currently selected.
-  const presenceOf = (c: Client) => (c.online ? 'online' : 'offline')
-  const match = (c: Client, skip: 'presence' | 'connection' | 'scope' | null) =>
-    (skip === 'presence' || presence === '' || presenceOf(c) === presence) &&
-    (skip === 'connection' || connection === '' || c.connection === connection) &&
-    (skip === 'scope' || scope === '' || c.scope === scope)
+  const load = useCallback(async () => {
+    try {
+      setPage(await api.clients({ limit, offset, presence, connection, scope }))
+      setErr('')
+    } catch (e) {
+      // Keep the last good page. Blanking it on one dropped request would read
+      // as "no clients", which is a different claim.
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [limit, offset, presence, connection, scope])
 
-  const rows = clients.filter((c) => match(c, null))
+  useEffect(() => {
+    load()
+    const t = setInterval(load, 30_000)
+    return () => clearInterval(t)
+  }, [load])
+
+  // Changing a filter resets the offset: page 4 of the unfiltered list is not
+  // page 4 of the filtered one, and keeping it lands on an empty page that
+  // reads as "no matches".
+  const setFilter = (set: (v: string) => void) => (v: string) => {
+    set(v)
+    setOffset(0)
+  }
+
+  const rows = page?.clients ?? []
+  const withRF = rows.filter((c) => c.signal != null).length
 
   const columns: Column<Client>[] = [
     {
@@ -136,8 +163,8 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      {withRF === 0 && clients.length > 0 && (
-        <Banner tone="accent">{note}. Open a device to populate them.</Banner>
+      {withRF === 0 && rows.length > 0 && page && (
+        <Banner tone="accent">{page.note}. Open a device to populate them.</Banner>
       )}
       <div
         style={{
@@ -147,39 +174,37 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
           alignItems: 'start',
         }}
       >
-        {/* counted="loaded" and not "all": /clients returns the entire
-            inventory in one response, so counting it here IS counting
-            everything. The rail says which it is rather than leaving the
-            reader to assume — the assumption is wrong on the log screen. */}
+        {/* counted="all" now: the counts come from an aggregate over the whole
+            filtered table rather than from the rows on screen. */}
         <FilterRail
-          counted="loaded"
+          counted="all"
           groups={[
             {
               label: 'Network',
-              options: tally(clients.filter((c) => match(c, 'scope')), (c) => c.scope),
+              options: page?.facets.scope ?? [],
               selected: scope,
-              onChange: setScope,
+              onChange: setFilter(setScope),
             },
             {
               label: 'Presence',
-              options: tally(clients.filter((c) => match(c, 'presence')), presenceOf),
+              options: page?.facets.presence ?? [],
               selected: presence,
-              onChange: setPresence,
+              onChange: setFilter(setPresence),
             },
             {
               label: 'Connection',
-              options: tally(clients.filter((c) => match(c, 'connection')), (c) => c.connection),
+              options: page?.facets.connection ?? [],
               selected: connection,
-              onChange: setConnection,
+              onChange: setFilter(setConnection),
             },
           ]}
         />
-        <Card
-          title={`Client devices (${rows.length.toLocaleString()}${
-            rows.length !== clients.length ? ` of ${clients.length.toLocaleString()}` : ''
-          })`}
-          pad={false}
-        >
+        <Card title={`Client devices (${(page?.total ?? 0).toLocaleString()})`} pad={false}>
+          {err && (
+            <div style={{ padding: 12 }}>
+              <Banner tone="critical">{err}</Banner>
+            </div>
+          )}
           <DataGrid
             rows={rows}
             columns={columns}
@@ -188,19 +213,21 @@ export function Clients({ clients, note }: { clients: Client[]; note: string }) 
             rowKey={(c) => c.mac}
             empty="No clients match these filters. The inventory is built from the baseline poll, so it fills in within a minute of a device coming online."
           />
+          {page && (
+            <Pager
+              total={page.total}
+              limit={limit}
+              offset={offset}
+              onChange={(l, o) => {
+                setLimit(l)
+                setOffset(o)
+              }}
+            />
+          )}
         </Card>
       </div>
     </div>
   )
-}
-
-/** Count each distinct value of `of` across rows, commonest first. */
-function tally(rows: Client[], of: (c: Client) => string) {
-  const m = new Map<string, number>()
-  for (const c of rows) m.set(of(c), (m.get(of(c)) ?? 0) + 1)
-  return [...m.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([value, count]) => ({ value, count }))
 }
 
 /** RSSI colouring. Additive only — the number is always shown (UI-SPEC §5). */
