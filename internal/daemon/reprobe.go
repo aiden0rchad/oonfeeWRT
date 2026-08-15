@@ -11,6 +11,7 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -157,6 +158,7 @@ func (d *Daemon) reprobe(ctx context.Context, deviceID int64, auto bool) (*api.R
 	res := &api.ReprobeResult{
 		DeviceID: deviceID, Name: dev.Name, Summary: after.Summary(),
 		Changes: changes, Registry: after, Unchanged: len(changes) == 0,
+		RoleFit: roleFit(model.RoleOf(dev.Role), after),
 	}
 
 	d.logReprobe(ctx, dev, res, auto)

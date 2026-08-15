@@ -966,6 +966,31 @@ tell which.
 to adopt from the UI. It has one now, defaulting to access point — the role
 that changes least about a device.
 
+#### Fixed here: the role is now checked against the hardware
+
+`roleFit` compares the role an operator chose against what the probe found, at
+adoption and on every re-probe. It **warns and never refuses**: the role is a
+statement of intent and the probe is a snapshot, and they disagree for good
+reasons — radios switched off today and wanted tomorrow, a board file that
+under-reports, hardware being prepared before it is cabled. Refusing would turn
+a note into a wall, and the operator is the one who knows which of the two is
+wrong. What it must not do is stay quiet, and silence was the previous
+behaviour: adopt an old router as an access point, get no WLANs, no error, and
+a preview that renders nothing.
+
+The three-state rule shows up again inside it. An empty radio list means either
+"this device has none" or "we could not ask" — `probeRadios` returns early with
+the wireless features `NotObservable` when `iwinfo.devices` is refused, and the
+list is empty either way. Those need different messages: one says the role is
+wrong, the other says the ACL is narrow, and telling someone to change the role
+when the real problem is a refused call sends them to fix the wrong thing.
+`FeatSurvey` separates them without a second call.
+
+Verified against the reference device's own registry — 2 radios, survey
+present, `br-lan` and `wan` declared — so the premise is checked on real shapes
+rather than only on hand-built fixtures: an AP role is silent, a switch role
+says plainly that nothing will broadcast.
+
 #### What is still missing, in the order it matters
 
 1. **Bridge and mesh are not modelled.** `Roles` is gateway/ap/switch. The goal
@@ -982,10 +1007,7 @@ that changes least about a device.
    guess wearing a measurement's clothes** — the fix is to measure, or to
    surface the board target so an operator can see what the controller is
    looking at.
-3. **Nothing enforces role against capability.** A device with no radios can be
-   adopted as an access point, and will simply render nothing. The probe knows
-   it has no radios; adoption could say so.
-4. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
+3. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
    every number in this project comes from class A. The budget harness runs
    anywhere; it has only ever run against the comfortable class — and §5k is
    the standing reminder that one reference device hides whole categories of

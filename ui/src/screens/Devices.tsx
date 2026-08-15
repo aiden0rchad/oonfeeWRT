@@ -668,6 +668,16 @@ function Reprobe({ deviceID, onProbed }: { deviceID: number; onProbed: () => voi
         </div>
       )}
 
+      {res?.role_fit && res.role_fit.length > 0 && (
+        <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+          {res.role_fit.map((r) => (
+            <Banner key={r} tone="warning">
+              {r}
+            </Banner>
+          ))}
+        </div>
+      )}
+
       {res?.unchanged && (
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
           Probed — nothing changed. {res.summary}

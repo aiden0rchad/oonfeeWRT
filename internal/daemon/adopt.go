@@ -178,6 +178,12 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		out.Quirks = append(out.Quirks, fmt.Sprintf("%s.%s — %s", q.Source, q.Field, q.Reason))
 	}
 	sortStrings(out.Features)
+	// Does the role match what was actually found? A warning, never a refusal —
+	// see roleFit. Silence is the failure mode being avoided: an old router
+	// adopted as an access point that renders nothing, with no error to explain
+	// it, is the likeliest disappointment when the point is repurposing
+	// hardware nobody has catalogued.
+	out.Warnings = append(out.Warnings, roleFit(role, res.Caps)...)
 	if noPassword {
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"%s accepts ANY password for %q, so it has no password set for that "+

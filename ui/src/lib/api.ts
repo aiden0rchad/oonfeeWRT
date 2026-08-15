@@ -203,6 +203,10 @@ export interface ReprobeResult {
    *  are excluded — the device is the same device. */
   actionable: number
   capabilities: Registry | null
+  /** Where this device's role and its hardware disagree, as the probe just
+   *  found it. A device that loses a radio has not only lost a radio, it has
+   *  stopped matching the role it was adopted under. */
+  role_fit?: string[]
   note: string
 }
 

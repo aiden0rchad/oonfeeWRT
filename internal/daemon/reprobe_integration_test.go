@@ -232,3 +232,63 @@ func TestIntegrationPreviewExplainsItselfAfterACapabilityLoss(t *testing.T) {
 	}
 	t.Logf("cause offered: %v", row.CapabilityCause.Changes)
 }
+
+// roleFit against a registry the hardware actually produced.
+//
+// The unit tests build registries by hand, which proves the branching and not
+// the premise: that `len(Radios)` and FeatSurvey mean on a real device what the
+// code assumes. This runs each role past what the reference AP genuinely
+// reported.
+func TestIntegrationRoleFitAgainstRealHardware(t *testing.T) {
+	host := os.Getenv("OONFEE_TEST_HOST")
+	user := os.Getenv("OONFEE_TEST_USER")
+	pass := os.Getenv("OONFEE_TEST_PASS")
+	if host == "" || user == "" {
+		t.Skip("set OONFEE_TEST_HOST and OONFEE_TEST_USER to run integration tests")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	const mac = "60:38:e0:00:00:05"
+	blob, err := d.Keys.SealCredential(mac, user, pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := int64(1)
+	dev := &store.Device{MAC: mac, Host: host, Name: "wrt3200acm", Scheme: "http",
+		Role: string(model.RoleAP), AdoptedAt: &at, CredEnc: blob}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	res, err := d.Reprobe(ctx, dev.ID)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	caps := res.Registry
+	t.Logf("real registry: %d radio(s), survey=%s, ports bridge=%q wan=%q",
+		len(caps.Radios), caps.State(capability.FeatSurvey),
+		caps.Ports.Bridge, caps.Ports.WAN)
+
+	// This device has radios, so an AP role fits and must produce no noise. A
+	// warning on the ordinary case teaches operators to ignore warnings.
+	if got := roleFit(model.RoleAP, caps); len(got) != 0 {
+		t.Errorf("an access point with %d radios warned: %v", len(caps.Radios), got)
+	}
+	// Adopted as a switch it must say plainly that nothing will broadcast —
+	// which is the whole reason the note exists.
+	if got := roleFit(model.RoleSwitch, caps); len(got) != 1 {
+		t.Errorf("a switch with %d radios produced %v, want one note",
+			len(caps.Radios), got)
+	}
+	// The reprobe result carries it, so the device screen can show it without
+	// a second call.
+	if len(res.RoleFit) != 0 {
+		t.Errorf("the AP-role probe carried role-fit warnings: %v", res.RoleFit)
+	}
+}

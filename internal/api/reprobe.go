@@ -42,6 +42,13 @@ type ReprobeResult struct {
 	// Unchanged says plainly that a probe ran and found nothing. Without it the
 	// UI shows an empty list, which reads as a failure rather than as a result.
 	Unchanged bool `json:"unchanged"`
+
+	// RoleFit is where this device's role and its hardware disagree, as the
+	// probe just found it. Reported here as well as at adoption because that is
+	// when it can CHANGE: a device that loses a radio has not only lost a
+	// radio, it has stopped matching the role it was adopted under, and the
+	// diff alone does not say so.
+	RoleFit []string `json:"role_fit,omitempty"`
 }
 
 // Actionable counts the changes that alter what may be rendered or sent, so a
@@ -82,6 +89,7 @@ func (s *Server) handleReprobe(w http.ResponseWriter, r *http.Request) {
 		// The registry itself, so the device screen can update without a
 		// second round trip.
 		"capabilities": res.Registry,
+		"role_fit":     res.RoleFit,
 		"note": "a capability that became unobservable has NOT been lost: the " +
 			"check was refused, usually by a narrowed ACL, and the device may " +
 			"be unchanged. Only \"gained\" and \"lost\" describe the hardware",
