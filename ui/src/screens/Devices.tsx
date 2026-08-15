@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { Device, DeviceDetail, OverheadReport, Point, Series } from '../lib/api'
+import type {
+  CapEffect, Device, DeviceDetail, OverheadReport, Point, ReprobeResult, Series,
+} from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
 } from '../components/ui'
@@ -118,21 +120,24 @@ function DeviceDetailPanel({
   const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
 
+  // Hoisted out of the effect so a re-probe can refresh the pane: a probe
+  // rewrites the capability record, and leaving the panel showing the previous
+  // one is how "I pressed re-probe and nothing happened" happens.
+  const load = useCallback(async () => {
+    try {
+      const [d, s] = await Promise.all([api.device(id), api.deviceSeries(id)])
+      setDetail(d)
+      setSeries(s.series)
+      // Not fatal: a device in the inventory but not yet polled has no
+      // overhead to report, which is a real state rather than zero cost.
+      api.overhead(id).then(setOverhead).catch(() => {})
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }, [id])
+
   useEffect(() => {
     let alive = true
-    const load = async () => {
-      try {
-        const [d, s] = await Promise.all([api.device(id), api.deviceSeries(id)])
-        if (!alive) return
-        setDetail(d)
-        setSeries(s.series)
-        // Not fatal: a device in the inventory but not yet polled has no
-        // overhead to report, which is a real state rather than zero cost.
-        api.overhead(id).then((o) => alive && setOverhead(o)).catch(() => {})
-      } catch (e) {
-        if (alive) setErr(e instanceof Error ? e.message : String(e))
-      }
-    }
     load()
 
     // Watching the device IS the focus. The server reference-counts it on the
@@ -156,7 +161,7 @@ function DeviceDetailPanel({
       unwatch()
       clearInterval(refresh)
     }
-  }, [id])
+  }, [id, load])
 
   if (err) {
     return (
@@ -324,6 +329,8 @@ function DeviceDetailPanel({
           onChanged={() => api.overhead(id).then(setOverhead).catch(() => {})}
         />
       )}
+
+      <Reprobe deviceID={id} onProbed={load} />
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
         <Button onClick={() => setRemoving(true)}>Remove from controller</Button>
@@ -608,3 +615,122 @@ function ChartBlock({
 }
 
 export { duration, Button }
+
+/**
+ * Re-probe this device's capabilities.
+ *
+ * The controller probes at adoption and again whenever the firmware changes.
+ * This is the manual path, for the cases the automatic trigger cannot see: a
+ * package installed, an ACL widened, a radio added.
+ *
+ * The interesting part of the result is not the list of changes but their
+ * classification. "802.11r can no longer be checked" and "802.11r is gone" look
+ * identical in the raw states and mean completely different things — the first
+ * is almost always a narrowed ACL on a device that is fine. Rendering them the
+ * same colour would recreate, in the UI, exactly the bug the three-state
+ * capability model exists to prevent.
+ */
+function Reprobe({ deviceID, onProbed }: { deviceID: number; onProbed: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState<ReprobeResult | null>(null)
+  const [err, setErr] = useState('')
+
+  const run = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await api.reprobe(deviceID)
+      setRes(r)
+      onProbed()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const changes = res?.changes ?? []
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <Button onClick={run} disabled={busy}>
+        {busy ? 'Probing…' : 'Re-probe capabilities'}
+      </Button>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+        Re-reads what this device can do. Runs automatically after a firmware
+        change; do it by hand after installing a package or widening the ACL.
+        It is a burst of reads, so polling pauses while it runs.
+      </div>
+
+      {err && (
+        <div style={{ marginTop: 8 }}>
+          <Banner tone="critical">{err}</Banner>
+        </div>
+      )}
+
+      {res?.unchanged && (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+          Probed — nothing changed. {res.summary}
+        </div>
+      )}
+
+      {changes.length > 0 && (
+        <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+          {changes.map((c, i) => (
+            <div
+              key={i}
+              style={{
+                fontSize: 11,
+                borderLeft: `2px solid ${effectTone(c.effect)}`,
+                paddingLeft: 8,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <code style={{ color: 'var(--text-primary)' }}>{c.name}</code>
+                <span style={{ color: effectTone(c.effect) }}>
+                  {effectLabel(c.effect)}
+                </span>
+              </div>
+              <div style={{ color: 'var(--text-secondary)' }}>{c.detail}</div>
+            </div>
+          ))}
+          {res && res.actionable === 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              None of these change what this device can be sent — they are
+              changes in what the controller can see.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Colour by what the change licenses you to conclude, not by whether it reads
+ *  as good news. A visibility change is muted because the device did not
+ *  change; showing it in the "lost" colour sends someone hunting a fault. */
+function effectTone(e: CapEffect): string {
+  switch (e) {
+    case 'gained':
+      return 'var(--good)'
+    case 'lost':
+      return 'var(--critical)'
+    case 'changed':
+      return 'var(--warning)'
+    default:
+      return 'var(--text-muted)'
+  }
+}
+
+function effectLabel(e: CapEffect): string {
+  switch (e) {
+    case 'now-observable':
+      return 'visible now (may have been there all along)'
+    case 'no-longer-observable':
+      return 'can no longer be checked — not a loss'
+    case 'first-observation':
+      return 'first reading'
+    default:
+      return e
+  }
+}

@@ -42,6 +42,12 @@ type Daemon struct {
 	// applies tracks in-flight applies so shutdown can wait for them.
 	applies applyBarrier
 
+	// reprobes serialises capability probes per device and rate-limits the
+	// automatic ones. A probe is a burst of calls against a budget that allows
+	// one per minute, so two at once is worse than twice as expensive: they
+	// interleave on one rpcd.
+	reprobes reprobeGate
+
 	// Samples is the in-RAM telemetry ring. It exists from Open so that a
 	// device polled before the maintainer starts is still recorded.
 	Samples *telemetry.Store

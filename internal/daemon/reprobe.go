@@ -1,0 +1,258 @@
+package daemon
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
+	"github.com/aiden0rchad/oonfeewrt/internal/capability"
+	"github.com/aiden0rchad/oonfeewrt/internal/store"
+)
+
+// Re-probing an adopted device.
+//
+// # Why this is not part of the poll
+//
+// A probe is a burst: tens of ubus calls, several of them the expensive ones
+// the poll deliberately avoids. DEVICE-BUDGET's ceiling is one request per
+// minute at baseline, and a probe folded into polling would blow it on every
+// cycle to re-learn facts that change once a year. So it runs on the two
+// occasions the answer can actually have changed — the firmware moved, or an
+// operator asked — and quiesces the poller while it does, for the same reason
+// an apply does: two conversations with one rpcd is how you get a read that
+// belongs to neither.
+//
+// # Why the old record is not simply overwritten
+//
+// The valuable output is the *difference*. "This device now has a second radio"
+// and "this device can no longer be asked about hostapd control" are the things
+// an operator needs, and they are invisible in a replaced blob. capability.Diff
+// produces them, and it is careful about the one distinction that matters: a
+// check that stopped being possible is not a capability that stopped existing.
+
+// reprobeTimeout bounds one probe. Generous — a probe is dozens of calls and a
+// slow device on a busy channel is not a broken one — but bounded, because a
+// hung probe holds the device quiesced and polling stops.
+const reprobeTimeout = 90 * time.Second
+
+// reprobeMinInterval is the floor between automatic re-probes of one device.
+//
+// A device that flaps its firmware string, or one whose board call returns
+// something unstable, would otherwise trigger a probe burst on every poll. The
+// operator-initiated path is not rate limited: someone watching a screen and
+// pressing a button has a reason.
+const reprobeMinInterval = 10 * time.Minute
+
+// reprobeGate serialises probes per device and enforces the automatic floor.
+type reprobeGate struct {
+	mu      sync.Mutex
+	running map[int64]bool
+	last    map[int64]time.Time
+}
+
+func (g *reprobeGate) enter(id int64, auto bool, now time.Time, floor time.Duration) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.running == nil {
+		g.running = map[int64]bool{}
+		g.last = map[int64]time.Time{}
+	}
+	if g.running[id] {
+		return false
+	}
+	if auto {
+		if t, ok := g.last[id]; ok && now.Sub(t) < floor {
+			return false
+		}
+	}
+	g.running[id] = true
+	g.last[id] = now
+	return true
+}
+
+func (g *reprobeGate) leave(id int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.running, id)
+}
+
+// Reprobe re-interrogates one adopted device and records what changed.
+//
+// It replaces the stored registry whatever the diff says. The registry is a
+// record of the last successful observation, and keeping an older one because
+// it looked better would make the controller's model of the device diverge from
+// the device on exactly the occasions it matters.
+func (d *Daemon) Reprobe(ctx context.Context, deviceID int64) (*api.ReprobeResult, error) {
+	return d.reprobe(ctx, deviceID, false)
+}
+
+func (d *Daemon) reprobe(ctx context.Context, deviceID int64, auto bool) (*api.ReprobeResult, error) {
+	dev, err := d.Store.DeviceByID(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if !dev.Adopted() {
+		return nil, fmt.Errorf("daemon: %s is not adopted, so there is no "+
+			"credential to probe it with", dev.Name)
+	}
+	if !d.reprobes.enter(deviceID, auto, time.Now(), reprobeMinInterval) {
+		return nil, errReprobeBusy
+	}
+	defer d.reprobes.leave(deviceID)
+
+	// The previous record, decoded before anything is overwritten. A device
+	// with no readable record is not an error here — that is the first probe,
+	// and Diff treats a nil old registry as first observation rather than as a
+	// device that just gained everything it has.
+	var before *capability.Registry
+	if dev.CapsJSON != "" && dev.CapsJSON != "{}" {
+		var r capability.Registry
+		if err := json.Unmarshal([]byte(dev.CapsJSON), &r); err == nil {
+			before = &r
+		} else {
+			d.Log.Warn("the stored capability record could not be decoded; "+
+				"this probe will be treated as the first",
+				"device", dev.MAC, "err", err)
+		}
+	}
+
+	// Never poll and probe at once — the same rule an apply follows, for the
+	// same reason.
+	if c := d.collectorRef(); c != nil {
+		defer c.Quiesce(deviceID)()
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, reprobeTimeout)
+	defer cancel()
+
+	client, err := d.Connect(pctx, dev)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	after, err := capability.Probe(pctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: probe %s: %w", dev.Name, err)
+	}
+
+	if err := d.Store.SetCapabilities(ctx, deviceID, after, string(after.Class)); err != nil {
+		return nil, fmt.Errorf("daemon: probed %s but could not store the "+
+			"result: %w", dev.Name, err)
+	}
+	// The firmware column is what the automatic trigger compares against. Not
+	// updating it here means a probe that succeeds still leaves the device
+	// looking changed, and the next poll triggers another one.
+	if err := d.Store.SetFirmware(ctx, deviceID, after.Board.Release); err != nil {
+		d.Log.Debug("could not record firmware after a probe",
+			"device", dev.MAC, "err", err)
+	}
+
+	changes := capability.Diff(before, after)
+	res := &api.ReprobeResult{
+		DeviceID: deviceID, Name: dev.Name, Summary: after.Summary(),
+		Changes: changes, Registry: after, Unchanged: len(changes) == 0,
+	}
+
+	d.logReprobe(ctx, dev, res, auto)
+	return res, nil
+}
+
+// errReprobeBusy is the API's sentinel, re-exported here so the two packages
+// cannot drift into two errors that mean the same thing but compare unequal —
+// which would turn a 429 into a 502 and tell an operator their device failed
+// when nothing did.
+var errReprobeBusy = api.ErrReprobeBusy
+
+// logReprobe records the outcome, splitting it by what a reader may conclude.
+//
+// Actionable changes are a warning: something the controller renders against
+// moved. Visibility changes are info, because the device did not change — and
+// logging "hostapd-control lost" at warning level for a narrowed ACL would send
+// someone looking for a hardware fault that is not there.
+func (d *Daemon) logReprobe(ctx context.Context, dev *store.Device,
+	res *api.ReprobeResult, auto bool) {
+	id := dev.ID
+	if res.Unchanged {
+		d.Log.Info("capability probe found no changes",
+			"device", dev.MAC, "automatic", auto)
+		return
+	}
+
+	actionable := capability.Actionable(res.Changes)
+	severity := "info"
+	if len(actionable) > 0 {
+		severity = "warning"
+	}
+	details := make([]map[string]any, 0, len(res.Changes))
+	for _, c := range res.Changes {
+		details = append(details, map[string]any{
+			"kind": c.Kind, "name": c.Name, "effect": string(c.Effect),
+			"from": c.From, "to": c.To, "detail": c.Detail,
+		})
+		d.Log.Log(ctx, levelFor(c.Effect), "capability change",
+			"device", dev.MAC, "change", c.String())
+	}
+	_ = d.Store.LogEvent(ctx, store.Event{
+		DeviceID: &id, Category: "device", Severity: severity,
+		Event: "device.capabilities_changed",
+		Detail: map[string]any{
+			"automatic": auto, "summary": res.Summary,
+			"actionable": len(actionable), "changes": details,
+		},
+	})
+}
+
+// levelFor keeps the log level honest about what a line means. A visibility
+// change at warning level sends someone looking for a hardware fault that is
+// not there; a lost radio at debug level is never seen at all.
+func levelFor(e capability.Effect) slog.Level {
+	if e.Actionable() {
+		return slog.LevelWarn
+	}
+	return slog.LevelInfo
+}
+
+// reprobeAfterFirmwareChange is the automatic trigger.
+//
+// Detached from the poll's context on purpose: the poll callback returns
+// immediately and its context dies with it, while the probe has to outlive it.
+// Failures are logged and not retried here — the next firmware-change detection
+// will try again, and a probe that retries in a loop against a device that is
+// refusing is the opposite of a budget.
+func (d *Daemon) reprobeAfterFirmwareChange(deviceID int64, mac, from, to string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), reprobeTimeout)
+		defer cancel()
+
+		res, err := d.reprobe(ctx, deviceID, true)
+		switch {
+		case errors.Is(err, errReprobeBusy):
+			// Not a failure. Two polls can see the same change.
+			return
+		case err != nil:
+			d.Log.Warn("could not re-probe after a firmware change; the stored "+
+				"capability record still describes the previous build",
+				"device", mac, "from", from, "to", to, "err", err)
+			id := deviceID
+			_ = d.Store.LogEvent(context.Background(), store.Event{
+				DeviceID: &id, Category: "device", Severity: "warning",
+				Event: "device.reprobe_failed",
+				Detail: map[string]any{
+					"from": from, "to": to, "error": err.Error(),
+					"consequence": "the capability record still describes the " +
+						"previous firmware; re-probe from the device screen " +
+						"once it is reachable",
+				},
+			})
+		case res.Unchanged:
+			d.Log.Info("firmware changed but capabilities did not",
+				"device", mac, "from", from, "to", to)
+		}
+	}()
+}

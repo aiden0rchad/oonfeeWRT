@@ -255,15 +255,16 @@ most-worth-doing first.
 
 ### Do these next
 
-1. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
-   detected and logged as a warning and the stale registry is left in place, so
-   a device that gained a radio or a feature never gets it.
-2. **Look at the client grid in a browser.** Paging and faceting moved
-   server-side (§5i) and the API is verified from unit tests up through the real
-   device, but nobody has *looked* at the screen since. Every UI defect this
-   project has found was found by looking — see the standing gap below.
-3. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+1. **Look at the client grid and the re-probe panel in a browser.** Both are new
+   (§5i, §5j) and verified from unit tests up through the real device, but
+   nobody has *looked* at either. Every UI defect this project has found was
+   found by looking — see the standing gap below.
+2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
+3. **A capability the renderer gates on going Absent should surface where the
+   config is.** Re-probe now detects it and logs a warning, but the preview
+   screen does not say "this WLAN stopped rendering because that device lost
+   the feature". The detection is done; the connection to the site model is not.
 
 ### Blocked, and by what
 
@@ -309,6 +310,7 @@ the useful part — the code is in git either way.
 | §5g | Networks — **read this one** |
 | §5h | The fleet client total — two screens answering one question two ways |
 | §5i | Client paging — and the one rail that is not a column |
+| §5j | Re-probing — and the difference between losing a feature and losing sight of it |
 
 ### 5a. What discovery corrected
 
@@ -730,6 +732,54 @@ inventory every 30 seconds for a screen that is usually not open.
 §0 tells a reader to run the controller with. Following the documented command
 left `keyring.json` untracked in a public repo, one `git add -A` from being
 published. `data/` was ignored; the name in the docs was not.
+
+### 5j. Re-probing, and the distinction it exists to protect
+
+Capabilities were probed once, at adoption, and never again. A firmware change
+was detected, logged as a warning, and then nothing happened — the stale record
+stayed, describing a build that was no longer installed. Now the same detection
+triggers a probe, and `POST /devices/{id}/reprobe` does it on demand for the
+cases no automatic trigger can see: a package installed, an ACL widened.
+
+**The valuable output is the diff, not the new record.** And the diff had one
+job to get right, which is the same job the three-state model has:
+
+> A check that stopped being *possible* is not a capability that stopped
+> *existing*.
+
+`Present -> Absent` is a device that lost something. `Present -> NotObservable`
+is a narrowed ACL, a removed binary, an ungranted method — on hardware that is
+very likely unchanged. They are indistinguishable in the raw states.
+`tools/probe.py` collapsed the two and reported "no DSA" for a device with a DSA
+switch; a diff that collapses them reports the same lie *as an event, with a
+timestamp*, which is worse because it looks like news. So every transition is
+classified by what it licenses a reader to conclude — `capability.Effect` — and
+that classification, not the raw states, is what the log, the API and the UI
+render. Visibility changes log at info and colour muted; only real ones warn.
+
+Three decisions worth not re-litigating:
+
+- **A probe is a burst, so it is not on the poll path.** It runs on a firmware
+  change or an operator's request, quiesces the device's poller while it runs
+  (the rule an apply follows, for the same reason), and is gated per device.
+  Automatic probes have a 10-minute floor; operator-initiated ones have none —
+  someone pressing a button has a reason, and refusing them because a
+  background probe ran two minutes ago makes the button look broken.
+- **A failed probe leaves the old record alone.** It learned nothing. Clearing
+  it would make the device unplannable — `deviceCaps` refuses an empty
+  record — for a transient network fault. The failure is logged as an event that
+  names the consequence, so a misdescribed device is never silent.
+- **Sampled and volatile fields are not diffed.** Channel (ACS moves it),
+  frequency, and per-radio noise stability (decided by sampling twice, so it can
+  differ between two probes of an unchanged radio). Diffing those means every
+  probe reports churn, and churn arriving right after an upgrade reads as the
+  upgrade's doing.
+
+Verified on the device, read-only, using the existing credential: first probe
+`class A Linksys WRT3200ACM`, 8 changes, **0 actionable** — a device does not
+gain a radio by being looked at for the first time. Second probe of the same
+unchanged device: **no changes at all**, which is the property that makes the
+whole thing usable.
 
 ---
 

@@ -65,6 +65,10 @@ type Server struct {
 	// Provision previews and applies the site model. Optional: the fleet view
 	// works without it.
 	Provision Provisioner
+	// Reprobe re-runs the capability probe. Optional: without it the stored
+	// record is whatever adoption found, which is the behaviour that made a
+	// firmware upgrade leave a device permanently misdescribed.
+	Reprobe Reprober
 	Hub       *Hub
 	Log       *slog.Logger
 
@@ -157,6 +161,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
+	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
 	// The site model (Phase 2). Editing any of this changes nothing on any
 	// device; /site/preview says what it WOULD change and /site/apply does it.
 	private.HandleFunc("GET /api/v1/site", s.handleSite)

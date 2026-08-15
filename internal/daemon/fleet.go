@@ -180,9 +180,11 @@ func (d *Daemon) sink() collector.Sink {
 
 		// A firmware change invalidates the capability snapshot: a new build can
 		// add or remove ubus objects, and rendering against a stale registry is
-		// how a screen offers a control the device no longer has.
+		// how a screen offers a control the device no longer has. So this does
+		// not merely say so — it re-probes, in the background, because the poll
+		// callback must return and a probe is dozens of calls.
 		if s.Board != nil && lastFW != "" && s.Board.Release.Description != lastFW {
-			d.Log.Warn("device firmware changed; its capability snapshot is stale",
+			d.Log.Warn("device firmware changed; re-probing its capabilities",
 				"device", s.MAC, "from", lastFW, "to", s.Board.Release.Description)
 			_ = d.Store.LogEvent(ctx, store.Event{
 				DeviceID: &id, Category: "device", Severity: "warning",
@@ -191,6 +193,8 @@ func (d *Daemon) sink() collector.Sink {
 					"from": lastFW, "to": s.Board.Release.Description,
 				},
 			})
+			d.reprobeAfterFirmwareChange(id, s.MAC, lastFW,
+				s.Board.Release.Description)
 		}
 
 		// Degradations are logged at debug: they are a standing property of a

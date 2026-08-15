@@ -171,6 +171,41 @@ export interface EventPage {
   facets: { category: Facet[]; severity: Facet[] }
 }
 
+/** What a capability change licenses a reader to conclude.
+ *
+ *  The two "observable" values are the load-bearing ones: they mean the
+ *  controller's view changed, NOT the device. Rendering them the same as
+ *  gained/lost would report a narrowed ACL as missing hardware. */
+export type CapEffect =
+  | 'gained'
+  | 'lost'
+  | 'now-observable'
+  | 'no-longer-observable'
+  | 'first-observation'
+  | 'changed'
+
+export interface CapChange {
+  kind: string
+  name: string
+  from: string
+  to: string
+  effect: CapEffect
+  detail: string
+}
+
+export interface ReprobeResult {
+  device_id: number
+  name: string
+  summary: string
+  unchanged: boolean
+  changes: CapChange[] | null
+  /** How many changes alter what may be rendered or sent. Visibility changes
+   *  are excluded — the device is the same device. */
+  actionable: number
+  capabilities: Registry | null
+  note: string
+}
+
 /** One page of the client grid. Same shape as EventPage and for the same
  *  reason: filters, paging and facet counts are all server-side, so the rail
  *  counts the whole filtered table rather than the rows that arrived. */
@@ -471,6 +506,7 @@ export const api = {
     post<{ poll_interval_s: number }>(`/devices/${id}/poll-interval`, { seconds }),
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
+  reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
   clients: (q: {
