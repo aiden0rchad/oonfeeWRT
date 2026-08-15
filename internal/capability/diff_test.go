@@ -1,6 +1,9 @@
 package capability
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func reg(feats map[Feature]State) *Registry {
 	r := NewRegistry()
@@ -175,3 +178,49 @@ func TestDiffReportsClassChange(t *testing.T) {
 		t.Fatalf("class change reported as %v", changes)
 	}
 }
+
+// An idle channel demonstrates nothing about the airtime counters, and must not
+// be recorded as demonstrating they are broken.
+//
+// Found by diffing two probes rather than by reading the code. splitOK starts
+// at Absent and the idle-channel branch fell through to it, so on a driver
+// whose counters work the feature came out Present when the channel happened to
+// be busy and Absent when it happened to be quiet. Re-probing then reported the
+// device gaining and losing airtime-split at random, with a warning each time.
+// The reference device hid it: mwlwifi's counters are genuinely broken, so it
+// is stably Absent for a real reason.
+func TestIdleChannelDoesNotProveTheAirtimeSplitIsBroken(t *testing.T) {
+	// busy_time did not advance: the channel was quiet for the whole sample.
+	idle := judgeSplit(
+		surveyRow{BusyTime: 1000, ActiveTime: 5000, RxTime: 400, TxTime: 200},
+		surveyRow{BusyTime: 1000, ActiveTime: 9000, RxTime: 400, TxTime: 200},
+		nil)
+	if idle != splitUndemonstrated {
+		t.Errorf("an idle channel judged %v, want splitUndemonstrated — quiet "+
+			"counters prove nothing about counters that would move", idle)
+	}
+
+	// The second read failed: likewise nothing demonstrated.
+	if got := judgeSplit(surveyRow{}, surveyRow{}, errNoSecondSample); got != splitUndemonstrated {
+		t.Errorf("a failed second sample judged %v, want splitUndemonstrated", got)
+	}
+
+	// Counters that track busy time: usable.
+	if got := judgeSplit(
+		surveyRow{BusyTime: 1000, RxTime: 400, TxTime: 200},
+		surveyRow{BusyTime: 3000, RxTime: 1600, TxTime: 800},
+		nil); got != splitUsable {
+		t.Errorf("proportional counters judged %v, want splitUsable", got)
+	}
+
+	// Counters that do not move while busy time climbs: demonstrably broken,
+	// which is a real Absent and must stay one.
+	if got := judgeSplit(
+		surveyRow{BusyTime: 1000, RxTime: 0, TxTime: 100},
+		surveyRow{BusyTime: 4000, RxTime: 0, TxTime: 102},
+		nil); got != splitBroken {
+		t.Errorf("stuck counters judged %v, want splitBroken", got)
+	}
+}
+
+var errNoSecondSample = errors.New("second sample failed")

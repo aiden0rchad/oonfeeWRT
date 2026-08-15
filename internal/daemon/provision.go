@@ -115,7 +115,24 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 		p.Deviations = append(p.Deviations, ov.Describe(ssidOf[ov.WLANID]))
 	}
 	sort.Strings(p.Deviations)
+
+	if needsExplanation(p) {
+		p.CapabilityCause = d.recentCapabilityLoss(ctx, dev.ID)
+	}
 	return p
+}
+
+// needsExplanation reports whether this row has something a recent capability
+// change might account for.
+//
+// A named predicate rather than an inline condition because the tempting
+// simplification — always attach the last change — is wrong, and wrong in a way
+// that looks like an improvement. A device whose plan is clean does not need to
+// be told its radio list changed last week; that is noise on the one screen
+// where noise costs most, since it is the screen someone reads immediately
+// before writing to their network.
+func needsExplanation(p api.DevicePreview) bool {
+	return len(p.Omitted) > 0 || p.Blocked || len(p.Conflicts) > 0
 }
 
 // summarise renders a plan's operations as lines an operator can read.

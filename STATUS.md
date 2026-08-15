@@ -261,10 +261,12 @@ most-worth-doing first.
    found by looking — see the standing gap below.
 2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
    the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
-3. **A capability the renderer gates on going Absent should surface where the
-   config is.** Re-probe now detects it and logs a warning, but the preview
-   screen does not say "this WLAN stopped rendering because that device lost
-   the feature". The detection is done; the connection to the site model is not.
+3. **Re-probe the other sampled determinations the way the airtime split now
+   is.** §5k found one feature whose state depended on whether the channel
+   happened to be busy. `FeatSurvey` is decided from a single `active_time > 0`
+   and the same question has not been asked of it, nor of the noise-stability
+   quirk, which is visibly non-deterministic across runs (it just does not
+   reach a feature).
 
 ### Blocked, and by what
 
@@ -311,6 +313,7 @@ the useful part — the code is in git either way.
 | §5h | The fleet client total — two screens answering one question two ways |
 | §5i | Client paging — and the one rail that is not a column |
 | §5j | Re-probing — and the difference between losing a feature and losing sight of it |
+| §5k | What diffing two probes found in the probe itself |
 
 ### 5a. What discovery corrected
 
@@ -780,6 +783,42 @@ Verified on the device, read-only, using the existing credential: first probe
 gain a radio by being looked at for the first time. Second probe of the same
 unchanged device: **no changes at all**, which is the property that makes the
 whole thing usable.
+
+### 5k. What diffing two probes found in the probe itself
+
+Comparing two probes turns out to be a test of the probe. Run it twice against
+an unchanged device and every non-deterministic determination shows up as a
+change — which is how this was found, not by reading the code.
+
+**The bug: an idle channel was reported as a broken driver.** `FeatAirtimeSplit`
+is decided by sampling `busy_time`, `rx_time` and `tx_time` twice and checking
+the timers advance in proportion. `splitOK` started at `Absent`, and the branch
+for an idle channel — which carries the comment *"this sample proves nothing
+either way"* — fell straight through to that default. So it recorded proof of
+exactly what it had just said it could not prove.
+
+On a driver whose counters work, that makes the feature `Present` when the
+channel happened to be busy during the probe and `Absent` when it happened to be
+quiet, so re-probing reports the device gaining and losing airtime-split at
+random, with a warning each time. The reference device hides it completely:
+mwlwifi's counters are genuinely broken, so it is stably `Absent` for a real
+reason, and no amount of re-probing this hardware would have shown it.
+
+It is the same collapse the package exists to prevent — "could not determine"
+becoming "does not have" — one level in from where the rule is usually applied.
+The three-way outcome is now an explicit `judgeSplit`, testable without a device
+that happens to be busy, and an undetermined split records `NotObservable` with
+a note saying to re-probe while there is traffic. No screen changes: `Buildable`
+already accepted only `Present`. What changes is what the record *claims*, which
+is what a diff reads and what an operator is told.
+
+**Also observed:** the reference device reported 2 quirks on one probe and 3 on
+the next. The extra one is `noise:stability`, which is decided by sampling the
+noise floor twice — and the 2.4 GHz radio on this board swings 40+ dB. That is
+real device behaviour, not a bug, and it is the reason quirks are not diffed.
+The features they gate are, so a quirk that actually costs a capability is still
+reported; the noisy list itself is not. Worth remembering if quirks ever start
+driving something directly.
 
 ---
 

@@ -68,6 +68,29 @@ type DevicePreview struct {
 	// Error means this device could not be planned at all. The others are still
 	// reported: one unreachable AP must not blank the whole screen.
 	Error string `json:"error,omitempty"`
+	// CapabilityCause names a recent capability change when this device has
+	// something unexplained — an omission, a block, a plan that does nothing.
+	// Present only when there is something to explain; a past change on a
+	// device that plans cleanly is not news.
+	CapabilityCause *CapabilityCause `json:"capability_cause,omitempty"`
+}
+
+// CapabilityCause is a probable reason a device is not rendering what the site
+// model asks for.
+//
+// Deliberately a *probable* cause, and worded that way in the UI. The preview
+// knows a WLAN was omitted and knows a radio disappeared an hour ago; it does
+// not know they are the same fact. Asserting the link would be a guess, and
+// omitting it entirely leaves the operator reading "device has no 5 GHz radio"
+// with no way to tell their own misconfiguration from a fault that appeared on
+// Tuesday. The same sentence describes both.
+type CapabilityCause struct {
+	// At is when the change was recorded.
+	At int64 `json:"at"`
+	// Changes are the actionable ones only — a capability that merely became
+	// unobservable did not stop the device doing anything, and offering it as
+	// the cause would send someone to fix an ACL that is not the problem.
+	Changes []string `json:"changes"`
 }
 
 // PreviewResult is the whole fleet's pending change.

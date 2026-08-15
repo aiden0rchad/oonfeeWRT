@@ -412,6 +412,12 @@ export interface DevicePreview {
   /** Per-device overrides in force here, shown at the moment someone is
    *  deciding what to push. */
   deviations?: string[]
+  /** A recent capability change, offered as a PROBABLE cause when this device
+   *  omitted or blocked something. The server knows a WLAN was omitted and
+   *  knows a radio disappeared; it does not know they are the same fact, so
+   *  the UI must not assert the link. Absent when there is nothing to
+   *  explain. */
+  capability_cause?: { at: number; changes: string[] }
   /** The change edits network or firewall config — the path the controller
    *  reaches this device through. Applying needs an explicit acknowledgment. */
   touches_traversal?: boolean

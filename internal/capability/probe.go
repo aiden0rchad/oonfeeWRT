@@ -228,6 +228,41 @@ func advancesProportionately(a, b surveyRow) bool {
 	return (dRx+dTx)*10 >= dBusy
 }
 
+// splitJudgement is what one radio's two survey samples demonstrated about
+// whether rx_time/tx_time can carry an airtime split.
+type splitJudgement int
+
+const (
+	// splitUndemonstrated: the samples showed nothing either way. The usual
+	// cause is an idle channel — busy_time did not move, so counters that do
+	// not move prove nothing about counters that would.
+	splitUndemonstrated splitJudgement = iota
+	// splitUsable: the counters advanced in proportion to busy time.
+	splitUsable
+	// splitBroken: the counters exist and do not track reality.
+	splitBroken
+)
+
+// judgeSplit classifies a pair of survey samples.
+//
+// A function rather than an inline switch because the three outcomes are the
+// whole point and two of them used to collapse: "could not tell" fell through
+// to the caller's Absent default, so an idle channel reported that the driver
+// cannot supply the split. Extracted so the distinction can be tested without a
+// device that happens to be busy.
+func judgeSplit(first, second surveyRow, err2 error) splitJudgement {
+	switch {
+	case err2 != nil:
+		return splitUndemonstrated
+	case second.BusyTime <= first.BusyTime:
+		return splitUndemonstrated
+	case !advancesProportionately(first, second):
+		return splitBroken
+	default:
+		return splitUsable
+	}
+}
+
 // probeRadios records per-radio capability and the mwlwifi quirks.
 func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	var devs struct {
@@ -243,6 +278,21 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 
 	surveyOK, splitOK := Absent, Absent
 	surveyUnreachable := false
+	// The airtime split is decided by watching two counters advance, which some
+	// probes cannot decide at all: on an idle channel busy_time does not move,
+	// so nothing is demonstrated either way. splitOK starts at Absent, so
+	// without these two flags an inconclusive probe ASSERTS the driver cannot
+	// supply the split — the exact collapse of NotObservable into Absent this
+	// package exists to prevent, and the branch below even says "this sample
+	// proves nothing" while leaving the default in place.
+	//
+	// Found by diffing two probes: on a driver whose counters work, this makes
+	// the feature Present when the channel happened to be busy and Absent when
+	// it happened to be quiet, so re-probing reports the device gaining and
+	// losing airtime-split at random. The reference device hides it — mwlwifi's
+	// counters are genuinely broken, so it is stably Absent for a real reason.
+	splitDecided := false // some radio gave a real answer, either way
+	splitUndecidable := false
 	for _, dev := range devs.Devices {
 		radio := Radio{Device: dev, SurveyUsest: Absent}
 
@@ -282,6 +332,8 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			}
 			absurdTimers := first.RxTime > 1<<40 || first.TxTime > 1<<40
 			if absurdTimers {
+				// A real determination: the counters are visibly uninitialised.
+				splitDecided = true
 				r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "rx_time/tx_time",
 					Reason: "uninitialised on this driver (absurd u64); the airtime split is not computable"})
 			}
@@ -293,20 +345,20 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			radio.NoiseStable = checkNoiseStability(ctx, c, r, dev,
 				info, infoErr, first, second, err2)
 			if !absurdTimers {
-				switch {
-				case err2 != nil:
-					// leave splitOK as-is; we could not tell
-				case second.BusyTime <= first.BusyTime:
-					// Idle channel: this sample proves nothing either way.
-				case !advancesProportionately(first, second):
+				switch judgeSplit(first, second, err2) {
+				case splitUndemonstrated:
+					splitUndecidable = true
+				case splitBroken:
+					splitDecided = true
 					// Present, typed, plausible — and not tracking reality. On
 					// mwlwifi rx_time never moves and tx_time crept 2ms while
 					// busy_time advanced ~3000ms, which would make the split a
 					// rounding error masquerading as a measurement.
 					r.AddQuirk(Quirk{Source: "iwinfo.survey", Field: "rx_time/tx_time",
 						Reason: "do not track busy time (rx+tx advanced <10% of busy); the airtime split is not computable"})
-				default:
+				case splitUsable:
 					splitOK = Present
+					splitDecided = true
 				}
 			}
 		}
@@ -328,6 +380,17 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 
 	if surveyUnreachable && surveyOK != Present {
 		surveyOK, splitOK = NotObservable, NotObservable
+	}
+	// Nothing demonstrated it either way, and something tried: undetermined,
+	// not absent. The UI gates the same on both — Buildable() accepts only
+	// Present — so this changes no screen. It changes what the device record
+	// CLAIMS, which is what a re-probe diff reads and what an operator is told.
+	if splitOK == Absent && !splitDecided && splitUndecidable {
+		splitOK = NotObservable
+		r.Note("the airtime split could not be determined: the channel was idle " +
+			"for the whole sample, so the counters demonstrated nothing either " +
+			"way. This is not a driver limitation — re-probe while there is " +
+			"traffic to settle it")
 	}
 	r.Set(FeatSurvey, surveyOK)
 	// A recorded quirk on these fields settles it for the whole device: one

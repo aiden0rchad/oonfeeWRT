@@ -520,6 +520,27 @@ func (db *DB) QueryEvents(ctx context.Context, category, severity string, limit 
 	return db.QueryEventsPage(ctx, category, severity, limit, 0)
 }
 
+// DeviceEvents returns the newest events of one kind for one device.
+//
+// Narrow on purpose. The general query pages the whole log by category and
+// severity, which is the wrong shape for "what most recently happened to THIS
+// device" — that would page through everything else to find it, and on a busy
+// controller would not find it at all.
+func (db *DB) DeviceEvents(ctx context.Context, deviceID int64, event string, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT ts, device_id, category, severity, event, detail_json
+		   FROM events
+		  WHERE device_id = ? AND event = ?
+		  ORDER BY ts DESC, id DESC LIMIT ?`, deviceID, event, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: device events: %w", err)
+	}
+	return scanEvents(rows)
+}
+
 // QueryEventsPage is QueryEvents with an offset, for server-side paging.
 func (db *DB) QueryEventsPage(ctx context.Context, category, severity string, limit, offset int) ([]Event, error) {
 	if limit <= 0 {
@@ -537,6 +558,11 @@ func (db *DB) QueryEventsPage(ctx context.Context, category, severity string, li
 	if err != nil {
 		return nil, err
 	}
+	return scanEvents(rows)
+}
+
+// scanEvents reads the event column list, which two queries share.
+func scanEvents(rows *sql.Rows) ([]Event, error) {
 	defer rows.Close()
 	var out []Event
 	for rows.Next() {

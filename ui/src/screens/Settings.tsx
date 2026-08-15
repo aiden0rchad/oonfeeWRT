@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { APGroup, Device, PreviewResult, Site, WLAN } from '../lib/api'
 import { Banner, Button, Card, Field, Prop } from '../components/ui'
+import { ago } from '../components/Chart'
 
 /**
  * Settings — the site model, and the flow that pushes it to hardware.
@@ -872,6 +873,25 @@ function Preview({ p }: { p: PreviewResult }) {
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {d.omitted.map((o) => (
                   <li key={o}>{o}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* A probable cause, worded as one.
+              "device has no 5 GHz radio" describes a misconfigured band and a
+              radio that failed on Tuesday equally well, and the operator has
+              to act differently in each case. The server knows a capability
+              changed recently; it does not know that is why. Saying "may
+              explain" gives them the fact and leaves the inference where it
+              belongs. */}
+          {d.capability_cause && (
+            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
+              This device's capabilities changed {ago(d.capability_cause.at)},
+              which may explain what is missing above:
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {d.capability_cause.changes.map((c) => (
+                  <li key={c} style={{ color: 'var(--text-secondary)' }}>{c}</li>
                 ))}
               </ul>
             </div>

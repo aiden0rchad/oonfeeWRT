@@ -200,12 +200,70 @@ func (d *Daemon) logReprobe(ctx context.Context, dev *store.Device,
 	}
 	_ = d.Store.LogEvent(ctx, store.Event{
 		DeviceID: &id, Category: "device", Severity: severity,
-		Event: "device.capabilities_changed",
+		Event: EventCapabilitiesChanged,
 		Detail: map[string]any{
 			"automatic": auto, "summary": res.Summary,
 			"actionable": len(actionable), "changes": details,
 		},
 	})
+}
+
+// EventCapabilitiesChanged is the event a re-probe writes. Named because the
+// preview reads it back to explain itself.
+const EventCapabilitiesChanged = "device.capabilities_changed"
+
+// recentCapabilityLoss finds the newest re-probe that changed something the
+// controller renders against.
+//
+// It exists to answer a question the preview screen could not: an operator sees
+// "this WLAN was not rendered: device has no 5 GHz radio" and cannot tell
+// whether they configured the wrong band or the radio disappeared on Tuesday.
+// The first is their mistake, the second is a fault, and the same sentence
+// describes both.
+//
+// Only actionable changes qualify. A capability that merely became unobservable
+// did not stop the device doing anything, and offering it as the cause of an
+// omission would send someone to fix an ACL that is not the problem.
+//
+// Returns nil for anything it cannot answer: no probe, no actionable change, an
+// undecodable detail blob. A wrong explanation is worse than none, because an
+// operator will act on it.
+func (d *Daemon) recentCapabilityLoss(ctx context.Context, deviceID int64) *api.CapabilityCause {
+	events, err := d.Store.DeviceEvents(ctx, deviceID, EventCapabilitiesChanged, 5)
+	if err != nil {
+		d.Log.Debug("could not read capability history",
+			"device", deviceID, "err", err)
+		return nil
+	}
+	for _, e := range events {
+		blob, ok := e.Detail.(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var detail struct {
+			Actionable int `json:"actionable"`
+			Changes    []struct {
+				Effect string `json:"effect"`
+				Detail string `json:"detail"`
+			} `json:"changes"`
+		}
+		if err := json.Unmarshal(blob, &detail); err != nil || detail.Actionable == 0 {
+			continue
+		}
+		cause := &api.CapabilityCause{At: e.TS}
+		for _, c := range detail.Changes {
+			if capability.Effect(c.Effect).Actionable() {
+				cause.Changes = append(cause.Changes, c.Detail)
+			}
+		}
+		if len(cause.Changes) == 0 {
+			// The count said actionable but no change survived the filter: the
+			// two disagree, so trust neither.
+			continue
+		}
+		return cause
+	}
+	return nil
 }
 
 // levelFor keeps the log level honest about what a line means. A visibility

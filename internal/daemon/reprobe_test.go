@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
@@ -170,5 +171,162 @@ func TestReprobeRefusesAnUnadoptedDevice(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not adopted") {
 		t.Errorf("err = %q, want it to name the actual reason", err)
+	}
+}
+
+// The preview's probable-cause lookup: what qualifies, and what does not.
+//
+// It answers a question the preview screen could not. An operator reads "this
+// WLAN was not rendered: device has no 5 GHz radio" and cannot tell their own
+// misconfiguration from a radio that failed on Tuesday — one sentence describes
+// both, and they call for opposite responses.
+func TestRecentCapabilityLossOffersOnlyActionableChanges(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	dev := &store.Device{MAC: "60:38:e0:00:00:0c", Host: "192.0.2.1", Name: "ap"}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	id := dev.ID
+
+	// A probe that only lost VISIBILITY. Nothing about the device changed, so
+	// it must never be offered as the reason a WLAN did not render — that
+	// sends someone to widen an ACL that is not the problem.
+	if err := d.Store.LogEvent(ctx, store.Event{
+		TS: 1000, DeviceID: &id, Category: "device", Severity: "info",
+		Event: EventCapabilitiesChanged,
+		Detail: map[string]any{
+			"actionable": 0,
+			"changes": []map[string]any{{
+				"effect": string(capability.EffectHidden),
+				"detail": "hostapd-control can no longer be checked",
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.recentCapabilityLoss(ctx, id); got != nil {
+		t.Errorf("a visibility-only change was offered as a cause: %+v", got)
+	}
+
+	// A real loss, and a visibility change recorded alongside it. Only the
+	// real one is offered.
+	if err := d.Store.LogEvent(ctx, store.Event{
+		TS: 2000, DeviceID: &id, Category: "device", Severity: "warning",
+		Event: EventCapabilitiesChanged,
+		Detail: map[string]any{
+			"actionable": 1,
+			"changes": []map[string]any{
+				{"effect": string(capability.EffectLost),
+					"detail": "radio phy1 is gone"},
+				{"effect": string(capability.EffectHidden),
+					"detail": "iwinfo-survey can no longer be checked"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := d.recentCapabilityLoss(ctx, id)
+	if got == nil {
+		t.Fatal("a real capability loss was not offered as a cause")
+	}
+	if got.At != 2000 {
+		t.Errorf("At = %d, want the newest actionable event (2000)", got.At)
+	}
+	if len(got.Changes) != 1 || got.Changes[0] != "radio phy1 is gone" {
+		t.Errorf("changes = %v; only the actionable one belongs here", got.Changes)
+	}
+}
+
+// A device with no probe history has no cause, and asking must not error.
+func TestRecentCapabilityLossIsNilWithNoHistory(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	dev := &store.Device{MAC: "60:38:e0:00:00:0d", Host: "192.0.2.1", Name: "fresh"}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.recentCapabilityLoss(ctx, dev.ID); got != nil {
+		t.Errorf("a device that has never been re-probed reported %+v", got)
+	}
+}
+
+// The cause is scoped to its own device. Offering one device's radio failure as
+// the reason a different device omitted a WLAN would be worse than silence.
+func TestRecentCapabilityLossDoesNotLeakBetweenDevices(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	a := &store.Device{MAC: "60:38:e0:00:00:0e", Host: "192.0.2.1", Name: "a"}
+	b := &store.Device{MAC: "60:38:e0:00:00:0f", Host: "192.0.2.2", Name: "b"}
+	for _, dev := range []*store.Device{a, b} {
+		if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aid := a.ID
+	if err := d.Store.LogEvent(ctx, store.Event{
+		TS: 3000, DeviceID: &aid, Category: "device", Severity: "warning",
+		Event: EventCapabilitiesChanged,
+		Detail: map[string]any{
+			"actionable": 1,
+			"changes": []map[string]any{{
+				"effect": string(capability.EffectLost), "detail": "radio phy1 is gone",
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.recentCapabilityLoss(ctx, b.ID); got != nil {
+		t.Errorf("device b was offered device a's capability loss: %+v", got)
+	}
+	if got := d.recentCapabilityLoss(ctx, a.ID); got == nil {
+		t.Error("device a lost its own cause")
+	}
+}
+
+// A probable cause is offered only where there is something to explain.
+//
+// Always attaching the last capability change is the tempting simplification,
+// and it is wrong: a device whose plan is clean does not need to be told its
+// radio list changed last week. The preview is the screen someone reads
+// immediately before writing to their network, so it is the worst place to add
+// a standing warning that is usually irrelevant.
+func TestOnlyRowsWithSomethingUnexplainedGetACause(t *testing.T) {
+	clean := api.DevicePreview{Name: "ap", Changes: []api.Change{
+		{Action: "create", Config: "wireless", Section: "oowrt_wlan1_radio0"},
+	}}
+	if needsExplanation(clean) {
+		t.Error("a device that plans cleanly was given a capability explanation")
+	}
+	if needsExplanation(api.DevicePreview{Name: "ap"}) {
+		t.Error("a device with nothing to do was given one")
+	}
+
+	for _, tc := range []struct {
+		name string
+		p    api.DevicePreview
+	}{
+		{"omitted", api.DevicePreview{Omitted: []string{"guest: device has no 5 GHz radio"}}},
+		{"blocked", api.DevicePreview{Blocked: true}},
+		{"conflict", api.DevicePreview{Conflicts: []string{"wireless.human_wlan: not ours"}}},
+	} {
+		if !needsExplanation(tc.p) {
+			t.Errorf("%s: a row with something unexplained got no cause lookup", tc.name)
+		}
 	}
 }
