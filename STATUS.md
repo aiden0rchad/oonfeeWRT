@@ -1323,14 +1323,52 @@ written and believed.
   `IMPLEMENTATION.md` §1's stated "Go ≥ 1.23" floor.
 - `CGO_ENABLED=0` cross-compiles cleanly for `linux/amd64` and `linux/arm64` —
   verified, and the reason decision D3 chose that driver.
-- The device credential lives in the session scratchpad
-  (`oonfeewrt-device-password.txt`), currently
-  `oonfeewrt / usJAW5PSBYGjsex35nS7gNZqKARH662M`. It is rotated by every
-  adoption, and `TestIntegrationAdoptARealDevice` prints the one it creates —
-  re-run that to get a known credential, then re-grant the `oonfeewrt-probe`
-  scope (below) or the applyengine hardware tests fail. If lost, delete
-  `rpcd.oonfeewrt` on the device and re-run adoption, or regenerate a `$6$` hash
-  with `internal/crypt` and write it into `/etc/config/rpcd`.
+- **The device credential is not recorded in this repo, and must not be.** This
+  repo is public, and a password committed to it stays in the history after any
+  later edit. One was committed here and is now dead — rotated 2026-08-15 — but
+  it cost an hour first, in the way stale secrets always do: it was *recorded*,
+  so it was *trusted*, so a login failure looked like a broken device rather
+  than a wrong password.
+
+  It is rotated by every adoption, which is what makes drift the normal case
+  rather than the exception.
+
+  **To find out whether the one you have is right**, ask the device rather than
+  a document:
+
+  ```bash
+  curl -s http://192.168.1.1/ubus -d '{"jsonrpc":"2.0","id":1,"method":"call",
+    "params":["00000000000000000000000000000000","session","login",
+    {"username":"oonfeewrt","password":"THE-ONE-YOU-HAVE"}]}'
+  ```
+
+  A `ubus_rpc_session` in the reply means yes; `"result":[6]` means no.
+
+  **To settle it definitively** — whether the password is wrong or something
+  else is — compare against the stored hash, which SSH can read and ubus
+  deliberately cannot:
+
+  ```bash
+  ssh root@192.168.1.1 "uci get rpcd.oonfeewrt.password"
+  openssl passwd -6 -salt "<the salt between the 2nd and 3rd \$>" "THE-ONE-YOU-HAVE"
+  ```
+
+  Equal means the password is fine and the problem is elsewhere; unequal means
+  it was rotated. That check turned an hour of guessing into one command.
+
+  **To set a known one** (no re-adoption, does not touch the ACL file):
+
+  ```bash
+  ssh root@192.168.1.1 "uci set rpcd.oonfeewrt.password='$(openssl passwd -6 'NEW')' \
+    && uci commit rpcd"
+  ```
+
+  rpcd re-reads the login config at session-creation time, so no restart is
+  needed — and restarting it would destroy every live session.
+
+  If the login section is gone entirely, re-adopt: that rewrites both
+  `/usr/share/rpcd/acl.d/oonfeewrt.json` and the `rpcd` login, and
+  `TestIntegrationAdoptARealDevice` prints the credential it creates.
 - Running the daemon from a checkout:
 
   ```bash
