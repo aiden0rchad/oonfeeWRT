@@ -1,12 +1,48 @@
 # Where this project is
 
-Written 2026-08-13 as a handoff. Updated when Phase 0 finished, when Phase 1's
-read-only fleet view came up, and again on 2026-08-14 after adoption, the
-budget harness, the live channel, un-adoption and network discovery landed.
-Everything below is either committed or measured on real hardware; nothing here
-is aspiration.
+Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
+through **2026-08-14**, ending with Phase 2's networks work. Everything below is
+either committed or measured on real hardware; nothing here is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
+
+---
+
+## 0. Picking this up
+
+Read §5 first — it opens with what to do next, in order. Then §5g, then §6.
+
+To get running:
+
+```bash
+npm --prefix ui install && npm --prefix ui run build && go build -o oonfeewrtd ./cmd/oonfeewrtd
+./oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080
+```
+
+It prompts for an operator passphrase (twice on first run) and serves the UI at
+that address. §7 has the unattended variant and everything else operational.
+
+To run the tests:
+
+```bash
+go test ./internal/...
+```
+
+The hardware suite needs the device and a credential — §7 explains the rotation
+dance, which is the one genuinely fiddly part of this repo:
+
+```bash
+OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
+```
+
+**State of the test device right now:** adopted, polling, `/etc/config` byte
+identical to its pre-session md5s, `vlan_filtering` back to 0, no oonfeeWRT
+sections left in `network`/`dhcp`/`firewall`. The `oonfeewrt-probe` scratch ACL
+scope is granted, so the applyengine hardware tests run as-is.
+
+**One habit worth inheriting:** before any experiment that writes to the device's
+network config, arm a restore on the device itself first (§6, "arm the undo
+before the experiment"). It saved this session three times.
 
 ---
 
@@ -14,24 +50,30 @@ Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
 The design is no longer a design. It was validated against a real
 **Linksys WRT3200ACM running OpenWrt 25.12.5**, which corrected several
-assumptions, and then **Phases 0 and 1 were built in Go and TypeScript** against
-those findings.
+assumptions, and then **Phases 0, 1 and most of 2 were built in Go and
+TypeScript** against those findings.
 
 **Phase 0 is complete, including both of ROADMAP's proofs.** Proof 1 (a broken
-config reverts on its own and is reported honestly from a second session) was
-met earlier. **Proof 2 is now met too**: adopt a device, use it, remove it, and
-its config matches a pre-adoption snapshot exactly — 369 UCI lines and 9 ACL
-files before, 374 and 10 while adopted, 369 and 9 after, asserted by
-`TestIntegrationAdoptUnadoptLeavesNothing` against real hardware.
+config reverts on its own and is reported honestly from a second session) and
+Proof 2 (adopt, use, remove, and the config matches a pre-adoption snapshot
+byte for byte — 369 UCI lines and 9 ACL files before, 374 and 10 while adopted,
+369 and 9 after) are both asserted against real hardware.
 
-**Phase 1 is nearly complete.** The whole path runs against real hardware:
-adopt a device from the UI, poll it, roll the samples into SQLite, serve them
-through an authenticated API, push live updates over a WebSocket, and render it
-in a browser — dashboard, devices with charts, client grid, logs. 94 KB of UI
-gzipped against a 1.5 MB budget, and the resource budget is measured rather
-than asserted.
+**Phase 1 is complete.** Adopt a device from the UI — found by a network scan or
+by address — poll it inside a measured budget, roll the samples into SQLite,
+serve them through an authenticated API, push live updates over a WebSocket, and
+render it in a browser: dashboard, devices with charts, a virtualized client
+grid, logs paged and faceted in SQL. ~105 KB of UI gzipped against a 1.5 MB
+budget.
 
-Fifteen Go packages plus a UI. Everything that touches a device has been
+**Phase 2 is largely complete and its ROADMAP proof is met.** One SSID edited
+once lands on both bands of an AP with an identical derived mobility domain, a
+hand-edited section elsewhere on the device is untouched, and the whole thing is
+previewed per device before anything is written. Networks (VLAN, DHCP, firewall
+zone) render too, within a limit that hardware imposed — §5g is the single most
+important thing in this file.
+
+Seventeen Go packages plus a UI. Everything that touches a device has been
 verified against one.
 
 ---
@@ -78,9 +120,10 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 | `internal/store` | SQLite schema, migrations, rollups, inventory, operators | ✅ |
 | `internal/crypt` | SHA-512 crypt (`$6$`) for rpcd | ✅ |
 | `internal/adoption` | Adopt / un-adopt, the SSH bootstrap, the two-credential split | ✅ |
-| `internal/model` | Site model: networks, WLANs, AP groups | pure |
-| `internal/render` | Site model → per-device UCI, deterministic | pure |
-| `internal/reconcile` | Read → render → diff → apply → record | mock only |
+| `internal/model` | Site model: networks, WLANs, AP groups, per-device overrides | pure |
+| `internal/render` | Site model → per-device UCI (wireless + network/dhcp/firewall), deterministic | pure |
+| `internal/reconcile` | Read → render → diff → apply → record | ✅ |
+| `internal/discovery` | Unauthenticated subnet sweep for OpenWrt candidates | ✅ |
 | `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ |
 | `internal/collector` | Two-tier poll loop, batching, backoff, quiesce, overhead | ✅ |
 | `internal/telemetry` | RAM ring → 5m → 1h, counter/ratio arithmetic | ✅ |
@@ -206,58 +249,70 @@ for someone picking the work up.
 
 ## 5. What to do next
 
-Phase 0 is done. Phase 1 is done except for the list below.
+**Phases 0 and 1 are complete. Phase 2 is complete except for two items that
+need something I do not have.** Everything below is the honest remaining list,
+most-worth-doing first.
 
-**Discovery landed 2026-08-14** (`internal/discovery`, `Discover.tsx`). The
-adopt screen scans the host's attached networks and lists what answers as
-OpenWrt; add-by-address is unchanged and still first-class, because discovery
-cannot work at all from a bridged container. Two documented claims were refuted
-building it — see §5a below, they are the interesting part.
+### Do these next
 
-**The table system landed 2026-08-14** (UI-SPEC §5): virtualized rows,
-show/hide columns persisted across reloads, a shared filter rail with live
-counts, server-side paging with a page-size selector, and a sticky header that
-is now actually sticky. See §5b — the interesting part is again what was found
-to be false.
+1. **Scope the fleet client total.** The dashboard's "Devices on the LAN" counts
+   every host including upstream neighbours, so it says 14 where the client grid
+   now correctly says 3. One query, but it is the second place the same
+   local/upstream distinction has to be made and it should be made deliberately
+   rather than patched — see §5c for the distinction itself.
+2. **Server-side paging for `/clients`.** The event log is paged and faceted in
+   SQL; the client list still returns everything and filters in the browser.
+   Correct today at 14 clients, and its filter rail says so rather than implying
+   otherwise, but it does not survive a real fleet. §5b has the faceting rules
+   that took two attempts to get right — reuse them, do not re-derive them.
+3. **Re-probe capabilities after adoption.** Nothing does. A firmware upgrade is
+   detected and logged as a warning and the stale registry is left in place, so
+   a device that gained a radio or a feature never gets it.
+4. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
+   the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
 
-**Client-list scoping landed 2026-08-14**, and it did *not* need the site model
-— see §5c. The client grid now defaults to the network this controller manages.
+### Blocked, and by what
 
-**Management Overhead is complete 2026-08-14** — all three of DEVICE-BUDGET
-§7's remaining fields. See §5d; the CPU measurement produced a finding that
-changes how to reason about poll cost.
-
-**Phase 1 is complete.** **Phase 2 is underway and its ROADMAP proof is met** —
-see §5e. The site model persists, has screens, and reaches hardware through a
-preview-then-apply flow.
-
-**Per-device overrides landed 2026-08-14** — see §5f. The interesting part is
-what is deliberately *not* overridable.
-
-**Networks render to devices as of 2026-08-14** — bridge-VLAN, interface, DHCP,
-firewall zone and forwarding, role-aware. It also found the sharpest limit in
-the project so far; see §5g, which is the one to read.
-
-**Phase 2, what remains:**
 - **`usteer` / `dawn` configuration and state readout.** Neither is installed on
-  the reference device and both are in the official feeds — so this is blocked
-  behind the package-installation flow ARCHITECTURE §6 step 3 describes and
-  nothing has built. Writing config for an absent package would be untestable.
-- **A second AP.** The fan-out is proven across two bands of one device; three
-  APs is the ROADMAP sentence and needs hardware.
+  the reference device; both are in the official feeds. This sits behind the
+  package-installation flow ARCHITECTURE §6 step 3 describes and nothing has
+  built. Writing config for an absent package would be untestable, so it was not
+  written.
+- **A second and third AP.** The WLAN fan-out is proven across two bands of one
+  device. ROADMAP's Phase 2 sentence says three APs. Nothing in the pipeline is
+  per-device — render is driven by group membership and the mobility domain is
+  derived rather than agreed — so this needs hardware, not code.
+- **Class B and C devices.** Class C (MT7621) *sets* the budget and every number
+  so far comes from class A. The budget harness runs anywhere; it has only ever
+  run against the comfortable class.
 
-**Phase 1 leftovers** (polish, none of it blocking):
+### Before starting anything, read these
 
-1. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
-   the remaining half of UI-SPEC §5's "Customize Columns".
-2. **Server-side paging for `/clients`.** The log is paged and faceted in SQL;
-   the client list still returns everything and filters in the browser. That is
-   correct today (14 clients) and its rail says so rather than implying
-   otherwise, but it does not survive a real fleet.
-3. **Scope the fleet client total too.** The dashboard's "Devices on the LAN"
-   counts every host including upstream neighbours, so it still says 14 where
-   the grid now says 3. One query away, but it is a second place the same
-   distinction has to be made and worth doing deliberately.
+They are the parts of this file that will save the most time, in order:
+
+- **§5g — the limit networks ran into.** A confirmed, "healthy" change that
+  severed the network, and why the controller now refuses to enable VLAN
+  filtering at all. If you touch `internal/render/network.go`, read this first.
+- **§6 — working practices.** Every entry is there because it caught a real bug,
+  usually one already written and believed.
+- **§4 — measured device behaviour.** When code and docs disagree, the
+  measurement wins; when neither matches the device, re-measure before changing
+  either.
+
+### How each piece landed
+
+Chronological, 2026-08-14. Each is a section below with the findings, which are
+the useful part — the code is in git either way.
+
+| | |
+|---|---|
+| §5a | Discovery — the specified probe would have minted a root session on every passwordless device |
+| §5b | The table system — six defects that 13,000 rows exposed, including a header that had never been sticky |
+| §5c | Client scoping — it did not need the site model, only the device's |
+| §5d | Management Overhead — attributable CPU cannot be sampled live, and latency is not load |
+| §5e | Phase 2's first contact with hardware — three defects a mock could not reach |
+| §5f | Per-device overrides — and the four things they deliberately cannot touch |
+| §5g | Networks — **read this one** |
 
 ### 5a. What discovery corrected
 
@@ -594,19 +649,23 @@ new network defaults to exactly that.
   need 3 GB pushed through it. The code is written to be correct either way.
 
 **Known gaps worth closing cheaply:**
-- `internal/model` has no tests of its own (it is exercised through `render`
-  and now through `store`'s site-model round-trip tests).
+- ~~`internal/model` has no tests of its own.~~ Closed 2026-08-14: the override
+  vocabulary has its own suite (`override_test.go`), and the rest is exercised
+  through `render` and `store`'s site-model round-trips.
 - ~~`reconcile` is mock-verified only.~~ Closed 2026-08-14: it now runs against
   the real device through the Phase 2 apply flow, which is how the `uci.get`
   decode bug was found (§5e).
-- The UI has no automated tests. It has been driven in a browser against the
-  real device, which has now caught **fifteen** defects no unit test would have
+- **The UI has no automated tests — the single highest-value gap in the
+  project's testing.** It has been driven in a browser against the real device,
+  which has caught **fifteen** defects no unit test would have
   — three from the discovery screen and six more from the table system (§5b),
   including a sticky header that had never once been sticky and a
   virtualization drift of 840px. That is a manual step someone has to remember,
   and it is now the single highest-value gap in the project's testing.
 - Nothing re-probes capabilities after adoption. A firmware upgrade is detected
-  and logged as a warning, and the stale registry is left in place.
+  and logged as a warning, and the stale registry is left in place. This one has
+  grown teeth now that the renderer gates network rendering on the probed port
+  map — it is item 3 in the do-next list above.
 
 ---
 
@@ -740,11 +799,11 @@ written and believed.
 - `CGO_ENABLED=0` cross-compiles cleanly for `linux/amd64` and `linux/arm64` —
   verified, and the reason decision D3 chose that driver.
 - The device credential lives in the session scratchpad
-  (`oonfeewrt-device-password.txt`). It was rotated several times on
-  2026-08-14 and the live one is sealed in the scratchpad's `disco/data`
-  keyring rather than written down — re-run
-  `TestIntegrationAdoptARealDevice`, which prints the credential it creates,
-  to get a known one. If lost, delete
+  (`oonfeewrt-device-password.txt`), currently
+  `oonfeewrt / usJAW5PSBYGjsex35nS7gNZqKARH662M`. It is rotated by every
+  adoption, and `TestIntegrationAdoptARealDevice` prints the one it creates —
+  re-run that to get a known credential, then re-grant the `oonfeewrt-probe`
+  scope (below) or the applyengine hardware tests fail. If lost, delete
   `rpcd.oonfeewrt` on the device and re-run adoption, or regenerate a `$6$` hash
   with `internal/crypt` and write it into `/etc/config/rpcd`.
 - Running the daemon from a checkout:
