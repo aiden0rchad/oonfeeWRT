@@ -9,7 +9,7 @@ import {
   Status,
   Unknown,
   Banner,
-  useHiddenColumns,
+  useColumnPrefs,
 } from '../components/ui'
 import type { Column } from '../components/ui'
 import { ago } from '../components/Chart'
@@ -46,7 +46,7 @@ export function Clients() {
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState<ClientPage | null>(null)
   const [err, setErr] = useState('')
-  const [hidden, setHidden] = useHiddenColumns('clients')
+  const [colPrefs, setColPrefs] = useColumnPrefs('clients')
 
   const load = useCallback(async () => {
     try {
@@ -208,8 +208,8 @@ export function Clients() {
           <DataGrid
             rows={rows}
             columns={columns}
-            hidden={hidden}
-            onHiddenChange={setHidden}
+            prefs={colPrefs}
+            onPrefsChange={setColPrefs}
             rowKey={(c) => c.mac}
             empty="No clients match these filters. The inventory is built from the baseline poll, so it fills in within a minute of a device coming online."
           />

@@ -4,3 +4,6 @@ tsconfig.tsbuildinfo
 # see ui/embed.go. Keeping .gitkeep means `go build` works without Node.
 dist/*
 !dist/.gitkeep
+
+# Scratch output from `npm run check:columns`.
+.check/

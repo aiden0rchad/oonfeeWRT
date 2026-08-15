@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
+import type { ColumnPrefs } from '../lib/columns'
+
+export type { ColumnPrefs }
+export { orderColumns, moveColumn }
 
 /** Status pill. The dot is never the only signal — UI-SPEC §3 calls colour-only
  *  status a genuine accessibility flaw and says not to inherit it, so the text
@@ -285,19 +290,25 @@ export function DataGrid<T>({
   rowKey,
   onRowClick,
   empty = 'Nothing to show',
-  hidden,
-  onHiddenChange,
+  prefs,
+  onPrefsChange,
 }: {
   rows: T[]
   columns: Column<T>[]
   rowKey: (row: T) => string
   onRowClick?: (row: T) => void
   empty?: ReactNode
-  /** Hidden column keys. Omit to disable column customization. */
-  hidden?: string[]
-  onHiddenChange?: (keys: string[]) => void
+  /** Column visibility and order. Omit to disable column customization. */
+  prefs?: ColumnPrefs
+  onPrefsChange?: (v: ColumnPrefs) => void
 }) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null)
+  const dragging = useRef<string | null>(null)
+  // A finished drag must not also sort the column it landed on. Browsers differ
+  // on whether a click follows a drag, so this is cheap insurance rather than a
+  // fix for an observed bug — and getting it wrong means every reorder silently
+  // re-sorts the grid.
+  const swallowClick = useRef(false)
   const [scrollTop, setScrollTop] = useState(0)
   // Measured, not assumed: the CSS height is viewport-relative, and windowing
   // against a guessed height leaves blank rows on a tall screen.
@@ -308,8 +319,19 @@ export function DataGrid<T>({
   const scroller = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLTableSectionElement>(null)
 
-  const hiddenSet = new Set(hidden ?? [])
-  const shown = columns.filter((c) => c.required || !hiddenSet.has(c.key))
+  const hiddenSet = new Set(prefs?.hidden ?? [])
+  const ordered = orderColumns(columns, prefs?.order ?? [])
+  const shown = ordered.filter((c) => c.required || !hiddenSet.has(c.key))
+
+  // Reordering always rewrites the FULL key list, hidden columns included, so
+  // a column unhidden later comes back where the operator left it.
+  const reorder = (from: string, to: string) => {
+    if (!prefs || !onPrefsChange) return
+    onPrefsChange({
+      ...prefs,
+      order: moveColumn(ordered.map((c) => c.key), from, to),
+    })
+  }
 
   let view = rows
   if (sort) {
@@ -343,7 +365,7 @@ export function DataGrid<T>({
     if (!tr) return
     const h = tr.getBoundingClientRect().height
     if (h > 0 && Math.abs(h - rowH) > 0.5) setRowH(h)
-  }, [rowH, columns.length, hidden])
+  }, [rowH, columns.length, prefs?.hidden])
 
   // Keep React's idea of the scroll position tied to the DOM's.
   //
@@ -381,14 +403,39 @@ export function DataGrid<T>({
         {shown.map((c) => (
           <th
             key={c.key}
-            onClick={() =>
-              c.sortBy &&
+            draggable={!!onPrefsChange}
+            onDragStart={(e) => {
+              dragging.current = c.key
+              e.dataTransfer.effectAllowed = 'move'
+              // Firefox will not start a drag without payload.
+              e.dataTransfer.setData('text/plain', c.key)
+            }}
+            onDragOver={(e) => {
+              if (dragging.current && dragging.current !== c.key) e.preventDefault()
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              const from = dragging.current
+              dragging.current = null
+              swallowClick.current = true
+              if (from) reorder(from, c.key)
+            }}
+            onDragEnd={() => {
+              dragging.current = null
+            }}
+            onClick={() => {
+              if (swallowClick.current) {
+                swallowClick.current = false
+                return
+              }
+              if (!c.sortBy) return
               setSort((s) =>
                 s?.key === c.key
                   ? { key: c.key, dir: s.dir === 1 ? -1 : 1 }
                   : { key: c.key, dir: 1 },
               )
-            }
+            }}
+            title={onPrefsChange ? 'Drag to reorder' : undefined}
             style={{
               position: 'sticky',
               top: 0,
@@ -488,11 +535,17 @@ export function DataGrid<T>({
 
   return (
     <div>
-      {hidden !== undefined && onHiddenChange && (
+      {prefs !== undefined && onPrefsChange && (
         <ColumnPicker
-          columns={columns}
+          columns={ordered}
           hidden={hiddenSet}
-          onChange={onHiddenChange}
+          onChange={(keys) => onPrefsChange({ ...prefs, hidden: keys })}
+          onMove={(key, delta) => {
+            const keys = ordered.map((c) => c.key)
+            const at = keys.indexOf(key)
+            const to = keys[at + delta]
+            if (to) reorder(key, to)
+          }}
           virtualized={virtual}
           rowCount={view.length}
         />
@@ -512,7 +565,13 @@ export function DataGrid<T>({
 }
 
 /**
- * Show/hide columns.
+ * Show, hide and reorder columns.
+ *
+ * The arrows are not a lesser alternative to dragging the headers — they are
+ * the only path that works without a mouse, and the only one that can move a
+ * HIDDEN column, which dragging cannot because there is no header to grab.
+ * Someone who hides a column, rearranges the rest, then unhides it would
+ * otherwise have no way to say where it goes.
  *
  * It also states when the grid is windowed, because that changes what the page
  * can do: the browser's find-in-page only sees rendered rows, so a search that
@@ -524,12 +583,14 @@ function ColumnPicker<T>({
   columns,
   hidden,
   onChange,
+  onMove,
   virtualized,
   rowCount,
 }: {
   columns: Column<T>[]
   hidden: Set<string>
   onChange: (keys: string[]) => void
+  onMove: (key: string, delta: -1 | 1) => void
   virtualized: boolean
   rowCount: number
 }) {
@@ -577,32 +638,48 @@ function ColumnPicker<T>({
             marginLeft: 4,
           }}
         >
-          {columns.map((c) => (
-            <label
+          {columns.map((c, i) => (
+            <span
               key={c.key}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                cursor: c.required ? 'default' : 'pointer',
-                opacity: c.required ? 0.5 : 1,
-                color: 'var(--text-secondary)',
-              }}
-              title={c.required ? 'This column identifies the row.' : undefined}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}
             >
-              <input
-                type="checkbox"
-                disabled={c.required}
-                checked={c.required || !hidden.has(c.key)}
-                onChange={() => {
-                  const next = new Set(hidden)
-                  if (next.has(c.key)) next.delete(c.key)
-                  else next.add(c.key)
-                  onChange([...next])
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  cursor: c.required ? 'default' : 'pointer',
+                  opacity: c.required ? 0.5 : 1,
+                  color: 'var(--text-secondary)',
                 }}
+                title={c.required ? 'This column identifies the row.' : undefined}
+              >
+                <input
+                  type="checkbox"
+                  disabled={c.required}
+                  checked={c.required || !hidden.has(c.key)}
+                  onChange={() => {
+                    const next = new Set(hidden)
+                    if (next.has(c.key)) next.delete(c.key)
+                    else next.add(c.key)
+                    onChange([...next])
+                  }}
+                />
+                {c.header}
+              </label>
+              <MoveButton
+                label="◀"
+                title={`Move ${textOf(c.header)} left`}
+                disabled={i === 0}
+                onClick={() => onMove(c.key, -1)}
               />
-              {c.header}
-            </label>
+              <MoveButton
+                label="▶"
+                title={`Move ${textOf(c.header)} right`}
+                disabled={i === columns.length - 1}
+                onClick={() => onMove(c.key, 1)}
+              />
+            </span>
           ))}
         </div>
       )}
@@ -610,8 +687,49 @@ function ColumnPicker<T>({
   )
 }
 
+/** One arrow in the column picker. */
+function MoveButton({
+  label,
+  title,
+  disabled,
+  onClick,
+}: {
+  label: string
+  title: string
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        border: 'none',
+        background: 'none',
+        color: disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.35 : 1,
+        padding: '0 1px',
+        fontSize: 9,
+        lineHeight: 1,
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+/** The text of a column header, for a tooltip. Headers are usually strings;
+ *  anything else gets a generic label rather than "[object Object]". */
+function textOf(header: ReactNode): string {
+  return typeof header === 'string' ? header : 'this column'
+}
+
 /**
- * Column visibility that survives a reload.
+ * Column visibility and order that survive a reload.
  *
  * localStorage, keyed by grid. UI-SPEC §5 says "persisted per user" and this is
  * per *browser* instead — the honest limitation is that choices do not follow
@@ -619,28 +737,22 @@ function ColumnPicker<T>({
  * and an endpoint, which is not worth it while a controller has one operator;
  * when Phase 4 adds real multi-user accounts, this is the thing to move.
  */
-export function useHiddenColumns(gridKey: string): [string[], (v: string[]) => void] {
+export function useColumnPrefs(
+  gridKey: string,
+): [ColumnPrefs, (v: ColumnPrefs) => void] {
   const storageKey = `oonfee.columns.${gridKey}`
-  const [hidden, setHidden] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(storageKey)
-      const parsed = raw ? JSON.parse(raw) : []
-      // Anything could be in storage — another version's format, a hand-edit.
-      // A grid that throws on load is worse than one that forgets a preference.
-      return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : []
-    } catch {
-      return []
-    }
-  })
-  const set = (v: string[]) => {
-    setHidden(v)
+  const [prefs, setPrefs] = useState<ColumnPrefs>(() =>
+    parsePrefs(localStorage.getItem(storageKey)),
+  )
+  const set = (v: ColumnPrefs) => {
+    setPrefs(v)
     try {
       localStorage.setItem(storageKey, JSON.stringify(v))
     } catch {
       /* private mode, or a full quota: the grid still works for this session */
     }
   }
-  return [hidden, set]
+  return [prefs, set]
 }
 
 /** Slide-over detail panel — 370px, enters from the right (UI-SPEC §1). */

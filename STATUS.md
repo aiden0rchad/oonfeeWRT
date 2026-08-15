@@ -28,6 +28,14 @@ To run the tests:
 go test ./internal/...
 ```
 
+The UI has no test runner. The one piece of it with rules rather than rendering —
+column ordering and preference parsing — lives in `ui/src/lib/columns.ts` with
+no React import, so it compiles and runs on the toolchain already here:
+
+```bash
+npm --prefix ui run check:columns
+```
+
 The hardware suite needs the device and a credential — §7 explains the rotation
 dance, which is the one genuinely fiddly part of this repo:
 
@@ -259,12 +267,14 @@ most-worth-doing first.
    (§5i, §5j) and verified from unit tests up through the real device, but
    nobody has *looked* at either. Every UI defect this project has found was
    found by looking — see the standing gap below.
-2. **Column reorder.** Show/hide and persistence are done; drag-to-reorder is
-   the remaining half of UI-SPEC §5's "Customize Columns". Lowest value here.
-3. **Nothing pressing.** The rest of §5's list is hardware- or package-blocked
-   (below). If you want the highest-value non-blocked work, it is the browser
-   pass in item 1 — the API layers have tests and hardware coverage; the screens
-   have neither.
+2. **Decide whether the UI gets a test runner.** This is a toolchain decision
+   and nobody has made it, so nothing here has. `vitest` is the natural pairing
+   with vite and would cover the component behaviour that `check:columns`
+   cannot — see §5l for what the stopgap does and does not reach. Until then,
+   every UI change needs a human at a browser, which is why item 1 keeps
+   appearing.
+3. **Nothing else pressing.** The rest of §5's list is hardware- or
+   package-blocked (below).
 
 ### Blocked, and by what
 
@@ -312,6 +322,7 @@ the useful part — the code is in git either way.
 | §5i | Client paging — and the one rail that is not a column |
 | §5j | Re-probing — and the difference between losing a feature and losing sight of it |
 | §5k | What diffing two probes found in the probe itself |
+| §5l | Column reorder, and getting UI logic under a check without a test runner |
 
 ### 5a. What discovery corrected
 
@@ -845,6 +856,43 @@ real device behaviour, not a bug, and it is the reason quirks are not diffed.
 The features they gate are, so a quirk that actually costs a capability is still
 reported; the noisy list itself is not. Worth remembering if quirks ever start
 driving something directly.
+
+### 5l. Column reorder, and a way to check UI logic without a test runner
+
+Drag-to-reorder was the last half of UI-SPEC §5's "Customize Columns". The
+feature is small; what it ran into is not.
+
+**There is no way to click anything here.** Every UI defect this project has
+found was found by a human looking at a screen, and shipping a drag interaction
+that nobody has dragged is exactly the pattern that produced a sticky header
+which had never once been sticky. So the parts with *rules* were separated from
+the parts with *rendering*: `ui/src/lib/columns.ts` holds the ordering and the
+preference parsing, imports nothing, and is compiled and run by
+`npm --prefix ui run check:columns` — the repo's own `tsc`, then `node`. Twenty
+assertions against the real shipped code, no new dependency.
+
+What that reaches: the move arithmetic, the storage-format migration, and the
+tolerance for junk in `localStorage`. What it does not reach: whether a drag
+actually starts, whether the arrows are where you would look for them, whether
+any of it is usable. That still needs a person.
+
+Rules worth keeping, each of which the checks pin down:
+
+- **Moving right and moving left are not symmetric.** Removing the dragged key
+  first shifts the target left into the slot it just left, so "drag one place
+  right" silently does nothing unless the insert index compensates.
+- **Reordering rewrites the full key list, hidden columns included.** Ordering
+  only the visible ones loses the hidden ones' positions, so unhiding a column
+  later drops it somewhere the operator never chose.
+- **A column a later build ADDS must still appear**, and one a later build
+  REMOVES must not break the saved order. Storage outlives any one build.
+- **The old storage format migrates.** Preferences were a bare array of hidden
+  keys; someone who hid four columns must not get them all back because a later
+  build started storing an order alongside.
+
+The picker's ◀ ▶ arrows are not a fallback for the drag — they are the only
+path that works without a mouse, and the only one that can move a *hidden*
+column, which dragging cannot because there is no header to grab.
 
 ---
 

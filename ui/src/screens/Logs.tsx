@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type { EventPage, EventRow } from '../lib/api'
-import { Banner, Card, DataGrid, FilterRail, Pager, useHiddenColumns } from '../components/ui'
+import { Banner, Card, DataGrid, FilterRail, Pager, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 
 /**
@@ -26,7 +26,7 @@ export function Logs() {
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState<EventPage | null>(null)
   const [err, setErr] = useState('')
-  const [hidden, setHidden] = useHiddenColumns('logs')
+  const [colPrefs, setColPrefs] = useColumnPrefs('logs')
 
   const load = useCallback(async () => {
     try {
@@ -125,8 +125,8 @@ export function Logs() {
         <DataGrid
           rows={rows}
           columns={columns}
-          hidden={hidden}
-          onHiddenChange={setHidden}
+          prefs={colPrefs}
+          onPrefsChange={setColPrefs}
           rowKey={(e) => `${e.TS}-${e.Category}-${e.Event}`}
           empty={
             category || severity
