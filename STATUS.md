@@ -98,18 +98,25 @@ found except the WLANs listed below, which were applied deliberately.
 > installed**: stock config, both radios up on a hand-made WPA2 SSID, no
 > controller polling it.
 >
-> **Since the reset: no wedge in nearly two hours.** 28.5 minutes clean-room
-> with nothing of ours installed, then the lab restored on top and **112 minutes
-> and counting** with both radios up, the controller polling it, an 802.11k
-> reconciler writing to it and a mesh applied and pruned. That is four times the
-> longest pre-reset interval and twelve times the shortest.
+> **Since the reset: no wedge in 3 hours 36 minutes.** Sampled every two
+> minutes across 90 consecutive checks, `hostapd` answered every one. That is
+> roughly eight times the longest pre-reset interval and twenty-four times the
+> shortest. Through all of it the device carried both radios, the controller
+> polling it, an 802.11k reconciler writing to it, a mesh applied and pruned,
+> and several full applies.
 >
-> **It is still not the same test.** Every pre-reset wedge happened with a phone
-> associating, roaming and being deauthenticated for inactivity. Through all of
-> the above the WRT has carried **zero clients** — the one real client on this
-> network picked the C6 and stayed there. So what has been shown is that the
-> device survives configuration, polling and applies indefinitely; what has not
-> been shown is that it survives a client.
+> **It is still not the same test, and the reason is worth knowing.** Every
+> pre-reset wedge happened with a phone associating, roaming and being
+> deauthenticated for inactivity. Across all 90 samples the WRT carried **zero
+> clients** — the one real client on this network associated to the C6 and
+> stayed there, which it is entitled to do now that both APs advertise each
+> other and the client picks on signal.
+>
+> So what is established is that the device survives configuration, polling,
+> applies and hours of uptime. What is **not** established is that it survives a
+> client, which is the only condition every failure had in common. Getting that
+> answer needs a client that prefers the WRT — moving one out of the C6's range,
+> or taking the C6 down for a while.
 >
 > If it wedges again, `sysrq` is still the only recovery and the
 > reflash-or-replace question is still open.
