@@ -27,41 +27,8 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 	// silently does not come up. So only Present renders, and the other two
 	// states say which one they are: "your device cannot" and "we could not
 	// find out" send an operator to completely different places.
-	switch caps.State(capability.FeatMesh) {
-	case capability.Present:
-	case capability.NotObservable:
-		return Section{}, []Omission{{
-			WLAN: m.MeshID,
-			Reason: "802.11s support could not be established on this device, so " +
-				"no mesh interface is rendered. The check reads which wpad build " +
-				"is installed and could not; that is a gap in what the controller " +
-				"can see, not a statement that the device lacks mesh",
-		}}
-	default:
-		// Absent has two causes and they send an operator to opposite places.
-		//
-		// The package cause is fixable: install wpad-mesh-*. The driver cause is
-		// not — the daemon already supports mesh and the radio will not run one,
-		// so the answer is different hardware. Telling someone to install a
-		// package they already have is worse than saying nothing, and that is
-		// exactly what this message did until a real apply exposed it.
-		if caps.HasQuirk("mac80211", "mesh-point") {
-			return Section{}, []Omission{{
-				WLAN: m.MeshID,
-				Reason: "this device's wireless driver will not run an 802.11s " +
-					"mesh point. It advertises the mode and accepts the config, " +
-					"and then refuses to bring the interface up — so a mesh here " +
-					"would apply cleanly and never carry traffic. The 802.11s " +
-					"daemon is installed and is not the problem; this needs a " +
-					"different radio",
-			}}
-		}
-		return Section{}, []Omission{{
-			WLAN: m.MeshID,
-			Reason: "this device's wpad build does not carry 802.11s. Installing " +
-				"a wpad-mesh-* package would provide it — which the controller " +
-				"does not do, because it installs nothing on your devices",
-		}}
+	if ok, reason := MeshGate(caps); !ok {
+		return Section{}, []Omission{{WLAN: m.MeshID, Reason: reason}}
 	}
 
 	v := map[string]string{
@@ -110,4 +77,52 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 // already receives the resolved radio section name.
 func meshIfaceName(meshID int, radio string) string {
 	return fmt.Sprintf("%s_mesh%d_%s", NamePrefix, meshID, radio)
+}
+
+// MeshGate decides whether an 802.11s interface may be rendered for a device,
+// and says why when it may not.
+//
+// Exported and shared, because two different screens answer this question and
+// they must not answer it differently. The apply preview reports it as an
+// omission ("this WLAN was not rendered because…"); the mesh health readout
+// reports it as a standing state ("this device cannot carry the mesh you have
+// assigned to it"). Same fact, same sentence, one place.
+//
+// # Why it is three-state
+//
+// FeatMesh comes from which wpad build is installed, because nothing else on
+// the device answers the question. A build that is not named for its feature
+// set records NotObservable — and rendering into that would send an interface
+// hostapd may refuse at startup, which surfaces as a radio that silently does
+// not come up. So only Present passes, and the other two states say which one
+// they are: "your device cannot" and "we could not find out" send an operator
+// to completely different places.
+//
+// # Absent has two causes and they send an operator to opposite places
+//
+// The package cause is fixable: install wpad-mesh-*. The driver cause is not —
+// the daemon already supports mesh and the radio will not run one, so the
+// answer is different hardware. Telling someone to install a package they
+// already have is worse than saying nothing, and that is exactly what this
+// message did until a real apply exposed it (§5q).
+func MeshGate(caps *capability.Registry) (bool, string) {
+	switch caps.State(capability.FeatMesh) {
+	case capability.Present:
+		return true, ""
+	case capability.NotObservable:
+		return false, "802.11s support could not be established on this device, " +
+			"so no mesh interface is rendered. The check reads which wpad build " +
+			"is installed and could not; that is a gap in what the controller " +
+			"can see, not a statement that the device lacks mesh"
+	}
+	if caps.HasQuirk("mac80211", "mesh-point") {
+		return false, "this device's wireless driver will not run an 802.11s " +
+			"mesh point. It advertises the mode and accepts the config, and " +
+			"then refuses to bring the interface up — so a mesh here would " +
+			"apply cleanly and never carry traffic. The 802.11s daemon is " +
+			"installed and is not the problem; this needs a different radio"
+	}
+	return false, "this device's wpad build does not carry 802.11s. Installing " +
+		"a wpad-mesh-* package would provide it — which the controller does " +
+		"not do, because it installs nothing on your devices"
 }
