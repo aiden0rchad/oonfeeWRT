@@ -344,14 +344,27 @@ NR_LISTS = {}
 # plaintext, on every entry — reproduced here so that a decoder which widens its
 # struct and starts carrying it around fails a test rather than a review.
 WIRELESS_DEVICES = {
-    "radio0": {"interfaces": [
-        {"ifname": "wlan0", "section": "default_radio0",
-         "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
-    ]},
-    "radio1": {"interfaces": [
-        {"ifname": "wlan1", "section": "default_radio1",
-         "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
-    ]},
+    # The RADIO-level config is load-bearing and was missing here at first.
+    # `band` and `channel` live on the radio, not on its interfaces, and they
+    # are the only source that survives a device having no interfaces at all —
+    # which is the state every stock OpenWrt router ships in. A fixture without
+    # them cannot express the case that broke adoption.
+    "radio0": {
+        "up": True,
+        "config": {"band": "5g", "channel": "36", "htmode": "VHT80"},
+        "interfaces": [
+            {"ifname": "wlan0", "section": "default_radio0",
+             "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
+        ],
+    },
+    "radio1": {
+        "up": True,
+        "config": {"band": "2g", "channel": "6", "htmode": "HT20"},
+        "interfaces": [
+            {"ifname": "wlan1", "section": "default_radio1",
+             "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
+        ],
+    },
 }
 
 OBJECTS = {
@@ -681,12 +694,35 @@ def handle_one(req):
             WIRELESS_DEVICES.setdefault(radio, {"interfaces": []})
             WIRELESS_DEVICES[radio]["interfaces"].append(entry)
         return ok(rid, {"interfaces": len(WIRELESS_DEVICES[radio]["interfaces"])})
+    if obj == "__test" and meth == "disable_radios":
+        # Strip every interface from every radio, leaving the radios
+        # themselves — which is exactly how stock OpenWrt ships: the radios
+        # exist and are disabled, so nothing is broadcasting.
+        #
+        # This is the shape that made the controller unable to bring a fresh
+        # router into service at all: iwinfo.devices returns [] because it
+        # enumerates INTERFACES, the probe recorded zero radios, and the
+        # renderer then refused to give the device a WLAN it could never
+        # otherwise obtain. Reproducible here so that never regresses.
+        with lock:
+            for radio in WIRELESS_DEVICES.values():
+                radio["interfaces"] = []
+        return ok(rid, {"radios": len(WIRELESS_DEVICES), "interfaces": 0})
     if obj == "__test" and meth == "set_dirty":
         dirty_configs.clear()
         dirty_configs.update(args.get("configs") or [])
         return ok(rid, {"dirty": sorted(dirty_configs)})
 
     if obj == "iwinfo":
+        if meth == "devices":
+            # Derived from WIRELESS_DEVICES rather than hardcoded, because the
+            # whole point of the disable_radios hook is that this list goes
+            # empty while the radios remain. A constant here would make the
+            # fixture unable to express the state that broke adoption.
+            with lock:
+                names = [i["ifname"] for r in WIRELESS_DEVICES.values()
+                         for i in r.get("interfaces", []) if i.get("ifname")]
+            return ok(rid, {"devices": names})
         dev = args.get("device", "wlan0")
         if meth == "devices":
             return ok(rid, {"devices": ["wlan0", "wlan1"]})

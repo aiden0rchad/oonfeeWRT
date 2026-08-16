@@ -432,3 +432,77 @@ func TestUplinkPresentSaysWhatItDoesNotProve(t *testing.T) {
 			"cannot recognise it; notes = %q", r.Notes)
 	}
 }
+
+// A stock OpenWrt device: radios present, every one of them disabled, so
+// nothing is broadcasting and `iwinfo.devices` is empty.
+//
+// This is the state every freshly flashed router is in, and it is the one that
+// made the controller unable to bring one into service. probeRadios enumerated
+// interfaces and called them radios, so the device recorded ZERO radios, and
+// the renderer then refused to give it a WLAN — which was the only thing that
+// could have created an interface for the radios to become visible through.
+//
+// It survived for the life of the project because the one device that ever
+// worked had its radios switched on by hand before it was adopted.
+func TestRadiosAreFoundWhenNothingIsBroadcasting(t *testing.T) {
+	c := dial(t)
+	if err := c.Call(context.Background(), "__test", "disable_radios", nil, nil); err != nil {
+		t.Skipf("mock does not support disable_radios: %v", err)
+	}
+	t.Cleanup(func() {
+		// The fixture is process-wide, so put it back or every later test in
+		// this package inherits a device with no interfaces.
+		_ = c.Call(context.Background(), "__test", "add_wifi_iface",
+			map[string]any{"radio": "radio0", "ifname": "wlan0",
+				"section": "default_radio0", "mode": "ap"}, nil)
+		_ = c.Call(context.Background(), "__test", "add_wifi_iface",
+			map[string]any{"radio": "radio1", "ifname": "wlan1",
+				"section": "default_radio1", "mode": "ap"}, nil)
+	})
+
+	// The precondition, asserted rather than assumed: if the fixture still
+	// lists interfaces this test proves nothing.
+	var devs struct {
+		Devices []string `json:"devices"`
+	}
+	if err := c.Call(context.Background(), "iwinfo", "devices", nil, &devs); err != nil {
+		t.Fatal(err)
+	}
+	if len(devs.Devices) != 0 {
+		t.Fatalf("precondition failed: iwinfo still lists %v", devs.Devices)
+	}
+
+	r, err := Probe(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+
+	if len(r.Radios) == 0 {
+		t.Fatal("a device with disabled radios reported none at all. The " +
+			"renderer will refuse to give it a WLAN, and a WLAN is the only " +
+			"thing that would make its radios visible — so it can never be " +
+			"brought into service")
+	}
+	bands := map[string]bool{}
+	for _, radio := range r.Radios {
+		bands[radio.Band] = true
+	}
+	if !bands["2g"] || !bands["5g"] {
+		t.Errorf("both configured bands should be known from the radio list, got %v", bands)
+	}
+
+	// And the sampled capabilities must be UNOBSERVABLE rather than Absent:
+	// there is no interface to survey, and "we did not look" is not "it cannot".
+	for _, f := range []Feature{FeatSurvey, FeatHostapdControl, FeatAirtimeSplit} {
+		if got := r.State(f); got == Absent {
+			t.Errorf("%s recorded Absent on a radio with no interface to "+
+				"sample; nothing demonstrated an absence", f)
+		}
+	}
+	// The mesh gate keys on a hardware name that only iwinfo supplies, so with
+	// no interface it cannot run — and a check that cannot run must not pass.
+	if got := r.State(FeatMesh); got == Present {
+		t.Error("mesh reported Present while the per-driver check could not " +
+			"run; an unrunnable check must not report a clean bill")
+	}
+}

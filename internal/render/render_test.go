@@ -885,3 +885,57 @@ func TestAnAccessPointStillGetsItsWLANs(t *testing.T) {
 		}
 	}
 }
+
+// The other half of the stock-device bug. capability/probe_test.go pins that a
+// device with no interfaces still reports its radios; this pins that the
+// renderer will then actually give those radios a WLAN.
+//
+// Both halves were needed to break adoption and either alone would have hidden
+// it: a radio with no interface has no frequency, so a renderer that keys only
+// on frequency skips it and reports "device has no 5 GHz radio" — about a radio
+// the probe just handed it. The device then never gets an interface, so the
+// frequency never appears, so it is never configurable. Stock OpenWrt ships
+// its radios disabled, which is to say this was every new router.
+func TestRadiosWithNoFrequencyStillGetWLANs(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	// Frequency deliberately zero: iwinfo answers per-interface, and there are
+	// none. The CONFIGURED band is all that is knowable, and it is enough.
+	caps.Radios = []capability.Radio{
+		{Device: "radio0", Phy: "phy0", Band: "5g"},
+		{Device: "radio1", Phy: "phy1", Band: "2g"},
+	}
+
+	doc, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if rep.HasConflicts() {
+		t.Fatalf("unexpected conflicts: %v", rep.Conflicts)
+	}
+	if len(doc.Sections) != 2 {
+		t.Fatalf("a dual-band device with disabled radios must still get a "+
+			"WLAN on each band; got %d section(s): %+v", len(doc.Sections), doc.Sections)
+	}
+	r0, ok := sectionByName(doc, "oowrt_wlan3_radio0")
+	if !ok {
+		t.Fatal("no section for radio0")
+	}
+	r1, ok := sectionByName(doc, "oowrt_wlan3_radio1")
+	if !ok {
+		t.Fatal("no section for radio1")
+	}
+	if r0.Values["device"] != "radio0" || r1.Values["device"] != "radio1" {
+		t.Errorf("radios not bound correctly: %q / %q",
+			r0.Values["device"], r1.Values["device"])
+	}
+	// And nothing may be omitted for want of a radio. This is the assertion
+	// that actually reproduces the reported symptom — "device has no 5g radio"
+	// arrived as an omission, not as an error.
+	for _, om := range rep.Omissions {
+		if strings.Contains(strings.ToLower(om.Reason), "radio") {
+			t.Errorf("renderer omitted %q for want of a radio it was given: %s",
+				om.WLAN, om.Reason)
+		}
+	}
+}
