@@ -166,7 +166,11 @@ type wlanView struct {
 	Hidden   bool `json:"hidden"`
 	Isolate  bool `json:"isolate"`
 	MaxAssoc int  `json:"max_assoc"`
-	Enabled  bool `json:"enabled"`
+	// AllowUplink lets devices join this network as a 4-address bridge rather
+	// than as a client. Off unless asked for: it changes what the access points
+	// accept from the air.
+	AllowUplink bool `json:"allow_uplink"`
+	Enabled     bool `json:"enabled"`
 }
 
 func viewWLAN(w model.WLAN, reveal bool) wlanView {
@@ -175,7 +179,7 @@ func viewWLAN(w model.WLAN, reveal bool) wlanView {
 		Mode: string(w.Security.Mode), PMF: string(w.Security.PMF),
 		HasKey: w.Security.Key != "", Enabled: w.Enabled,
 		Hidden: w.Options.Hidden, Isolate: w.Options.Isolate,
-		MaxAssoc: w.Options.MaxAssoc,
+		MaxAssoc: w.Options.MaxAssoc, AllowUplink: w.Options.AllowUplink,
 	}
 	v.Bands = make([]string, 0, len(w.Bands))
 	for _, b := range w.Bands {
@@ -203,6 +207,7 @@ func (v wlanView) toModel() model.WLAN {
 		},
 		Options: model.WLANOptions{
 			Hidden: v.Hidden, Isolate: v.Isolate, MaxAssoc: v.MaxAssoc,
+			AllowUplink: v.AllowUplink,
 		},
 	}
 	w.Roaming.FT = v.Roaming.FT
@@ -256,6 +261,13 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 	for _, x := range site.Meshes {
 		meshes = append(meshes, viewMesh(x, false))
 	}
+	uplinks := make([]uplinkView, 0, len(site.Uplinks))
+	for _, x := range site.Uplinks {
+		uplinks = append(uplinks, uplinkView{
+			ID: x.ID, DeviceID: x.DeviceID, WLANID: x.WLANID,
+			Band: string(x.Band), Enabled: x.Enabled,
+		})
+	}
 	groups := make([]groupView, 0, len(site.Groups))
 	for _, g := range site.Groups {
 		ids := g.DeviceIDs
@@ -304,6 +316,7 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 		"name":      site.Name,
 		"wlans":     wlans,
 		"meshes":    meshes,
+		"uplinks":   uplinks,
 		"groups":    groups,
 		"networks":  nets,
 		"problems":  problems,
@@ -586,5 +599,97 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request) {
 func (s *Server) logSiteChange(ctx context.Context, event string, detail map[string]any) {
 	_ = s.Store.LogEvent(ctx, store.Event{
 		Category: "audit", Severity: "info", Event: event, Detail: detail,
+	})
+}
+
+// uplinkView is one device's wireless uplink over the wire.
+//
+// No credentials of any kind, and none to omit: an uplink joins by referencing
+// a WLAN, so the SSID, the passphrase and the security mode all live in one
+// place and this carries only the reference. That is not a serialisation
+// convenience — two copies of a passphrase drift, and a bridge whose key no
+// longer matches the network it bridges to fails the way a client with a stale
+// password fails, intermittently and at the worst moment.
+type uplinkView struct {
+	ID       int    `json:"id"`
+	DeviceID int64  `json:"device_id"`
+	WLANID   int    `json:"wlan_id"`
+	Band     string `json:"band"`
+	Enabled  bool   `json:"enabled"`
+}
+
+func (v uplinkView) toModel() model.Uplink {
+	return model.Uplink{
+		ID: v.ID, DeviceID: v.DeviceID, WLANID: v.WLANID,
+		Band: model.Band(v.Band), Enabled: v.Enabled,
+	}
+}
+
+// handleSaveUplink creates or updates a device's wireless uplink.
+//
+// Validated against the whole site before it is stored, not after. An uplink is
+// only meaningful in relation to a WLAN — whether that network is enabled,
+// whether it accepts bridges, whether it is published on the requested band —
+// and storing one that cannot work would put a row in the site model whose only
+// effect is a rendered station that never associates.
+func (s *Server) handleSaveUplink(w http.ResponseWriter, r *http.Request) {
+	var v uplinkView
+	if !decodeJSON(w, r, &v) {
+		return
+	}
+	if id := r.PathValue("id"); id != "" {
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "uplink id must be a number")
+			return
+		}
+		v.ID = n
+	}
+	site, err := s.Store.Site(r.Context())
+	if handleStoreErr(w, err, "site") {
+		return
+	}
+	u := v.toModel()
+	if errs := u.Validate(site); len(errs) > 0 {
+		writeErr(w, http.StatusBadRequest, errs[0].Error())
+		return
+	}
+	if err := s.Store.SaveUplink(r.Context(), &u); handleStoreErr(w, err, "uplink") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"uplink": uplinkView{ID: u.ID, DeviceID: u.DeviceID, WLANID: u.WLANID,
+			Band: string(u.Band), Enabled: u.Enabled},
+		// Said on the way out, every time, because the controller cannot see
+		// the far end of a cable and this is the one hazard it cannot check.
+		"note": "this device will reach the network over the air once applied. " +
+			"If it is ALSO connected by ethernet to the same network that is a " +
+			"layer-2 loop, and OpenWrt bridges ship with STP off — so nothing " +
+			"will break it and the symptom is a network that stops working " +
+			"rather than an error",
+	})
+}
+
+// handleDeleteUplink removes an uplink.
+func (s *Server) handleDeleteUplink(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "uplink id must be a number")
+		return
+	}
+	if err := s.Store.DeleteUplink(r.Context(), id); handleStoreErr(w, err, "uplink") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted": id,
+		// The delete is the dangerous half, so the warning is on this response
+		// rather than only on the create. On a device with no cable the station
+		// this removes IS the route to it — which is why the apply engine
+		// counts pruning it as touching the management path and will ask for an
+		// explicit acknowledgment.
+		"note": "applying this removes the station interface. If that device " +
+			"has no cable it is how the controller reaches it, so the apply " +
+			"will ask you to acknowledge that you are editing the road before " +
+			"driving down it",
 	})
 }

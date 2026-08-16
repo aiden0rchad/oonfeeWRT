@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1381,5 +1382,105 @@ func TestDeviceDetailOmitsDegradationsBeforeAnyPoll(t *testing.T) {
 	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
 	if strings.Contains(w.Body.String(), `"degraded"`) {
 		t.Errorf("an unpolled device reported a degradation list: %s", w.Body.String())
+	}
+}
+
+// An uplink is validated against the whole site before it is stored, not after.
+//
+// It is only meaningful in relation to a WLAN — whether that network is
+// enabled, accepts bridges, and is published on the requested band — so storing
+// one that cannot work would put a row in the site model whose only effect is a
+// rendered station that never associates. That failure looks exactly like a
+// driver refusing 4-address frames, which sends an operator to the wrong place.
+func TestUplinkIsRefusedBeforeItIsStored(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+
+	n := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	if err := h.db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	g := &model.APGroup{Name: "all"}
+	if err := h.db.SaveGroup(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	// A WLAN that does NOT accept wireless bridges — the half people forget.
+	w := &model.WLAN{SSID: "roam", NetworkID: n.ID, GroupID: g.ID,
+		Bands: []model.Band{model.Band5G}, Enabled: true}
+	if err := h.db.SaveWLAN(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := h.do("POST", "/api/v1/site/uplinks", map[string]any{
+		"device_id": 1, "wlan_id": w.ID, "band": "5g", "enabled": true,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400 — an unusable uplink was stored", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "does not accept wireless bridges") {
+		t.Errorf("the refusal does not name the missing half: %s", rec.Body.String())
+	}
+
+	site, err := h.db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(site.Uplinks) != 0 {
+		t.Errorf("a refused uplink was stored anyway: %+v", site.Uplinks)
+	}
+}
+
+// Both hazards are on the responses, every time, rather than only in
+// documentation. The controller cannot see the far end of a cable, and these
+// are the two things it cannot check for the operator.
+func TestUplinkResponsesCarryBothHazards(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+
+	n := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	_ = h.db.SaveNetwork(ctx, n)
+	g := &model.APGroup{Name: "all"}
+	_ = h.db.SaveGroup(ctx, g)
+	w := &model.WLAN{SSID: "roam", NetworkID: n.ID, GroupID: g.ID,
+		Bands: []model.Band{model.Band5G}, Enabled: true,
+		Options: model.WLANOptions{AllowUplink: true}}
+	_ = h.db.SaveWLAN(ctx, w)
+	at := int64(1)
+	dev := &store.Device{MAC: "60:38:e0:00:0f:01", Host: "192.168.1.9",
+		Name: "no-cable", Scheme: "http", AdoptedAt: &at}
+	if err := h.db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := h.do("POST", "/api/v1/site/uplinks", map[string]any{
+		"device_id": dev.ID, "wlan_id": w.ID, "band": "5g", "enabled": true,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "layer-2 loop") {
+		t.Errorf("creating an uplink did not warn about the loop: %s", rec.Body.String())
+	}
+
+	// The site view carries it, so a screen can render it without a second call.
+	site := h.json(h.do("GET", "/api/v1/site", nil))
+	ups, _ := site["uplinks"].([]any)
+	if len(ups) != 1 {
+		t.Fatalf("the site view does not carry the uplink: %v", site["uplinks"])
+	}
+
+	// And the delete warns about the OTHER hazard: on a device with no cable
+	// this station IS the route the controller reaches it through.
+	created := h.json(rec)["uplink"].(map[string]any)
+	id := int(created["id"].(float64))
+	rec = h.do("DELETE", fmt.Sprintf("/api/v1/site/uplinks/%d", id), nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "acknowledge") {
+		t.Errorf("deleting an uplink did not warn that it is the route: %s",
+			rec.Body.String())
 	}
 }
