@@ -115,11 +115,27 @@ func (t Target) String() string { return fmt.Sprintf("%d/%s", t.DeviceID, t.Ifac
 // byte-identical lists. That is what makes "has this changed?" answerable
 // without pushing, which is the whole of the request budget for this feature.
 func Distribute(observed []Neighbour) map[Target][]Neighbour {
+	// Deduplicated by BSSID before anything else.
+	//
+	// One BSS must appear at most once in any neighbour list — a list naming
+	// the same BSSID twice is malformed, and a client parsing it gets a
+	// candidate set that disagrees with itself. The controller cannot assume
+	// its observations are already unique: the same physical AP can reach this
+	// function under two device rows, which is exactly what a lab database
+	// holding both a hand-seeded row and a real adoption produces. Rather than
+	// depend on the inventory being clean, the identity that matters on the
+	// wire — the BSSID — is made unique here.
 	bySSID := map[string][]Neighbour{}
+	seen := map[string]bool{}
 	for _, n := range observed {
 		if !n.Valid() {
 			continue
 		}
+		key := strings.ToLower(n.BSSID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		bySSID[n.SSID] = append(bySSID[n.SSID], n)
 	}
 

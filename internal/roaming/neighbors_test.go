@@ -186,3 +186,39 @@ func TestCaseFoldingOnBSSIDs(t *testing.T) {
 			"reconciler would re-push a list that is already correct")
 	}
 }
+
+// One BSS must appear at most once in any list. The controller cannot assume
+// its own inventory is clean: the same physical AP reaches Distribute under two
+// device rows whenever a database holds both a hand-seeded row and a real
+// adoption of the same box — which is exactly what this project's lab database
+// held when this was found.
+func TestDistributeDeduplicatesByBSSID(t *testing.T) {
+	ghost := wrt5
+	ghost.DeviceID = 99 // same BSS, second inventory row
+
+	got := Distribute([]Neighbour{wrt5, ghost, wrt2, c6_5})
+
+	peers := got[Target{wrt2.DeviceID, wrt2.Iface}]
+	counts := map[string]int{}
+	for _, p := range peers {
+		counts[p.BSSID]++
+	}
+	for bssid, n := range counts {
+		if n > 1 {
+			t.Errorf("%s appears %d times in one neighbour list; a client "+
+				"parsing it gets a candidate set that disagrees with itself",
+				bssid, n)
+		}
+	}
+	if len(peers) != 2 {
+		t.Errorf("want 2 distinct neighbours, got %d: %+v", len(peers), peers)
+	}
+
+	// The duplicate target gets no plan at all, rather than an empty one. An
+	// empty plan is a real instruction — "clear your list" — so a caller must
+	// be able to tell the two apart or it will wipe a correct list.
+	if _, planned := got[Target{ghost.DeviceID, ghost.Iface}]; planned {
+		t.Error("a deduplicated BSS was also planned under its second device " +
+			"row; whichever ran last would decide what the AP ends up with")
+	}
+}

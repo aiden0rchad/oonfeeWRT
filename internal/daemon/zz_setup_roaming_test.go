@@ -10,6 +10,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
 // Sets up a real roaming WLAN across both APs, through the controller.
@@ -39,19 +40,31 @@ func TestZZSetupRoaming(t *testing.T) {
 	}
 	defer d.Close()
 
-	type ap struct{ mac, host, pass, name string }
+	// The MAC is read from the device rather than written down here.
+	//
+	// It used to be a literal, and the literals were wrong: one was the box's
+	// WAN-side address and the other was a radio's, while adoption identifies a
+	// device by its LAN bridge. A seeded row therefore carried a different
+	// identity than a real adoption of the same box would, and the two coexisted
+	// in the inventory as two devices — one physical AP polled twice, against a
+	// budget of one request a minute.
+	type ap struct{ host, pass, name string }
 	aps := []ap{
-		{"60:38:e0:db:be:40", os.Getenv("OONFEE_AP1"), os.Getenv("OONFEE_AP1_PASS"), "wrt3200acm"},
-		{"84:d8:1b:c5:19:35", os.Getenv("OONFEE_AP2"), os.Getenv("OONFEE_AP2_PASS"), "archer-c6"},
+		{os.Getenv("OONFEE_AP1"), os.Getenv("OONFEE_AP1_PASS"), "wrt3200acm"},
+		{os.Getenv("OONFEE_AP2"), os.Getenv("OONFEE_AP2_PASS"), "archer-c6"},
 	}
 	var ids []int64
 	for _, a := range aps {
-		blob, err := d.Keys.SealCredential(a.mac, "oonfeewrt", a.pass)
+		mac, err := macOf(ctx, a.host, a.pass)
+		if err != nil {
+			t.Fatalf("%s: %v", a.name, err)
+		}
+		blob, err := d.Keys.SealCredential(mac, "oonfeewrt", a.pass)
 		if err != nil {
 			t.Fatal(err)
 		}
 		at := int64(1)
-		dev := &store.Device{MAC: a.mac, Host: a.host, Name: a.name, Scheme: "http",
+		dev := &store.Device{MAC: mac, Host: a.host, Name: a.name, Scheme: "http",
 			Role: string(model.RoleAP), AdoptedAt: &at, CredEnc: blob}
 		if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 			t.Fatal(err)
@@ -107,4 +120,19 @@ func TestZZSetupRoaming(t *testing.T) {
 	if res.Aborted {
 		t.Fatalf("apply aborted after %s", res.AbortedAfter)
 	}
+}
+
+// macOf asks the device for the identity adoption would give it.
+//
+// Deliberately the same function the real path uses. A helper that computed the
+// identity its own way would produce rows that look adopted and do not match
+// what adopting the same box actually yields — which is how one physical AP
+// ends up in the inventory twice.
+func macOf(ctx context.Context, host, pass string) (string, error) {
+	c := ubus.New(ubus.Options{Host: host})
+	defer c.Close()
+	if err := c.Login(ctx, "oonfeewrt", pass); err != nil {
+		return "", err
+	}
+	return deviceMAC(ctx, c)
 }

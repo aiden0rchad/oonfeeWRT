@@ -33,13 +33,21 @@ func TestSeedLiveInventory(t *testing.T) {
 	}
 	defer d.Close()
 
-	blob, err := d.Keys.SealCredential("60:38:e0:db:be:40",
+	// Asked, not asserted. A literal here was wrong — it was the box's WAN-side
+	// address while adoption identifies a device by its LAN bridge — so a
+	// seeded row and a real adoption of the same box became two devices in the
+	// inventory, and one physical AP got polled twice.
+	mac, err := macOf(ctx, os.Getenv("OONFEE_TEST_HOST"), os.Getenv("OONFEE_TEST_PASS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := d.Keys.SealCredential(mac,
 		os.Getenv("OONFEE_TEST_USER"), os.Getenv("OONFEE_TEST_PASS"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := int64(1)
-	dev := &store.Device{MAC: "60:38:e0:db:be:40", Host: os.Getenv("OONFEE_TEST_HOST"),
+	dev := &store.Device{MAC: mac, Host: os.Getenv("OONFEE_TEST_HOST"),
 		Name: "wrt3200acm", Scheme: "http", Role: "gateway",
 		AdoptedAt: &at, CredEnc: blob, Class: "A"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {

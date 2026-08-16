@@ -204,7 +204,18 @@ func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult
 			if o == nil || !o.ok {
 				continue
 			}
-			if roaming.SameSet(o.current, desired[tgt]) {
+			want, planned := desired[tgt]
+			if !planned {
+				// Distribute deduplicates by BSSID, so a BSS reachable under
+				// two device rows is planned once. The two-value lookup is
+				// load-bearing: a target with no plan is covered elsewhere,
+				// whereas a target planned with an EMPTY list is the last AP of
+				// an SSID being told to clear stale neighbours. Treating the
+				// first as the second pushes an empty list over a correct one.
+				row.Unchanged++
+				continue
+			}
+			if roaming.SameSet(o.current, want) {
 				row.Unchanged++
 				continue
 			}
