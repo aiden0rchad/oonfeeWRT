@@ -137,10 +137,26 @@ the controller diagnosed it (§5u) with the message it had gained an hour
 earlier, then the setup helper force-un-adopted and re-adopted without being
 told anything about the reset.
 
-**Root has no password on either device.** The adoption flow warns about it and
-it is still true. That is also what lets adoption bootstrap over SSH with an
-empty credential, which is how both devices were re-adopted for the ACL change —
-convenient, and exactly the thing worth fixing on the devices.
+**Root has no password on either device, and that is a deliberate hold.**
+Decided 2026-08-16: the lab stays open while the system is being built, and
+device authentication is taken up as its own piece of work once everything else
+is buttoned up — so that it can be *verified* rather than assumed. It is not an
+oversight and it does not need raising again.
+
+Two things follow from it that a reader should know rather than rediscover. It
+is why adoption can bootstrap over SSH with an empty credential, which is how
+both devices were re-adopted for the ACL change without anyone typing a
+password. And the controller's own behaviour here is already built and tested —
+`acceptsAnyPassword` detects it at adoption and warns (§4), the discovery probe
+was redesigned around it (§5a), and none of that is waiting on the hold. What is
+deferred is hardening the *devices*, not the controller's handling of them.
+
+**When that work starts**, the pieces already in place are worth reusing rather
+than rebuilding: the adoption warning, the two-credential split (operator for
+SSH, scoped login for ubus), credential sealing in the keyring, and §7's
+check-and-reset procedure. The open questions are whether the controller should
+offer to *set* a root password during adoption, and whether an SSH key should
+replace password auth for the bootstrap channel entirely.
 
 **One habit worth inheriting:** before any experiment that writes to a device's
 network config, arm a restore on the device itself first (§6, "arm the undo
