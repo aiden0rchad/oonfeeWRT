@@ -209,7 +209,7 @@ function DeviceDetailPanel({
           {detail.firmware || <Unknown why="not read yet" />}
         </Prop>
         <Prop label="Class">
-          {detail.class ?? <Unknown why="not classified" />}
+          <DeviceClass cls={detail.class} target={detail.capabilities?.Board?.Target} />
         </Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
@@ -773,4 +773,38 @@ function effectLabel(e: CapEffect): string {
     default:
       return e
   }
+}
+
+/**
+ * The DEVICE-BUDGET hardware class, and what "?" actually means.
+ *
+ * `?` is not "the probe failed" and not "unclassifiable hardware". It means the
+ * SoC family has never been measured by this project — `classify()` covers
+ * mvebu, filogic/MT7981 and MT7621, and everything else is most old routers:
+ * ath79, ramips/MT7620, ipq40xx, bcm53xx, lantiq. Rendering a bare `?` invites
+ * an operator to go looking for a fault; naming the target tells them what the
+ * controller is actually looking at, which is the only thing that would let
+ * them (or anyone) close the gap.
+ *
+ * Deliberately NOT solved by adding targets to the map. A class carries a CPU
+ * and RAM budget, and assigning one from a family nobody has measured would be
+ * a guess wearing a measurement's clothes. The consequence of `?` is mild and
+ * correct: the conservative poll default, and no CPU figure claimed.
+ */
+export function DeviceClass({ cls, target }: { cls?: string | null; target?: string }) {
+  if (!cls) {
+    return <Unknown why="the capability probe has not classified this device" />
+  }
+  if (cls !== '?') {
+    return <>{cls}</>
+  }
+  return (
+    <span>
+      ?{' '}
+      <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+        {target ? `— ${target} ` : ''}has not been measured, so this device is
+        polled at the conservative default and no CPU cost is claimed for it
+      </span>
+    </span>
+  )
 }

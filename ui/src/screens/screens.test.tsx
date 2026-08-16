@@ -37,6 +37,7 @@ vi.mock('../lib/live', () => ({
 
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')
+const { DeviceClass } = await import('./Devices')
 
 const emptyFacets = { presence: [], connection: [], scope: [] }
 
@@ -479,5 +480,37 @@ describe('Settings — neighbour reports', () => {
       expect(screen.getByText(/already up to date/)).toBeTruthy(),
     )
     expect(screen.getByText(/4 already correct/)).toBeTruthy()
+  })
+})
+
+describe('Devices — the unmeasured class', () => {
+  // "?" is not a failure and not unclassifiable hardware. It means this SoC
+  // family has never been measured — which is most old routers, and precisely
+  // the hardware this project exists to support. A bare "?" sends an operator
+  // looking for a fault; naming the target says what the controller is looking
+  // at, which is the only thing that would let anyone close the gap.
+  it('explains an unmeasured class and names the board target', () => {
+    render(<DeviceClass cls="?" target="ath79/generic" />)
+    expect(screen.getByText(/ath79\/generic/)).toBeTruthy()
+    expect(screen.getByText(/has not been measured/)).toBeTruthy()
+  })
+
+  it('says nothing extra for a class that WAS measured', () => {
+    render(<DeviceClass cls="A" target="mvebu/cortexa9" />)
+    expect(screen.getByText('A')).toBeTruthy()
+    expect(screen.queryByText(/has not been measured/)).toBeNull()
+  })
+
+  // A device with no class at all is a different thing again: the probe never
+  // ran or its record could not be read. That is "we do not know", not "we know
+  // it is unmeasured".
+  it('distinguishes no class from an unmeasured one', () => {
+    const { container } = render(<DeviceClass cls={null} />)
+    expect(screen.queryByText(/has not been measured/)).toBeNull()
+    // Unknown carries its reason in a title attribute, not in text — the whole
+    // point being that the em dash is never mistaken for a value.
+    expect(container.querySelector('[title]')?.getAttribute('title')).toMatch(
+      /not classified this device/,
+    )
   })
 })
