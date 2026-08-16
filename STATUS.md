@@ -1,8 +1,9 @@
 # Where this project is
 
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
-through **2026-08-14**, ending with Phase 2's networks work. Everything below is
-either committed or measured on real hardware; nothing here is aspiration.
+through **2026-08-16**, ending with 802.11k neighbour distribution across two
+real APs. Everything below is either committed or measured on real hardware;
+nothing here is aspiration.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -41,20 +42,55 @@ dance, which is the one genuinely fiddly part of this repo:
 OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
 ```
 
-**Two devices, both adopted-capable and both clean as of 2026-08-15:**
+**Two devices, both adopted through the controller and both clean as of
+2026-08-16:**
 
 | | WRT3200ACM | Archer C6 v2 (US) |
 |---|---|---|
 | address | `192.168.1.1` (gateway, WAN to UniFi) | `192.168.1.2`, DHCP off, static |
+| identity (`br-lan`) | `30:23:03:db:be:40` | `c4:e9:84:...` — ask, do not assume |
 | SoC / target | mvebu/cortexa9 — **class A** | ath79/generic — **class ?** |
 | radios | mwlwifi ×2 | ath10k (5G) + ath9k (2.4G) |
 | firmware | OpenWrt 25.12.5 | OpenWrt 25.12.5 |
 | mesh | **gated off** (driver quirk, §5q) | **Present**, verified working |
 | airtime-split | absent (dead counters) | **Present** — only device with it |
+| neighbour reports | **Present** | **Present** |
 | wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
+| health | **unstable — see below** | stable, 2h+ uptime unattended |
 
 Cabled LAN-to-LAN, C6 behind the WRT. Both left byte-identical to how they were
 found except the WLANs listed below, which were applied deliberately.
+
+> ### ⚠ The WRT3200ACM's wireless stack wedges, twice in one session
+>
+> Both times, roughly **28–30 minutes after boot**, `hostapd` entered
+> uninterruptible sleep (`D` state) and every hostapd ubus method plus `iwinfo`
+> began timing out, while the rest of the device stayed perfectly responsive —
+> SSH, `ubus system board`, `ip link` all fine, and all four BSSes still `UP`
+> and bridged. The kernel log shows the driver failing underneath it:
+>
+>     nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
+>     nl80211: wpa_driver_nl80211_event_receive->nl_recvmsgs failed: -5
+>     phy0-ap0: nl80211: kernel reports: key addition failed
+>
+> **A clean `reboot` does not work** — procd waits forever for a process it
+> cannot kill. The only recovery found is a hard reset:
+>
+> ```bash
+> ssh root@192.168.1.1 'sync; printf b > /proc/sysrq-trigger'
+> ```
+>
+> **What is NOT established is the cause.** It is tempting to blame the
+> `rrm_nr_get_own` call that happened to be in flight the first time, and that
+> is wrong: on a freshly booted device the same call returns instantly and
+> leaves hostapd healthy, verified deliberately. The `key addition failed` lines
+> also predate any call of mine. The honest statement is that this radio has
+> been unreliable since the `txpower=0` incident (§5s) and that no specific
+> operation has been shown to trigger it.
+>
+> **For the user:** this is worth investigating on the device itself — a
+> firmware reflash, or checking whether the 5 GHz radio has a hardware fault.
+> The C6 has been up for hours through all the same work without a stumble.
 
 **Wireless currently on air** (four BSSes per SSID pair):
 
@@ -65,13 +101,16 @@ found except the WLANs listed below, which were applied deliberately.
   (stock OpenWrt ships them disabled, and enabling them unsecured would have
   broadcast two open networks).
 
-**Credentials are in the session scratchpad and nowhere else** — see §7 for how
-to check and reset one. Both device logins and all three WLAN passphrases were
-generated during that session; a new session must ask the device, not a
-document.
+**Both devices' controller credentials now live in `.run/keyring.json`**, sealed
+by the operator passphrase, because the two-AP integration test doubles as the
+setup helper (`OONFEE_SEED_DIR`). Nothing in this repo holds a password, and
+nothing should. The `oonfee-roam` passphrase is not recorded here either; §7 has
+how to check or reset any of them by asking the device rather than a document.
 
-**Both routers have an empty root password.** The adoption flow warns about it
-and it is still true. Worth fixing on the devices.
+**Root has no password on either device.** The adoption flow warns about it and
+it is still true. That is also what lets adoption bootstrap over SSH with an
+empty credential, which is how both devices were re-adopted for the ACL change —
+convenient, and exactly the thing worth fixing on the devices.
 
 **One habit worth inheriting:** before any experiment that writes to the device's
 network config, arm a restore on the device itself first (§6, "arm the undo
@@ -99,6 +138,12 @@ render it in a browser: dashboard, devices with charts, a virtualized client
 grid, logs paged and faceted in SQL. ~105 KB of UI gzipped against a 1.5 MB
 budget.
 
+**Roaming is now more than configuration.** As of 2026-08-16 the controller
+distributes 802.11k neighbour lists across the fleet — reading each AP's own
+neighbour element and telling every other AP on the same SSID about it. That is
+the first feature here that hand configuration cannot reproduce at all, because
+no AP can learn what is around it. §5t.
+
 **Phase 2 is largely complete and its ROADMAP proof is met.** One SSID edited
 once lands on both bands of an AP with an identical derived mobility domain, a
 hand-edited section elsewhere on the device is untouched, and the whole thing is
@@ -106,7 +151,7 @@ previewed per device before anything is written. Networks (VLAN, DHCP, firewall
 zone) render too, within a limit that hardware imposed — §5g is the single most
 important thing in this file.
 
-Seventeen Go packages plus a UI. Everything that touches a device has been
+Eighteen Go packages plus a UI. Everything that touches a device has been
 verified against one.
 
 ---
@@ -122,7 +167,7 @@ verified against one.
 | Radios | both enabled, `oonfeewrt-probe-2g` / `oonfeewrt-probe-5g`, WPA2 |
 
 **Our footprint on it right now:** `/usr/share/rpcd/acl.d/oonfeewrt.json`, one
-`rpcd` login (`oonfeewrt`, password in the session scratchpad — regenerate if
+`rpcd` login (`oonfeewrt`, password sealed in `.run/keyring.json` — re-adopt if
 lost, see §7), two empty scratch configs, and **nlbwmon** (installed to test the
 tier-2 path; `apk del nlbwmon` removes it).
 
@@ -156,6 +201,7 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 | `internal/model` | Site model: networks, WLANs, AP groups, per-device overrides | pure |
 | `internal/render` | Site model → per-device UCI (wireless + network/dhcp/firewall), deterministic | pure |
 | `internal/reconcile` | Read → render → diff → apply → record | ✅ |
+| `internal/roaming` | Which APs are each other's 802.11k neighbours | pure |
 | `internal/discovery` | Unauthenticated subnet sweep for OpenWrt candidates | ✅ |
 | `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ |
 | `internal/collector` | Two-tier poll loop, batching, backoff, quiesce, overhead | ✅ |
@@ -269,6 +315,15 @@ for someone picking the work up.
   `getDHCPLeases` 2.9 ms; adding both took the baseline poll from 8 ms to 11 ms
   batched. `luci-rpc.getWirelessDevices` is **128.8 ms** — as expensive as an
   entire focused poll — so it belongs to adoption and must never enter a poll.
+- **802.11k neighbour lists are runtime state, and `wifi reload` clears them
+  SELECTIVELY.** Measured: after editing one wifi-iface section and reloading,
+  the reconfigured BSS came back with an empty list while an untouched BSS on
+  the same device kept its own intact. So neither "an apply clears everything"
+  nor "an apply clears nothing" is a safe assumption, and the list must be read
+  back rather than remembered. `rrm_nr_get_own` returns a **positional triple**
+  `[bssid, ssid, nr_hex]`, and `rrm_nr_list` returns entries in hostapd's own
+  storage order — neither insertion order nor sorted — so comparison has to be
+  order-insensitive or the reconciler never converges.
 - **The noise floor is a per-radio capability, and changing source does not
   rescue it.** The documented advice was "`iwinfo.survey` reports noise
   unsigned, so read it from `iwinfo.info`" — right about the encoding, silent
@@ -288,16 +343,26 @@ most-worth-doing first.
 
 ### Do these next
 
-0. **Neighbour-report distribution (`rrm_nr_set`).** The controller enables
-   802.11k on every AP and populates no neighbour lists, so the capability is
-   advertised and empty. It is the one thing a controller can do that hand
-   configuration cannot, it is now reachable with two real APs, and §5s explains
-   both the mechanism and the ACL decision it requires. Highest value remaining.
+0. ~~**Neighbour-report distribution (`rrm_nr_set`).**~~ **Done 2026-08-16** —
+   §5t. The ACL decision §5s left open was made: `rrm_nr_get_own` and
+   `rrm_nr_list` to read, `rrm_nr_set` to write, and deliberately **not**
+   `bss_transition_request`. Verified across both APs.
 
-1. **Look at the client grid and the re-probe panel in a browser.** Both are new
-   (§5i, §5j) and verified from unit tests up through the real device, but
-   nobody has *looked* at either. Every UI defect this project has found was
-   found by looking — see the standing gap below.
+   The obvious follow-on is **`rrm_beacon_req`**, which asks a *client* what it
+   can hear. That is the missing half of roaming: the controller now knows where
+   its APs are and still has no idea what any client's radio actually sees, so
+   it cannot tell "this phone is stuck on a far AP" from "this phone is exactly
+   where it should be". It is a bigger step than it looks — a beacon request is
+   a frame sent to a client, so it needs a policy for which clients and how
+   often, and the answer arrives asynchronously as an event rather than as a
+   call's return value. Nothing in the collector consumes device-pushed events
+   yet.
+
+1. **Look at the client grid, the re-probe panel and the new neighbour card in a
+   browser.** All three (§5i, §5j, §5t) are verified from unit tests up through
+   the real device, and nobody has *looked* at any of them. Every UI defect this
+   project has found was found by looking — see the standing gap below. `.run`
+   is seeded with both APs and the roaming WLAN, so this is one command away.
 2. **Broaden hardware support** — the stated direction: any old router flashed
    with OpenWrt, adopted from the network like a UniFi device, working as an AP,
    a switch, or a bridge/mesh node. §5m is the audit of what that needs and what
@@ -358,6 +423,7 @@ the useful part — the code is in git either way.
 | §5q | **Applying a mesh to real hardware** — and what every other source got wrong |
 | §5r | **Two devices at last** — fast roaming verified across different SoCs |
 | §5s | The roam demo — what it proved, what it did not, and the txpower trap |
+| §5t | **Neighbour reports** — the first thing built that hand configuration cannot do |
 
 ### 5a. What discovery corrected
 
@@ -1444,8 +1510,185 @@ candidate for the next real feature.
 `get_clients`, `get_features`, `list_bans` and `del_client` — not `rrm_nr_set`
 or `bss_transition_request`. And a new grant only reaches devices adopted
 *after* it (§5q), so widening the ACL means existing devices report the feature
-NotObservable until re-adopted. That is the whole decision, and it has not been
-made.
+NotObservable until re-adopted. That is the whole decision. **It was made the
+next day — see §5t.**
+
+---
+
+### 5t. Neighbour reports: the first thing built that hand configuration cannot do
+
+Every AP the renderer touches has carried `ieee80211k=1` and
+`rrm_neighbor_report=1` since Phase 2, which makes it advertise that it will
+answer a client asking "what else is around?". Measured on both reference
+devices, every one of them answered with an **empty list**.
+
+That is not a small gap. The whole value of 802.11k is that a client scans three
+channels instead of all of them, and a client that asks and gets nothing scans
+all of them anyway — so the feature was switched on across the fleet, costing a
+beacon information element, and doing nothing.
+
+An AP cannot close it. It knows its own BSS and nothing about the AP down the
+hall; the two never talk. Something has to hold the whole fleet and tell each
+member about the others, and the controller is the only component that does.
+This is the first feature in the project that is not "LuCI, but for several
+devices at once" — it is a thing that cannot be configured by hand at all.
+
+#### The controller relays and never constructs
+
+A neighbour report element packs a BSSID, a capability bitfield, an operating
+class, a channel, a PHY type and optional subelements. Getting the operating
+class alone right means mapping frequency and bandwidth through a regulatory
+table.
+
+hostapd already computes it, correctly, for its own BSS, and hands it over
+verbatim:
+
+    ubus call hostapd.phy0-ap1 rrm_nr_get_own
+    { "value": [ "32:23:03:db:be:43", "oonfee-roam",
+                 "322303dbbe43ef1900008024090603022a00" ] }
+
+So the controller reads that and relays the bytes untouched. It never parses or
+builds one. Doing otherwise would put a second regulatory mapping in the system,
+disagreeing with the AP's own on exactly the bands where it matters.
+
+Note the reply is a **positional triple**, not an object. A short array from a
+firmware that shapes it differently must read as "could not tell", never as a
+neighbour with blank fields — relaying one of those makes an AP answer a client
+with a candidate it has no channel to scan for.
+
+#### Why it reconciles instead of applying
+
+Everything else the controller writes is UCI, and survives a reboot because it
+is on disk. This does not: `rrm_nr_set` writes hostapd's **runtime** state and
+there is no UCI option that carries it.
+
+That is the right shape rather than a limitation to work around. A neighbour
+list is derived from where the other APs are *now*, so one written to flash
+would be worse than none — an AP confidently sending a client to a BSS that
+moved channels a month ago. And it means none of the apply machinery applies:
+no rollback (there is nothing to roll back to but the empty list it already
+had), no confirm, no health gate, and no taking the fleet-wide apply lock for a
+change that cannot make a device unhealthy.
+
+#### The measurement that decided the design
+
+The tempting optimisation is to remember what was last pushed and skip the read.
+It does not survive contact with the device:
+
+| after `wifi reload`, having edited one section | neighbour list |
+|---|---|
+| `phy0-ap1` — the BSS whose config changed | **cleared** |
+| `phy1-ap1` — untouched BSS on the same device | **kept, intact** |
+
+Neither "an apply clears everything" nor "an apply clears nothing" is true. So
+the current list is **read back** and compared, which makes the operation
+idempotent against every cause of loss including ones nobody has thought of — a
+hostapd crash, an operator's own `wifi reload`, a device that rebooted between
+cycles.
+
+The best evidence it works is the hardware run where the WRT had rebooted and
+the C6 had not: **2 updated on the WRT, 2 unchanged on the C6**, all four BSSes
+ending with three neighbours. The reconciler repaired exactly what was broken.
+
+**Comparison is order-insensitive, and that is measured rather than preferred.**
+hostapd returns `rrm_nr_list` in its own storage order — on both devices neither
+insertion order nor sorted. An order-sensitive comparison reports every list as
+changed on every cycle and pushes to every AP forever: a reconciler that never
+converges, indistinguishable from a broken one except that it also spends the
+request budget.
+
+#### What it costs
+
+Per device per cycle: one `iwinfo.devices`, one batched request carrying two
+calls per wireless interface, and — only when something differs — one more to
+push. At the 15-minute cadence that is under a tenth of DEVICE-BUDGET's
+one-request-per-minute allowance, and in the steady state the third request
+never happens. Requests are attributed to the device's Management Overhead
+readout, the same rule discovery follows.
+
+Triggers are the 15-minute loop, one cycle at startup (a controller that just
+started is most likely starting because something restarted, which is exactly
+when the lists are empty), and after every apply.
+
+#### The ACL decision §5s left open
+
+Made, and narrowly:
+
+| granted | not granted |
+|---|---|
+| `rrm_nr_get_own`, `rrm_nr_list` (read) | `bss_transition_request` |
+| `rrm_nr_set` (write) | `rrm_beacon_req` |
+
+The controller tells APs about each other and leaves the roam decision to the
+client. Steering a client is a different feature with client-visible effects and
+a policy behind it, and granting the method "while we are here" would put the
+capability on every device ahead of the decision to use it.
+
+Widening the ACL only reaches a device through adoption, so both devices were
+re-adopted — which is the real upgrade path, and the integration test walks it
+rather than arranging the end state by hand.
+
+#### Three defects, none found by hardware
+
+- **`verdict`'s empty default is `Absent`.** Right for a device that reported no
+  radios — there is nothing there to give a neighbour list to — and wrong for
+  one whose hostapd could not be reached, where nothing was recorded because
+  nothing could be asked. A denied `get_status` therefore reported neighbour
+  support as *absent*. Found by a test written specifically to check that one
+  cause does not produce two symptoms. The fix ties the neighbour verdict to the
+  hostapd verdict on the same radio, since you cannot learn about a method on an
+  object you could not reach.
+- **`Distribute` did not deduplicate by BSSID.** A list naming the same BSSID
+  twice is malformed. The controller cannot assume its inventory is clean — one
+  physical AP reached the function under two device rows (below) — so the
+  identity that matters on the wire is made unique. Fixing it needed a matching
+  two-value lookup in the caller, because *"no plan, another row covers this"*
+  and *"planned with an empty list, clear your neighbours"* are different
+  instructions, and treating the first as the second overwrites a correct list
+  with nothing.
+- **The mock advertised a hostapd with no `get_status`.** `OBJECTS` had
+  duplicate `hostapd.wlan0` and `hostapd.wlan1` keys and Python kept the last,
+  silently discarding the full method lists. Invisible, because the dispatcher
+  answers `hostapd.*` before consulting that table — while `ubus list`, which is
+  what discovery and the capability probe fingerprint on, read the truncated
+  version.
+
+#### And one the lab found: a fleet can hold the same AP twice
+
+Adoption identifies a device by its `br-lan` MAC. The test seed helpers wrote
+MACs as **literals** — one of them the box's WAN-side address, the other a
+radio's — so a seeded row and a real adoption of the same physical box became
+two devices in the inventory, both marked adopted, both pointed at
+`192.168.1.1`. One AP polled twice, against a budget of one request a minute.
+
+The helpers ask the device now, through the same function the real path uses. A
+helper that computes an identity its own way produces rows that look adopted and
+are not the rows adopting would produce.
+
+**Still open, and worth a decision:** adoption refuses a device whose MAC it has
+already seen, and has no guard on *host*. Nothing stops the same box being
+adopted twice under two identities if its identifying interface ever changes —
+which a bridge rename or a board file change would do.
+
+#### Verified
+
+Two APs, two bands each, one SSID, on mvebu/mwlwifi and ath79/ath10k:
+
+| | |
+|---|---|
+| BSSes carrying `oonfee-roam` | 4 |
+| neighbours each ended up with | 3 — every other BSS, and never itself |
+| second cycle | 0 updated, 4 unchanged |
+| second cycle from a *fresh database* | 0 updated, 4 unchanged |
+
+The fresh-database run is the one worth keeping: the reconciler holds no state
+between runs, so a controller that has lost its database still converges the
+fleet from what the devices themselves report.
+
+One more thing the fault conditions demonstrated for free. While the WRT's
+hostapd was wedged, its re-probe recorded `neighbor-report: not-observable` —
+**not absent**. The three-state rule held under a real fault, on a device that
+genuinely has the capability, without anyone arranging it.
 
 ---
 
@@ -1562,6 +1805,23 @@ written and believed.
   actually have. The fix — `list`, which has no success case worth having —
   turned out to be cheaper, faster and more informative than the thing it
   replaced, which is usually what happens when the honest version is found.
+- **The last thing you did is not the cause.** hostapd on the reference device
+  went into uninterruptible sleep with an `rrm_nr_get_own` in flight, and the
+  obvious conclusion — a driver quirk in that call, of exactly the shape §5q and
+  §5s already document twice — was wrong. The kernel log showed the driver
+  already failing before the call, and on a freshly booted device the same call
+  returns instantly and leaves hostapd healthy. A project that has found three
+  real "the device says yes and means no" quirks is primed to see a fourth
+  everywhere; a controlled repeat on a known-good device is cheap and settles
+  it. The cost of getting this wrong is not a wasted hour — it is a quirk
+  recorded in the capability model, gating a working feature off working
+  hardware forever, with a measurement's authority behind it.
+- **A test helper that computes an identity its own way will invent a second
+  device.** The seed helpers wrote device MACs as literals while adoption reads
+  the LAN bridge, so a seeded row and a real adoption of one physical box
+  coexisted as two adopted devices — one AP polled twice against a budget of one
+  request a minute. Fixtures that stand in for a real path must call the real
+  path's function, not agree with it by hand.
 - **Say what a check proves, not what it suggests.** The noise-stability
   detector fires on a disagreement and stays silent on agreement, so silence is
   not evidence. On one hardware run the survey pair agreed while the
@@ -1664,10 +1924,26 @@ written and believed.
   `store.Device` with `AdoptedAt` set. `internal/daemon/integration_test.go`
   does exactly that and is the shortest working example.
 
-- The device is left adopted with the credential in the session scratchpad
-  (`oonfeewrt-device-password.txt`). Re-adopting rotates it — the adoption
-  integration test prints the new one, and `STATUS.md` §7's grant command has to
-  be re-run afterwards for the applyengine hardware tests.
+- **Both devices are adopted into `.run/`**, with their credentials sealed in
+  `.run/keyring.json` under the operator passphrase. That is the only copy —
+  adoption never returns the password it generated, deliberately, so it exists
+  in the keyring and nowhere else. Losing the passphrase means re-adopting, and
+  re-adopting works because root has no password over SSH.
+
+  The two-AP neighbour test is also the setup helper. It re-adopts what it can,
+  reuses and re-probes what is already adopted, and reuses the site model rather
+  than recreating it, so it is safe to run repeatedly:
+
+  ```bash
+  OONFEE_NEIGHBOURS=1 OONFEE_SEED_DIR="$PWD/.run" OONFEE_SEED_PASSFILE=/path/pass \
+    OONFEE_AP1=192.168.1.1 OONFEE_AP2=192.168.1.2 \
+    OONFEE_ADMIN_USER=root OONFEE_ADMIN_PASS= \
+    OONFEE_WLAN_SSID=oonfee-roam OONFEE_WLAN_KEY=... \
+    go test -tags=integration ./internal/daemon/ -run TestIntegrationNeighbours -v
+  ```
+
+  Re-adopting narrows the login to production scope, so §7's `add_list` grant
+  command has to be re-run afterwards for the applyengine hardware tests.
 
 - `docs/IMPLEMENTATION.md` §14 is the authoritative record of measured
   behaviour. When code and docs disagree, the measurement wins — and if neither
