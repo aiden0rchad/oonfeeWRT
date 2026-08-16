@@ -41,14 +41,37 @@ dance, which is the one genuinely fiddly part of this repo:
 OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
 ```
 
-**Two devices now.** The Archer C6 (`192.168.1.2`, ath79, adopted) sits on the
-WRT3200ACM's LAN with its own DHCP disabled and a static address outside the
-pool. Credentials live in the session scratchpad, never here — see §7.
+**Two devices, both adopted-capable and both clean as of 2026-08-15:**
 
-**State of the test device right now:** adopted, polling, `/etc/config` byte
-identical to its pre-session md5s, `vlan_filtering` back to 0, no oonfeeWRT
-sections left in `network`/`dhcp`/`firewall`. The `oonfeewrt-probe` scratch ACL
-scope is granted, so the applyengine hardware tests run as-is.
+| | WRT3200ACM | Archer C6 v2 (US) |
+|---|---|---|
+| address | `192.168.1.1` (gateway, WAN to UniFi) | `192.168.1.2`, DHCP off, static |
+| SoC / target | mvebu/cortexa9 — **class A** | ath79/generic — **class ?** |
+| radios | mwlwifi ×2 | ath10k (5G) + ath9k (2.4G) |
+| firmware | OpenWrt 25.12.5 | OpenWrt 25.12.5 |
+| mesh | **gated off** (driver quirk, §5q) | **Present**, verified working |
+| airtime-split | absent (dead counters) | **Present** — only device with it |
+| wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
+
+Cabled LAN-to-LAN, C6 behind the WRT. Both left byte-identical to how they were
+found except the WLANs listed below, which were applied deliberately.
+
+**Wireless currently on air** (four BSSes per SSID pair):
+
+- `oonfee-roam` on **both** APs, 2.4 + 5 GHz — the controller-managed WLAN, WPA2-PSK
+  with 802.11r/k/v, `mobility_domain=90e4`. This is the roaming test bed.
+- `oonfeewrt-probe-5g` / `-2g` on the WRT — pre-existing, not ours.
+- `oonfee-c6-5g` / `-2g` on the C6 — created by hand to enable its radios
+  (stock OpenWrt ships them disabled, and enabling them unsecured would have
+  broadcast two open networks).
+
+**Credentials are in the session scratchpad and nowhere else** — see §7 for how
+to check and reset one. Both device logins and all three WLAN passphrases were
+generated during that session; a new session must ask the device, not a
+document.
+
+**Both routers have an empty root password.** The adoption flow warns about it
+and it is still true. Worth fixing on the devices.
 
 **One habit worth inheriting:** before any experiment that writes to the device's
 network config, arm a restore on the device itself first (§6, "arm the undo
@@ -265,6 +288,12 @@ most-worth-doing first.
 
 ### Do these next
 
+0. **Neighbour-report distribution (`rrm_nr_set`).** The controller enables
+   802.11k on every AP and populates no neighbour lists, so the capability is
+   advertised and empty. It is the one thing a controller can do that hand
+   configuration cannot, it is now reachable with two real APs, and §5s explains
+   both the mechanism and the ACL decision it requires. Highest value remaining.
+
 1. **Look at the client grid and the re-probe panel in a browser.** Both are new
    (§5i, §5j) and verified from unit tests up through the real device, but
    nobody has *looked* at either. Every UI defect this project has found was
@@ -328,6 +357,7 @@ the useful part — the code is in git either way.
 | §5o | The bug mesh support created in the collector, found by looking for it |
 | §5q | **Applying a mesh to real hardware** — and what every other source got wrong |
 | §5r | **Two devices at last** — fast roaming verified across different SoCs |
+| §5s | The roam demo — what it proved, what it did not, and the txpower trap |
 
 ### 5a. What discovery corrected
 
@@ -1351,6 +1381,71 @@ ends, and it is the obvious next thing.
 `/var/run/hostapd-phy0.conf`, which needs SSH — no ACL grant covers it, and none
 should. A two-device integration test would have to drive SSH the way adoption
 does.
+
+### 5s. The roam demo: what it proved, and the trap it found
+
+A real client (an iPhone) on `oonfee-roam`, one SSID across both APs.
+
+**Proved:** the phone held IP `192.168.1.249` throughout, with `DHCPREQUEST`/
+`ACK` renewals and no fresh `DHCPDISCOVER`. Same lease, same subnet — the L2
+arrangement is right. Both APs carry the same SSID, same `mobility_domain=90e4`,
+same FT key, on all four radios.
+
+**Not proved: an observable fast transition.** A `bss_transition_request` from
+the C6 was accepted (`exit=0`) and the phone did leave — then re-scanned and
+chose the C6 again, because at that position the C6 was genuinely stronger. That
+is correct client behaviour: iOS weighs an 802.11v hint against its own
+measurements rather than obeying it. Watching a handoff still needs the target
+AP to actually be the better choice.
+
+#### The trap: `txpower=0` wedges mwlwifi until a reboot
+
+Reducing transmit power is the obvious way to force a roam between two APs
+sitting side by side. On the WRT3200ACM, setting `txpower=0`:
+
+- was accepted by uci and reported as applied;
+- made mwlwifi fail to program keys into hardware
+  (`failed to set key ... (-5)`), so the second BSS never came up;
+- then took the **whole 5 GHz radio** down —
+  `Could not set interface phy0-ap0 flags (UP): I/O error`, and
+  `nl80211 driver initialization failed`;
+- survived `wifi reload` AND `wifi down/up`.
+
+Worse, `rmmod mwlwifi` (an attempt to recover it) left `modprobe` hung in R
+state with no phys at all. **Only a reboot cleared it.**
+
+`iwinfo txpowerlist` advertises `0` as supported on this driver. It is not. Same
+shape as the mesh-point claim in §5q: the device asserts a capability, accepts
+the configuration, and fails in hardware.
+
+**By contrast the Archer C6 (ath10k) took `txpower=4` cleanly** — radio stayed
+up, all four interfaces intact, power applied. So the rule is per-driver, not
+universal.
+
+**Consequence for the product.** The controller does not expose transmit power
+today. If it ever does, mwlwifi needs a floor above 0 — otherwise it hands an
+operator a config that applies successfully, reports healthy, and kills their
+5 GHz until they power-cycle the router. That is the §5g failure shape exactly:
+a confirmed, "healthy" change that breaks the device.
+
+#### The gap this surfaced: nobody populates the neighbour list
+
+The renderer sets `ieee80211k=1` and `rrm_neighbor_report=1`, so each AP
+*advertises* that it can answer neighbour reports — while knowing about no
+neighbours. `rrm_nr_get_own` and `rrm_nr_set` are in hostapd's ubus API on both
+devices, and a controller is the one component ideally placed to use them: it
+knows every AP in a group, their BSSIDs and their channels.
+
+This is the "essentially impossible to maintain by hand across a fleet" claim
+the roaming code makes about itself, currently unfulfilled. It is the strongest
+candidate for the next real feature.
+
+**It needs an ACL change.** `hostapd.*` currently grants `get_status`,
+`get_clients`, `get_features`, `list_bans` and `del_client` — not `rrm_nr_set`
+or `bss_transition_request`. And a new grant only reaches devices adopted
+*after* it (§5q), so widening the ACL means existing devices report the feature
+NotObservable until re-adopted. That is the whole decision, and it has not been
+made.
 
 ---
 
