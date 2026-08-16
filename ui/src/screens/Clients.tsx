@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { Client, ClientPage } from '../lib/api'
+import type { Client, ClientPage, Device } from '../lib/api'
 import {
   Card,
   DataGrid,
@@ -47,6 +47,10 @@ export function Clients() {
   const [page, setPage] = useState<ClientPage | null>(null)
   const [err, setErr] = useState('')
   const [colPrefs, setColPrefs] = useColumnPrefs('clients')
+  // Only to turn the AP id on a client row into a name. Fetched once rather
+  // than per refresh: the client list reloads every 30s and the fleet roster
+  // does not change on that timescale.
+  const [devices, setDevices] = useState<Device[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -64,6 +68,16 @@ export function Clients() {
     const t = setInterval(load, 30_000)
     return () => clearInterval(t)
   }, [load])
+
+  useEffect(() => {
+    // A failure here costs the AP column its names, not its answers — the row
+    // falls back to the device id — so it is deliberately not surfaced as an
+    // error over the client list.
+    api
+      .devices()
+      .then((r) => setDevices(r.devices))
+      .catch(() => {})
+  }, [])
 
   // Changing a filter resets the offset: page 4 of the unfiltered list is not
   // page 4 of the filtered one, and keeping it lands on an empty page that
@@ -120,6 +134,25 @@ export function Clients() {
           <span style={{ color: signalTone(c.signal) }}>{c.signal} dBm</span>
         ),
       sortBy: (c) => c.signal ?? -999,
+    },
+    {
+      key: 'ap',
+      header: 'Access point',
+      width: 150,
+      render: (c) => {
+        if (c.device_id == null) {
+          return (
+            <Unknown why="which AP a client is on comes from the focused poll tier, which runs only while a device screen is open" />
+          )
+        }
+        const ap = devices.find((d) => d.id === c.device_id)
+        // The id is a real answer even when the name is not to hand: the device
+        // may have been unadopted since the reading, and printing nothing would
+        // claim we do not know which AP it was.
+        return ap ? ap.name : `device ${c.device_id}`
+      },
+      sortBy: (c) =>
+        c.device_id == null ? '' : (devices.find((d) => d.id === c.device_id)?.name ?? ''),
     },
     {
       key: 'retry',

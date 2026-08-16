@@ -15,6 +15,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 
 const api = {
   clients: vi.fn(),
+  devices: vi.fn(),
   site: vi.fn(),
   saveMesh: vi.fn(),
   deleteMesh: vi.fn(),
@@ -37,6 +38,13 @@ vi.mock('../lib/api', () => ({
 vi.mock('../lib/live', () => ({
   live: { watch: () => () => {}, on: () => () => {}, connect: () => {} },
 }))
+
+// The Clients grid resolves its "Access point" column against the fleet roster.
+// Defaulted here rather than in each test: a screen that throws because an
+// auxiliary fetch was not stubbed fails for a reason unrelated to what the test
+// is about, which is how two unrelated Clients tests broke when the column
+// landed.
+api.devices.mockResolvedValue({ devices: [] })
 
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')
@@ -127,6 +135,61 @@ describe('Clients', () => {
     await waitFor(() => expect(screen.getByText('network down')).toBeTruthy())
     // Still there.
     expect(screen.getByText('laptop')).toBeTruthy()
+  })
+
+  // On a multi-AP controller, which AP a client is on is the most useful thing
+  // on the row — and it was computed by the API, typed in the client, and shown
+  // nowhere. The name must be resolved against the roster, and a client no
+  // focused poll has covered must say so rather than render an empty cell that
+  // reads as "on no access point".
+  it('names the access point, and says why when it cannot', async () => {
+    api.devices.mockResolvedValue({
+      devices: [
+        { id: 4, name: 'hallway-ap', adopted: true },
+        { id: 9, name: 'garage-ap', adopted: true },
+      ],
+    })
+    api.clients.mockResolvedValue(
+      clientPage({
+        total: 2,
+        clients: [
+          {
+            mac: 'aa:bb:cc:dd:ee:01',
+            name: 'roamer',
+            first_seen: 1,
+            last_seen: 2,
+            blocked: false,
+            connection: 'wireless',
+            online: true,
+            scope: 'local',
+            signal: -47,
+            device_id: 9,
+          },
+          {
+            mac: 'aa:bb:cc:dd:ee:02',
+            name: 'unseen',
+            first_seen: 1,
+            last_seen: 2,
+            blocked: false,
+            connection: 'unknown',
+            online: true,
+            scope: 'local',
+          },
+        ],
+      }),
+    )
+    render(<Clients />)
+    await waitFor(() => expect(screen.getByText('roamer')).toBeTruthy())
+
+    // The attributed AP is named, not numbered.
+    await waitFor(() => expect(screen.getByText('garage-ap')).toBeTruthy())
+    // And the AP it is NOT on must not appear anywhere on the row.
+    expect(screen.queryByText('hallway-ap')).toBeNull()
+
+    // The uncovered client gets an explanation, not a blank. Unknown renders a
+    // dash carrying its reason as a title.
+    const why = document.querySelectorAll('[title*="focused poll tier"]')
+    expect(why.length).toBeGreaterThan(0)
   })
 })
 
