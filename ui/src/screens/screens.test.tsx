@@ -37,7 +37,7 @@ vi.mock('../lib/live', () => ({
 
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')
-const { DeviceClass } = await import('./Devices')
+const { DeviceClass, Devices } = await import('./Devices')
 
 const emptyFacets = { presence: [], connection: [], scope: [] }
 
@@ -512,5 +512,35 @@ describe('Devices — the unmeasured class', () => {
     expect(container.querySelector('[title]')?.getAttribute('title')).toMatch(
       /not classified this device/,
     )
+  })
+})
+
+describe('Devices — column preferences', () => {
+  // The screen an operator looks at most was the one grid with no column
+  // customisation. Its headers were not draggable, there was no picker, and
+  // nothing said why — so trying to reorder read as a broken feature rather
+  // than an absent one.
+  const device = {
+    id: 1,
+    mac: '30:23:03:db:be:40',
+    name: 'ap-one',
+    host: '192.168.1.1',
+    class: 'A',
+    firmware: 'OpenWrt 25.12.5',
+    online: true,
+    adopted: true,
+    role: 'ap',
+    last_seen: 1,
+  }
+
+  it('makes the device grid reorderable like every other grid', () => {
+    // A row is required: an empty grid renders its empty state instead of a
+    // header, and there is nothing to customise when there are no columns on
+    // screen.
+    render(<Devices devices={[device] as never} />)
+    expect(screen.getByText(/Customize columns/)).toBeTruthy()
+    for (const th of screen.getAllByRole('columnheader')) {
+      expect(th.getAttribute('draggable')).toBe('true')
+    }
   })
 })

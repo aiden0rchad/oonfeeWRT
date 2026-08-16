@@ -5,6 +5,7 @@ import type {
 } from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
+  useColumnPrefs,
 } from '../components/ui'
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
@@ -21,6 +22,14 @@ export function Devices({
   onAdopt?: () => void
   onChanged?: () => void
 }) {
+  // Column preferences, the same as Clients and Logs have.
+  //
+  // Their absence here was not a decision, and it read as a broken feature
+  // rather than a missing one: without onPrefsChange the header is not
+  // `draggable` at all, so someone who tried to drag a column on the screen
+  // they look at most got no reordering, no picker, and not even the tooltip
+  // that says dragging is possible. Nothing anywhere said why.
+  const [colPrefs, setColPrefs] = useColumnPrefs('devices')
   const [openID, setOpenID] = useState<number | null>(null)
 
   const columns: Column<Device>[] = [
@@ -78,6 +87,8 @@ export function Devices({
           columns={columns}
           rowKey={(d) => d.mac}
           onRowClick={(d) => setOpenID(d.id)}
+          prefs={colPrefs}
+          onPrefsChange={setColPrefs}
           empty="No devices yet. Adopt one to get started."
         />
       </Card>

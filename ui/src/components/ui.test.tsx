@@ -125,6 +125,39 @@ describe('DataGrid', () => {
     expect(next.hidden).toEqual(['id'])
   })
 
+  // fireEvent.dragStart dispatches the event whatever the DOM says, so every
+  // other drag test here passes on a header a real mouse could never pick up.
+  // The `draggable` attribute is the thing a browser actually consults, so it
+  // gets asserted directly.
+  //
+  // This is not hypothetical: the Devices grid shipped without column prefs, so
+  // its headers were draggable={false} and dragging one did nothing at all —
+  // no reorder, no picker, not even the tooltip that says dragging is possible.
+  // Found by a person trying it, which is the only way it could have been.
+  it('marks headers draggable only when reordering is actually wired up', () => {
+    const { unmount } = render(
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        rowKey={(r) => r.id}
+        prefs={noPrefs}
+        onPrefsChange={vi.fn()}
+      />,
+    )
+    for (const th of screen.getAllByRole('columnheader')) {
+      expect(th.getAttribute('draggable')).toBe('true')
+      expect(th.getAttribute('title')).toMatch(/drag/i)
+    }
+    unmount()
+
+    // And a grid with no prefs must not advertise a drag it cannot perform.
+    render(<DataGrid rows={rows} columns={columns} rowKey={(r) => r.id} />)
+    for (const th of screen.getAllByRole('columnheader')) {
+      expect(th.getAttribute('draggable')).not.toBe('true')
+      expect(th.getAttribute('title')).toBeNull()
+    }
+  })
+
   // A drag that lands must not also sort the column it landed on. Getting this
   // wrong means every reorder silently re-sorts the grid.
   it('does not sort the column a drag was dropped onto', () => {
