@@ -63,6 +63,11 @@ type Daemon struct {
 	// same as having no entry.
 	lastClients map[int64]*int
 
+	// meshes retains the poll-derived half of every backhaul reading. In RAM
+	// because it describes right now: a stale interface list read back from
+	// disk would answer "is this up" with something that was once true.
+	meshes meshStore
+
 	maint     *telemetry.Maintainer
 	maintDone chan struct{}
 	maintStop context.CancelFunc

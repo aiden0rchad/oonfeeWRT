@@ -138,6 +138,8 @@ func (d *Daemon) sink() collector.Sink {
 		}
 		mu.Unlock()
 
+		d.meshes.put(s)
+
 		id := s.DeviceID
 		switch {
 		case !s.OK():
