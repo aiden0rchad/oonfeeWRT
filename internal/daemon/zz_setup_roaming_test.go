@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
 
 // Sets up a real roaming WLAN across both APs, through the controller.
@@ -61,27 +60,8 @@ func TestZZSetupRoaming(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
-	if err := d.Store.SaveNetwork(ctx, net); err != nil {
-		t.Fatal(err)
-	}
-	grp := &model.APGroup{Name: "all-aps", DeviceIDs: ids}
-	if err := d.Store.SaveGroup(ctx, grp); err != nil {
-		t.Fatal(err)
-	}
-	w := &model.WLAN{
-		SSID: os.Getenv("OONFEE_WLAN_SSID"), NetworkID: net.ID, GroupID: grp.ID,
-		Bands: []model.Band{model.Band2G, model.Band5G},
-		Security: model.Security{Mode: model.SecPSK2, Key: os.Getenv("OONFEE_WLAN_KEY"),
-			PMF: model.PMFOptional},
-		// FT on WPA2-PSK needs the compatibility acknowledgment: it breaks some
-		// older clients, which is why the renderer refuses it silently otherwise.
-		Roaming: model.Roaming{FT: true, FTOverDS: true, KV: true, FTWithPSK2: true},
-		Enabled: true,
-	}
-	if err := d.Store.SaveWLAN(ctx, w); err != nil {
-		t.Fatal(err)
-	}
+	seedRoamingSite(ctx, t, d, ids, os.Getenv("OONFEE_WLAN_SSID"),
+		os.Getenv("OONFEE_WLAN_KEY"))
 
 	prev, err := d.Preview(ctx)
 	if err != nil {

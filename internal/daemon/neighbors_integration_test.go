@@ -73,51 +73,7 @@ func TestIntegrationNeighbours(t *testing.T) {
 		ids = append(ids, id)
 	}
 
-	// The site model: one WLAN with 802.11k, on both bands, across both APs.
-	//
-	// Reused if it is already there. VLAN id and SSID are both unique, so a
-	// second run against a seeded directory would otherwise fail on a
-	// constraint rather than on anything about the feature.
-	site, err := d.Store.Site(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
-	for i := range site.Networks {
-		if site.Networks[i].VLAN == net.VLAN {
-			net = &site.Networks[i]
-		}
-	}
-	if net.ID == 0 {
-		if err := d.Store.SaveNetwork(ctx, net); err != nil {
-			t.Fatal(err)
-		}
-	}
-	grp := &model.APGroup{Name: "all-aps", DeviceIDs: ids}
-	for i := range site.Groups {
-		if site.Groups[i].Name == grp.Name {
-			grp = &site.Groups[i]
-			grp.DeviceIDs = ids
-		}
-	}
-	if err := d.Store.SaveGroup(ctx, grp); err != nil {
-		t.Fatal(err)
-	}
-	w := &model.WLAN{
-		SSID: ssid, NetworkID: net.ID, GroupID: grp.ID, Enabled: true,
-		Bands: []model.Band{model.Band2G, model.Band5G},
-		Security: model.Security{Mode: model.SecPSK2,
-			Key: os.Getenv("OONFEE_WLAN_KEY"), PMF: model.PMFOptional},
-		Roaming: model.Roaming{FT: true, FTOverDS: true, KV: true, FTWithPSK2: true},
-	}
-	for i := range site.WLANs {
-		if site.WLANs[i].SSID == ssid {
-			w.ID = site.WLANs[i].ID
-		}
-	}
-	if err := d.Store.SaveWLAN(ctx, w); err != nil {
-		t.Fatal(err)
-	}
+	seedRoamingSite(ctx, t, d, ids, ssid, os.Getenv("OONFEE_WLAN_KEY"))
 
 	first, err := d.DistributeNeighbours(ctx)
 	if err != nil {
@@ -271,4 +227,59 @@ func featureState(res *api.AdoptResult, name string) string {
 		}
 	}
 	return "absent"
+}
+
+// seedRoamingSite puts one 802.11k WLAN on both bands across both APs, reusing
+// whatever is already there.
+//
+// Reuse rather than create, because VLAN id and SSID are both unique: a second
+// run against a seeded data directory would otherwise fail on a database
+// constraint rather than on anything about the feature under test. Shared with
+// TestZZSetupRoaming so the verifier and the setup helper cannot describe two
+// different site models.
+func seedRoamingSite(ctx context.Context, t *testing.T, d *Daemon,
+	deviceIDs []int64, ssid, key string) {
+	t.Helper()
+
+	site, err := d.Store.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	for i := range site.Networks {
+		if site.Networks[i].VLAN == net.VLAN {
+			net = &site.Networks[i]
+		}
+	}
+	if net.ID == 0 {
+		if err := d.Store.SaveNetwork(ctx, net); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grp := &model.APGroup{Name: "all-aps", DeviceIDs: deviceIDs}
+	for i := range site.Groups {
+		if site.Groups[i].Name == grp.Name {
+			grp = &site.Groups[i]
+			grp.DeviceIDs = deviceIDs
+		}
+	}
+	if err := d.Store.SaveGroup(ctx, grp); err != nil {
+		t.Fatal(err)
+	}
+	w := &model.WLAN{
+		SSID: ssid, NetworkID: net.ID, GroupID: grp.ID, Enabled: true,
+		Bands:    []model.Band{model.Band2G, model.Band5G},
+		Security: model.Security{Mode: model.SecPSK2, Key: key, PMF: model.PMFOptional},
+		// FT on WPA2-PSK needs the compatibility acknowledgment: it breaks some
+		// older clients, which is why the renderer refuses it silently otherwise.
+		Roaming: model.Roaming{FT: true, FTOverDS: true, KV: true, FTWithPSK2: true},
+	}
+	for i := range site.WLANs {
+		if site.WLANs[i].SSID == ssid {
+			w.ID = site.WLANs[i].ID
+		}
+	}
+	if err := d.Store.SaveWLAN(ctx, w); err != nil {
+		t.Fatal(err)
+	}
 }
