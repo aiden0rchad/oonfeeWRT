@@ -450,19 +450,29 @@ most-worth-doing first.
    **The half that could not be done here:** no `peered` state has ever been
    observed, because mesh is Present only on the C6 and there is no second node
    to peer with. Three rungs of the ladder are unit-tested and have never met
-   hardware. **A third mesh-capable device is now the single highest-value
-   piece of hardware this project could acquire** — it would close that, and it
-   is also the only way to meet ROADMAP Phase 2's "three APs".
+   hardware.
+
+   **One more device is now by far the highest-value thing this project could
+   acquire**, and after §5x the case is stronger than it was. A third router
+   would close four separate gaps at once: mesh `peered`, the wireless uplink
+   (which needs a radio that will run a station — neither of these two will),
+   ROADMAP Phase 2's "three APs", and the first class B or C measurement, since
+   every number in DEVICE-BUDGET comes from the comfortable class. Any cheap
+   MT7621 or ath79 box that takes OpenWrt does all four.
 
    The remaining device-side gap is `mpath dump`, the forwarding table, which
    is the one thing here that would need an ACL grant. Worth it only once a
    mesh actually carries traffic, since a path table with no peers is empty.
-3. **Broaden hardware support** — the stated direction: any old router flashed
-   with OpenWrt, adopted from the network like a UniFi device, working as an AP,
-   a switch, or a bridge/mesh node. §5m is the audit. The largest remaining
-   piece, and most of it needs no hardware to start — **a WDS/relay bridge is
-   still entirely unmodelled**, which is the half of "AP bridge mesh" that
-   802.11s does not cover.
+3. ~~**A WDS/relay bridge is still entirely unmodelled.**~~ **Built
+   2026-08-16** — §5x. Capability, model, renderer, store, API and screen, with
+   two review-found guards and three hardware-found bugs fixed. Unproven on this
+   hardware because **station mode does not work on the C6 at all** — isolated
+   three ways, so not the controller, not 4-address, not concurrency.
+
+   **`classify()` still covers three SoC families**, and the half of that item
+   which needs no lab is done (§5m item 3): the panel names the board target
+   instead of a bare `?`. Adding targets to the map still needs measuring.
+
 4. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
 
 **Landed 2026-08-16 alongside the neighbour work**, all from things the session
@@ -529,6 +539,7 @@ the useful part — the code is in git either way.
 | §5u | What a factory reset looks like from the controller, and why it used to look like nothing |
 | §5v | **The browser pass** — four defects in one sitting, and why none was reachable by a test |
 | §5w | **Mesh backhaul health** — a closed state vocabulary, and the four bugs only hardware could show |
+| §5x | **The wireless uplink** — built end to end, and unprovable on this hardware for a sharper reason than mesh |
 
 ### 5a. What discovery corrected
 
@@ -2084,6 +2095,115 @@ watched two nodes find each other. `peered`, `peering` and `plink-unknown` are
 unit-tested against constructed input and have never met hardware. That needs a
 third device or a WRT replacement, and until then the most interesting half of
 this ladder is theory.
+
+### 5x. The wireless uplink (WDS), and what the hardware said about it
+
+The last unmodelled piece of the stated direction: the router in the room with
+no ethernet run to it. A mesh covers that when both ends can carry 802.11s;
+this covers it when they cannot — which, measured, includes one of the two
+devices here (§5q).
+
+Built end to end in one pass: capability, model, renderer, store (migration 8),
+API, and a screen. Then reviewed adversarially, then met hardware. Each of those
+three stages found something the previous one had not, and the hardware finding
+is the one that decides what this feature is worth.
+
+#### The modelling decision
+
+**A device property plus a WLAN flag, not a Bridge object.** The two ends are
+not symmetric and do not belong to the same owner: the AP end is a property of a
+network ("this one accepts wireless bridges") and applies to every AP publishing
+it; the station end is a property of one device ("this one has no cable"). A
+Bridge object forces an operator to describe a relationship where the real
+decision is two independent facts, and breaks the moment a second device wants
+to join the same way.
+
+Credentials are never restated on the uplink — it references a WLAN, so the
+SSID, passphrase and security mode live in one place. Same rule `override.go`
+enforces, same reason: a bridge whose key drifts fails the way a client with a
+stale password fails.
+
+#### Two hazards the controller cannot check, so it says them
+
+**The loop.** A station bridged into `br-lan` on a device that is ALSO cabled is
+a layer-2 loop, OpenWrt bridges ship with STP off, and the symptom is a network
+that stops working rather than an error — §5g's shape exactly. The controller
+cannot see the far end of a cable and does not pretend to: it states the
+condition on the preview and on every API response, and leaves it to whoever can
+see the room.
+
+**Removing one is editing the road while driving down it.** On a device with no
+cable the station IS the route. `applyengine.IsUplinkSection` makes pruning it
+count as touching the management path, so it needs an explicit acknowledgment
+rather than going through as an ordinary wireless change.
+
+#### What the review caught, and what it cost to ignore one finding
+
+Four lenses, two skeptics per finding. Two criticals, both real, both latent —
+nothing could create an uplink yet, so they would have gone live in the very
+next commit:
+
+- **`Site.Validate` never iterated `Uplinks`**, so every sentence
+  `Uplink.Validate` produces was unreachable. §6's guard that cannot fire.
+- **`TouchesManagementPath` covered only `network` and `firewall`.** A wireless
+  section was never a management path — until an uplink, where it is the only
+  one. Matched on the section name now rather than a caller-set flag, with the
+  coupling pinned by a test from render's side, because applyengine cannot
+  import render.
+
+And one finding I read and did not act on: *what if an uplink names a device
+that also serves that WLAN?* Hardware charged me for it within the hour.
+
+#### What hardware found
+
+**Turning the AP half off did not turn it off.** The renderer omitted `wds` when
+the flag was false, and a plan compares only the keys it writes — so whatever
+was last applied stayed. Measured: after switching it off and applying, both
+access points still carried `wds='1'`. An AP still accepting 4-address frames
+while the screen says it does not is a security posture nobody chose. It writes
+`"0"` explicitly now, as `ft_over_ds` three lines above it already did. **My own
+test asserted the buggy behaviour** — it checked the key was absent, which is
+what the code did rather than what it should do.
+
+**A device cannot bridge to a network it publishes.** The C6 was in the AP group
+serving `oonfee-roam` and told to join it, so a station came up on the radio
+already carrying that SSID and sat at channel 0. Refused now rather than warned
+about, because nothing in that config looks wrong.
+
+#### And the finding that decides the feature's status
+
+**Station mode does not work on the Archer C6 at all.** Not 4-address; not the
+controller. Isolated three ways before being written down:
+
+| ruled out | how |
+|---|---|
+| the controller | a hand-written UCI section fails identically |
+| 4-address framing | fails the same with `wds` removed |
+| AP/STA concurrency | fails with every AP on that radio disabled, station alone |
+
+The interface comes up in Client mode at channel 0 with 0 dBm, `iw link` says
+"Not connected", and a scan returns **zero BSSes**. Every signal a controller can
+consult says it should work: `wpad-mesh-openssl` installed, `wpa_supplicant`
+running with a control socket open for that interface, and `iw phy` declaring
+`#{ managed } <= 16` alongside the APs on one channel.
+
+That is §5q's shape on a second driver — advertised, accepted, refused.
+
+**Deliberately NOT recorded as a Quirk.** A quirk gates the feature off, and one
+board is not a driver: this could be the board, that firmware build, or ath10k
+generally, and those three send an operator to three different places.
+`FeatWirelessUplink` stays Present from the package list, and the note now says
+what Present means — *the software is there, worth trying* — and **describes how
+it fails**, because a station that comes up and never associates looks like a
+dozen other problems and cost an afternoon here.
+
+#### Status
+
+Complete in code, tested from unit through API and UI, and **unproven on this
+hardware for a sharper reason than mesh**. Mesh needs a second mesh-capable
+node; this needs a device whose radio will run a station at all. The feature
+rests on the assumption that some OpenWrt device can, which is well founded and
+now explicitly untested here.
 
 ---
 
