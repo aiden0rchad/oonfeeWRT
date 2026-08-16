@@ -409,14 +409,26 @@ func TestUplinkPresentSaysWhatItDoesNotProve(t *testing.T) {
 	if r.State(FeatWirelessUplink) != Present {
 		t.Fatalf("uplink = %s, want Present", r.State(FeatWirelessUplink))
 	}
-	var caveated bool
+	// The note must do two things, and the second one is what a measurement
+	// bought: say that the radio half is unsettled, AND describe how it fails.
+	// "Present means worth trying" is only useful if the reader can recognise
+	// the failure — a station that comes up and never associates looks like a
+	// dozen other problems, and on real hardware it cost an afternoon.
+	var saysUnsettled, saysHowItFails bool
 	for _, n := range r.Notes {
-		if strings.Contains(n, "4-address") && strings.Contains(n, "NOT settled") {
-			caveated = true
+		if strings.Contains(n, "NOT settled") {
+			saysUnsettled = true
+		}
+		if strings.Contains(n, "never associated") {
+			saysHowItFails = true
 		}
 	}
-	if !caveated {
+	if !saysUnsettled {
 		t.Errorf("nothing records that the radio half is unproven; notes = %q",
 			r.Notes)
+	}
+	if !saysHowItFails {
+		t.Errorf("the note does not say what the failure looks like, so a reader "+
+			"cannot recognise it; notes = %q", r.Notes)
 	}
 }
