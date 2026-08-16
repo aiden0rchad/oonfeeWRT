@@ -482,7 +482,11 @@ most-worth-doing first.
    been seen. §5v's count stands at nineteen defects found by looking, four of
    them in one sitting, and none of them reachable by any test in the repo.
 
-5. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
+   Both halves pinned and mutation-verified, and the fixture gained the two
+   things whose absence had made the bug untestable.
+
+6. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
 
 ### Where I would start, if picking this up cold
 
@@ -2347,6 +2351,80 @@ right there is a claim no apply could ever fix.
 End to end: the WRT went from *"device has no 2g radio"* to `applied (2 changes)
 health passed and confirm landed`, with `oonfee-roam` on both radios.
 
+### 5z. The adoption bug, pinned — and what a real roam exposed on the way
+
+**Done 2026-08-16.** §5y's bug was proven only by hardware and had no test. It
+now has two, one per half, because **either half alone would have hidden it**:
+the probe must find radios on a device with no interfaces, and the renderer must
+then give those radios a WLAN despite their having no frequency. Both are
+mutation-verified — putting each bug back reproduces its own symptom and no
+other (`"a device with disabled radios reported none at all"` /
+`"got 0 section(s)"`).
+
+Writing the test found the fixture had the same blind spot **in two places**,
+which is why no test had ever caught this: `iwinfo.devices` was a hardcoded
+constant that could not go empty, and `WIRELESS_DEVICES` carried no radio-level
+config at all — no `band`, no `channel`. Those live on the *radio*, and they are
+the only facts that survive a device having no interfaces. **A fixture that
+cannot express the broken state cannot catch the bug.**
+
+#### A real roam, and the grid that could not say where the client went
+
+A client roamed C6 → WRT under 802.11r while the monitor was running
+(`AP-STA-CONNECTED ... auth_alg=ft`). The obvious next question — does the
+Clients grid now say WRT? — had no confident answer, and chasing it found a bug
+with nothing to do with roaming.
+
+`recentStations` scanned every station rollup flat and let the last row win. Two
+APs report the same MAC in one five-minute bucket on every roam, and also
+whenever an operator opens two device pages within five minutes, since a focused
+poll is the only thing that produces station telemetry at all. **Whichever
+collector wrote second took the client.** Proven rather than argued: hold both
+readings fixed, reverse only the write order, and the client moves to the other
+AP. The same grid, refreshed, could relocate a stationary client.
+
+Two more consequences came from the same scan. Each field was overwritten
+independently, so one row could carry **one AP's identity, a second's signal and
+a third's retry rate** — three sources, one plausible-looking row, undetectable
+from outside. And a retry row could carry the attribution alone, so an AP with
+no RSSI reading for a client could still be named as the AP it was on.
+
+The AP is now chosen in SQL, per MAC, before any metric is read: newest bucket,
+then strongest signal, then `device_id` purely so a real tie is stable. Retry is
+excluded from the ranking — a retry percentage says nothing about which radio a
+client is near.
+
+#### Measured, so nobody chases it again
+
+**mwlwifi logs two errors on every successful FT association** and they are
+noise:
+
+```
+phy0-ap0: nl80211: kernel reports: key addition failed
+nl80211: NL80211_ATTR_STA_VLAN (addr=… ifname=phy0-ap0 vlan_id=0) failed: -2
+```
+
+Both land in the same second as the association. The client was then
+`authorized/authenticated/associated` and moved **539 KB in 93 seconds**, so the
+key is installed and traffic flows. Checked rather than inferred, because "key
+addition failed" reads exactly like the cause of a connects-but-no-traffic bug.
+
+#### The monitor gave two false signals before it gave a true one
+
+Both worth stating, because a watchdog that lies is worse than none:
+
+1. It counted **any** `daemon.err` as a driver fault, so it reported a FAULT for
+   the successful roam above. It now matches the actual wedge signature
+   (`nl80211_recv_beacons->nl_recvmsgs failed: -5`, or hostapd in D state).
+2. It held the ssh command in a string and ran `$S …`. **zsh does not word-split
+   an unquoted parameter**, so the whole command line became one command name,
+   every probe returned empty, and the monitor reported the router UNREACHABLE
+   while it was answering fine. A false "down" is the same failure as a false
+   fault.
+
+The WRT has now run **49 minutes with a clean signature**, past the ~28-minute
+mark it wedged at before.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -2367,6 +2445,19 @@ written and believed.
 - **A measurement script that cannot distinguish a failed call from an empty
   result will eventually report a failure as data.** That produced a 131-second
   "divergence" that did not exist.
+- **A fixture that cannot express the broken state cannot catch the bug.** The
+  adoption bug that stopped every stock router survived because the mock had a
+  hardcoded interface list that could not go empty, and no radio-level config at
+  all. Two blind spots in the fixture, in the exact shape of the blind spot in
+  the code.
+- **When a value can come from more than one source, check what decides.** The
+  client grid picked an AP by which collector wrote second. Holding the evidence
+  fixed and reversing only the write order is what proved it; reading the query
+  had not.
+- **A watchdog that cries wolf will be ignored on the day it is right.** The WRT
+  monitor reported a FAULT for a normal 802.11r roam, and separately reported the
+  router UNREACHABLE while it was answering — a false "down" and a false alarm
+  are the same failure.
 - **Mock-green is not hardware-green.** The mock passed throughout while real
   hardware exposed the shared-session bug that reverted healthy changes.
 - **A fix for one defect is not a fix for the next one in the same field.**
