@@ -98,19 +98,21 @@ found except the WLANs listed below, which were applied deliberately.
 > installed**: stock config, both radios up on a hand-made WPA2 SSID, no
 > controller polling it.
 >
-> **The clean-room result: 28.5 minutes, no wedge.** Sampled once a minute,
-> `hostapd` answered every time. That is past the longest pre-reset interval
-> (~28 min) and three times the shortest (~9 min).
+> **Since the reset: no wedge in nearly two hours.** 28.5 minutes clean-room
+> with nothing of ours installed, then the lab restored on top and **112 minutes
+> and counting** with both radios up, the controller polling it, an 802.11k
+> reconciler writing to it and a mesh applied and pruned. That is four times the
+> longest pre-reset interval and twelve times the shortest.
 >
-> **Do not read that as "fixed".** It is one run, and it is the *weakest* form
-> of the test: no clients were associated, while every pre-reset wedge happened
-> with a phone associating, roaming and being deauthenticated for inactivity. A
-> quiet AP staying up for half an hour does not establish that the device is
-> healthy — it only rules out the most trivial explanations. The lab has been
-> restored on top of it (below), so the next meaningful data point is whether it
-> survives a normal working session with a real client on it. **If it wedges
-> again, `sysrq` is still the only recovery, and the reflash-or-replace question
-> is still open.**
+> **It is still not the same test.** Every pre-reset wedge happened with a phone
+> associating, roaming and being deauthenticated for inactivity. Through all of
+> the above the WRT has carried **zero clients** — the one real client on this
+> network picked the C6 and stayed there. So what has been shown is that the
+> device survives configuration, polling and applies indefinitely; what has not
+> been shown is that it survives a client.
+>
+> If it wedges again, `sysrq` is still the only recovery and the
+> reflash-or-replace question is still open.
 
 **Wireless currently on air:**
 
