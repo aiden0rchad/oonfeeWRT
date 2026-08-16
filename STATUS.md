@@ -59,8 +59,26 @@ OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   g
 | wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
 | health | **reset 2026-08-16 after four wedges; 28 min clean since, unproven** | stable, 3h+ uptime unattended |
 
-Cabled LAN-to-LAN, C6 behind the WRT. Both left byte-identical to how they were
-found except the WLANs listed below, which were applied deliberately.
+**The wired topology, corrected 2026-08-16 by looking rather than by trusting
+this file.** It was wrong in two ways that both cost time:
+
+| | |
+|---|---|
+| dev Mac | `192.168.1.3` on **en13** — this file said `.181` on `en9` |
+| WRT `lan1` | the dev Mac |
+| WRT `lan3` | the C6's LAN port (`eth0.1`), bridged into `192.168.1.0/24` |
+| WRT `wan` | the UniFi network |
+| **C6 `wan` (`eth0.2`)** | **also the UniFi network, `10.7.46.52`** — undocumented until now |
+
+The C6 being **dual-homed** is the part worth knowing. Its WAN is routed rather
+than bridged, so it is not a layer-2 loop — but it is a second path, and it
+means unplugging the WRT-to-C6 cable does not isolate the device the way the
+one-line description implied. The dev Mac cannot reach `10.7.46.52`, so from
+here the C6 still goes away when that cable does; from the UniFi side it does
+not.
+
+Anything that reasons about "what happens if this device loses its cable" has to
+start from this table rather than from the sentence that used to be here.
 
 > ### ⚠ The WRT3200ACM's wireless stack wedged four times, then was factory reset
 >
@@ -216,7 +234,7 @@ verified against one.
 | | |
 |---|---|
 | Model | Linksys WRT3200ACM, OpenWrt 25.12.5 r33051 (mvebu/cortexa9, class A) |
-| Reached at | `192.168.1.1` over ethernet from the dev Mac at `192.168.1.181` (`en9`) |
+| Reached at | `192.168.1.1` over ethernet from the dev Mac at `192.168.1.3` (`en13`) |
 | Root access | SSH key auth works; **root has no password set** |
 | WAN | up, on the UniFi-routed `10.7.46.0/24` |
 | Radios | both enabled, `oonfeewrt-probe-2g` / `oonfeewrt-probe-5g`, WPA2 |
@@ -2232,6 +2250,15 @@ written and believed.
   "Radios" listing BSSes, and one channel's occupancy printed once per BSS so
   that one measurement looked like two. None of the three had a wrong number in
   it, and all three told the reader something untrue.
+- **A topology written down once is a topology that is wrong later.** This file
+  described the lab as "cabled LAN-to-LAN, C6 behind the WRT", with the dev Mac
+  at an address and interface that had both changed. It also never mentioned
+  that the C6's WAN port is plugged into the UniFi network, which makes it
+  dual-homed — so every sentence anyone wrote about "what happens when this
+  device loses its cable" was reasoning from a diagram that did not match the
+  room. Cheap to check (`carrier` under /sys/class/net, one `network.interface
+  dump`), and it took an accidental unplug to expose. Re-measure the wiring
+  before designing anything that depends on it.
 - **A test helper that computes an identity its own way will invent a second
   device.** The seed helpers wrote device MACs as literals while adoption reads
   the LAN bridge, so a seeded row and a real adoption of one physical box
