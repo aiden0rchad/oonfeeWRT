@@ -95,13 +95,20 @@ start from this table rather than from the sentence that used to be here.
 > ssh root@192.168.1.1 'sync; printf b > /proc/sysrq-trigger'
 > ```
 >
-> #### The trigger, caught directly rather than inferred
+> #### The cause — see §5aa, which supersedes what this section used to claim
 >
-> The post-reset wedge came 19 minutes after boot, and the log has the cause
-> immediately above the first error:
+> **It is the 5 GHz firmware.** Caught live on 2026-08-16: the driver stops
+> reaching the 88W8964 on phy0 (`cmd 0x801d=MEMAddrAccess timed out`, then every
+> ~20s forever), and the `-5` above arrives 40 seconds later as `EIO` from a
+> driver that cannot reach its firmware. hostapd's D state is it blocking on
+> that driver. Because nl80211 operations serialise, one stuck phy0 call blocks
+> **every** radio — the healthy 2.4 GHz one included.
 >
->     21:02:19 hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb deauthenticated due to inactivity
->     21:03:25 hostapd: nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
+> This section previously named a trigger: a client deauthenticated for
+> inactivity, 66 seconds before the first error. **That was a coincidence in one
+> sample.** The occurrence caught live had no deauth at all — the last wireless
+> event was a routine opmode change 8.5 minutes earlier. No trigger has been
+> identified. What is known is the failing component and the order of collapse.
 >
 > **A client associated, went idle, was deauthenticated, and the driver failed
 > 66 seconds later.** That sequence is in every pre-reset log too; this is the
@@ -2424,6 +2431,90 @@ Both worth stating, because a watchdog that lies is worse than none:
 
 The WRT has now run **49 minutes with a clean signature**, past the ~28-minute
 mark it wedged at before.
+
+### 5aa. The WRT failure, diagnosed — it is the 5 GHz firmware
+
+**Caught live 2026-08-16, 52 minutes after a clean boot.** The user asked to
+watch rather than act, and the watch paid: this is the first time the failure
+has been observed from the inside while it was happening.
+
+**The causal chain, measured in order:**
+
+```
+22:08:21  ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out   <- CAUSE
+          (return code 0x001d, then every ~20s, forever)
+22:09:01  nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5  <- 40s later
+          hostapd (pid 1793) in D state, ubus silent
+```
+
+`MEMAddrAccess` is the mwlwifi driver failing to reach the **88W8964 firmware on
+phy0**. Everything previously treated as the fault is downstream of it: the
+netlink `-5` is `EIO` from a driver that cannot reach its firmware, and hostapd's
+uninterruptible sleep is it blocking on that driver.
+
+**The blocking is global, not per-radio.** A bounded probe (watchdog per call,
+so a hang is measured rather than inferred):
+
+| call | result |
+|---|---|
+| `iw dev phy1-ap0 station dump` (2.4 GHz, first call) | **completed, 1s** |
+| `iw dev phy0-ap0 station dump` (5 GHz) | **blocked** |
+| `iw dev phy1-ap0 info` (2.4 GHz, after the above) | **blocked** |
+
+phy1's firmware is healthy — it answers until a phy0 call is outstanding, and
+then it does not. nl80211 operations serialise, so one stuck phy0 command holds
+the lock against every radio. `kill -9` does not release it; D state is
+uninterruptible. **One hung radio takes the entire wireless control plane with
+it, including the working one.**
+
+#### This explains the 14-hour lie
+
+§0's most confusing event — the WRT beaconing `wrt-cleanroom`, an SSID in no
+config anywhere, while `/etc/config`, the hostapd conf, `iwinfo`, ubus and `iw
+dev info` all said `oonfee-roam` — now has a mechanism. The control plane
+accepted and reported the new config; **phy0's firmware was hung and never
+applied it**, and kept transmitting from the last configuration it had actually
+loaded. Every reader was telling the truth about what it had been told. Only the
+air knew. That is precisely the gap `internal/onair` (§5y) was built to close,
+and it turns out to have a specific, reproducible cause rather than a mystery.
+
+#### A correction to §0
+
+§0 states the trigger was caught directly: `STA … deauthenticated due to
+inactivity`, then `-5` 66 seconds later. **That does not hold.** In this
+occurrence there was no deauth at all — the last wireless event was a routine
+`STA-OPMODE-*` change 8.5 minutes earlier, then silence, then the firmware
+timeout. The deauth was a coincidence in one sample. The honest statement is
+that **no trigger has been identified**; what is now known is the failing
+component and the order of collapse.
+
+Timing is not fixed either: the earlier wedge was ~28 minutes in, this one 50.
+
+#### What this rules out
+
+No ubus call causes it (already disproved by controlled repeat, §6). Nothing the
+controller does can prevent it, and nothing it does can recover it — the recovery
+is below the level any management protocol reaches. **This is not a software
+problem this project can fix.** The device is a firmware-faulty AP and should be
+treated as one: useful as a hostile test subject, not as a reference.
+
+#### The watchdog was wrong three times before it was right
+
+Kept in `tools/wrt-wedge-watch.sh` now, with all three fixed:
+
+1. Counted **any** `daemon.err` as a fault, so it fired on a successful 802.11r
+   roam (§5z).
+2. Held the ssh command in a string and ran `$S …`; **zsh does not word-split an
+   unquoted parameter**, so every probe returned empty and it reported the
+   router UNREACHABLE while it was answering.
+3. Matched D state on `$3` of busybox `ps w`, which is the **VSZ** column, not
+   `STAT` (`$4`). It printed `hostapd_D=0` throughout, while hostapd was in D
+   state the entire time. A watchdog reading the wrong column reports healthy
+   through the exact failure it exists to catch.
+
+It now watches `MEMAddrAccess timed out` as well, which is the earliest signal —
+40 seconds ahead of the netlink error and a full minute ahead of anything a user
+would notice.
 
 ---
 
