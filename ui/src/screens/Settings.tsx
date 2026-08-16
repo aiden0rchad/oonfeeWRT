@@ -4,6 +4,8 @@ import type {
   APGroup,
   Device,
   Mesh,
+  MeshHealthResult,
+  MeshLink,
   NeighbourDevice,
   NeighbourResult,
   PreviewResult,
@@ -223,6 +225,7 @@ export function Settings({ devices }: { devices: Device[] }) {
         )}
       </Card>
 
+      <MeshHealth />
       <Groups site={site} devices={devices} onChanged={load} />
       <Neighbours site={site} />
       <Deviations site={site} devices={devices} onChanged={load} />
@@ -1413,6 +1416,118 @@ function NeighbourDeviceRow({ d }: { d: NeighbourDevice }) {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+/**
+ * What each configured backhaul is actually doing.
+ *
+ * Deliberately a separate card from the mesh editor above it. That one is
+ * desired state — what you want built. This is observed state — what is
+ * running, or why nothing is. Merging them puts a green tick next to a form
+ * field and invites the reading that saving the form made it true.
+ *
+ * The rule this card exists to hold: it switches on `state` and never decides
+ * for itself what the other fields mean together. A screen that reads a null
+ * peer count as zero is a second implementation of the controller's health
+ * logic, and the two drift — which is how this project once had two screens
+ * answering one question two different ways.
+ */
+function MeshHealth() {
+  const [res, setRes] = useState<MeshHealthResult | null>(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let live = true
+    const load = async () => {
+      try {
+        const r = await api.meshHealth()
+        if (live) {
+          setRes(r)
+          setErr('')
+        }
+      } catch (e) {
+        if (live) setErr(e instanceof Error ? e.message : String(e))
+      }
+    }
+    load()
+    // Cheap to ask: the controller reads no device to answer this, so a
+    // refresh costs nothing on anyone's request budget.
+    const t = setInterval(load, 30_000)
+    return () => {
+      live = false
+      clearInterval(t)
+    }
+  }, [])
+
+  if (err) return <Card title="Backhaul health"><Banner tone="critical">{err}</Banner></Card>
+  if (!res) return null
+
+  return (
+    <Card title="Backhaul health">
+      {res.links.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          {res.note}
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {res.links.map((l) => (
+            <MeshLinkRow key={`${l.device_id}:${l.mesh_id}`} l={l} />
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/** The tone-to-colour mapping, in one place. The controller decides the tone
+ *  alongside the state, so a screen cannot disagree with another screen about
+ *  how serious the same fact is. */
+const meshTone: Record<string, string> = {
+  ok: 'var(--ok, #3fb950)',
+  normal: 'var(--text-secondary)',
+  muted: 'var(--text-muted)',
+  warning: 'var(--warning)',
+  critical: 'var(--critical)',
+}
+
+function MeshLinkRow({ l }: { l: MeshLink }) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderLeft: `3px solid ${meshTone[l.tone] ?? 'var(--border)'}`,
+        borderRadius: 6,
+        padding: '6px 8px',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontWeight: 600 }}>
+          {l.name}{' '}
+          <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+            on {l.device_name}
+            {l.iface ? ` · ${l.iface}` : ''}
+          </span>
+        </span>
+        <span style={{ color: meshTone[l.tone] ?? 'inherit' }}>{l.state}</span>
+      </div>
+      <div style={{ color: 'var(--text-secondary)', marginTop: 2 }}>{l.reason}</div>
+      {/* Peers render only when they were counted. `null` means nobody looked,
+          and drawing "0 peers" for it would be the exact lie the state
+          vocabulary exists to prevent. */}
+      {l.peers && l.peers.length > 0 && (
+        <div style={{ marginTop: 4, display: 'grid', gap: 2 }}>
+          {l.peers.map((p) => (
+            <div key={p.mac} style={{ color: 'var(--text-muted)' }}>
+              <code>{p.mac}</code>
+              {p.plink ? ` · ${p.plink}` : ' · link state not reported'}
+              {p.signal_dbm != null ? ` · ${p.signal_dbm} dBm` : ''}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

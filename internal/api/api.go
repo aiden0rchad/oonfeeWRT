@@ -79,6 +79,9 @@ type Server struct {
 	// requests and still answers them with nothing, which is where this
 	// project was before the endpoint existed.
 	Neighbours func(context.Context) (*NeighbourResult, error)
+	// MeshHealth reports what every configured backhaul is doing. Optional,
+	// and free: it reads no device.
+	MeshHealth func(context.Context) (*MeshHealthResult, error)
 	Hub        *Hub
 	Log        *slog.Logger
 
@@ -173,6 +176,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
 	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
+	private.HandleFunc("GET /api/v1/site/mesh-health", s.handleMeshHealth)
 	// The site model (Phase 2). Editing any of this changes nothing on any
 	// device; /site/preview says what it WOULD change and /site/apply does it.
 	private.HandleFunc("GET /api/v1/site", s.handleSite)

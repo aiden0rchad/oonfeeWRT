@@ -436,6 +436,44 @@ export interface NeighbourResult {
   note?: string
 }
 
+/** One 802.11s backhaul on one device.
+ *
+ *  `state` is a closed vocabulary decided once in the controller. Switch on it;
+ *  never re-derive health from the other fields — a screen that decides for
+ *  itself what a null peer count means is a second implementation of that
+ *  logic, and the two drift. */
+export interface MeshLink {
+  device_id: number
+  device_name: string
+  mesh_id: number
+  name: string
+  iface?: string
+  state: string
+  tone: 'ok' | 'normal' | 'muted' | 'warning' | 'critical'
+  /** Always present. A state with no sentence is a code nobody looks up. */
+  reason: string
+  /** null when peers were not counted — a real state, not an omission. Never
+   *  an empty array: "none" and "not counted" are different answers. */
+  peers: MeshPeer[] | null
+  established: number | null
+  /** Something to go and fix, as opposed to something the controller could not
+   *  see. Sent rather than inferred: rendering the second as the first is the
+   *  collapse the capability model exists to prevent. */
+  actionable: boolean
+}
+
+export interface MeshPeer {
+  mac: string
+  plink?: string
+  signal_dbm: number | null
+  inactive_ms: number | null
+}
+
+export interface MeshHealthResult {
+  links: MeshLink[]
+  note?: string
+}
+
 export interface Mesh {
   id: number
   mesh_id: string
@@ -597,6 +635,7 @@ export const api = {
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
   distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
+  meshHealth: () => get<MeshHealthResult>('/site/mesh-health'),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
   clients: (q: {

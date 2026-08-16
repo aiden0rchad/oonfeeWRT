@@ -206,6 +206,17 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 		}
 		res := d.applyDevice(ctx, site, dev, req.AcknowledgeTraversal)
 		out.Devices = append(out.Devices, res)
+		// An apply reconfigures the radios, which is the one thing the
+		// 15-minute interface cadence assumes does not happen between reads.
+		// Without this, a mesh applied now has its interface a few seconds
+		// later while the cached list still says that section has none — and
+		// the health readout calls that a critical fault, for up to fifteen
+		// minutes, after every successful mesh apply. Measured on hardware.
+		if res.Changes > 0 {
+			if c := d.collectorRef(); c != nil {
+				c.Rediscover(dev.ID)
+			}
+		}
 		if res.Outcome != string(applyengine.Applied) {
 			// First failure stops the queue. Continuing would apply a
 			// half-consistent site — some APs on the new SSID, some on the old

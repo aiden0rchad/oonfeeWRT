@@ -283,6 +283,32 @@ func (c *Collector) Quiesce(deviceID int64) (release func()) {
 	return p.addQuiesce()
 }
 
+// Rediscover forces the next poll of a device to re-read its interface list.
+//
+// The list normally rides a 15-minute cadence, because interfaces change only
+// when someone reconfigures the radios. An apply IS someone reconfiguring the
+// radios, and until this existed the consequence was sharp: a mesh applied at
+// 12:00 has its interface a few seconds later, while the cached list — fetched
+// moments before, when the interface did not yet exist — says there is a
+// configured section with no interface. That is the §5q signature, and the
+// controller would have reported a critical fault that had already resolved,
+// for up to fifteen minutes, after every successful mesh apply.
+//
+// Found on hardware the first time the mesh health readout met a real device.
+//
+// Cheap: it does not fetch anything, it just makes the next scheduled poll ask.
+func (c *Collector) Rediscover(deviceID int64) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ifaceAt = time.Time{}
+}
+
 // Quiesced reports that polling is suspended for a device, which the UI shows
 // as "paused during a configuration change" rather than as a gap in the data.
 func (c *Collector) Quiesced(deviceID int64) bool {

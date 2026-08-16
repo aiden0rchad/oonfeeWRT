@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
@@ -268,4 +269,45 @@ func containsStr(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// MeshHealthReport adapts MeshHealth to the API shape.
+//
+// The device NAME is joined here rather than carried through meshlink, which
+// deliberately knows nothing about the inventory: it decides what a link is
+// doing, and who owns it is presentation.
+func (d *Daemon) MeshHealthReport(ctx context.Context) (*api.MeshHealthResult, error) {
+	links, err := d.MeshHealth(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := map[int64]string{}
+	if devices, err := d.Store.Devices(ctx); err == nil {
+		for _, dev := range devices {
+			names[dev.ID] = dev.Name
+		}
+	}
+	out := &api.MeshHealthResult{Links: make([]api.MeshLink, 0, len(links))}
+	for _, l := range links {
+		row := api.MeshLink{
+			DeviceID: l.DeviceID, DeviceName: names[l.DeviceID],
+			MeshID: l.MeshID, Name: l.Name, Iface: l.Iface,
+			State: string(l.State), Tone: string(l.Tone), Reason: l.Reason,
+			Established: l.Established, Actionable: l.Actionable(),
+		}
+		// nil, not an empty slice, when nobody counted. The JSON has to keep
+		// "none" and "not counted" apart, and this is the field that would
+		// blur them.
+		if l.Peers != nil {
+			row.Peers = make([]api.MeshPeer, 0, len(l.Peers))
+			for _, p := range l.Peers {
+				row.Peers = append(row.Peers, api.MeshPeer{
+					MAC: p.MAC, Plink: p.Plink,
+					SignalDBm: p.SignalDBm, InactiveMS: p.InactiveMS,
+				})
+			}
+		}
+		out.Links = append(out.Links, row)
+	}
+	return out, nil
 }
