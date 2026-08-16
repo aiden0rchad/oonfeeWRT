@@ -53,11 +53,11 @@ OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   g
 | radios | mwlwifi ×2 | ath10k (5G) + ath9k (2.4G) |
 | firmware | OpenWrt 25.12.5 | OpenWrt 25.12.5 |
 | mesh | **gated off** (driver quirk, §5q) | **Present**, verified working |
-| our footprint | **none** — wiped by the reset | ACL + rpcd login installed |
+| our footprint | ACL + rpcd login (reinstalled after the reset) | ACL + rpcd login installed |
 | airtime-split | absent (dead counters) | **Present** — only device with it |
-| neighbour reports | Present *(before the reset; needs re-adoption)* | **Present** |
+| neighbour reports | **Present**, re-adopted after the reset | **Present** |
 | wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
-| health | **factory reset 2026-08-16 after four wedges — see below** | stable, 2h+ uptime unattended |
+| health | **reset 2026-08-16 after four wedges; 28 min clean since, unproven** | stable, 3h+ uptime unattended |
 
 Cabled LAN-to-LAN, C6 behind the WRT. Both left byte-identical to how they were
 found except the WLANs listed below, which were applied deliberately.
@@ -98,33 +98,44 @@ found except the WLANs listed below, which were applied deliberately.
 > installed**: stock config, both radios up on a hand-made WPA2 SSID, no
 > controller polling it.
 >
-> **Read that result carefully when you find it below.** The earlier wedges all
-> happened with a client associating and roaming; a clean-room run with no
-> clients is weaker evidence than it looks, and a quiet AP staying up does not
-> establish that the device is healthy. If it wedges with nothing of ours on it,
-> that is decisive; if it does not, the next step is restoring the load and
-> watching again.
+> **The clean-room result: 28.5 minutes, no wedge.** Sampled once a minute,
+> `hostapd` answered every time. That is past the longest pre-reset interval
+> (~28 min) and three times the shortest (~9 min).
+>
+> **Do not read that as "fixed".** It is one run, and it is the *weakest* form
+> of the test: no clients were associated, while every pre-reset wedge happened
+> with a phone associating, roaming and being deauthenticated for inactivity. A
+> quiet AP staying up for half an hour does not establish that the device is
+> healthy — it only rules out the most trivial explanations. The lab has been
+> restored on top of it (below), so the next meaningful data point is whether it
+> survives a normal working session with a real client on it. **If it wedges
+> again, `sysrq` is still the only recovery, and the reflash-or-replace question
+> is still open.**
 
 **Wireless currently on air:**
 
-- `oonfee-roam` on the **C6**, 2.4 + 5 GHz — the controller-managed WLAN,
+- `oonfee-roam` on **both** APs, 2.4 + 5 GHz — the controller-managed WLAN,
   WPA2-PSK with 802.11r/k/v, `mobility_domain=90e4`, and the neighbour lists
-  §5t distributes. **Gone from the WRT** with the factory reset; restoring it is
-  an apply away once the device is re-adopted.
+  §5t distributes. Restored to the WRT after the reset by the setup helper.
 - `oonfee-c6-5g` / `-2g` on the C6 — created by hand to enable its radios (stock
   OpenWrt ships them disabled, and enabling them unsecured would broadcast two
-  open networks).
-- `wrt-cleanroom` on the WRT, both bands — **not ours**, made by hand after the
-  reset purely to get hostapd running for the watch above. Delete it when the
-  device is re-adopted.
+  open networks). **Their neighbour lists are empty and stay empty**, which is
+  the "never touch an SSID we do not manage" rule visible on hardware.
+- The WRT's stock `default_radio0/1` are back to `disabled=1`. The consequence
+  worth knowing: `oonfee-roam` is now the *first* interface on each of its
+  radios, so its BSSIDs moved from `32:23:03:db:be:43`/`:40` to
+  `30:23:03:db:be:42`/`:41`. The distributor propagated that to the C6 by
+  itself — two updates on a device nobody had touched.
 
-**Credentials.** The C6's controller login is sealed in `.run/keyring.json`
-under the operator passphrase, and that is the only copy — adoption never
-returns the password it generates. **The WRT's record in `.run` is now stale**:
-the reset removed the login it refers to. The controller diagnoses that itself
-now (§5u) and the setup helper recovers from it by force-un-adopting and
-re-adopting. Nothing in this repo holds a password and nothing should; §7 has
-how to check or reset one by asking the device rather than a document.
+**Credentials.** Both controller logins are sealed in `.run/keyring.json` under
+the operator passphrase, and that is the only copy — adoption never returns the
+password it generates. Nothing in this repo holds a password and nothing should;
+§7 has how to check or reset one by asking the device rather than a document.
+
+The WRT's record went stale when it was reset, and the recovery ran for real:
+the controller diagnosed it (§5u) with the message it had gained an hour
+earlier, then the setup helper force-un-adopted and re-adopted without being
+told anything about the reset.
 
 **Root has no password on either device.** The adoption flow warns about it and
 it is still true. That is also what lets adoption bootstrap over SSH with an
