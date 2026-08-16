@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -375,6 +377,33 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		return
 	}
 
+	// A radio with no interface on it is still a radio.
+	//
+	// `iwinfo.devices` lists BROADCASTING INTERFACES, not radios. On a device
+	// with no wifi-iface configured it returns an empty list — and this used to
+	// read that as "no radios", which is a claim about hardware made from a
+	// call that was answering a different question.
+	//
+	// The consequence was a chicken and egg that made the project's stated goal
+	// impossible: stock OpenWrt ships its radios DISABLED, so a freshly adopted
+	// router has no interfaces, so the probe recorded zero radios, so the
+	// renderer refused to render a WLAN onto it — "device has no 5g radio" —
+	// so it could never get an interface. Measured on the WRT3200ACM with two
+	// working radios and no WLAN: `iwinfo.devices` empty, `getWirelessDevices`
+	// reporting radio0 (5g, ch36) and radio1 (2g, ch1) both up, and
+	// /sys/class/ieee80211 holding phy0 and phy1.
+	//
+	// It also corrupted OTHER answers, which is how it was found. With no
+	// radios to inspect, the Marvell mesh quirk could not fire, so FeatMesh
+	// flipped from correctly-Absent to wrongly-Present on a device whose driver
+	// demonstrably will not run a mesh point.
+	//
+	// So the radio list comes from `luci-rpc.getWirelessDevices`, which is
+	// keyed by radio and answers even when nothing is broadcasting, and which
+	// the ACL already grants. iwinfo is still used for the per-interface
+	// detail, where an interface exists.
+	radioIfaces := radiosWithInterfaces(ctx, c, devs.Devices)
+
 	// One accumulator per feature. The first three previously defaulted to
 	// Absent and all three had a path that reached the end without
 	// demonstrating anything — see verdict.
@@ -385,11 +414,27 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	// rrm grant would name a call that was never made.
 	rrmRefused := false
 
-	for _, dev := range devs.Devices {
+	for _, entry := range radioIfaces {
+		dev := entry.iface
+		if dev == "" {
+			// A radio that exists and carries nothing. Recorded so the renderer
+			// knows the band is available, with every sampled capability left
+			// unasked rather than answered — there is no interface to survey,
+			// and "we did not look" is not "it cannot".
+			r.Radios = append(r.Radios, Radio{
+				Device: entry.radio, Phy: entry.radio,
+				Channel: entry.channel, Band: entry.band,
+			})
+			survey.undecided()
+			split.undecided()
+			hostapd.undecided()
+			neighbors.undecided()
+			continue
+		}
 		// SurveyUsest starts Unknown, not Absent: the switch below sets it from
 		// what the call actually showed, and a default of Absent is a claim
 		// about a radio nobody has asked yet.
-		radio := Radio{Device: dev}
+		radio := Radio{Device: dev, Band: entry.band}
 
 		info, infoErr := readInfo(ctx, c, dev)
 		if infoErr == nil {
@@ -829,6 +874,25 @@ func probeMesh(ctx context.Context, c *ubus.Client, r *Registry) {
 	//
 	// This is the exact category Quirk was made for — present, correctly typed,
 	// plausible, and wrong — and the same driver already supplies three others.
+	// A radio whose hardware string could not be read cannot be cleared of the
+	// quirk either.
+	//
+	// The gate below keys on the hardware name, which comes from iwinfo and so
+	// needs an INTERFACE. A device with radios and no wifi-iface has radios
+	// with no hardware string — which used to mean the Marvell check silently
+	// could not fire, and mesh flipped from correctly-Absent to Present on a
+	// driver that demonstrably will not run a mesh point. That is the
+	// capability model's own cardinal error, reached sideways: an unrunnable
+	// check reported as a clean bill.
+	if state == Present && !anyRadioHardwareKnown(r) {
+		r.Set(FeatMesh, NotObservable)
+		r.Note("802.11s mesh could not be settled: the installed daemon carries " +
+			"it, and the per-driver check needs a radio's hardware name, which " +
+			"iwinfo only reports for a radio that has an interface. Apply a " +
+			"WLAN and re-probe — some drivers accept a mesh and never bring it " +
+			"up, so the daemon supporting it is not the whole answer")
+		return
+	}
 	if hw := marvellRadio(r); hw != "" {
 		r.AddQuirk(Quirk{
 			Source: "mac80211", Field: "mesh-point",
@@ -1067,4 +1131,89 @@ func uplinkFromPackages(pkgs []string) State {
 	}
 	// No 802.11 daemon at all. It cannot do wireless anything.
 	return Absent
+}
+
+// radioEntry pairs a configured radio with the interface (if any) that can be
+// sampled for it.
+type radioEntry struct {
+	radio   string // the UCI wifi-device name, e.g. radio0
+	iface   string // a broadcasting interface on it, empty when there is none
+	channel int
+	band    string
+}
+
+// radiosWithInterfaces lists every radio the device HAS, paired with an
+// interface to sample where one exists.
+//
+// getWirelessDevices is keyed by radio and reports each one's configured band
+// and channel plus its interfaces, so it answers "what radios are there" even
+// when none of them is broadcasting. That is the question `iwinfo.devices`
+// cannot answer, because it enumerates interfaces.
+//
+// Falls back to the interface list when getWirelessDevices cannot be read: a
+// device whose ACL refuses it still gets whatever iwinfo can show, which is the
+// previous behaviour rather than a regression.
+func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) []radioEntry {
+	var wl map[string]struct {
+		Up     bool `json:"up"`
+		Config struct {
+			Band    string `json:"band"`
+			Channel any    `json:"channel"`
+		} `json:"config"`
+		Interfaces []struct {
+			IfName string `json:"ifname"`
+		} `json:"interfaces"`
+	}
+	if err := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &wl); err != nil || len(wl) == 0 {
+		out := make([]radioEntry, 0, len(ifaces))
+		for _, i := range ifaces {
+			out = append(out, radioEntry{radio: i, iface: i})
+		}
+		return out
+	}
+
+	known := map[string]bool{}
+	out := make([]radioEntry, 0, len(wl))
+	for radio, v := range wl {
+		e := radioEntry{radio: radio}
+		e.band = v.Config.Band
+		switch ch := v.Config.Channel.(type) {
+		case float64:
+			e.channel = int(ch)
+		case string:
+			if n, err := strconv.Atoi(ch); err == nil {
+				e.channel = n
+			}
+		}
+		for _, i := range v.Interfaces {
+			if i.IfName != "" {
+				e.iface = i.IfName
+				known[i.IfName] = true
+				break
+			}
+		}
+		out = append(out, e)
+	}
+	// Any interface the radio map did not account for is still worth probing —
+	// it exists and is broadcasting, whatever the config says about it.
+	for _, i := range ifaces {
+		if !known[i] {
+			out = append(out, radioEntry{radio: i, iface: i})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].radio < out[b].radio })
+	return out
+}
+
+// anyRadioHardwareKnown reports whether any radio's hardware name was readable.
+//
+// Split out because its absence is the difference between "checked and clean"
+// and "could not check", and those must not share a code path.
+func anyRadioHardwareKnown(r *Registry) bool {
+	for _, radio := range r.Radios {
+		if radio.Hardware != "" {
+			return true
+		}
+	}
+	return false
 }

@@ -24,6 +24,7 @@ func (d *Daemon) routes() http.Handler {
 	d.api.Reprobe = d
 	d.api.Neighbours = d.DistributeNeighbours
 	d.api.MeshHealth = d.MeshHealthReport
+	d.api.OnAir = d.OnAirReport
 	// Lets a poll-interval change take effect immediately: the collector holds
 	// the interval in its target, so the row alone would not move until restart.
 	d.api.Retrack = func(id int64) {

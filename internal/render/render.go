@@ -467,7 +467,17 @@ func radiosByBand(caps *capability.Registry) map[model.Band]string {
 	radios := append([]capability.Radio(nil), caps.Radios...)
 	sort.Slice(radios, func(i, j int) bool { return radios[i].Device < radios[j].Device })
 	for _, r := range radios {
+		// Frequency first, because it is what the radio is actually doing.
+		// Falling back to the CONFIGURED band matters for a radio that has no
+		// interface: iwinfo reports no frequency for one, and skipping it made
+		// the renderer announce "device has no 5 GHz radio" about hardware that
+		// was sitting right there — which no apply could ever fix, since the
+		// radio needed an interface to become visible and could not be given
+		// one.
 		band, ok := model.BandForFrequency(r.Frequency)
+		if !ok && r.Band != "" {
+			band, ok = model.Band(r.Band), true
+		}
 		if !ok {
 			continue
 		}

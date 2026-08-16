@@ -82,8 +82,12 @@ type Server struct {
 	// MeshHealth reports what every configured backhaul is doing. Optional,
 	// and free: it reads no device.
 	MeshHealth func(context.Context) (*MeshHealthResult, error)
-	Hub        *Hub
-	Log        *slog.Logger
+	// OnAir verifies the fleet is transmitting what it claims, by making each
+	// radio scan for the others. Optional, and deliberately not on any timer:
+	// a scan takes a radio off-channel.
+	OnAir func(context.Context) (*OnAirResult, error)
+	Hub   *Hub
+	Log   *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -177,6 +181,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
 	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
 	private.HandleFunc("GET /api/v1/site/mesh-health", s.handleMeshHealth)
+	private.HandleFunc("POST /api/v1/site/verify-on-air", s.handleOnAir)
 	// The site model (Phase 2). Editing any of this changes nothing on any
 	// device; /site/preview says what it WOULD change and /site/apply does it.
 	private.HandleFunc("GET /api/v1/site", s.handleSite)

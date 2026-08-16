@@ -147,12 +147,20 @@ type Ports struct {
 
 // Radio is one PHY as the UI needs to know it.
 type Radio struct {
-	Device      string // e.g. phy0-ap0
-	Phy         string
-	Channel     int
-	Frequency   int
-	HWModes     []string
-	Hardware    string
+	Device    string // e.g. phy0-ap0
+	Phy       string
+	Channel   int
+	Frequency int
+	HWModes   []string
+	Hardware  string
+	// Band is the radio's CONFIGURED band, from luci-rpc.getWirelessDevices.
+	//
+	// Needed because Frequency comes from iwinfo and iwinfo only answers for a
+	// radio that has an interface. A device with radios and no WLAN has no
+	// frequency to report, and deciding "this device has no 5 GHz radio" from
+	// that is how the controller used to refuse to configure hardware it could
+	// see perfectly well.
+	Band        string
 	SurveyUsest State // channel utilization from busy/active
 
 	// NoiseStable is whether this radio's noise floor survives re-reading.
