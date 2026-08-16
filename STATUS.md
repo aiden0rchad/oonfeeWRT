@@ -221,7 +221,7 @@ fixture — it reproduces the measured semantics, including the awkward ones),
 ## 4. Measured device behaviour that the code depends on
 
 These were discovered by measurement and several **contradicted the original
-design**. Full detail in `docs/IMPLEMENTATION.md` §14; this is the short list
+design**. Full detail in `docs/IMPLEMENTATION.md` §14 and §15; this is the short list
 for someone picking the work up.
 
 **The apply path**
@@ -1945,6 +1945,6 @@ written and believed.
   Re-adopting narrows the login to production scope, so §7's `add_list` grant
   command has to be re-run afterwards for the applyengine hardware tests.
 
-- `docs/IMPLEMENTATION.md` §14 is the authoritative record of measured
+- `docs/IMPLEMENTATION.md` §14 and §15 are the authoritative record of measured
   behaviour. When code and docs disagree, the measurement wins — and if neither
   matches the device, re-measure before changing either.

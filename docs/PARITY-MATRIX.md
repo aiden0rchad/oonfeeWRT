@@ -142,7 +142,7 @@ feature is absent and everything else works.
 | Hide SSID | `hidden` | 🟢 |
 | Band steering | `usteer` / `dawn` config | 🟢 |
 | Fast roaming (802.11r) | hostapd FT: `ieee80211r`, `mobility_domain`, `ft_over_ds`, `r0kh`/`r1kh` | 🟢 and controller-guaranteed consistency is the whole value |
-| BSS transition (802.11v), neighbor reports (802.11k) | hostapd `bss_transition`, `rrm_neighbor_report` | 🟢 |
+| BSS transition (802.11v), neighbor reports (802.11k) | hostapd `bss_transition`, `rrm_neighbor_report`, and `rrm_nr_set` to fill the list | 🟢 **built 2026-08-16** — the config flags alone leave every AP advertising the feature and answering with nothing, because no AP can discover its neighbours. IMPLEMENTATION §15 |
 | Minimum RSSI / client kick threshold | `usteer`/`dawn` thresholds | 🟢 |
 | Client isolation | bridge `isolate` / ebtables | 🟢 |
 | Multicast enhancement / IGMP snooping | bridge `multicast_snooping` | 🟢 |

@@ -1170,3 +1170,105 @@ No error at any layer. `render.Section` and `applyengine.Op` now carry `Lists`
 separately, staged as JSON arrays, and the section hash covers them — a
 bridge-VLAN whose port membership changed but whose options did not is a real
 change.
+
+---
+
+## 15. 802.11k neighbour reports, measured
+
+Settled 2026-08-16 against both reference devices: a WRT3200ACM
+(mvebu/mwlwifi) and an Archer C6 v2 (ath79, ath9k + ath10k), each publishing
+one SSID on both bands.
+
+### 15.1 The methods exist and the list is empty
+
+`ubus -v list hostapd.<iface>` carries `rrm_nr_get_own`, `rrm_nr_list`,
+`rrm_nr_set`, `rrm_beacon_req`, `bss_transition_request` and
+`bss_mgmt_enable` on both devices. Stock rpcd grants none of them; the
+controller's ACL now grants the first three and deliberately not the rest.
+
+On every AP the renderer had configured with `ieee80211k=1` and
+`rrm_neighbor_report=1`, `rrm_nr_list` returned `{"list":[]}`. **hostapd does
+not populate its own neighbour list, not even with its own BSS.** The feature
+was advertised in every beacon and answered with nothing.
+
+### 15.2 The reply shapes
+
+`rrm_nr_get_own` returns a **positional triple**, not an object:
+
+    { "value": [ "32:23:03:db:be:43", "oonfee-roam",
+                 "322303dbbe43ef1900008024090603022a00" ] }
+
+The element decodes as BSSID (6 bytes) · BSS-info (4, LE) · operating class ·
+channel · PHY type · optional subelements. The controller does not decode it:
+hostapd already computes the regulatory mapping for its own BSS, and a second
+implementation would disagree with the AP's own on exactly the bands where it
+matters. It is relayed as the hex string the device produced.
+
+`rrm_nr_set` takes `{"list": [[bssid, ssid, nr], ...]}`, **replaces** the whole
+list for that BSS, and is scoped per BSS — setting one interface leaves the
+others on the same radio untouched. Verified by reading back.
+
+A short `value` array must be treated as "could not tell", never as a neighbour
+with blank fields: relaying one makes an AP answer a client with a candidate it
+has no channel to scan for.
+
+### 15.3 `rrm_nr_list` returns entries in hostapd's own order
+
+Pushing `[A, B, C]` reads back as `[C, B, A]` on both devices — neither
+insertion order nor sorted. Comparison must be order-insensitive. An
+order-sensitive one reports every list as changed on every cycle, so the
+reconciler pushes to every AP forever and never converges, which is
+indistinguishable from a broken one except that it also spends the request
+budget.
+
+### 15.4 `wifi reload` clears the list SELECTIVELY
+
+The measurement that decides whether the current list can be remembered rather
+than re-read. After editing one `wifi-iface` section and running `wifi reload`:
+
+| interface | config changed | neighbour list after |
+|---|---|---|
+| `phy0-ap1` | yes | **cleared** |
+| `phy1-ap1` | no | **kept, intact** |
+
+Neither "an apply clears everything" nor "an apply clears nothing" is safe. The
+list is therefore read back and compared on every cycle, which makes the
+operation idempotent against every cause of loss — a hostapd crash, an
+operator's own reload, a device that rebooted between cycles.
+
+Confirmed in the large by a two-device run where the WRT had rebooted and the C6
+had not: 2 pushed, 2 left alone, all four BSSes ending correct.
+
+### 15.5 `bss_mgmt_enable` turns RRM on at runtime
+
+`ubus call hostapd.<iface> bss_mgmt_enable
+'{"neighbor_report":true,"beacon_report":true,"bss_transition":true}'` is
+accepted and takes effect without a reload. Recorded because it is a real
+alternative to a `wifi reload` for enabling neighbour-report answering — and
+deliberately **not used**: the renderer writes `rrm_neighbor_report=1` to UCI,
+which is the durable source, and enabling it at runtime as well would mask
+config drift rather than surface it.
+
+### 15.6 Cost
+
+Per device per cycle: one `iwinfo.devices`, one batched request carrying two
+calls per wireless interface, and — only when something differs — one more
+batched request to push. At the shipped 15-minute cadence that is under a tenth
+of DEVICE-BUDGET's one-request-per-minute allowance, and in the steady state the
+push never happens. Requests are attributed to the device's Management Overhead
+readout.
+
+### 15.7 What was NOT established
+
+**That `rrm_nr_get_own` is safe on a driver that is already failing.** On the
+WRT3200ACM, hostapd entered uninterruptible sleep with one of these calls in
+flight, and the tempting conclusion — a fourth mwlwifi "says yes, means no"
+quirk of the shape §14 documents three times — is not supported. The kernel log
+showed `nl80211 ... nl_recvmsgs failed: -5` before the call, and on a freshly
+booted device the same call returns instantly and leaves hostapd healthy,
+checked deliberately. The device's 5 GHz path has been unstable since the
+`txpower=0` incident; no specific operation has been shown to trigger it.
+
+Recording a quirk here would have gated a working feature off working hardware
+forever, with a measurement's authority behind it. A controlled repeat on a
+known-good device costs a minute.
