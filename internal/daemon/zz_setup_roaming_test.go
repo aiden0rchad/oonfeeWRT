@@ -9,8 +9,6 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
-	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
 // Sets up a real roaming WLAN across both APs, through the controller.
@@ -40,41 +38,27 @@ func TestZZSetupRoaming(t *testing.T) {
 	}
 	defer d.Close()
 
-	// The MAC is read from the device rather than written down here.
+	// Adopted, not hand-seeded.
 	//
-	// It used to be a literal, and the literals were wrong: one was the box's
-	// WAN-side address and the other was a radio's, while adoption identifies a
-	// device by its LAN bridge. A seeded row therefore carried a different
-	// identity than a real adoption of the same box would, and the two coexisted
-	// in the inventory as two devices — one physical AP polled twice, against a
-	// budget of one request a minute.
-	type ap struct{ host, pass, name string }
-	aps := []ap{
-		{os.Getenv("OONFEE_AP1"), os.Getenv("OONFEE_AP1_PASS"), "wrt3200acm"},
-		{os.Getenv("OONFEE_AP2"), os.Getenv("OONFEE_AP2_PASS"), "archer-c6"},
-	}
+	// This used to write inventory rows directly, sealing the `oonfeewrt`
+	// password the devices happened to have. Two things were wrong with that.
+	// The MACs were literals — one the box's WAN-side address, one a radio's —
+	// while adoption identifies a device by its LAN bridge, so a seeded row and
+	// a real adoption of the same box coexisted as two devices, one physical AP
+	// polled twice against a budget of one request a minute. And it assumed the
+	// controller login already existed, which stops being true the moment
+	// someone factory resets a router.
+	//
+	// adoptOrReuse handles all of it: adopt, or reuse and re-probe, or — when
+	// the stored credential is refused by a device that is plainly alive —
+	// force un-adopt and adopt again, which is what a reset leaves behind.
 	var ids []int64
-	for _, a := range aps {
-		mac, err := macOf(ctx, a.host, a.pass)
+	for _, host := range []string{os.Getenv("OONFEE_AP1"), os.Getenv("OONFEE_AP2")} {
+		id, err := adoptOrReuse(ctx, t, d, host)
 		if err != nil {
-			t.Fatalf("%s: %v", a.name, err)
+			t.Fatalf("adopt %s: %v", host, err)
 		}
-		blob, err := d.Keys.SealCredential(mac, "oonfeewrt", a.pass)
-		if err != nil {
-			t.Fatal(err)
-		}
-		at := int64(1)
-		dev := &store.Device{MAC: mac, Host: a.host, Name: a.name, Scheme: "http",
-			Role: string(model.RoleAP), AdoptedAt: &at, CredEnc: blob}
-		if err := d.Store.UpsertDevice(ctx, dev); err != nil {
-			t.Fatal(err)
-		}
-		res, err := d.Reprobe(ctx, dev.ID)
-		if err != nil {
-			t.Fatalf("%s probe: %v", a.name, err)
-		}
-		t.Logf("%s (%s): %s", a.name, a.host, res.Summary)
-		ids = append(ids, dev.ID)
+		ids = append(ids, id)
 	}
 
 	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
@@ -120,19 +104,4 @@ func TestZZSetupRoaming(t *testing.T) {
 	if res.Aborted {
 		t.Fatalf("apply aborted after %s", res.AbortedAfter)
 	}
-}
-
-// macOf asks the device for the identity adoption would give it.
-//
-// Deliberately the same function the real path uses. A helper that computed the
-// identity its own way would produce rows that look adopted and do not match
-// what adopting the same box actually yields — which is how one physical AP
-// ends up in the inventory twice.
-func macOf(ctx context.Context, host, pass string) (string, error) {
-	c := ubus.New(ubus.Options{Host: host})
-	defer c.Close()
-	if err := c.Login(ctx, "oonfeewrt", pass); err != nil {
-		return "", err
-	}
-	return deviceMAC(ctx, c)
 }

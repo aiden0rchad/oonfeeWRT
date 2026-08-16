@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
 // TestSeedLiveInventory is a helper, not an assertion: it points a real data
@@ -37,7 +38,8 @@ func TestSeedLiveInventory(t *testing.T) {
 	// address while adoption identifies a device by its LAN bridge — so a
 	// seeded row and a real adoption of the same box became two devices in the
 	// inventory, and one physical AP got polled twice.
-	mac, err := macOf(ctx, os.Getenv("OONFEE_TEST_HOST"), os.Getenv("OONFEE_TEST_PASS"))
+	mac, err := macOf(ctx, os.Getenv("OONFEE_TEST_HOST"),
+		os.Getenv("OONFEE_TEST_USER"), os.Getenv("OONFEE_TEST_PASS"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,4 +56,19 @@ func TestSeedLiveInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("seeded device %d at %s", dev.ID, dev.Host)
+}
+
+// macOf asks the device for the identity adoption would give it.
+//
+// Deliberately the same function the real path uses. A helper that computed the
+// identity its own way produces rows that look adopted and are not the rows
+// adopting would produce — which is how one physical AP ends up in the
+// inventory twice.
+func macOf(ctx context.Context, host, user, pass string) (string, error) {
+	c := ubus.New(ubus.Options{Host: host})
+	defer c.Close()
+	if err := c.Login(ctx, user, pass); err != nil {
+		return "", err
+	}
+	return deviceMAC(ctx, c)
 }
