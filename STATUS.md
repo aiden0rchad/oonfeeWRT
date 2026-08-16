@@ -41,6 +41,10 @@ dance, which is the one genuinely fiddly part of this repo:
 OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
 ```
 
+**Two devices now.** The Archer C6 (`192.168.1.2`, ath79, adopted) sits on the
+WRT3200ACM's LAN with its own DHCP disabled and a static address outside the
+pool. Credentials live in the session scratchpad, never here — see §7.
+
 **State of the test device right now:** adopted, polling, `/etc/config` byte
 identical to its pre-session md5s, `vlan_filtering` back to 0, no oonfeeWRT
 sections left in `network`/`dhcp`/`firewall`. The `oonfeewrt-probe` scratch ACL
@@ -323,6 +327,7 @@ the useful part — the code is in git either way.
 | §5n | 802.11s mesh — modelled as an interface mode, not a role |
 | §5o | The bug mesh support created in the collector, found by looking for it |
 | §5q | **Applying a mesh to real hardware** — and what every other source got wrong |
+| §5r | **Two devices at last** — fast roaming verified across different SoCs |
 
 ### 5a. What discovery corrected
 
@@ -1253,6 +1258,99 @@ configs, with a dead-man restore armed on the device before anything was written
 first `pkill` did not take, and a `sleep 1200` was still pending a `wifi reload`
 at an arbitrary future moment. Arming an undo is half the practice; confirming
 it is gone is the other half.
+
+### 5r. Two devices: fast roaming, verified across different silicon
+
+A second router arrived — a TP-Link Archer C6 v2 (US), `ath79/generic`, ath9k +
+ath10k — cabled LAN-to-LAN behind the WRT3200ACM. First time this project has
+had two.
+
+#### What the second device confirmed immediately
+
+Adoption on hardware it had never seen, and three separate pieces of work firing
+correctly for the first time outside a fixture:
+
+- **`class=?`** — `ath79` is not one of the three SoC families `classify()`
+  knows, and it says so rather than guessing. §5m item 3, visible in production.
+- **`roleFit` diagnosed the radios**: *"adopted as gateway, but this device
+  reported no radios… its radios may be disabled — enable one and re-probe."*
+  Stock OpenWrt ships radios disabled, so the message written that morning met
+  its exact case within hours.
+- **The passwordless-root warning fired** — this device accepts any password for
+  root, the behaviour ARCHITECTURE §6's probe was redesigned around.
+
+Then, with the radios enabled: **`airtime-split` is Present** — the first
+device where it is. mwlwifi's counters are dead, so the WRT3200ACM will never
+have it, and §5k's `judgeSplit` correctly found working counters here. Probe
+stability also held on a second, entirely different device: second probe,
+**unchanged**.
+
+Its wired layout is `bridge="eth0.1" wan="eth0.2"` — swconfig VLANs, not
+`br-lan`. Nothing had produced that shape before.
+
+#### Mesh works here, and that validated §5o
+
+`FeatMesh` is **Present** on the C6 and gated **Absent** on the WRT3200ACM —
+the two-cause distinction (§5q) exercised from both sides on real hardware.
+Applied by hand, the interface came up properly:
+
+    phy0-mesh0: joining mesh oonfee-hw-mesh
+    phy0-mesh0: MESH-GROUP-STARTED ssid="oonfee-hw-mesh"
+    br-lan: port 4(phy0-mesh0) entered forwarding state
+
+And `iwinfo devices` then lists `phy0-mesh0` alongside the APs — which is
+exactly why §5o matters: without the mode filter the poll would ask a mesh point
+for its "clients" and report backhaul peers as users.
+
+**The hardware apply test read the modes too early.** A mesh takes ~4 s to come
+up and the assertion ran immediately after the apply returned. The product was
+right; the test was wrong. Worth remembering when the next one is written: an
+apply returning is not the same as a radio being ready.
+
+#### Fast roaming across two APs — the actual verification
+
+The question was whether 802.11r works reliably when adopting other OpenWrt
+routers. The renderer emits `ieee80211r`, `mobility_domain`,
+`reassociation_deadline` and `ft_over_ds`, and **not** `nas_identifier`, `r0kh`,
+`r1kh` or `ft_psk_generate_local` — the four that decide whether FT completes or
+falls back to a full reauth. So: look at what the device generates.
+
+**WPA2-PSK.** OpenWrt fills in `ft_psk_generate_local=1`. Every AP derives the
+FT keys from the shared passphrase, no key-holder exchange needed.
+
+**SAE / WPA3** — which is the UI default, and where local generation cannot
+apply because the key comes from the handshake:
+
+    ft_psk_generate_local=0
+    r0kh=ff:ff:ff:ff:ff:ff * 141f748db78bb03c75216d6248ca68fc
+    r1kh=00:00:00:00:00:00 00:00:00:00:00:00 141f748db78bb03c75216d6248ca68fc
+    wpa_key_mgmt=SAE FT-SAE WPA-PSK WPA-PSK-SHA256 FT-PSK
+
+OpenWrt generates wildcard key holders with a key derived from the mobility
+domain and the passphrase. **The identical config on the Archer C6 produced the
+identical key** — `141f748db78bb03c75216d6248ca68fc` on Marvell/mvebu and on
+Qualcomm/ath79, different drivers, different radio vendors.
+
+That is the whole design working. The controller derives the mobility domain
+deterministically so every AP computes the same value without coordination; that
+same value plus the passphrase is what OpenWrt hashes into the FT key. And the
+reason it holds is `override.go`: SSID, passphrase, security mode and roaming are
+**deliberately not overridable per device**, precisely because APs that disagree
+about them do not fail cleanly — they fail intermittently.
+
+`nas_identifier` is unset on both. With wildcard key holders hostapd falls back
+to the BSSID, so FT still completes; recorded because it is a field the renderer
+could set and does not.
+
+**Still unverified: an actual client roaming between them.** The configuration
+is right on both APs and the keys match, which is the hard part — but nothing
+has yet watched a phone hand off. That needs a client and a `logread` on both
+ends, and it is the obvious next thing.
+
+**Automating this is blocked on one thing:** the check reads
+`/var/run/hostapd-phy0.conf`, which needs SSH — no ACL grant covers it, and none
+should. A two-device integration test would have to drive SSH the way adoption
+does.
 
 ---
 
