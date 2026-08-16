@@ -197,7 +197,7 @@ previewed per device before anything is written. Networks (VLAN, DHCP, firewall
 zone) render too, within a limit that hardware imposed — §5g is the single most
 important thing in this file.
 
-Eighteen Go packages plus a UI. Everything that touches a device has been
+Nineteen Go packages plus a UI. Everything that touches a device has been
 verified against one.
 
 ---
@@ -248,6 +248,7 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 | `internal/render` | Site model → per-device UCI (wireless + network/dhcp/firewall), deterministic | pure |
 | `internal/reconcile` | Read → render → diff → apply → record | ✅ |
 | `internal/roaming` | Which APs are each other's 802.11k neighbours | pure |
+| `internal/meshlink` | What a backhaul is actually doing, and `iw station dump` | pure |
 | `internal/discovery` | Unauthenticated subnet sweep for OpenWrt candidates | ✅ |
 | `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ |
 | `internal/collector` | Two-tier poll loop, batching, backoff, quiesce, overhead | ✅ |
@@ -413,26 +414,22 @@ most-worth-doing first.
    currently have none associated), the Logs facets under load, and the adopt
    and discovery screens. Keep doing this — it remains the highest-yield check
    this project has, and the count is now nineteen.
-2. **A mesh backhaul whose health cannot be seen is half a feature.** §5m's own
-   note says this is "the first thing worth building once there are two nodes",
-   and there are two nodes now. The readout may be closer than that note
-   thought: `/usr/sbin/iw dev * station dump` is **already granted**, and under
-   mac80211 an 802.11s peer is a station — so if that holds, peer count, signal
-   and inactivity need no ACL change at all. `mpath dump` (the forwarding
-   table) is not granted and would.
+2. ~~**A mesh backhaul whose health cannot be seen is half a feature.**~~
+   **Done 2026-08-16** — §5w. Thirteen states, no new device requests for four
+   of the five facts, and the peer read on the slow slot. Four bugs found by
+   running it, one of which would have reported a critical fault after every
+   successful mesh apply.
 
-   **That "if" is not verified.** No mesh is running on either device now, so
-   nobody has run `station dump` against a real mesh interface here. Check it
-   before designing around it — the ACL grant existing is not the same as the
-   call answering usefully, which is a distinction this file has had to make
-   about four separate things already.
+   **The half that could not be done here:** no `peered` state has ever been
+   observed, because mesh is Present only on the C6 and there is no second node
+   to peer with. Three rungs of the ladder are unit-tested and have never met
+   hardware. **A third mesh-capable device is now the single highest-value
+   piece of hardware this project could acquire** — it would close that, and it
+   is also the only way to meet ROADMAP Phase 2's "three APs".
 
-   The catch, and it is not small: **this cannot be verified on the hardware
-   here.** Mesh is Present on the C6 and gated off on the WRT (§5q), so a
-   two-node mesh is not buildable with these two devices. Build it against the
-   mock by all means, but do not record it as verified, and expect the first
-   real mesh to find something — every other device-facing feature in this
-   project has.
+   The remaining device-side gap is `mpath dump`, the forwarding table, which
+   is the one thing here that would need an ACL grant. Worth it only once a
+   mesh actually carries traffic, since a path table with no peers is empty.
 3. **Broaden hardware support** — the stated direction: any old router flashed
    with OpenWrt, adopted from the network like a UniFi device, working as an AP,
    a switch, or a bridge/mesh node. §5m is the audit. The largest remaining
@@ -504,6 +501,7 @@ the useful part — the code is in git either way.
 | §5t | **Neighbour reports** — the first thing built that hand configuration cannot do |
 | §5u | What a factory reset looks like from the controller, and why it used to look like nothing |
 | §5v | **The browser pass** — four defects in one sitting, and why none was reachable by a test |
+| §5w | **Mesh backhaul health** — a closed state vocabulary, and the four bugs only hardware could show |
 
 ### 5a. What discovery corrected
 
@@ -1929,6 +1927,129 @@ directory that has already been wiped once during this project.** §7 documents
 `-passphrase-file`; the running daemon does not mention it. A prompt that cannot
 be answered should say what would answer it.
 
+### 5w. Mesh backhaul health
+
+§5m called this "the first thing worth building once there are two nodes", and
+it was the last thing the mesh feature was missing: the controller could
+configure a backhaul and could see that an interface was in mode `mesh`, and had
+no idea whether anything crossed it.
+
+Designed with a fan-out of readers and an adversarial judge panel, then built
+by hand from the synthesis. Two of its claims were checkable and both were true;
+one of its judgements was overridden. What follows is what survived contact.
+
+#### The deliverable is a closed vocabulary, not a struct of nullables
+
+Thirteen states, one per way of being right or wrong, decided once in
+`internal/meshlink` and switched on at the render boundary. The alternative —
+peer count, interface up, capability present, handed to a screen that decides
+what they mean together — has failed twice in this project already: a count
+computed from whatever happened to be loaded (§5b), and one question answered
+two ways on two screens (§5h). A UI that re-derives health from nullables is a
+second implementation of this logic, and two implementations drift.
+
+**The order of the ladder is the design.** Every rung is reached only when the
+ones above did not apply, so the first state that matches is also the first
+thing worth doing something about. A device whose driver will not run a mesh
+must never be described as having zero peers: the count would be true and the
+sentence useless, because the thing to fix is three rungs earlier.
+
+Two judgements worth defending:
+
+- **A count without peer-link state is its own state**, not a healthy one. It
+  cannot distinguish a working backhaul from one stuck mid-handshake.
+- **Zero peers on the only node of a mesh is toned down.** On the one
+  mesh-capable device here it is correct and permanent, and rendering it red
+  forever is precisely how a screen teaches people to ignore red.
+
+#### It costs no device request, and that is why it works this way
+
+| fact | source | cost |
+|---|---|---|
+| can this device carry a mesh | capability record via `render.MeshGate` | none |
+| was one applied to it | `owned_sections` (applied AND confirmed) | none |
+| which interface it is | `getWirelessDevices`, already on the 15-min slot | none |
+| is it up | `network.device status`, already call #2 of every poll | none |
+| how many peers, and their link state | `iw dev <if> station dump`, 15-min slot | one exec |
+
+The liveness row is the one worth staring at: **`phy0-mesh0 state DOWN` has been
+arriving in every snapshot this project has ever taken.** §5q went looking for
+it over SSH. Only the join was missing.
+
+`owned_sections` is load-bearing rather than an optimisation. Observation alone
+can never distinguish a mesh whose interface the driver refused to create from a
+device nobody asked to run one — so without the record of what was applied,
+§5q is unreportable in principle.
+
+#### Where the design was overridden
+
+DEVICE-BUDGET disagrees with itself: §3.2's rule says `file.exec` belongs "at the
+slow-loop interval, never the fast one", while its feature table lists
+`iw station dump` as focused-rate. The synthesis resolved toward the table,
+gated on re-running the budget harness. This resolves toward the rule, and the
+gate becomes unnecessary: a mesh peer appears when somebody unplugs a node or a
+link finally establishes, not on the timescale of somebody watching a screen.
+
+`iwinfo.assoclist` is **deliberately not used** even though it is already
+granted, returns the same peers as structured JSON, and needs no process spawn.
+It carries no `mesh plink`. That single field is the entire difference between a
+count and a health reading.
+
+#### The parser is written against a capture, not against the format
+
+`iw station dump` output was taken verbatim from the C6 on 2026-08-16, and it
+contains something nobody would have guessed:
+
+    inactive time:	7700 ms          <- key, tab, value
+    signal:  	-37 [-37, -47, -77, -77] dBm
+    beacon interval:100              <- NO whitespace at all
+    short slot time:yes
+
+A parser splitting on `":\t"` drops every field the device chose not to pad —
+and on a device that formats `mesh plink` that way, it would drop the one field
+the whole judgement turns on. Splitting on the first colon and trimming both
+halves is the only shape that reads both.
+
+#### Four bugs, and only one was findable without hardware
+
+1. **An apply invalidated the interface cache immediately**, and the refetch
+   landed in the four to six seconds *before* the new interface exists. It
+   cached the absence and held it for the full 15-minute cadence — so every
+   successful mesh apply would have shouted `interface-absent`, critical, about
+   a backhaul that came up fine two seconds later. A second, delayed re-read
+   fixes it. §5r's lesson arriving for the third time: **an apply returning is
+   not a radio being ready.**
+2. **The peer exec was gated on `needIfaces()`**, and the mode map that says
+   which interface is a mesh comes *from* that fetch. The poll that learns about
+   the mesh has not got the modes yet; the poll that has them is not re-reading.
+   It could never fire. Its own cadence now.
+3. **The exec iterated `iwinfo.devices`, which did not list the live
+   `phy0-mesh0`** — measured — while `getWirelessDevices` did. Two sources of
+   "which interfaces exist" disagree, and only one of them knows about meshes.
+   §5o chose `getWirelessDevices` for modes and this had quietly chosen the
+   other list for the same question.
+4. **"Expect a peer" counted devices in the group**, so the C6 sat at warning
+   permanently because the WRT is in that group and cannot run a mesh at all.
+   It counts devices that could actually *carry* one now. Left alone, the
+   readout would have committed the exact failure it was built to avoid.
+
+#### What is verified, and what cannot be
+
+Verified on both devices, end to end through real polls: the WRT reaches
+`not-buildable` carrying the driver's own sentence — §5q's gate working from the
+health side rather than the render side — and the C6 reaches a live
+`phy0-mesh0`, then a **demonstrated** zero peers, toned normal with the reason.
+The test waits for the reading to settle rather than for a fixed time, and
+starts the collector *before* the apply on purpose: started afterwards there is
+no stale cache to invalidate and it would pass on a lucky ordering.
+
+**Not verified, and not verifiable here: any peered state.** Mesh is Present
+only on the C6 and gated off on the WRT, so nothing in this project has ever
+watched two nodes find each other. `peered`, `peering` and `plink-unknown` are
+unit-tested against constructed input and have never met hardware. That needs a
+third device or a WRT replacement, and until then the most interesting half of
+this ladder is theory.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -2064,6 +2185,21 @@ written and believed.
   mock-is-simpler failure: this mock was *inverted*, and every test that never
   asked the question passed either way. Where two components share a fixture,
   make at least one test cross the boundary.
+- **Two sources that answer the same question do not answer it the same way.**
+  `iwinfo.devices` and `luci-rpc.getWirelessDevices` both list wireless
+  interfaces, and only the second listed a live 802.11s mesh point — measured.
+  A feature that read one list and looked up the other's map silently never
+  fired. §5o had already chosen getWirelessDevices for modes; the same code
+  then used the other list for the same question, two lines apart. When two
+  calls overlap, write down which one is authoritative for what.
+- **A cache invalidated at the right moment can still be invalidated too
+  early.** An apply invalidates the interface list, correctly — and the refetch
+  landed in the seconds before the new interface existed, so it cached the
+  absence and held it for the full cadence. Invalidation says "this is stale";
+  it does not say "the replacement is ready". Where a change takes effect
+  asynchronously on the device, the re-read has to be scheduled after it, not
+  after the call that requested it. Third appearance of "an apply returning is
+  not a radio being ready".
 - **Firing an event is not performing a gesture.** Every drag test in the UI
   suite called `fireEvent.dragStart` on a header and asserted the reorder
   landed. They all passed on a grid whose headers were `draggable={false}` —
