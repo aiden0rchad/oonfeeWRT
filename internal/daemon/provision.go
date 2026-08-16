@@ -231,21 +231,6 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 	return out, nil
 }
 
-// nudgeNeighbours re-runs the neighbour distribution out of band.
-func (d *Daemon) nudgeNeighbours() {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
-		defer cancel()
-		if res, err := d.DistributeNeighbours(ctx); err != nil {
-			d.Log.Debug("could not refresh 802.11k neighbour lists after an "+
-				"apply; the periodic cycle will retry", "err", err)
-		} else if res.Updated > 0 {
-			d.Log.Info("refreshed 802.11k neighbour lists after an apply",
-				"updated", res.Updated)
-		}
-	}()
-}
-
 func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.Device,
 	ackTraversal bool) api.DeviceApply {
 	out := api.DeviceApply{DeviceID: dev.ID, Name: dev.Name}

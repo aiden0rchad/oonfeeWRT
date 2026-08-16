@@ -174,6 +174,12 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		return nil, fmt.Errorf("adopted %s but could not record it: %w", mac, err)
 	}
 	d.Track(dev)
+	// A new AP knows about no neighbours, and every existing AP knows nothing
+	// about it. Both are fixed by the same cycle, and waiting up to fifteen
+	// minutes for the periodic one would leave the fleet advertising 802.11k
+	// and answering with a stale picture for exactly as long as someone is
+	// standing there watching their new access point come up.
+	d.nudgeNeighbours()
 
 	id := dev.ID
 	_ = d.Store.LogEvent(ctx, store.Event{
@@ -349,6 +355,12 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 		} else {
 			d.Log.Info("removed device from the inventory", "mac", dev.MAC)
 		}
+		// The removed AP is still in every other AP's neighbour list, telling
+		// clients to consider roaming to something that is no longer part of
+		// this network. Removal only happens on a cycle that read the whole
+		// fleet (roaming.Union), and this one will: the row is gone, so there
+		// is no unreachable device left to make the cycle incomplete.
+		d.nudgeNeighbours()
 	}
 	if uerr != nil && !errors.Is(uerr, adoption.ErrOperatorRequired) {
 		return out, uerr

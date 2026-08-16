@@ -495,3 +495,31 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// nudgeNeighbours re-runs the distribution out of band, after something that
+// changed which APs exist or what they are carrying.
+//
+// Three callers, and each one leaves the fleet's neighbour lists wrong in a
+// different direction until this runs: an apply restarts reconfigured BSSes and
+// empties theirs, an adoption adds an AP nobody knows about and which knows
+// nobody, and an un-adoption leaves a departed AP in every remaining list —
+// telling clients to consider roaming to something that is no longer part of
+// this network.
+//
+// Detached from the caller's context because it must outlive the HTTP response,
+// and quiet on failure: an operator who just applied a site model or adopted a
+// device would read a neighbour-list warning as though that had failed. The
+// periodic cycle is the retry.
+func (d *Daemon) nudgeNeighbours() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
+		defer cancel()
+		if res, err := d.DistributeNeighbours(ctx); err != nil {
+			d.Log.Debug("could not refresh 802.11k neighbour lists; the "+
+				"periodic cycle will retry", "err", err)
+		} else if res.Updated > 0 {
+			d.Log.Info("refreshed 802.11k neighbour lists",
+				"updated", res.Updated, "unchanged", res.Unchanged)
+		}
+	}()
+}
