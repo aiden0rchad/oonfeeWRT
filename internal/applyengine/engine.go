@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
@@ -218,8 +219,51 @@ func TouchesManagementPath(plan Plan) bool {
 		if op.Config == "network" || op.Config == "firewall" {
 			return true
 		}
+		if IsUplinkSection(op.Config, op.Section) {
+			return true
+		}
 	}
 	return false
+}
+
+// UplinkSectionPrefix names the wifi-iface sections that carry a device's
+// WIRELESS uplink — the 4-address station a device with no cable reaches the
+// network through.
+//
+// It lives here rather than in render because render imports this package and
+// not the other way round. The coupling is real and is pinned from the side
+// that can see both: a test in internal/render asserts that the name its own
+// uplinkIfaceName produces satisfies IsUplinkSection. If the naming ever
+// changes, that test fails rather than this guard silently going quiet.
+const UplinkSectionPrefix = "oowrt_up"
+
+// IsUplinkSection reports whether an operation touches a wireless uplink.
+//
+// # Why a wifi-iface can be a management path
+//
+// Everything else in this gate is `network` or `firewall`, because those are
+// where an operator can sever their own access — an interface renumbered, a
+// zone set to REJECT. A wireless section was never in that category: an SSID
+// coming or going does not move the controller's route to the device.
+//
+// An uplink breaks that assumption completely. On a device with no cable it IS
+// the route, and the operation that removes it is an ordinary `delete` of a
+// `wireless` section — so the plan reached preflight with the traversal
+// acknowledgment not required and the preview showed no warning. The apply then
+// lands, the station disappears, health cannot run and confirm cannot land, and
+// the engine has to open a fresh session to a device it has just disconnected.
+// The outcome is Unknown rather than a clean revert.
+//
+// That is the §5g shape exactly — a change that applies cleanly and severs the
+// path — and the gate that exists so severing your own access is a decision
+// rather than an accident did not fire for the one interface class that is
+// always the management path.
+//
+// Deliberately matched on the section NAME. The alternative is a flag set by
+// whoever built the plan, and a guard that depends on its caller remembering to
+// set a flag is the guard that eventually does not fire.
+func IsUplinkSection(config, section string) bool {
+	return config == "wireless" && strings.HasPrefix(section, UplinkSectionPrefix)
 }
 
 // withLists folds list options into the values map as JSON arrays, which is how

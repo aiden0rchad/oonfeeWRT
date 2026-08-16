@@ -262,6 +262,21 @@ func (s Site) Validate() []error {
 				m.MeshID, m.GroupID))
 		}
 	}
+
+	// Uplinks, checked here rather than only where they render.
+	//
+	// They were not, and the guard was therefore dead: every sentence
+	// Uplink.Validate was written to produce — the network is disabled, it does
+	// not accept wireless bridges, it is not published on that band — could
+	// never reach an operator. Found by review before an uplink could be
+	// created through the product, which is the only reason it was latent
+	// rather than shipped. §6's rule about guards that cannot fire.
+	for _, u := range s.Uplinks {
+		if !u.Enabled {
+			continue
+		}
+		errs = append(errs, u.Validate(s)...)
+	}
 	// Two meshes with the same ID on the same band are one mesh whose config
 	// disagrees with itself: nodes peer on the mesh ID, so whichever section
 	// hostapd reads last wins and the other's settings vanish silently.

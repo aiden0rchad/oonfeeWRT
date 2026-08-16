@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
@@ -185,5 +186,63 @@ func TestUplinkValidationCatchesTheHalfPeopleForget(t *testing.T) {
 	errs = u.Validate(site)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "not published on") {
 		t.Errorf("want exactly the band complaint, got %v", errs)
+	}
+}
+
+// The traversal gate must recognise the section this renderer produces.
+//
+// The coupling is pinned from here because this package can see both sides:
+// applyengine defines the predicate and cannot import render, so if the naming
+// ever changes it is this test that fails rather than the guard silently going
+// quiet. §6's rule about guards that cannot fire, applied to the guard itself.
+func TestUplinkSectionsCountAsTheManagementPath(t *testing.T) {
+	name := uplinkIfaceName(1, "radio0")
+
+	if !applyengine.IsUplinkSection("wireless", name) {
+		t.Fatalf("the traversal gate does not recognise %q, so removing a "+
+			"device's only route would apply unacknowledged and unwarned", name)
+	}
+
+	// And it must not swallow the other wireless sections, or every ordinary
+	// SSID edit starts demanding a traversal acknowledgment and the gate
+	// becomes something operators click past.
+	for _, other := range []string{
+		ifaceName(1, "radio0"),
+		meshIfaceName(1, "radio0"),
+		"default_radio0",
+	} {
+		if applyengine.IsUplinkSection("wireless", other) {
+			t.Errorf("%q was treated as a management path; a gate that fires on "+
+				"everything is a gate nobody reads", other)
+		}
+	}
+
+	// A delete of the uplink is the dangerous operation, and it is an ordinary
+	// wireless delete — which is exactly why the config check alone missed it.
+	plan := applyengine.Plan{Ops: []applyengine.Op{
+		{Kind: applyengine.OpDelete, Config: "wireless", Section: name},
+	}}
+	if !applyengine.TouchesManagementPath(plan) {
+		t.Error("removing a device's wireless uplink did not count as touching " +
+			"the management path")
+	}
+}
+
+// A disabled or bridge-refusing WLAN must not render a station, even if nobody
+// validated the site first. Render is not entitled to assume its caller checked.
+func TestUplinkRendersNothingForAnUnusableWLAN(t *testing.T) {
+	site := model.Site{
+		Networks: []model.Network{{ID: 1, Name: "lan", Enabled: true}},
+		WLANs: []model.WLAN{{
+			ID: 3, SSID: "oonfee-roam", NetworkID: 1, Enabled: false,
+			Bands:   []model.Band{model.Band5G},
+			Options: model.WLANOptions{AllowUplink: true},
+		}},
+		Uplinks: []model.Uplink{{ID: 1, DeviceID: 7, WLANID: 3, Band: model.Band5G, Enabled: true}},
+	}
+
+	if errs := site.Validate(); len(errs) == 0 {
+		t.Error("a uplink onto a disabled network passed site validation, so " +
+			"every sentence Uplink.Validate produces is unreachable")
 	}
 }
