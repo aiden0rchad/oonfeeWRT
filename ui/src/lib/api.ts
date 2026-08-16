@@ -362,6 +362,10 @@ export interface WLAN {
   hidden: boolean
   isolate: boolean
   max_assoc: number
+  /** Lets devices join this network as a 4-address bridge rather than as a
+   *  client. Off unless asked for: it changes what the access points accept
+   *  from the air, which is a security posture and not a convenience. */
+  allow_uplink: boolean
   enabled: boolean
 }
 
@@ -442,6 +446,21 @@ export interface NeighbourResult {
  *  never re-derive health from the other fields — a screen that decides for
  *  itself what a null peer count means is a second implementation of that
  *  logic, and the two drift. */
+/** One device's wireless uplink: how it reaches the network when there is no
+ *  cable to it.
+ *
+ *  Carries no credentials and has none to omit — it references a WLAN, so the
+ *  SSID, passphrase and security mode live in one place. Two copies of a
+ *  passphrase drift, and a bridge whose key stops matching fails the way a
+ *  client with a stale password fails. */
+export interface Uplink {
+  id: number
+  device_id: number
+  wlan_id: number
+  band: '2g' | '5g' | '6g'
+  enabled: boolean
+}
+
 export interface MeshLink {
   device_id: number
   device_name: string
@@ -494,6 +513,7 @@ export interface Site {
   uuid: string
   wlans: WLAN[]
   meshes: Mesh[]
+  uplinks: Uplink[]
   groups: APGroup[]
   networks: SiteNetwork[]
   problems: string[]
@@ -636,6 +656,11 @@ export const api = {
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
   distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
   meshHealth: () => get<MeshHealthResult>('/site/mesh-health'),
+  saveUplink: (u: Partial<Uplink> & { id?: number }) =>
+    post<{ uplink: Uplink; note: string }>(
+      u.id ? `/site/uplinks/${u.id}` : '/site/uplinks', u),
+  deleteUplink: (id: number) =>
+    del<{ deleted: number; note: string }>(`/site/uplinks/${id}`),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
   clients: (q: {

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
+import type React from 'react'
 import { api } from '../lib/api'
 import type {
   APGroup,
   Device,
   Mesh,
   MeshHealthResult,
+  Uplink,
   MeshLink,
   NeighbourDevice,
   NeighbourResult,
@@ -225,6 +227,7 @@ export function Settings({ devices }: { devices: Device[] }) {
         )}
       </Card>
 
+      <Uplinks site={site} devices={devices} onChanged={load} />
       <MeshHealth />
       <Groups site={site} devices={devices} onChanged={load} />
       <Neighbours site={site} />
@@ -547,6 +550,17 @@ function WLANEditor({
             label="Isolate clients from each other"
             on={!!draft.isolate}
             onChange={(v) => set({ isolate: v })}
+          />
+          {/* The AP half of a wireless uplink. Off unless asked for, because it
+              changes what the access points accept from the air rather than
+              merely what they advertise — and it is the half people forget:
+              configure the joining device and not this, and the device
+              associates as an ordinary client while everything behind it stays
+              dark. */}
+          <Toggle
+            label="Allow devices to join this network as a wireless bridge"
+            on={!!draft.allow_uplink}
+            onChange={(v) => set({ allow_uplink: v })}
           />
         </div>
 
@@ -1529,5 +1543,246 @@ function MeshLinkRow({ l }: { l: MeshLink }) {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Wireless uplinks: devices that reach the network over the air.
+ *
+ * For the router in the room with no ethernet run to it — the awkward half of
+ * "extend your network with hardware you already own", and the case a mesh
+ * cannot cover when one end's driver refuses 802.11s.
+ *
+ * Two things this card insists on saying, because they are the two the
+ * controller cannot check for anyone. A device bridged into a network it is
+ * ALSO cabled to is a layer-2 loop, and OpenWrt bridges ship with STP off so
+ * nothing breaks it. And once applied, that station is how the controller
+ * reaches the device — so removing it later is editing the road while driving
+ * down it.
+ */
+function Uplinks({
+  site,
+  devices,
+  onChanged,
+}: {
+  site: Site
+  devices: Device[]
+  onChanged: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+
+  // Only networks that actually accept bridges. Offering the others would let
+  // someone build the exact configuration whose failure mode is indisting-
+  // uishable from a driver refusing 4-address frames.
+  const bridgeable = site.wlans.filter((w) => w.enabled && w.allow_uplink)
+
+  async function save(u: Partial<Uplink> & { id?: number }) {
+    setBusy(true)
+    try {
+      const res = await api.saveUplink(u)
+      setNote(res.note)
+      setErr('')
+      onChanged()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id: number) {
+    setBusy(true)
+    try {
+      const res = await api.deleteUplink(id)
+      setNote(res.note)
+      setErr('')
+      onChanged()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const nameOf = (id: number) =>
+    devices.find((d) => d.id === id)?.name ?? `device ${id}`
+  const ssidOf = (id: number) => site.wlans.find((w) => w.id === id)?.ssid ?? '—'
+
+  return (
+    <Card title="Wireless uplinks">
+      {err && <Banner tone="critical">{err}</Banner>}
+
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+        A device with no cable to it can join one of your networks as a 4-address
+        bridge, putting its wired ports and its own access points on the network
+        over the air. The network has to accept bridges — that is the
+        <strong> Allow devices to join this network as a wireless bridge </strong>
+        switch on the network itself, and it is the half people forget.
+      </div>
+
+      {bridgeable.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          No network accepts wireless bridges yet, so there is nothing a device
+          could join. Turn that on for a network above first.
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {site.uplinks.length === 0 && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              No device is using a wireless uplink.
+            </div>
+          )}
+          {site.uplinks.map((u) => (
+            <div
+              key={u.id}
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '6px 8px',
+                fontSize: 12,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span>
+                <strong>{nameOf(u.device_id)}</strong>{' '}
+                <span style={{ color: 'var(--text-muted)' }}>
+                  joins {ssidOf(u.wlan_id)} on {u.band}
+                  {u.enabled ? '' : ' (disabled)'}
+                </span>
+              </span>
+              <Button onClick={() => remove(u.id)} disabled={busy}>
+                Remove
+              </Button>
+            </div>
+          ))}
+
+          <UplinkAdd
+            devices={devices.filter(
+              (d) => !site.uplinks.some((u) => u.device_id === d.id),
+            )}
+            wlans={bridgeable}
+            busy={busy}
+            onAdd={save}
+          />
+        </div>
+      )}
+
+      {/* The note comes from the server rather than being restated here, so
+          there is one wording of a hazard rather than two that can drift. */}
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner tone="warning">{note}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function UplinkAdd({
+  devices,
+  wlans,
+  busy,
+  onAdd,
+}: {
+  devices: Device[]
+  wlans: WLAN[]
+  busy: boolean
+  onAdd: (u: Partial<Uplink>) => void
+}) {
+  const [deviceID, setDeviceID] = useState(0)
+  const [wlanID, setWLANID] = useState(wlans[0]?.id ?? 0)
+  const [band, setBand] = useState<'2g' | '5g'>('5g')
+
+  if (devices.length === 0) {
+    return (
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        Every adopted device already has an uplink, or there are none to add.
+        One per device: a router with two would bridge the same network to
+        itself twice, which is a loop rather than redundancy.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      {/* Not <Field>: that component renders an <input>, which is a void
+          element, so giving it a <select> as children throws at render and
+          takes the whole screen with it. Caught by a test rather than by
+          somebody opening the page, which is the first time that has happened
+          in this project. */}
+      <Picker label="Device" value={deviceID} onChange={(v) => setDeviceID(Number(v))}>
+        <option value={0}>Choose…</option>
+        {devices.map((d) => (
+          <option key={d.id} value={d.id}>
+            {d.name}
+          </option>
+        ))}
+      </Picker>
+      <Picker label="Joins network" value={wlanID} onChange={(v) => setWLANID(Number(v))}>
+        {wlans.map((w) => (
+          <option key={w.id} value={w.id}>
+            {w.ssid}
+          </option>
+        ))}
+      </Picker>
+      <Picker
+        label="Band"
+        value={band}
+        onChange={(v) => setBand(String(v) as '2g' | '5g')}
+      >
+        <option value="5g">5 GHz</option>
+        <option value="2g">2.4 GHz</option>
+      </Picker>
+      <Button
+        kind="primary"
+        disabled={busy || !deviceID || !wlanID}
+        onClick={() => onAdd({ device_id: deviceID, wlan_id: wlanID, band, enabled: true })}
+      >
+        Add uplink
+      </Button>
+    </div>
+  )
+}
+
+/** A labelled <select>. Field renders an <input> and cannot take children. */
+function Picker({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string
+  value: string | number
+  onChange: (v: string | number) => void
+  children: React.ReactNode
+}) {
+  return (
+    <label style={{ display: 'block' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+        {label}
+      </div>
+      <select
+        value={value}
+        onChange={(e) =>
+          onChange(typeof value === 'number' ? Number(e.target.value) : e.target.value)
+        }
+        style={{
+          height: 30,
+          padding: '0 8px',
+          borderRadius: 6,
+          background: 'var(--surface-0)',
+          border: '1px solid var(--border-strong)',
+          color: 'var(--text-primary)',
+          fontSize: 13,
+        }}
+      >
+        {children}
+      </select>
+    </label>
   )
 }

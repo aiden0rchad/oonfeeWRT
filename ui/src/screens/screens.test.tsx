@@ -25,6 +25,9 @@ const api = {
   overhead: vi.fn(),
   reprobe: vi.fn(),
   distributeNeighbours: vi.fn(),
+  meshHealth: vi.fn(),
+  saveUplink: vi.fn(),
+  deleteUplink: vi.fn(),
 }
 vi.mock('../lib/api', () => ({
   api,
@@ -542,5 +545,91 @@ describe('Devices — column preferences', () => {
     for (const th of screen.getAllByRole('columnheader')) {
       expect(th.getAttribute('draggable')).toBe('true')
     }
+  })
+})
+
+describe('Settings — wireless uplinks', () => {
+  const base = {
+    name: 'Site',
+    uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
+    meshes: [],
+    uplinks: [],
+    groups: [{ id: 1, name: 'all', device_ids: [] }],
+    networks: [
+      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+    ],
+    problems: [],
+    overrides: [],
+    overridable: [],
+    override_note: '',
+  }
+
+  const wlan = (over: Record<string, unknown> = {}) => ({
+    id: 1, ssid: 'oonfee-roam', network_id: 1, group_id: 1,
+    bands: ['5g'], security_mode: 'psk2', pmf: '1', has_key: true, enabled: true,
+    roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: true },
+    hidden: false, isolate: false, max_assoc: 0, allow_uplink: false,
+    ...over,
+  })
+
+  // A network that does not accept bridges must not be offered as somewhere to
+  // join. Offering it would let someone build the one configuration whose
+  // failure mode is indistinguishable from a driver refusing 4-address frames:
+  // the station associates as an ordinary client and everything behind the
+  // device stays dark.
+  it('offers nothing to join until a network accepts bridges', async () => {
+    api.site.mockResolvedValue({ ...base, wlans: [wlan()] })
+    render(<Settings devices={[]} />)
+
+    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(screen.getByText(/No network accepts wireless bridges yet/)).toBeTruthy()
+    expect(screen.queryByText('Add uplink')).toBeNull()
+  })
+
+  it('offers the add form once a network accepts bridges', async () => {
+    api.site.mockResolvedValue({ ...base, wlans: [wlan({ allow_uplink: true })] })
+    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+
+    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(screen.getByText('Add uplink')).toBeTruthy()
+    expect(screen.getByText(/No device is using a wireless uplink/)).toBeTruthy()
+  })
+
+  // One per device, and the reason is said rather than merely enforced: a
+  // router with two bridges the same network to itself twice.
+  it('will not offer a device that already has an uplink', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ allow_uplink: true })],
+      uplinks: [{ id: 1, device_id: 7, wlan_id: 1, band: '5g', enabled: true }],
+    })
+    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+
+    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(screen.getByText(/joins oonfee-roam on 5g/)).toBeTruthy()
+    expect(screen.getByText(/loop rather than redundancy/)).toBeTruthy()
+    expect(screen.queryByText('Add uplink')).toBeNull()
+  })
+
+  // The hazard wording comes from the server rather than being restated in the
+  // UI, so there is one wording of it rather than two that can drift apart.
+  it('shows the server’s own warning after a change', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ allow_uplink: true })],
+      uplinks: [{ id: 1, device_id: 7, wlan_id: 1, band: '5g', enabled: true }],
+    })
+    api.deleteUplink.mockResolvedValue({
+      deleted: 1,
+      note: 'applying this removes the station interface — acknowledge it',
+    })
+    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+
+    await waitFor(() => expect(screen.getByText('Remove')).toBeTruthy())
+    fireEvent.click(screen.getByText('Remove'))
+
+    await waitFor(() =>
+      expect(screen.getByText(/removes the station interface/)).toBeTruthy(),
+    )
   })
 })
