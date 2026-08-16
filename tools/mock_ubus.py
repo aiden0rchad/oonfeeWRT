@@ -329,6 +329,31 @@ NR_OWN = {
 }
 NR_LISTS = {}
 
+# What `luci-rpc.getWirelessDevices` reports, shaped from a real capture on an
+# Archer C6 running OpenWrt 25.12.5 (2026-08-16).
+#
+# This used to be unimplemented — the luci-rpc branch fell through to `{}` — so
+# every consumer saw a device with NO interface modes at all. That is not a
+# smaller world, it is a different one: `servesClients` reads an unknown mode as
+# "assume AP", which is the behaviour §5o exists to replace, so the mode filter
+# it added has never once been exercised against this mock.
+#
+# Two details are load-bearing and both come from the capture. `section` is
+# present on some entries and absent on others, so consumers must treat it as
+# optional. And the real response carries the wireless passphrase in `key`, in
+# plaintext, on every entry — reproduced here so that a decoder which widens its
+# struct and starts carrying it around fails a test rather than a review.
+WIRELESS_DEVICES = {
+    "radio0": {"interfaces": [
+        {"ifname": "wlan0", "section": "default_radio0",
+         "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
+    ]},
+    "radio1": {"interfaces": [
+        {"ifname": "wlan1", "section": "default_radio1",
+         "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
+    ]},
+}
+
 OBJECTS = {
     "session": {"login": {}, "list": {}, "destroy": {}, "access": {}},
     "uci": {m: {} for m in ("configs", "get", "set", "add", "delete",
@@ -641,6 +666,21 @@ def handle_one(req):
     if obj == "__test" and meth == "written":
         return ok(rid, {"paths": sorted(written_files),
                         "content": written_files.get(args.get("path"), "")})
+    if obj == "__test" and meth == "add_wifi_iface":
+        # Add an interface to a radio, so a test can exercise a mesh point or a
+        # 4-address station without a second real router. Pass ifname="" to
+        # model a section whose interface the driver never created — the §5q
+        # signature, which is otherwise unreproducible without mwlwifi.
+        radio = args.get("radio") or "radio0"
+        entry = {"config": {"mode": args.get("mode") or "ap"}}
+        if args.get("ifname"):
+            entry["ifname"] = args["ifname"]
+        if args.get("section"):
+            entry["section"] = args["section"]
+        with lock:
+            WIRELESS_DEVICES.setdefault(radio, {"interfaces": []})
+            WIRELESS_DEVICES[radio]["interfaces"].append(entry)
+        return ok(rid, {"interfaces": len(WIRELESS_DEVICES[radio]["interfaces"])})
     if obj == "__test" and meth == "set_dirty":
         dirty_configs.clear()
         dirty_configs.update(args.get("configs") or [])
@@ -840,6 +880,9 @@ def handle_one(req):
             for w in ("wlan0", "wlan1"):
                 devs[w] = {"devtype": "wlan"}
             return ok(rid, devs)
+        if meth == "getWirelessDevices":
+            with lock:
+                return ok(rid, copy.deepcopy(WIRELESS_DEVICES))
         if meth == "getDHCPLeases":
             return ok(rid, {"dhcp_leases": [
                 {"macaddr": "AA:BB:CC:11:22:33", "ipaddr": "192.168.1.130",

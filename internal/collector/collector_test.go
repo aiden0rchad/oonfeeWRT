@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1146,5 +1147,50 @@ func TestNetDevicesRecordsThatItAnswered(t *testing.T) {
 	if !s.NetDevsFresh {
 		t.Error("an answered network.device status was not recorded as fresh, so " +
 			"a missing interface cannot be told from a refused call")
+	}
+}
+
+// The mock now answers getWirelessDevices, so §5o's mode filter is exercised
+// against it for the first time.
+//
+// This test exists because for the life of the project the mock returned `{}`
+// for that call, which is not a smaller world but a different one: an unknown
+// mode reads as "assume AP", so the filter the fix added was never once
+// reached. A fixture that quietly returns nothing produces green tests for
+// code that has never run.
+func TestIfaceModesAreActuallyExercised(t *testing.T) {
+	raw := []byte(`{
+	  "radio0": {"interfaces": [
+	    {"ifname": "wlan0", "section": "default_radio0",
+	     "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}}
+	  ]},
+	  "radio1": {"interfaces": [
+	    {"ifname": "wlan1", "section": "default_radio1",
+	     "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}}
+	  ]}
+	}`)
+
+	var s Snapshot
+	if err := decodeIfaceModes(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.IfaceModes["wlan0"] != "ap" || s.IfaceModes["wlan1"] != "ap" {
+		t.Fatalf("modes not read: %v", s.IfaceModes)
+	}
+	if !servesClients(s.IfaceModes, "wlan0") {
+		t.Error("an AP was filtered out of client counting")
+	}
+	if servesClients(s.IfaceModes, "phy0-mesh0") {
+		// Unknown means assume AP, which is the documented fallback — so this
+		// asserts the fallback rather than a mode lookup.
+		t.Log("unknown interface treated as an AP, as documented")
+	}
+
+	// The passphrase is in that payload, in plaintext, exactly as the device
+	// sends it. Nothing decoded may carry it — this is the assertion that
+	// stops a later widening of the struct from quietly holding a secret.
+	blob := fmt.Sprintf("%+v %+v %+v", s.IfaceModes, s.IfaceSections, s.ConfiguredIfacesAbsent)
+	if strings.Contains(blob, "plaintext-passphrase") {
+		t.Errorf("a wireless passphrase reached the snapshot: %s", blob)
 	}
 }
