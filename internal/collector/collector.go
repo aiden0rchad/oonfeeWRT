@@ -307,7 +307,23 @@ func (c *Collector) Rediscover(deviceID int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ifaceAt = time.Time{}
+	p.ifaceRefetchAt = p.c.now().Add(ifaceSettleDelay)
 }
+
+// ifaceSettleDelay is how long after an apply to re-read the interface list a
+// SECOND time.
+//
+// Measured: an 802.11s interface appears about four to six seconds after the
+// apply that configures it returns (§5r). An immediate re-read is therefore not
+// enough on its own — it lands in the gap, caches "this section has no
+// interface", and holds that for the full fifteen-minute cadence. Which is the
+// §5q signature, reported as a critical fault, about a backhaul that came up
+// fine two seconds later.
+//
+// Both re-reads happen rather than just the delayed one: a change that alters
+// config without creating an interface is visible immediately, and waiting to
+// notice it would be a regression for the common case to fix the rare one.
+const ifaceSettleDelay = 10 * time.Second
 
 // Quiesced reports that polling is suspended for a device, which the UI shows
 // as "paused during a configuration change" rather than as a gap in the data.
@@ -510,6 +526,13 @@ type poller struct {
 	client  *ubus.Client
 	ifaces  []string
 	ifaceAt time.Time
+	// ifaceRefetchAt schedules a SECOND re-read after an apply. See Rediscover:
+	// an interface can take seconds to appear, and an immediate re-read alone
+	// caches the moment before it did.
+	ifaceRefetchAt time.Time
+	// meshAt is the mesh peer read's own timer. Separate from ifaceAt because
+	// the two are consumer and producer: see needMeshPeers.
+	meshAt time.Time
 	// degraded is the last poll's list of refused or unreadable calls, kept so
 	// a standing limitation can be shown rather than only logged. degradedKnown
 	// separates "the last poll found none" from "no poll has completed".
@@ -640,6 +663,12 @@ func (p *poller) tick(ctx context.Context) {
 	if snap.IfacesFresh {
 		p.mu.Lock()
 		p.ifaces, p.ifaceAt = snap.Ifaces, p.c.now()
+		// A new interface list may contain a mesh nobody has asked about yet.
+		p.meshAt = time.Time{}
+		// The scheduled second look has happened; do not repeat it.
+		if !p.ifaceRefetchAt.IsZero() && !p.c.now().Before(p.ifaceRefetchAt) {
+			p.ifaceRefetchAt = time.Time{}
+		}
 		// Modes are cached only when they were actually read. A device whose
 		// ACL refuses getWirelessDevices keeps whatever it knew rather than
 		// forgetting, and a device that has never answered keeps an empty map —

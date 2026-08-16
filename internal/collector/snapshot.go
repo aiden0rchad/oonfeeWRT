@@ -2,6 +2,7 @@ package collector
 
 import (
 	"fmt"
+	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
 	"net"
 	"time"
 
@@ -86,6 +87,14 @@ type Snapshot struct {
 	// the driver never created. Without this the controller cannot tell "the
 	// mesh you configured does not exist" from "you configured no mesh".
 	ConfiguredIfacesAbsent []string
+
+	// MeshPeers is each mesh interface's peers, read on the slow cadence.
+	//
+	// A key present with an empty slice is a demonstrated zero; a key ABSENT
+	// means nobody asked or the answer did not come back. The state ladder has
+	// a separate rung for each, and this map is where that distinction has to
+	// survive — collapse it here and nothing downstream can rebuild it.
+	MeshPeers map[string][]meshlink.Peer
 
 	// Networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// carried forward on every poll in between — the hosts they classify arrive

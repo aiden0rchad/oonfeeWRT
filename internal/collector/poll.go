@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
 	"net"
 	"slices"
 	"sort"
@@ -159,6 +160,68 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			decode:   decodeIfaceModes,
 			optional: true,
 		})
+	}
+	if p.needMeshPeers() {
+		// Mesh peers, on their own slow cadence and only for interfaces already
+		// known to be mesh points.
+		//
+		// Deliberately NOT inside needIfaces(). The mode map that says which
+		// interface is a mesh comes FROM that fetch and is only available to
+		// the following poll, so an exec gated on the same condition can never
+		// fire: the poll that learns about the mesh has not got the modes yet,
+		// and the poll that has them is not re-reading. Found by watching a
+		// live mesh sit at peers-not-counted forever.
+		//
+		// This is the one process spawn in the poll, and the tier is a
+		// deliberate reading of a documentation conflict. DEVICE-BUDGET §3.2's
+		// rule says file.exec belongs "at the slow-loop interval, never the
+		// fast one"; its feature table lists `iw station dump` as focused-rate.
+		// The rule wins, and nothing is lost by it: a mesh peer appears or
+		// disappears when somebody unplugs a node or a link finally
+		// establishes, not on the timescale of somebody watching a screen.
+		//
+		// `iwinfo.assoclist` is NOT used even though it is granted, returns the
+		// same peers as JSON, and needs no spawn. It carries no `mesh plink`,
+		// and plink is the entire difference between a count and a health
+		// reading — a peer stuck at OPN_SNT is indistinguishable from an
+		// established one without it, so a backhaul carrying nothing would read
+		// as healthy.
+		// Iterated over MODES, not over the iwinfo interface list.
+		//
+		// The two disagree, and only one of them is authoritative here.
+		// `iwinfo.devices` did not list the live `phy0-mesh0` on the reference
+		// device — measured — while `luci-rpc.getWirelessDevices`, which is
+		// where modes come from, did. Iterating the iwinfo list meant the exec
+		// was never issued for any mesh at all, and a working backhaul sat at
+		// peers-not-counted forever.
+		var meshIfaces []string
+		for iface, mode := range modes {
+			if mode == "mesh" {
+				meshIfaces = append(meshIfaces, iface)
+			}
+		}
+		sort.Strings(meshIfaces)
+		meshed := len(meshIfaces) > 0
+		for _, iface := range meshIfaces {
+			calls = append(calls, call{
+				inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+					"command": "/usr/sbin/iw",
+					"params":  []string{"dev", iface, "station", "dump"},
+				}},
+				decode:   decodeMeshPeers(iface),
+				optional: true,
+			})
+		}
+		// Stamped on the ATTEMPT, and only when there was something to ask —
+		// the same rule needNetworks follows. A device whose ACL refuses the
+		// exec would otherwise re-request it on every poll forever; a device
+		// with no mesh must not have its timer reset by a poll that asked
+		// nothing, or the first mesh it gains waits a full cadence.
+		if meshed {
+			p.mu.Lock()
+			p.meshAt = p.c.now()
+			p.mu.Unlock()
+		}
 	}
 	if p.needNetworks() {
 		// Same reasoning as the radio list: in the batch, on the slow cadence,
@@ -633,7 +696,21 @@ func IfaceModes(ctx context.Context, c *ubus.Client) (map[string]string, error) 
 
 // needIfaces reports whether this poll should re-read the radio list.
 func (p *poller) needIfaces() bool {
-	return p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval
+	if p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval {
+		return true
+	}
+	// A scheduled second look after an apply. Without it, the re-read triggered
+	// by an apply lands in the seconds before a new interface exists and caches
+	// its absence for the whole cadence.
+	return !p.ifaceRefetchAt.IsZero() && !p.c.now().Before(p.ifaceRefetchAt)
+}
+
+// needMeshPeers reports whether this poll should re-read mesh peer lists.
+//
+// Its own timer rather than needIfaces()'s, because it consumes what that fetch
+// produces and would otherwise never fire — see the call site.
+func (p *poller) needMeshPeers() bool {
+	return p.meshAt.IsZero() || p.c.now().Sub(p.meshAt) >= rediscoverInterval
 }
 
 // needNetworks reports whether this poll should re-read the interface subnets.
@@ -654,3 +731,37 @@ func (p *poller) needBoard() bool {
 // every minute would add calls to every poll for an answer that is almost always
 // the one we already have.
 const rediscoverInterval = 15 * time.Minute
+
+// decodeMeshPeers reads one mesh interface's peer list.
+//
+// Records that the question was ASKED and ANSWERED separately from what the
+// answer was. Zero peers and a refused exec are different facts, and the state
+// ladder has a different rung for each — collapsing them here would undo that
+// two layers down, where nothing could tell them apart any more.
+func decodeMeshPeers(iface string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		var v struct {
+			Code   int    `json:"code"`
+			Stdout string `json:"stdout"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return err
+		}
+		if s.MeshPeers == nil {
+			s.MeshPeers = map[string][]meshlink.Peer{}
+		}
+		if v.Code != 0 {
+			// The command ran and failed — an interface that went away between
+			// the list and the call, most likely. Not an answer about peers.
+			return nil
+		}
+		// A successful exec with no stations is a real zero, and the empty
+		// slice is what says so: nil would read as "never asked".
+		peers := meshlink.ParseStationDump(v.Stdout)
+		if peers == nil {
+			peers = []meshlink.Peer{}
+		}
+		s.MeshPeers[iface] = peers
+		return nil
+	}
+}

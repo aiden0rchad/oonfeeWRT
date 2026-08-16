@@ -148,12 +148,35 @@ func TestIntegrationMeshHealth(t *testing.T) {
 
 	// A mesh takes a few seconds to come up, and an apply returning is not the
 	// same as a radio being ready — §5r learned that by asserting too early.
-	time.Sleep(15 * time.Second)
-
-	links, err := d.MeshHealth(ctx)
-	if err != nil {
-		t.Fatal(err)
+	// Wait for the reading to SETTLE rather than for a fixed time.
+	//
+	// A fixed sleep is the wrong shape here and §5e already paid for that
+	// lesson: an apply returning is not a radio being ready, and on top of that
+	// the interface list and the peer read ride their own cadences, so how many
+	// polls it takes is genuinely variable. Waiting on the state is both
+	// faster when things go well and honest when they do not.
+	deadline := time.Now().Add(90 * time.Second)
+	var links []meshlink.Link
+	for {
+		var err error
+		links, err = d.MeshHealth(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settled(links) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(3 * time.Second)
 	}
+
+	for _, id := range ids {
+		f := d.meshes.get(id)
+		t.Logf("device %d facts: ifacesFresh=%v modes=%v sections=%v absent=%v "+
+			"peers=%v askedFor=%v netDevsFresh=%v",
+			id, f.ifacesFresh, f.modes, f.sections, f.absent, f.peers,
+			f.peersAskedFor, f.netDevsFresh)
+	}
+
 	if len(links) != 2 {
 		t.Fatalf("want one link per device in the group, got %d", len(links))
 	}
@@ -204,4 +227,21 @@ func contains2(s, want string) bool {
 		}
 	}
 	return false
+}
+
+// settled reports that every link has reached a state that will not change by
+// waiting — so the test stops as soon as there is something to assert, and
+// keeps waiting only while the answer is still "not yet".
+func settled(links []meshlink.Link) bool {
+	if len(links) == 0 {
+		return false
+	}
+	for _, l := range links {
+		switch l.State {
+		case meshlink.StatePeersNotCounted, meshlink.StateUnidentifiable,
+			meshlink.StateLivenessUnknown:
+			return false
+		}
+	}
+	return true
 }

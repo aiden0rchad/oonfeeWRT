@@ -51,6 +51,13 @@ type meshFacts struct {
 	sections map[string]string
 	absent   []string
 	up       map[string]bool
+	// peers is per mesh interface. A key present with an empty slice is a
+	// demonstrated zero; an absent key means nobody asked or nothing came back.
+	peers map[string][]meshlink.Peer
+	// peersAskedFor names the interfaces this device was asked about, so a
+	// refusal ("asked, no answer") is distinguishable from the baseline case
+	// ("nobody asked"). Two different states, two different sentences.
+	peersAskedFor map[string]bool
 	// ifacesFresh records that the interface list answered; netDevsFresh that
 	// the liveness call did. Two calls, two cadences, two ways of not knowing.
 	ifacesFresh  bool
@@ -90,6 +97,18 @@ func (m *meshStore) put(s collector.Snapshot) {
 		f.modes, f.sections, f.absent = s.IfaceModes, s.IfaceSections, s.ConfiguredIfacesAbsent
 		f.ifacesFresh = true
 	}
+	// Peers ride the same slow cadence as the interface list, so most polls
+	// carry none and the previous answer is carried forward rather than erased.
+	if s.MeshPeers != nil {
+		f.peers = s.MeshPeers
+		asked := map[string]bool{}
+		for iface, mode := range f.modes {
+			if mode == "mesh" {
+				asked[iface] = true
+			}
+		}
+		f.peersAskedFor = asked
+	}
 	f.netDevsFresh = s.NetDevsFresh
 	if s.NetDevsFresh {
 		up := make(map[string]bool, len(s.Interfaces))
@@ -127,16 +146,49 @@ func (d *Daemon) MeshHealth(ctx context.Context) ([]meshlink.Link, error) {
 		groups[g.ID] = g.DeviceIDs
 	}
 
-	out := []meshlink.Link{}
+	// Which devices could carry a mesh at all, decided before anything else
+	// needs the answer.
+	//
+	// It is needed twice: to gate each device's own reading, and to decide
+	// whether a mesh with no peers is DISAPPOINTING or simply alone. The naive
+	// version of that second question — "is another device in this group" — is
+	// wrong on this very fleet, where the second device cannot run a mesh at
+	// all. It would leave the working node sitting at warning permanently,
+	// which is the thing this readout is supposed to avoid rather than commit.
+	type devGate struct {
+		ok     bool
+		reason string
+	}
+	gates := map[int64]devGate{}
 	for _, dev := range devices {
 		if !dev.Adopted() || !model.RoleOf(dev.Role).Wireless() {
 			continue
 		}
-		caps, err := deviceCaps(dev)
-		if err != nil {
+		if caps, err := deviceCaps(dev); err == nil {
+			ok, reason := render.MeshGate(caps)
+			gates[dev.ID] = devGate{ok, reason}
+		}
+	}
+	// A mesh expects peers when the site model puts a SECOND device that can
+	// actually carry it in the same group.
+	peerExpected := map[int]bool{}
+	for _, m := range site.Meshes {
+		n := 0
+		for _, id := range groups[m.GroupID] {
+			if gates[id].ok {
+				n++
+			}
+		}
+		peerExpected[m.ID] = n > 1
+	}
+
+	out := []meshlink.Link{}
+	for _, dev := range devices {
+		gate, known := gates[dev.ID]
+		if !known {
 			continue
 		}
-		buildable, gateReason := render.MeshGate(caps)
+		buildable, gateReason := gate.ok, gate.reason
 
 		applied, err := d.appliedMeshSections(ctx, dev.ID)
 		if err != nil {
@@ -173,9 +225,11 @@ func (d *Daemon) MeshHealth(ctx context.Context) ([]meshlink.Link, error) {
 			if o.Iface != "" && facts.netDevsFresh {
 				o.Up, o.NetDevFound = facts.up[o.Iface]
 			}
-			// Peers are not collected yet; the ladder has a state for exactly
-			// that and says so rather than reporting a zero.
-			out = append(out, meshlink.Evaluate(o, len(groups[m.GroupID]) > 1))
+			if o.Iface != "" {
+				o.PeersAsked = facts.peersAskedFor[o.Iface]
+				o.Peers, o.PeersKnown = facts.peers[o.Iface]
+			}
+			out = append(out, meshlink.Evaluate(o, peerExpected[m.ID]))
 		}
 	}
 	return out, nil
