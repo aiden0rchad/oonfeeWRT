@@ -252,18 +252,31 @@ function DeviceDetailPanel({
 
       {stats && stats.aps.length > 0 && (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Radios</div>
+          {/* One row per BSS, not per radio.
+              
+              This said "Radios" and listed `stats.aps`, which is one entry per
+              broadcasting interface. On a two-radio AP carrying two SSIDs that
+              rendered four "radios"; two of them had the same SSID on different
+              bands and were told apart only by a channel number; and the
+              airtime figure appeared twice per radio, which reads as two
+              measurements of one quantity rather than one channel's occupancy
+              reported by each BSS sitting on it. */}
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
+            Broadcasting
+          </div>
           <div style={{ display: 'grid', gap: 6 }}>
             {stats.aps.map((ap) => (
               <div key={ap.iface} style={{ fontSize: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>
                     {ap.ssid || ap.iface}{' '}
-                    <span style={{ color: 'var(--text-muted)' }}>ch {ap.channel}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      {ap.iface} · ch {ap.channel}
+                    </span>
                   </span>
                   <span className="num">
                     {ap.clients === null ? (
-                      <Unknown why="this radio did not report a client count" />
+                      <Unknown why="this interface did not report a client count" />
                     ) : (
                       `${ap.clients} client${ap.clients === 1 ? '' : 's'}`
                     )}
@@ -271,7 +284,7 @@ function DeviceDetailPanel({
                 </div>
                 {ap.airtime_pct !== undefined && (
                   <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
-                    airtime {ap.airtime_pct.toFixed(1)}%
+                    channel {ap.channel} is {ap.airtime_pct.toFixed(1)}% busy
                   </div>
                 )}
               </div>
@@ -489,7 +502,12 @@ function ManagementOverhead({
             <Unknown why={o.cpu_basis} />
           )}
         </Prop>
-        <Prop label="Packages installed">
+        {/* Not "packages installed" — this is what the CONTROLLER installed,
+            which is always nothing, and is reported so that claim can be
+            checked rather than believed. Under the old label the value read as
+            a statement about the device, which for any real router is plainly
+            false and made the field look broken. */}
+        <Prop label="Packages we installed">
           {report.packages.length === 0 ? (
             <span title={report.packages_note}>none</span>
           ) : (
