@@ -89,6 +89,15 @@ type WLANOptions struct {
 	Hidden   bool
 	Isolate  bool
 	MaxAssoc int
+	// AllowUplink lets devices join this network as a 4-address (WDS) bridge
+	// rather than as a client.
+	//
+	// Off by default and deliberately explicit. It changes what the AP accepts
+	// from the air, and a network that quietly bridged anything presenting
+	// 4-address frames is a different security posture than the operator asked
+	// for. It is also the half people forget: configure the station and not
+	// this, and the link silently never forms.
+	AllowUplink bool
 }
 
 // Network is one L2/L3 segment: a VLAN with addressing.
@@ -163,7 +172,11 @@ type Site struct {
 	// Meshes are 802.11s backhauls. Separate from WLANs because a mesh point is
 	// a different interface mode, not a WLAN with a flag — see mesh.go.
 	Meshes []Mesh
-	Groups []APGroup
+	// Uplinks are devices that reach the network over the air rather than over
+	// a cable. See uplink.go for why this is a device property rather than a
+	// bridge object.
+	Uplinks []Uplink
+	Groups  []APGroup
 	// Overrides are the places individual devices are allowed to differ. See
 	// override.go for what is overridable and, more importantly, what is not.
 	Overrides Overrides

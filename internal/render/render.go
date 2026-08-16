@@ -271,6 +271,33 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		}
 	}
 
+	// The station half of a wireless uplink, if this device has one.
+	//
+	// Rendered before the meshes and the APs for one reason worth keeping: a
+	// device with a wireless uplink has no other path to the network, so if the
+	// list is ever trimmed or an apply is ever made partial, the interface the
+	// device NEEDS should not be the one that gets dropped.
+	if u, ok := site.UplinkFor(dev.ID); ok {
+		if w, found := site.WLANByID(u.WLANID); found {
+			net, _ := site.NetworkByID(w.NetworkID)
+			radio, hasRadio := radios[u.Band]
+			switch {
+			case !hasRadio:
+				rep.Omissions = append(rep.Omissions, Omission{
+					WLAN: w.SSID,
+					Reason: fmt.Sprintf("this device has no %s radio, so it cannot "+
+						"join %s over the air on that band", u.Band, w.SSID),
+				})
+			default:
+				sec, oms := renderUplink(u, w, net, radio, caps)
+				rep.Omissions = append(rep.Omissions, oms...)
+				if sec.Name != "" {
+					doc.Sections = append(doc.Sections, sec)
+				}
+			}
+		}
+	}
+
 	// Mesh backhauls, alongside the APs rather than instead of them: a node
 	// carrying a mesh while still serving clients is the intended arrangement.
 	for _, m := range site.MeshesFor(dev.ID) {
@@ -365,6 +392,13 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	}
 	if w.Options.MaxAssoc > 0 {
 		v["maxassoc"] = strconv.Itoa(w.Options.MaxAssoc)
+	}
+	// The AP half of a wireless uplink. One option, and the half people forget:
+	// configure the joining device and not this, and the station associates as
+	// an ordinary client while everything behind it stays dark — a failure that
+	// looks like a driver refusing 4-address frames and is not.
+	if w.Options.AllowUplink {
+		v["wds"] = "1"
 	}
 
 	v[OwnershipTag] = "1"
