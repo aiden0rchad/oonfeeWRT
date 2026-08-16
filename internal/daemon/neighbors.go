@@ -173,11 +173,20 @@ func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult
 	// AP has been asked what it is, so this is a genuine barrier rather than
 	// something that could be pipelined per device.
 	obs := map[roaming.Target]*bssObservation{}
+	complete := true
 	for _, dev := range devices {
 		row := d.readNeighbourState(ctx, dev, managed, obs)
-		if row != nil {
-			res.Devices = append(res.Devices, *row)
+		if row == nil {
+			continue
 		}
+		// A device that errored may be carrying BSSes this cycle cannot see.
+		// A device that was SKIPPED is a different thing: it was reached, or it
+		// was ruled out by its own capability record, and either way its APs
+		// are not silently missing from the table.
+		if row.Error != "" {
+			complete = false
+		}
+		res.Devices = append(res.Devices, *row)
 	}
 
 	// Phase two: compute. Pure, and the only part with rules worth arguing
@@ -214,6 +223,13 @@ func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult
 				// first as the second pushes an empty list over a correct one.
 				row.Unchanged++
 				continue
+			}
+			if !complete {
+				// Some device could not be answered for, so this table is not
+				// the whole fleet. Add and refresh, never remove — see
+				// roaming.Union.
+				want = roaming.Union(o.current, want)
+				desired[tgt] = want
 			}
 			if roaming.SameSet(o.current, want) {
 				row.Unchanged++

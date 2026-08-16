@@ -314,3 +314,47 @@ func TestDecodeOwnNRRejectsShortReplies(t *testing.T) {
 		t.Errorf("decoded wrong: %+v", n)
 	}
 }
+
+// An unreachable device must not have its BSSes deleted from the APs that ARE
+// reachable.
+//
+// The mock instance here carries both BSSes of the managed SSID, so a complete
+// cycle would give each one the other. Adding a device that cannot be reached
+// makes the cycle incomplete — and the reconciler must then still refuse to
+// shrink a list, because it cannot tell "that AP is gone" from "I could not ask
+// about that AP".
+func TestIncompleteCycleNeverShrinksAList(t *testing.T) {
+	addr := startMock(t)
+	d := openDaemon(t)
+	seedRoamingWLAN(t, d, "OpenWrt", true)
+	seedAP(t, d, "60:38:e0:00:0b:07", "here", addr, capability.Present)
+
+	ctx := context.Background()
+	if _, err := d.DistributeNeighbours(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now a second device appears and cannot be reached. Nothing about the
+	// first device changed, so its lists must survive untouched.
+	seedAP(t, d, "60:38:e0:00:0b:08", "gone", "127.0.0.1:1", capability.Present)
+
+	res, err := d.DistributeNeighbours(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Updated != 0 {
+		t.Errorf("rewrote %d list(s) because an unrelated device was "+
+			"unreachable", res.Updated)
+	}
+	for _, dev := range res.Devices {
+		if dev.Error != "" {
+			continue
+		}
+		for _, b := range dev.BSSes {
+			if b.Neighbours != 1 {
+				t.Errorf("%s/%s dropped to %d neighbours during an incomplete "+
+					"cycle", dev.Name, b.Iface, b.Neighbours)
+			}
+		}
+	}
+}

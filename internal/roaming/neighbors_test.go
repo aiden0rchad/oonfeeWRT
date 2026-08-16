@@ -222,3 +222,63 @@ func TestDistributeDeduplicatesByBSSID(t *testing.T) {
 			"row; whichever ran last would decide what the AP ends up with")
 	}
 }
+
+// An incomplete cycle may add and refresh, and may not remove.
+//
+// Found on hardware: one AP was still bringing its radios up while the other
+// was reconciled, and the healthy AP was handed a list with the booting one
+// deleted from it. Same rule as everywhere else here — a device that could not
+// be read is not a device with no radios.
+func TestUnionKeepsNeighboursAnIncompleteCycleCannotSee(t *testing.T) {
+	// The AP currently knows about both the other C6 band and the WRT. This
+	// cycle could only see the C6.
+	current := []Neighbour{c6_5, wrt5}
+	computed := []Neighbour{c6_5}
+
+	got := Union(current, computed)
+
+	if !bssids(got)[wrt5.BSSID] {
+		t.Error("dropped a live AP because the controller could not reach it " +
+			"for one cycle; the client loses the scan hint 802.11k exists for")
+	}
+	if len(got) != 2 {
+		t.Errorf("want both entries, got %d: %+v", len(got), got)
+	}
+}
+
+// A refreshed element must win over the stale one for the same BSSID —
+// otherwise an AP that changed channel is remembered on the old one forever.
+func TestUnionPrefersTheFreshElement(t *testing.T) {
+	moved := c6_5
+	moved.NR = "86d81bc51934ef1900008024250603022a00"
+
+	got := Union([]Neighbour{c6_5, wrt5}, []Neighbour{moved})
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(got))
+	}
+	for _, n := range got {
+		if n.BSSID == moved.BSSID && n.NR != moved.NR {
+			t.Error("kept the stale element for a BSS that moved channel")
+		}
+	}
+}
+
+func TestUnionIsStableAndDeduplicated(t *testing.T) {
+	a := Union([]Neighbour{c6_5, wrt5}, []Neighbour{wrt5, c6_2})
+	b := Union([]Neighbour{wrt5, c6_5}, []Neighbour{c6_2, wrt5})
+
+	if len(a) != 3 {
+		t.Fatalf("want 3 distinct entries, got %d: %+v", len(a), a)
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("Union is not deterministic: %+v vs %+v", a, b)
+		}
+	}
+	// And a complete cycle that removes something still removes it: Union is
+	// only reached when the observation was incomplete.
+	if SameSet([]Neighbour{c6_5, wrt5}, []Neighbour{c6_5}) {
+		t.Error("SameSet must still notice a genuine removal")
+	}
+}

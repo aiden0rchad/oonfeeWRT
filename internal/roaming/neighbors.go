@@ -200,6 +200,41 @@ func SameSet(a, b []Neighbour) bool {
 	return true
 }
 
+// Union merges what an AP already knows with what this cycle computed,
+// preferring the computed entry for any BSSID in both.
+//
+// This is what an INCOMPLETE observation is allowed to do, and the rule behind
+// it is the one the whole project runs on: a device that could not be read is
+// not a device with no radios. If any AP in the fleet failed to answer, its
+// BSSes are absent from the computed table — and pushing that table verbatim
+// would delete a live AP from every other AP's neighbour list because the
+// controller could not reach it for thirty seconds.
+//
+// Found on hardware, not by reasoning: one AP was still bringing its radios up
+// while the other was reconciled, and the healthy AP was handed a list with the
+// booting one removed.
+//
+// So a partial cycle may add and may refresh, and may not remove. The failure
+// modes are not symmetric — a stale neighbour costs a client one wasted scan,
+// while a missing one costs it the full scan 802.11k exists to avoid. Removals
+// resume the moment a complete read succeeds.
+func Union(current, computed []Neighbour) []Neighbour {
+	out := make([]Neighbour, 0, len(current)+len(computed))
+	have := make(map[string]bool, len(computed))
+	for _, n := range computed {
+		have[strings.ToLower(n.BSSID)] = true
+		out = append(out, n)
+	}
+	for _, n := range current {
+		if have[strings.ToLower(n.BSSID)] {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].BSSID < out[j].BSSID })
+	return out
+}
+
 // entryKey is the wire identity of one entry: what actually reaches the AP.
 // DeviceID and Iface are the controller's bookkeeping and are deliberately
 // excluded — a BSS that moved between devices in our records is the same

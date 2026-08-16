@@ -1670,6 +1670,28 @@ already seen, and has no guard on *host*. Nothing stops the same box being
 adopted twice under two identities if its identifying interface ever changes —
 which a bridge rename or a board file change would do.
 
+#### And one more the hardware found: a partial cycle must not remove
+
+One AP was still bringing its radios up while the other was reconciled, and the
+healthy AP was handed a list with the booting one **deleted from it**. The
+reconciler had done exactly what it was told: the missing AP contributed no
+BSSes, so the computed table did not contain them, so they were removed.
+
+That is the project's own rule broken at the fleet level. A device that could
+not be read is not a device with no radios — and the failure modes here are not
+symmetric. A stale neighbour costs a client one wasted scan; a missing one costs
+it the full scan 802.11k exists to avoid.
+
+So a cycle in which any device **errored** may add and refresh, and may not
+remove (`roaming.Union`). Removals resume the moment a complete read succeeds —
+verified: after the partial cycle had shrunk the C6's lists, the next complete
+cycle repaired all four BSSes back to three neighbours each.
+
+A device that was *skipped* does not make a cycle incomplete. It was reached, or
+its own capability record ruled it out; either way its APs are not silently
+missing from the table, and treating that as incomplete would mean a fleet with
+one un-upgraded device could never remove a neighbour again.
+
 #### Verified
 
 Two APs, two bands each, one SSID, on mvebu/mwlwifi and ath79/ath10k:

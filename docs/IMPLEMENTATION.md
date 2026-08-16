@@ -1258,7 +1258,19 @@ of DEVICE-BUDGET's one-request-per-minute allowance, and in the steady state the
 push never happens. Requests are attributed to the device's Management Overhead
 readout.
 
-### 15.7 What was NOT established
+### 15.7 A partial read must not shrink a list
+
+Observed while one AP was still bringing its radios up: the reconciled AP was
+handed a neighbour list with the booting one removed. The missing AP contributed
+no BSSes, so the computed table did not contain them, so they were deleted.
+
+A cycle in which any device errored therefore may add and refresh and may not
+remove. The failure modes are not symmetric — a stale neighbour costs a client
+one wasted scan, a missing one costs it the full scan 802.11k exists to avoid.
+Removals resume on the next complete read, verified by repairing the shrunken
+lists back to three neighbours each.
+
+### 15.8 What was NOT established
 
 **That `rrm_nr_get_own` is safe on a driver that is already failing.** On the
 WRT3200ACM, hostapd entered uninterruptible sleep with one of these calls in
