@@ -1484,3 +1484,100 @@ func TestUplinkResponsesCarryBothHazards(t *testing.T) {
 			rec.Body.String())
 	}
 }
+
+// Which AP a client is on must be decided by the radio, not by which collector
+// happened to write its row second.
+//
+// Two APs report the same MAC in one five-minute bucket on every roam, and also
+// whenever an operator opens two device pages within five minutes — both get
+// focused, and a focused poll is the only thing that produces station
+// telemetry. The old query scanned flat and let the last row win, so the
+// evidence never entered into it: holding the readings fixed and reversing only
+// the write order moved the client to the other AP.
+func TestClientAPAttributionIgnoresWriteOrder(t *testing.T) {
+	for _, rightLast := range []bool{false, true} {
+		name := "left-written-last"
+		if rightLast {
+			name = "right-written-last"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.setup()
+			ctx := context.Background()
+			now := time.Now()
+			h.srv.Now = func() time.Time { return now }
+
+			left := h.seedDevice("ap-left", true, nil).ID
+			right := h.seedDevice("ap-right", true, nil).ID
+			const mac = "aa:bb:cc:de:ad:01"
+			if err := h.db.UpsertClients(ctx, []store.SeenClient{
+				{MAC: mac, Name: "roamer", IPv4: "192.168.9.99"},
+			}, now.Unix()); err != nil {
+				t.Fatal(err)
+			}
+
+			// The truth is identical in both runs: the client is associated to
+			// ap-left, which hears it at -40 across nine samples. ap-right
+			// merely overhears it at -88. Only the write order differs.
+			base := now.Truncate(5 * time.Minute).Unix()
+			onLeft := []store.RollupRow{
+				{DeviceID: left, Kind: "sta_rssi", Key: mac, TS: base, Avg: -40, Cnt: 9},
+				{DeviceID: left, Kind: "sta_retry_pct", Key: mac, TS: base, Avg: 3, Cnt: 9},
+			}
+			onRight := []store.RollupRow{
+				{DeviceID: right, Kind: "sta_rssi", Key: mac, TS: base, Avg: -88, Cnt: 2},
+				{DeviceID: right, Kind: "sta_retry_pct", Key: mac, TS: base, Avg: 61, Cnt: 2},
+			}
+			order := append(append([]store.RollupRow{}, onLeft...), onRight...)
+			if rightLast {
+				order = append(append([]store.RollupRow{}, onRight...), onLeft...)
+			}
+			if err := h.db.WriteRollups(ctx, order); err != nil {
+				t.Fatal(err)
+			}
+
+			w := h.do(http.MethodGet, "/api/v1/clients", nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Clients []clientView `json:"clients"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			var got *clientView
+			for i := range resp.Clients {
+				if resp.Clients[i].MAC == mac {
+					got = &resp.Clients[i]
+				}
+			}
+			if got == nil {
+				t.Fatal("the roaming client is missing from the grid entirely")
+			}
+			if got.DeviceID == nil {
+				t.Fatal("no AP attributed to a client two APs reported")
+			}
+			if *got.DeviceID != left {
+				t.Errorf("attributed to the AP that merely overhears it " +
+					"(-88, 2 samples) rather than the one it is on " +
+					"(-40, 9 samples); write order decided this, not the radio")
+			}
+			// The metrics must come from the SAME AP as the attribution. Each
+			// field used to be overwritten independently, so a client could be
+			// shown on ap-left at ap-right's signal and ap-right's retry rate —
+			// three fields, three different sources, one plausible-looking row.
+			if got.Signal == nil {
+				t.Error("no signal for a client two APs reported")
+			} else if *got.Signal != -40 {
+				t.Errorf("signal %d is not the attributed AP's reading (-40)", *got.Signal)
+			}
+			if got.RetryPct == nil {
+				t.Error("no retry rate for a client two APs reported")
+			} else if *got.RetryPct != 3 {
+				t.Errorf("retry %.0f%% is not the attributed AP's reading (3%%); "+
+					"it belongs to the other AP", *got.RetryPct)
+			}
+		})
+	}
+}

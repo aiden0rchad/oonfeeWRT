@@ -127,22 +127,56 @@ type stationRF struct {
 	retry    *float64
 }
 
-// recentStations reads the newest RSSI (and retry) rollup per station MAC.
+// recentStations reads the newest RSSI (and retry) rollup per station MAC, and
+// decides which AP a client is on.
 //
 // The window is deliberately short. A station series persists for the full
 // retention period, so without a recency bound this would report a client as
 // wireless-and-at-−52-dBm two weeks after it left.
+//
+// The AP is chosen in SQL, per MAC, before any metric is read. That ordering is
+// the point. This used to be a flat scan with last-row-wins, which meant three
+// things, none of them intended: a client heard by two APs in the same
+// five-minute bucket was attributed to whichever one the collector happened to
+// poll second; the signal could come from one AP while the retry rate came from
+// another, because each row overwrote its own field independently; and the same
+// grid, refreshed, could move a stationary client between APs. Holding the
+// evidence fixed and reversing only the write order flipped the answer — so
+// nothing about the radio decided it.
+//
+// Newest bucket first, then strongest signal. A client is heard far better by
+// the AP it is associated to than by a neighbour that merely overhears it, so
+// within one bucket the stronger reading is the association. device_id last,
+// only so that a genuine tie is stable rather than arbitrary.
 func (s *Server) recentStations(ctx context.Context, now time.Time) map[string]stationRF {
 	out := map[string]stationRF{}
 	cutoff := now.Add(-clientActiveWindow).Unix()
 
 	rows, err := s.Store.SQL().QueryContext(ctx, `
-SELECT se.key, se.device_id, se.kind, r.avg
-  FROM rollup_5m r
-  JOIN series se ON se.id = r.series_id
- WHERE se.kind IN (?, ?) AND r.ts >= ?
- ORDER BY r.ts`,
-		string(telemetry.KindStaRSSI), string(telemetry.KindStaRetry), cutoff)
+WITH sta AS (
+  SELECT se.key AS mac, se.device_id AS device_id, se.kind AS kind,
+         r.ts AS ts, r.avg AS avg
+    FROM rollup_5m r
+    JOIN series se ON se.id = r.series_id
+   WHERE se.kind IN (?, ?) AND r.ts >= ?
+),
+-- The AP each MAC is on: strongest recent RSSI wins. Retry rows are excluded
+-- from the ranking entirely — a retry percentage says nothing about which
+-- radio a client is near, and letting one vote was how a device with no RSSI
+-- reading at all could win the attribution.
+winner AS (
+  SELECT mac, device_id,
+         ROW_NUMBER() OVER (
+           PARTITION BY mac ORDER BY ts DESC, avg DESC, device_id
+         ) AS rn
+    FROM sta WHERE kind = ?
+)
+SELECT s.mac, s.device_id, s.kind, s.avg
+  FROM sta s
+  JOIN winner w ON w.mac = s.mac AND w.device_id = s.device_id AND w.rn = 1
+ ORDER BY s.ts`,
+		string(telemetry.KindStaRSSI), string(telemetry.KindStaRetry), cutoff,
+		string(telemetry.KindStaRSSI))
 	if err != nil {
 		s.Log.Debug("could not read station telemetry", "err", err)
 		return out
@@ -156,8 +190,9 @@ SELECT se.key, se.device_id, se.kind, r.avg
 		if err := rows.Scan(&mac, &deviceID, &kind, &avg); err != nil {
 			return out
 		}
-		// Ordered by ts, so later rows overwrite earlier ones and the last write
-		// wins — which is the most recent reading.
+		// Every row here already belongs to the winning AP, so the only thing
+		// last-write-wins still decides is which of that AP's buckets to take —
+		// and ordered by ts, that is the most recent one.
 		e := out[mac]
 		e.deviceID = deviceID
 		switch telemetry.Kind(kind) {
