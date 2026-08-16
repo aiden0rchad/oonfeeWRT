@@ -78,6 +78,7 @@ func run() error {
 		return err
 	}
 	d.StartMaintenance(ctx)
+	d.StartNeighbourReconciler(ctx)
 	if err := d.Serve(ctx); err != nil {
 		return err
 	}

@@ -72,6 +72,13 @@ const (
 	// FeatMesh gates 802.11s. Determined from which wpad build is installed —
 	// see probeMesh, which records why no other source can answer it.
 	FeatMesh Feature = "mesh-80211s"
+	// FeatNeighborReport gates distributing 802.11k neighbour lists to this
+	// device's APs. It needs `rrm_nr_get_own` and `rrm_nr_set` on the hostapd
+	// object, which stock rpcd does not grant — so on a device adopted before
+	// the ACL carried them this is NotObservable rather than Absent, and the
+	// difference is the whole point: one says buy different hardware, the other
+	// says re-adopt.
+	FeatNeighborReport Feature = "neighbor-report"
 	// FeatPreflightDirty gates the "unsaved changes on device" guard. Without
 	// it the apply path cannot detect a human mid-edit in LuCI.
 	FeatPreflightDirty Feature = "preflight-dirty-check"

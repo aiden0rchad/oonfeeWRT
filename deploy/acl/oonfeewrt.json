@@ -1,6 +1,6 @@
 {
 	"oonfeewrt": {
-		"description": "oonfeeWRT controller — read device state and write owned UCI sections. Two rpcd path rules govern the file map below, both verified on hardware: paths are CANONICALISED before matching, so a grant on a symlink tree (/sys/class/net/*) never fires; and '*' crosses '/', so a pattern like /sys/devices/* grants an entire subtree. Prefer ubus objects over file grants wherever the data exists in both.",
+		"description": "oonfeeWRT controller — read device state and write owned UCI sections. Two rpcd path rules govern the file map below, both verified on hardware: paths are CANONICALISED before matching, so a grant on a symlink tree (/sys/class/net/*) never fires; and '*' crosses '/', so a pattern like /sys/devices/* grants an entire subtree. Prefer ubus objects over file grants wherever the data exists in both. The hostapd rrm_nr_* grants distribute 802.11k neighbour lists, which no AP can learn on its own; note that hostapd's client-affecting methods (bss_transition_request, rrm_beacon_req, del_client beyond an operator's explicit action) are NOT granted — this controller tells APs about each other and leaves the roam decision to the client.",
 
 		"read": {
 			"ubus": {
@@ -16,7 +16,7 @@
 				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
 				"luci": [ "getFeatures" ],
 				"log": [ "read" ],
-				"hostapd.*": [ "get_status", "get_clients", "get_features", "list_bans" ]
+				"hostapd.*": [ "get_status", "get_clients", "get_features", "list_bans", "rrm_nr_get_own", "rrm_nr_list" ]
 			},
 			"uci": [ "network", "wireless", "firewall", "dhcp", "system", "luci", "uhttpd", "dropbear" ],
 			"file": {
@@ -45,7 +45,7 @@
 			"ubus": {
 				"uci": [ "add", "set", "delete", "rename", "order", "revert", "commit", "apply", "confirm", "rollback" ],
 				"network": [ "reload" ],
-				"hostapd.*": [ "del_client" ],
+				"hostapd.*": [ "del_client", "rrm_nr_set" ],
 				"file": [ "exec" ]
 			},
 			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ],

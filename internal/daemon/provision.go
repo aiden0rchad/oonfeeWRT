@@ -215,7 +215,35 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 			break
 		}
 	}
+
+	// An apply that reconfigures a BSS restarts it, and a restarted BSS comes
+	// back with an empty 802.11k neighbour list. Measured on the reference
+	// hardware: `wifi reload` cleared the list on the BSS whose section had
+	// changed and left the untouched BSS on the same radio holding its own, so
+	// this cannot be predicted from the plan — only re-read.
+	//
+	// Detached from the request's context because it must outlive the HTTP
+	// response, and quietly: an operator applied a site model, and a warning
+	// about neighbour lists would read as though their apply had failed. The
+	// fifteen-minute loop is the backstop if this cycle does not land.
+	d.nudgeNeighbours()
+
 	return out, nil
+}
+
+// nudgeNeighbours re-runs the neighbour distribution out of band.
+func (d *Daemon) nudgeNeighbours() {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
+		defer cancel()
+		if res, err := d.DistributeNeighbours(ctx); err != nil {
+			d.Log.Debug("could not refresh 802.11k neighbour lists after an "+
+				"apply; the periodic cycle will retry", "err", err)
+		} else if res.Updated > 0 {
+			d.Log.Info("refreshed 802.11k neighbour lists after an apply",
+				"updated", res.Updated)
+		}
+	}()
 }
 
 func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.Device,

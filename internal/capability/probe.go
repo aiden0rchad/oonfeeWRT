@@ -374,10 +374,15 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		return
 	}
 
-	// Three features, one accumulator each. All three previously defaulted to
+	// One accumulator per feature. The first three previously defaulted to
 	// Absent and all three had a path that reached the end without
 	// demonstrating anything — see verdict.
-	var survey, split, hostapd verdict
+	var survey, split, hostapd, neighbors verdict
+	// Tracked apart from the verdict because the note below must only fire when
+	// rrm_nr_get_own itself was refused. A radio whose hostapd object was
+	// unreachable also leaves neighbours unobservable, and blaming that on the
+	// rrm grant would name a call that was never made.
+	rrmRefused := false
 
 	for _, dev := range devs.Devices {
 		// SurveyUsest starts Unknown, not Absent: the switch below sets it from
@@ -482,15 +487,50 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		// mean no hostapd. Without that distinction, a device with its radios
 		// disabled reports the per-client controls as unavailable, and enabling
 		// a radio makes it look like the device gained a feature.
+		// 802.11k neighbour reports ride on the same object, so this radio's
+		// hostapd verdict is also the ceiling for them: you cannot learn
+		// anything about a method on an object you could not reach.
+		hostapdUp := false
 		switch err := c.Call(ctx, "hostapd."+dev, "get_status", nil, nil); {
 		case err == nil:
 			hostapd.demonstrated(Present)
+			hostapdUp = true
 		case isDenied(err):
 			hostapd.refuse()
+			neighbors.refuse()
 		case radioLive:
+			// The radio is up and hostapd is not managing it, so there is no
+			// BSS here to hold a neighbour list. A real absence for both.
 			hostapd.demonstrated(Absent)
+			neighbors.demonstrated(Absent)
 		default:
 			hostapd.undecided()
+			neighbors.undecided()
+		}
+
+		// Asked with rrm_nr_get_own because it is the read half of the pair and
+		// changes nothing. A device that will hand over its own element will
+		// take a list back: both are methods on the same object behind the same
+		// ACL entry, and hostapd has carried them together since RRM landed.
+		if hostapdUp {
+			switch err := c.Call(ctx, "hostapd."+dev, "rrm_nr_get_own", nil, nil); {
+			case err == nil:
+				neighbors.demonstrated(Present)
+			case isDenied(err):
+				// The ACL. Measured: stock rpcd grants no rrm_* method, and a
+				// grant only reaches devices adopted after it exists — so this
+				// is the expected state of every device adopted before this
+				// feature, and recording it as Absent would tell an operator
+				// their hardware cannot do something it does perfectly well.
+				neighbors.refuse()
+				rrmRefused = true
+			case isMethodMissing(err):
+				// hostapd is running and does not carry the method: a build
+				// without RRM. A real absence, and not fixable by re-adopting.
+				neighbors.demonstrated(Absent)
+			default:
+				neighbors.undecided()
+			}
 		}
 
 		r.Radios = append(r.Radios, radio)
@@ -507,6 +547,16 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 
 	r.Set(FeatSurvey, surveyOK)
 	r.Set(FeatHostapdControl, hostapd.state())
+
+	neighborsOK := neighbors.state()
+	r.Set(FeatNeighborReport, neighborsOK)
+	if neighborsOK == NotObservable && rrmRefused {
+		r.Note("802.11k neighbour lists cannot be distributed to this device: " +
+			"rpcd refused hostapd's rrm_nr_get_own. The controller's ACL is " +
+			"written to a device once, at adoption, so a device adopted before " +
+			"this feature existed will keep refusing until it is re-adopted. " +
+			"Nothing is wrong with the hardware")
+	}
 
 	// These notes are the operator-facing half of the distinction above. Both
 	// states gate the same — Buildable accepts only Present — so what changes is
@@ -584,6 +634,16 @@ func probeAccounting(ctx context.Context, c *ubus.Client, r *Registry) {
 func isNotFound(err error) bool {
 	var se *ubus.StatusError
 	return errors.As(err, &se) && se.Status == ubus.StatusNotFound
+}
+
+// isMethodMissing reports that the object answered and does not carry the
+// method. That is a real determination about the running daemon — a hostapd
+// built without RRM, say — and is the one error here that licenses an Absent.
+// It is deliberately narrow: METHOD_NOT_FOUND comes from the target, whereas
+// an ACL gap never reaches the target at all and surfaces as a denial.
+func isMethodMissing(err error) bool {
+	var se *ubus.StatusError
+	return errors.As(err, &se) && se.Status == ubus.StatusMethodNotFound
 }
 
 // isDenied reports a reach problem rather than a device answer: either rpcd

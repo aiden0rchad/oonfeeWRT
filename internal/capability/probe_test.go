@@ -281,3 +281,75 @@ func TestNoiseStabilityIsPerRadioAndPerSource(t *testing.T) {
 		t.Errorf("wlan1 (swinging in the fixture) NoiseStable = %v, want Absent", got)
 	}
 }
+
+// 802.11k neighbour reports.
+//
+// The interesting state here is not Present — it is what happens when the grant
+// is missing, because that is the state of every device adopted before this
+// feature existed. The ACL is written to a device twice in its life (adoption
+// and un-adoption), so a widened grant does not reach an already-adopted
+// device, and recording that as Absent would tell an operator their hardware
+// cannot do something it does perfectly well.
+func TestProbeFindsNeighborReport(t *testing.T) {
+	r, err := Probe(context.Background(), dial(t))
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got := r.State(FeatNeighborReport); got != Present {
+		t.Errorf("neighbor-report = %s, want Present", got)
+	}
+}
+
+func TestNeighborReportDeniedIsNotObservable(t *testing.T) {
+	c := dial(t)
+	setACLGap(t, c,
+		[2]string{"hostapd.wlan0", "rrm_nr_get_own"},
+		[2]string{"hostapd.wlan1", "rrm_nr_get_own"})
+
+	r, err := Probe(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got := r.State(FeatNeighborReport); got != NotObservable {
+		t.Fatalf("neighbor-report = %s, want NotObservable — a refused check "+
+			"is not a negative answer, and reporting Absent here sends an "+
+			"operator looking for a hardware limit that does not exist", got)
+	}
+	// The note is the operator-facing half. Both states gate the same thing, so
+	// what changes between them is what someone is told to do about it.
+	var found bool
+	for _, n := range r.Notes {
+		if strings.Contains(n, "re-adopt") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no note names re-adoption as the remedy; notes = %q", r.Notes)
+	}
+}
+
+// hostapd control being unreadable must not be reported twice. Two symptoms for
+// one cause reads as two problems, and an operator fixes the wrong one first.
+func TestNeighborReportIsNotAskedWithoutHostapd(t *testing.T) {
+	c := dial(t)
+	setACLGap(t, c,
+		[2]string{"hostapd.wlan0", "get_status"},
+		[2]string{"hostapd.wlan1", "get_status"})
+
+	r, err := Probe(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got := r.State(FeatHostapdControl); got != NotObservable {
+		t.Errorf("hostapd-control = %s, want NotObservable", got)
+	}
+	if got := r.State(FeatNeighborReport); got != NotObservable {
+		t.Errorf("neighbor-report = %s, want NotObservable", got)
+	}
+	for _, n := range r.Notes {
+		if strings.Contains(n, "re-adopt") {
+			t.Errorf("blamed the ACL for a device whose hostapd could not be "+
+				"reached at all: %q", n)
+		}
+	}
+}

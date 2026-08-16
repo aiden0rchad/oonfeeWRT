@@ -310,6 +310,25 @@ def rollback_watchdog():
 # ubus objects
 # --------------------------------------------------------------------------
 
+# The hostapd methods a real BSS object carries, as `ubus -v list` reported them
+# on both reference devices. `bss_transition_request` is present here because
+# the device has it — the controller's ACL deliberately does not grant it, and
+# a fixture that hid it would make that decision invisible.
+HOSTAPD_METHODS = ("get_status", "get_clients", "get_features", "list_bans",
+                   "del_client", "bss_transition_request",
+                   "rrm_nr_get_own", "rrm_nr_list", "rrm_nr_set")
+
+# One BSS per hostapd object: what `rrm_nr_get_own` reports about itself, and
+# what `rrm_nr_set` has most recently stored. Both SSIDs match so the two BSSes
+# are each other's neighbour, which is the case worth exercising.
+NR_OWN = {
+    "hostapd.wlan0": {"bssid": "30:23:03:db:be:42", "ssid": "OpenWrt",
+                      "nr": "302303dbbe42ef1900008024090603022a00"},
+    "hostapd.wlan1": {"bssid": "30:23:03:db:be:41", "ssid": "OpenWrt",
+                      "nr": "302303dbbe41ef0900005106070603000100"},
+}
+NR_LISTS = {}
+
 OBJECTS = {
     "session": {"login": {}, "list": {}, "destroy": {}, "access": {}},
     "uci": {m: {} for m in ("configs", "get", "set", "add", "delete",
@@ -327,18 +346,18 @@ OBJECTS = {
     "network.wireless": {"status": {}},
     # hostapd is the cheap source the architecture now prefers over iwinfo for
     # per-AP status and client lists (1 ms vs ~30 ms measured on class A).
-    "hostapd.wlan0": {m: {} for m in ("get_status", "get_clients",
-                                      "get_features", "list_bans",
-                                      "del_client")},
-    "hostapd.wlan1": {m: {} for m in ("get_status", "get_clients",
-                                      "get_features", "list_bans",
-                                      "del_client")},
+    #
+    # One entry per BSS and no duplicates. This dict had two `hostapd.wlan0`
+    # keys and two `hostapd.wlan1` keys, so the later pair silently replaced the
+    # earlier and the mock advertised a hostapd with no `get_status` at all —
+    # invisible, because the dispatcher answers hostapd.* before consulting
+    # this table, while `ubus list` (which is what discovery and the capability
+    # probe fingerprint on) read the truncated version.
+    "hostapd.wlan0": {m: {} for m in HOSTAPD_METHODS},
+    "hostapd.wlan1": {m: {} for m in HOSTAPD_METHODS},
     "luci-rpc": {m: {} for m in ("getNetworkDevices", "getWirelessDevices",
                                  "getHostHints", "getDHCPLeases",
                                  "getBoardJSON")},
-    "hostapd.wlan0": {"get_clients": {}, "bss_transition_request": {},
-                      "del_client": {}},
-    "hostapd.wlan1": {"get_clients": {}, "del_client": {}},
 }
 
 WHICH = {"iw": "/usr/sbin/iw", "iwinfo": "/usr/bin/iwinfo",
@@ -750,6 +769,35 @@ def handle_one(req):
         if meth == "get_features":
             return ok(rid, {"ht": True, "vht": g5, "he": False})
         if meth == "del_client":
+            return ok(rid, {})
+        # 802.11k neighbour reports.
+        #
+        # The shapes are copied from real captures on 2026-08-15: a WRT3200ACM
+        # (mwlwifi) and an Archer C6 v2 (ath9k/ath10k) both answer this way.
+        # `rrm_nr_get_own` returns a POSITIONAL triple, not an object, and the
+        # element is opaque hex the controller relays untouched.
+        #
+        # `rrm_nr_list` returns entries in hostapd's own storage order, which is
+        # neither insertion order nor sorted — so it is deliberately shuffled
+        # here. A consumer that compares lists order-sensitively converges
+        # never, and against an ordered fixture it would look fine.
+        if meth == "rrm_nr_get_own":
+            with lock:
+                return ok(rid, {"value": [
+                    NR_OWN[obj]["bssid"], NR_OWN[obj]["ssid"],
+                    NR_OWN[obj]["nr"]]})
+        if meth == "rrm_nr_list":
+            with lock:
+                return ok(rid, {"list": list(reversed(NR_LISTS.get(obj, [])))})
+        if meth == "rrm_nr_set":
+            entries = (args or {}).get("list")
+            if not isinstance(entries, list):
+                return err(rid, 2)
+            for e in entries:
+                if not isinstance(e, list) or len(e) != 3:
+                    return err(rid, 2)
+            with lock:
+                NR_LISTS[obj] = [list(e) for e in entries]
             return ok(rid, {})
         return err(rid, 3)
 

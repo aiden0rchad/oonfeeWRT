@@ -15,6 +15,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -73,8 +74,13 @@ type Server struct {
 	// record is whatever adoption found, which is the behaviour that made a
 	// firmware upgrade leave a device permanently misdescribed.
 	Reprobe Reprober
-	Hub     *Hub
-	Log     *slog.Logger
+	// Neighbours distributes 802.11k neighbour lists across the fleet.
+	// Optional: without it every AP still advertises that it answers neighbour
+	// requests and still answers them with nothing, which is where this
+	// project was before the endpoint existed.
+	Neighbours func(context.Context) (*NeighbourResult, error)
+	Hub        *Hub
+	Log        *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -166,6 +172,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
+	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
 	// The site model (Phase 2). Editing any of this changes nothing on any
 	// device; /site/preview says what it WOULD change and /site/apply does it.
 	private.HandleFunc("GET /api/v1/site", s.handleSite)
