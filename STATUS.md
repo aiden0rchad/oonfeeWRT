@@ -404,11 +404,15 @@ most-worth-doing first.
    call's return value. Nothing in the collector consumes device-pushed events
    yet.
 
-1. **Look at the client grid, the re-probe panel and the new neighbour card in a
-   browser.** All three (§5i, §5j, §5t) are verified from unit tests up through
-   the real device, and nobody has *looked* at any of them. Every UI defect this
-   project has found was found by looking — see the standing gap below. `.run`
-   is seeded with both APs and the roaming WLAN, so this is one command away.
+1. ~~**Look at the screens in a browser.**~~ **Done 2026-08-16** — §5v. Four
+   defects in one sitting, none reachable by any test in the repo, including a
+   grid whose headers could not be dragged and a suite that tested dragging
+   anyway. The sticky header was checked by eye and holds.
+
+   **Still unlooked-at:** the Clients grid with a real client on it (both APs
+   currently have none associated), the Logs facets under load, and the adopt
+   and discovery screens. Keep doing this — it remains the highest-yield check
+   this project has, and the count is now nineteen.
 2. **A mesh backhaul whose health cannot be seen is half a feature.** §5m's own
    note says this is "the first thing worth building once there are two nodes",
    and there are two nodes now. The readout may be closer than that note
@@ -499,6 +503,7 @@ the useful part — the code is in git either way.
 | §5s | The roam demo — what it proved, what it did not, and the txpower trap |
 | §5t | **Neighbour reports** — the first thing built that hand configuration cannot do |
 | §5u | What a factory reset looks like from the controller, and why it used to look like nothing |
+| §5v | **The browser pass** — four defects in one sitting, and why none was reachable by a test |
 
 ### 5a. What discovery corrected
 
@@ -841,9 +846,9 @@ new network defaults to exactly that.
 - ~~`reconcile` is mock-verified only.~~ Closed 2026-08-14: it now runs against
   the real device through the Phase 2 apply flow, which is how the `uci.get`
   decode bug was found (§5e).
-- **The UI has no automated tests — the single highest-value gap in the
-  project's testing.** It has been driven in a browser against the real device,
-  which has caught **fifteen** defects no unit test would have
+- **The UI's automated tests cannot see layout, and a person is still the only
+  thing that catches a dead affordance.** Driving it in a browser has now caught
+  **nineteen** defects no unit test would have
   — three from the discovery screen and six more from the table system (§5b),
   including a sticky header that had never once been sticky and a
   virtualization drift of 840px. That is a manual step someone has to remember,
@@ -1847,6 +1852,83 @@ is easier to write than the real thing is testing the wrong thing", one level
 further out: the mock was not simpler here, it was *inverted*, and every test
 that never asked this question passed either way.
 
+### 5v. The browser pass, and the four things it found
+
+Item 1 of the do-next list, done 2026-08-16 by an operator opening the screens
+while I watched the daemon log. Four defects in one sitting, and the useful part
+is that **not one of them was reachable by any test in the repo**.
+
+#### What was confirmed working
+
+Worth recording, because a pass that only lists faults reads as a broken build.
+The neighbour card rendered exactly as designed — `oonfee-roam` named, "4
+already correct", both APs, `knows 3 neighbours` on every BSS. The unmeasured
+class explained itself on the C6 and stayed a bare `A` on the WRT. Both
+re-probes reported `neighbor-report` present and no changes on a second run.
+**The sticky header stays pinned when a long grid scrolls** — the defect that
+was silently broken for the entire life of the project once (§5b), checked by
+eye because happy-dom has no layout engine and never will.
+
+And the daemon log carried **zero warnings or errors** for the whole session,
+which is the half of this that a screenshot cannot show.
+
+#### 1. The grid people look at most could not be reordered
+
+Reported as "I tried to drag the column header, nothing happens" — on Devices,
+which was the one `DataGrid` with no column preferences. Clients and Logs had
+them. Without `onPrefsChange` the header is not `draggable` at all, so there was
+no reorder, no picker, and not even the tooltip that says dragging is possible.
+
+**Why it survived a suite that tests dragging.** Every drag test fires
+`fireEvent.dragStart` directly, and fireEvent dispatches the event whatever the
+DOM says. They all passed against a header a real mouse could never pick up:
+they proved the *drop handler* worked and said nothing about whether a drag can
+*start*. §5l predicted this in so many words — *"nothing here says whether a drag
+actually starts"* — and then it happened anyway, which is the difference between
+naming a gap and closing it.
+
+`draggable` is asserted directly now, in both directions. A grid that cannot
+reorder must not advertise that it can, so the absent case is pinned too.
+
+#### 2. "Radios" was listing BSSes
+
+The device panel iterated `stats.aps` — one row per broadcasting interface —
+under a heading that said Radios. On a two-radio AP carrying two SSIDs that
+rendered **four radios**. Two rows read `oonfee-roam` and were distinguishable
+only by a channel number. And the airtime figure appeared **twice per radio**.
+
+That last one is the §5h shape again: one quantity presented as two
+measurements. Channel occupancy belongs to the channel, and every BSS sitting on
+it reports the same number correctly — but printing it once per BSS invites the
+reader to believe two radios were measured. It reads *"channel 1 is 58.0%
+busy"* now, once per interface, with the interface named.
+
+#### 3. "Packages installed: none" was true and unreadable
+
+It means packages **the controller** installed — always none, reported rather
+than omitted precisely so ARCHITECTURE §0's "we install nothing on your router"
+can be checked instead of believed. The tooltip said so. Nobody hovers. Under
+that label the value was a claim about the *device*, which for any real router
+is plainly false, so the field looked broken. Now "Packages we installed".
+
+The general shape: **a correct value under a wrong label is a wrong readout.**
+The `packages_note` was doing real work and reaching nobody.
+
+#### 4. The keyring passphrase has no recovery path, and it showed
+
+Not a UI defect, and the most operationally serious of the four. Starting the
+daemon by hand prompted `Operator passphrase:` — the key that unseals the device
+credentials — which was generated in a previous session and exists only in the
+session scratchpad. There is nothing an operator could type. The prompt gives no
+hint that a file is the intended path, and the failure is a flat "the passphrase
+is wrong, or the keyring file has been corrupted".
+
+Nothing was lost here (both devices re-adopt over SSH), but the shape is worth
+naming: **the only copy of the key to every device credential lives in a
+directory that has already been wiped once during this project.** §7 documents
+`-passphrase-file`; the running daemon does not mention it. A prompt that cannot
+be answered should say what would answer it.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -1982,6 +2064,21 @@ written and believed.
   mock-is-simpler failure: this mock was *inverted*, and every test that never
   asked the question passed either way. Where two components share a fixture,
   make at least one test cross the boundary.
+- **Firing an event is not performing a gesture.** Every drag test in the UI
+  suite called `fireEvent.dragStart` on a header and asserted the reorder
+  landed. They all passed on a grid whose headers were `draggable={false}` —
+  a header no mouse could ever pick up — because fireEvent dispatches the event
+  whatever the DOM says. The tests proved the *handler* worked and said nothing
+  about whether the gesture can begin. Where a feature depends on an attribute
+  the browser consults rather than on code you wrote, assert the attribute.
+- **A correct value under a wrong label is a wrong readout.** "Packages
+  installed: none" was true — the controller installs none, and the field exists
+  so that claim can be checked rather than believed — and it read as a statement
+  about the device, which for any real router is plainly false. The explanation
+  was in a `title` attribute nobody hovers. Two more in the same sitting:
+  "Radios" listing BSSes, and one channel's occupancy printed once per BSS so
+  that one measurement looked like two. None of the three had a wrong number in
+  it, and all three told the reader something untrue.
 - **A test helper that computes an identity its own way will invent a second
   device.** The seed helpers wrote device MACs as literals while adoption reads
   the LAN bridge, so a seeded row and a real adoption of one physical box
