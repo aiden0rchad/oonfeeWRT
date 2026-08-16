@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -412,5 +413,37 @@ func TestConnectDoesNotBlameAdoptionForAnUnreachableDevice(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "factory reset") {
 		t.Errorf("an unreachable device was reported as reset: %v", err)
+	}
+}
+
+// One address is one device.
+//
+// The MAC guard cannot catch a box whose identity changed — a renamed bridge, an
+// altered board file, an identifying interface that moved — and every
+// consequence of the resulting duplicate is silent: polled twice against a
+// budget of one request a minute, listed twice on every screen, and reaching the
+// neighbour distributor under two device ids. Observed for real from hand-seeded
+// rows whose MACs did not match what adoption derives.
+func TestAdoptRefusesASecondDeviceAtOneAddress(t *testing.T) {
+	addr := startMock(t)
+	d := openDaemon(t)
+
+	// An existing adopted row at this address, under an identity that is NOT
+	// the one the device will report.
+	seedAP(t, d, "60:38:e0:00:0d:01", "already-here", addr, capability.Present)
+
+	_, err := d.Adopt(context.Background(), api.AdoptRequest{
+		Host: addr, Username: "root", Password: "good", Name: "second",
+	})
+	if err == nil {
+		t.Fatal("adopted a second device at an address that already has one")
+	}
+	if !strings.Contains(err.Error(), "already adopted") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+	// The message has to name the row standing in the way, or an operator
+	// cannot act on it.
+	if !strings.Contains(err.Error(), "already-here") {
+		t.Errorf("the refusal does not name the existing device: %v", err)
 	}
 }

@@ -56,6 +56,32 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		host = net.JoinHostPort(req.Host, strconv.Itoa(req.Port))
 	}
 
+	// One address is one device, checked before the device is touched at all.
+	//
+	// The identity check further down cannot cover this: it compares the MAC
+	// this device reports, so a box whose identity ever changes — a renamed
+	// bridge, an altered board file, an identifying interface that moved —
+	// passes it, and the fleet quietly gains a second adopted row for one AP.
+	// Every consequence is silent: polled twice against a budget of one request
+	// a minute, listed twice on every screen, and reaching the 802.11k
+	// distributor under two device ids. Observed for real, from hand-seeded
+	// rows whose MACs did not match what adoption derives.
+	//
+	// Placed here rather than beside the MAC check because it needs nothing
+	// from the device. Refusing after opening SSH and minting a session would
+	// be a write-shaped conversation with a router we were never going to
+	// adopt.
+	if others, err := d.Store.Devices(ctx); err == nil {
+		for _, o := range others {
+			if o.Host == req.Host && o.Adopted() {
+				return nil, fmt.Errorf("%s is already adopted as %q (%s). One "+
+					"address is one device: un-adopt %q first, or correct the "+
+					"address if two devices really are involved",
+					req.Host, o.Name, o.MAC, o.Name)
+			}
+		}
+	}
+
 	operator := ubus.New(ubus.Options{Host: host, HTTPS: https, Timeout: 30 * time.Second})
 	defer operator.Close()
 	if err := operator.Login(ctx, req.Username, req.Password); err != nil {
