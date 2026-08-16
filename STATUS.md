@@ -226,7 +226,7 @@ previewed per device before anything is written. Networks (VLAN, DHCP, firewall
 zone) render too, within a limit that hardware imposed — §5g is the single most
 important thing in this file.
 
-Nineteen Go packages plus a UI. Everything that touches a device has been
+Twenty Go packages plus a UI. Everything that touches a device has been
 verified against one.
 
 ---
@@ -278,6 +278,7 @@ credential, which is where a missing ACL grant shows up) and `internal/daemon`
 | `internal/reconcile` | Read → render → diff → apply → record | ✅ |
 | `internal/roaming` | Which APs are each other's 802.11k neighbours | pure |
 | `internal/meshlink` | What a backhaul is actually doing, and `iw station dump` | pure |
+| `internal/onair` | Whether a BSS is really transmitting, cross-checked between APs | ✅ |
 | `internal/discovery` | Unauthenticated subnet sweep for OpenWrt candidates | ✅ |
 | `internal/secrets` | argon2id → XChaCha20-Poly1305; operator passwords | ✅ |
 | `internal/collector` | Two-tier poll loop, batching, backoff, quiesce, overhead | ✅ |
@@ -475,7 +476,21 @@ most-worth-doing first.
    which needs no lab is done (§5m item 3): the panel names the board target
    instead of a bare `?`. Adding targets to the map still needs measuring.
 
-4. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+4. **Look at the three new screens, and the Clients grid with a real client on
+   it.** The neighbour card, the backhaul-health card and the wireless-uplink
+   card have all been built since the last browser pass and only the first has
+   been seen. §5v's count stands at nineteen defects found by looking, four of
+   them in one sitting, and none of them reachable by any test in the repo.
+
+5. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+
+### Where I would start, if picking this up cold
+
+Not with a feature. The most valuable half-hour is **running the on-air check
+(§5y) and then reading §0**, in that order. The first tells you whether the
+fleet is actually doing what the controller believes; the second tells you why
+that question needed asking. Everything else in this file is downstream of the
+day those two things came apart.
 
 **Landed 2026-08-16 alongside the neighbour work**, all from things the session
 tripped over rather than planned: a factory reset is now diagnosed instead of
@@ -569,6 +584,7 @@ the useful part — the code is in git either way.
 | §5v | **The browser pass** — four defects in one sitting, and why none was reachable by a test |
 | §5w | **Mesh backhaul health** — a closed state vocabulary, and the four bugs only hardware could show |
 | §5x | **The wireless uplink** — built end to end, and unprovable on this hardware for a sharper reason than mesh |
+| §5y | **Asking the air** — the one check that does not trust the management plane, and the adoption bug it exposed |
 
 ### 5a. What discovery corrected
 
@@ -2258,6 +2274,79 @@ node; this needs a device whose radio will run a station at all. The feature
 rests on the assumption that some OpenWrt device can, which is well founded and
 now explicitly untested here.
 
+### 5y. Asking the air, and the adoption bug that fell out of it
+
+§0 records a WRT3200ACM that beaconed `wrt-cleanroom` — an SSID present in no
+configuration anywhere on the device — for about fourteen hours while
+`/etc/config/wireless`, hostapd's running conf, `iwinfo`, ubus **and the
+kernel's own `iw dev info`** all reported `oonfee-roam`. Every verification this
+controller had was on the wrong side of the driver.
+
+`internal/onair` is the answer: a second radio. A beacon is a physical thing and
+cannot be produced by a stale config or a confused daemon, so the fleet
+cross-checks itself — each device scans, and what it hears is compared against
+what the others claim to broadcast.
+
+**Verified on both APs, 2026-08-16:** six BSSes, every one confirmed by the
+other device's radio, zero faults. The WRT's two witnessed by the C6, the C6's
+four witnessed by the WRT.
+
+#### Almost all of the design is about not crying wolf
+
+A fleet that lights up red is a fleet nobody looks at, and access points placed
+for coverage routinely cannot hear each other. So the negative state is
+`Unheard`, never `Absent`, and four measured or known reasons a scan misses a
+live BSS are enumerated in the package comment — including one from this lab:
+**the C6's 2.4 GHz radio returned 20 BSSes while its 5 GHz radio, serving an AP,
+returned zero.** Not a quiet band; a scan that never happened. `BandsCovered`
+exists so that silence cannot become evidence.
+
+Exactly one combination is ever a fault: a BSSID another radio **did** hear, on
+a band that **was** scanned, broadcasting a **different SSID** than its own
+device claims. No distance or timing story explains that away.
+
+It is operator-initiated and on no timer. A scan takes a radio off-channel,
+which whoever is using the network feels — unlike the capability probe, which is
+merely expensive.
+
+#### The bug it exposed, which is bigger than the one it was built for
+
+`probeRadios` enumerated `iwinfo.devices` — which lists **broadcasting
+interfaces, not radios**. A device with no `wifi-iface` therefore recorded
+**zero radios**, and the renderer then refused to give it one ("device has no
+5g radio"), so it could never get an interface for the radios to become visible
+through.
+
+**Stock OpenWrt ships its radios disabled.** So this hit every freshly adopted
+router: the controller could not bring a stock device into service at all,
+which is this project's entire stated direction. The C6 only ever worked
+because its radios had been enabled by hand before adoption — the one accident
+that hid this for the life of the project.
+
+Measured on the WRT with two working radios and no WLAN:
+
+| source | says |
+|---|---|
+| `iwinfo.devices` | `[]` |
+| `luci-rpc.getWirelessDevices` | radio0 (5g, ch36) and radio1 (2g, ch1), both up |
+| `/sys/class/ieee80211/` | phy0, phy1 |
+
+The radio list now comes from `getWirelessDevices`, which is keyed by radio and
+answers when nothing is broadcasting, and which the ACL already granted. iwinfo
+still supplies the per-interface detail where an interface exists.
+
+**Two corrections fell out of it, both the capability model's own cardinal error
+reached sideways.** With no radios to inspect, the Marvell mesh quirk could not
+fire, so `FeatMesh` flipped from correctly-Absent to **Present** on a driver that
+demonstrably will not run a mesh point — an unrunnable check reported as a clean
+bill. It records NotObservable now. And a radio with no interface has no
+frequency, so `radiosByBand` skipped it entirely; it falls back to the
+configured band, because "this device has no 5 GHz radio" about hardware sitting
+right there is a claim no apply could ever fix.
+
+End to end: the WRT went from *"device has no 2g radio"* to `applied (2 changes)
+health passed and confirm landed`, with `oonfee-roam` on both radios.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -2423,6 +2512,20 @@ written and believed.
   "Radios" listing BSSes, and one channel's occupancy printed once per BSS so
   that one measurement looked like two. None of the three had a wrong number in
   it, and all three told the reader something untrue.
+- **Enumerating the wrong noun makes hardware disappear.** `iwinfo.devices`
+  lists broadcasting interfaces; `probeRadios` treated them as radios. A device
+  with no WLAN therefore had no radios, so the renderer would not give it a
+  WLAN, so it could never have one — and stock OpenWrt ships radios disabled, so
+  that was every freshly adopted router. It survived because the one device that
+  ever worked had its radios switched on by hand first. When a call answers a
+  question, check it is the question being asked.
+- **A check that cannot run must not report a clean result.** With no radios to
+  inspect, the Marvell mesh quirk could not fire, and mesh flipped from
+  correctly-Absent to Present on a driver that will not run a mesh point. The
+  three-state rule is usually applied to a call that was refused; this was a
+  check whose INPUTS went missing, and it reached the same wrong answer by a
+  different road. Where a gate depends on data that can be absent, absence of
+  the data is NotObservable, not a pass.
 - **A management-plane read is not a measurement of the physical world.** The
   WRT3200ACM beaconed an SSID that existed in no configuration for fourteen
   hours while `/etc/config`, hostapd's running conf, `iwinfo`, ubus AND the
