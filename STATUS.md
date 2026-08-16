@@ -384,11 +384,17 @@ most-worth-doing first.
    is seeded with both APs and the roaming WLAN, so this is one command away.
 2. **A mesh backhaul whose health cannot be seen is half a feature.** §5m's own
    note says this is "the first thing worth building once there are two nodes",
-   and there are two nodes now. The readout is closer than that note thought:
-   802.11s peers appear in `iw dev <mesh-if> station dump`, and
-   `/usr/sbin/iw dev * station dump` is **already granted** — so peer count,
-   signal and inactivity need no ACL change. `mpath dump` (the forwarding
-   table) does.
+   and there are two nodes now. The readout may be closer than that note
+   thought: `/usr/sbin/iw dev * station dump` is **already granted**, and under
+   mac80211 an 802.11s peer is a station — so if that holds, peer count, signal
+   and inactivity need no ACL change at all. `mpath dump` (the forwarding
+   table) is not granted and would.
+
+   **That "if" is not verified.** No mesh is running on either device now, so
+   nobody has run `station dump` against a real mesh interface here. Check it
+   before designing around it — the ACL grant existing is not the same as the
+   call answering usefully, which is a distinction this file has had to make
+   about four separate things already.
 
    The catch, and it is not small: **this cannot be verified on the hardware
    here.** Mesh is Present on the C6 and gated off on the WRT (§5q), so a
