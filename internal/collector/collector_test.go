@@ -1071,3 +1071,80 @@ func argDevice(args any) string {
 	s, _ := m["device"].(string)
 	return s
 }
+
+// A wifi-iface with a configured mode and no interface is the most important
+// thing getWirelessDevices can tell us, and it used to be dropped.
+//
+// It is §5q's exact signature: a mesh section that applied cleanly, passed its
+// health check, landed its confirm, and whose interface the driver never
+// brought into existence. The old guard skipped anything without an ifname, so
+// "the mesh you configured does not exist" and "you configured no mesh" reached
+// the controller as the same thing — which is to say, as nothing.
+func TestDecodeIfaceModesKeepsAConfiguredInterfaceThatDoesNotExist(t *testing.T) {
+	raw := []byte(`{
+	  "radio0": {"interfaces": [
+	    {"ifname": "phy0-ap0", "section": "default_radio0", "config": {"mode": "ap"}},
+	    {"section": "oowrt_mesh1_radio0", "config": {"mode": "mesh"}}
+	  ]}
+	}`)
+
+	var s Snapshot
+	if err := decodeIfaceModes(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.IfaceModes["phy0-ap0"]; got != "ap" {
+		t.Errorf("the real interface was lost: mode=%q", got)
+	}
+	if s.IfaceSections["phy0-ap0"] != "default_radio0" {
+		t.Errorf("section not carried: %v", s.IfaceSections)
+	}
+	if len(s.ConfiguredIfacesAbsent) != 1 ||
+		s.ConfiguredIfacesAbsent[0] != "oowrt_mesh1_radio0" {
+		t.Fatalf("a configured section with no interface was discarded: %v",
+			s.ConfiguredIfacesAbsent)
+	}
+	// And it must NOT appear as an interface: it does not exist.
+	if _, ok := s.IfaceModes[""]; ok {
+		t.Error("an interface with no name was entered into the mode map")
+	}
+}
+
+// Section is optional. The captured hardware fixture carries it on some
+// entries and not others, and an interface without one must still be usable —
+// attributed to the device rather than guessed at.
+func TestDecodeIfaceModesToleratesAMissingSection(t *testing.T) {
+	raw := []byte(`{"radio0": {"interfaces": [
+	  {"ifname": "phy0-mesh0", "config": {"mode": "mesh"}}
+	]}}`)
+
+	var s Snapshot
+	if err := decodeIfaceModes(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.IfaceModes["phy0-mesh0"] != "mesh" {
+		t.Errorf("an interface with no section was dropped: %v", s.IfaceModes)
+	}
+	if _, ok := s.IfaceSections["phy0-mesh0"]; ok {
+		t.Error("invented a section for an interface that reported none")
+	}
+	if len(s.ConfiguredIfacesAbsent) != 0 {
+		t.Errorf("a live interface was reported as absent: %v", s.ConfiguredIfacesAbsent)
+	}
+}
+
+// Absence from Interfaces means "this interface is not there" only if the call
+// that would have listed it actually answered.
+func TestNetDevicesRecordsThatItAnswered(t *testing.T) {
+	var s Snapshot
+	if s.NetDevsFresh {
+		t.Fatal("a snapshot nobody polled claims a fresh interface list")
+	}
+	if err := decodeNetDevices([]byte(`{"br-lan": {"up": true}}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.NetDevsFresh {
+		t.Error("an answered network.device status was not recorded as fresh, so " +
+			"a missing interface cannot be told from a refused call")
+	}
+}

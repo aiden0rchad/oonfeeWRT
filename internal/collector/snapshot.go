@@ -70,6 +70,23 @@ type Snapshot struct {
 	// denied call silently stop counting real clients.
 	IfaceModes map[string]string
 
+	// IfaceSections maps an interface name to the UCI wifi-iface section that
+	// created it, on the same slow cadence. Optional per interface: the device
+	// does not always report one, and an interface without a section is
+	// attributed to the DEVICE rather than guessed at — the site model permits
+	// one mesh id on two bands, so a guess would be wrong exactly where it
+	// would matter most.
+	IfaceSections map[string]string
+
+	// ConfiguredIfacesAbsent names wifi-iface sections that have a configured
+	// mode and NO interface.
+	//
+	// This is §5q's signature and it used to be discarded: a mesh that applied
+	// cleanly, passed its health check, landed its confirm, and whose interface
+	// the driver never created. Without this the controller cannot tell "the
+	// mesh you configured does not exist" from "you configured no mesh".
+	ConfiguredIfacesAbsent []string
+
 	// Networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// carried forward on every poll in between — the hosts they classify arrive
 	// every poll, so a snapshot without them could not scope its own clients.
@@ -84,9 +101,16 @@ type Snapshot struct {
 	Load       [3]float64 // 1/5/15 minute, already unscaled from /65536
 	Memory     Memory
 	Interfaces map[string]Interface
-	APs        []AP
-	Stations   []Station // focused only
-	Surveys    []Survey  // focused only
+
+	// NetDevsFresh records that network.device status ANSWERED on this poll.
+	//
+	// Without it, absence from Interfaces is ambiguous — a refused call and a
+	// device with no such interface look identical, and reading the first as
+	// the second turns silence into a claim about the kernel.
+	NetDevsFresh bool
+	APs          []AP
+	Stations     []Station // focused only
+	Surveys      []Survey  // focused only
 }
 
 // OK reports a poll that reached the device.

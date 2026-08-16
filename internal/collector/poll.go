@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -274,6 +275,17 @@ func decodeNetDevices(raw json.RawMessage, s *Snapshot) error {
 		return err
 	}
 	s.Interfaces = v
+	// Answered — recorded explicitly rather than inferred from the map.
+	//
+	// A nil Interfaces map usually does mean "never asked", because a
+	// successful empty reply decodes to an empty non-nil map. Usually is not a
+	// contract: a device answering `null` lands on nil too, and any later
+	// caller that reads absence-from-the-map as a statement about the kernel
+	// would then be making a positive claim from a call that said nothing. The
+	// consumer that needs the distinction is "this interface is not up" versus
+	// "we could not see whether it is up", which is the same denied-vs-absent
+	// rule everything else here follows.
+	s.NetDevsFresh = true
 	return nil
 }
 
@@ -512,8 +524,9 @@ func decodeIfaces(raw json.RawMessage, s *Snapshot) error {
 func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 	var v map[string]struct {
 		Interfaces []struct {
-			IfName string `json:"ifname"`
-			Config struct {
+			IfName  string `json:"ifname"`
+			Section string `json:"section"`
+			Config  struct {
 				Mode string `json:"mode"`
 			} `json:"config"`
 		} `json:"interfaces"`
@@ -522,14 +535,41 @@ func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 		return err
 	}
 	modes := map[string]string{}
+	sections := map[string]string{}
+	var configuredButAbsent []string
 	for _, radio := range v {
 		for _, i := range radio.Interfaces {
-			if i.IfName != "" && i.Config.Mode != "" {
-				modes[i.IfName] = i.Config.Mode
+			if i.Config.Mode == "" {
+				continue
+			}
+			// A configured interface with NO ifname is the interesting one.
+			//
+			// It used to be dropped by the same condition that skipped junk,
+			// and it is the exact signature of §5q: a section that applied
+			// cleanly and whose interface the driver never brought into
+			// existence. Discarding it is how "the mesh you configured does not
+			// exist" became indistinguishable from "you configured no mesh".
+			if i.IfName == "" {
+				if i.Section != "" {
+					configuredButAbsent = append(configuredButAbsent, i.Section)
+				}
+				continue
+			}
+			modes[i.IfName] = i.Config.Mode
+			// Optional, and treated as such. The captured fixture carries
+			// `section` on some entries and not others, so an interface without
+			// one is attributed to the device rather than guessed at by mesh id
+			// — the site model permits one mesh id on two bands, so a guess
+			// would be wrong precisely where a mesh is most interesting.
+			if i.Section != "" {
+				sections[i.IfName] = i.Section
 			}
 		}
 	}
+	sort.Strings(configuredButAbsent)
 	s.IfaceModes = modes
+	s.IfaceSections = sections
+	s.ConfiguredIfacesAbsent = configuredButAbsent
 	return nil
 }
 
