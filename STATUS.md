@@ -80,64 +80,66 @@ not.
 Anything that reasons about "what happens if this device loses its cable" has to
 start from this table rather than from the sentence that used to be here.
 
-> ### ⚠ The WRT3200ACM's wireless stack wedged four times, then was factory reset
+> ### ⚠ The WRT3200ACM is failing hardware. Do not treat it as a reference device.
 >
-> Each time, `hostapd` (and on the last occasion `rpcd` too) entered
-> uninterruptible sleep (`D` state). Every hostapd ubus method and `iwinfo`
-> began timing out while the rest of the device stayed perfectly responsive —
-> SSH, `ubus system board`, `ip link` all fine, all BSSes still `UP` and
-> bridged. The kernel log shows the driver failing underneath:
+> Five wedges across 2026-08-15/16, one of them AFTER a factory reset. The
+> factory reset did not fix it. Signature every time:
 >
 >     nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
->     nl80211: wpa_driver_nl80211_event_receive->nl_recvmsgs failed: -5
->     phy0-ap0: nl80211: kernel reports: key addition failed
 >
-> **The intervals shortened: ~28 min, ~28 min, ~12 min, ~9 min**, and once it
-> rebooted unprompted. **A clean `reboot` does not work** — procd waits forever
-> for a process it cannot kill. The only recovery found:
+> repeating once a minute, with `hostapd`, `rpcd`, `netifd` and `iwinfo` all in
+> `D` state and load climbing. A clean `reboot` is **blocked** — procd cannot
+> kill the D-state processes — so the only recovery is a hard reset:
 >
 > ```bash
 > ssh root@192.168.1.1 'sync; printf b > /proc/sysrq-trigger'
 > ```
 >
-> **The cause is NOT established, and one plausible suspect was ruled out.** It
-> is tempting to blame the `rrm_nr_get_own` that happened to be in flight the
-> first time, which would be a fourth mwlwifi "advertises it, accepts it, fails
-> in hardware" quirk of exactly the shape §5q and §5s document. That is wrong:
-> on a freshly booted device the same call returns instantly and leaves hostapd
-> healthy, checked deliberately, and the `key addition failed` lines predate any
-> call of mine. See §6, "the last thing you did is not the cause" — recording
-> that quirk would have gated a working feature off working hardware forever,
-> with a measurement's authority behind it.
+> #### The trigger, caught directly rather than inferred
 >
-> **The user factory reset the device on 2026-08-16.** That wiped our entire
-> footprint — ACL file, rpcd login, our wifi-iface sections, nlbwmon — and left
-> stock OpenWrt 25.12.5. A clean-room watch was then run with **nothing of ours
-> installed**: stock config, both radios up on a hand-made WPA2 SSID, no
-> controller polling it.
+> The post-reset wedge came 19 minutes after boot, and the log has the cause
+> immediately above the first error:
 >
-> **Since the reset: no wedge in 3 hours 36 minutes.** Sampled every two
-> minutes across 90 consecutive checks, `hostapd` answered every one. That is
-> roughly eight times the longest pre-reset interval and twenty-four times the
-> shortest. Through all of it the device carried both radios, the controller
-> polling it, an 802.11k reconciler writing to it, a mesh applied and pruned,
-> and several full applies.
+>     21:02:19 hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb deauthenticated due to inactivity
+>     21:03:25 hostapd: nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
 >
-> **It is still not the same test, and the reason is worth knowing.** Every
-> pre-reset wedge happened with a phone associating, roaming and being
-> deauthenticated for inactivity. Across all 90 samples the WRT carried **zero
-> clients** — the one real client on this network associated to the C6 and
-> stayed there, which it is entitled to do now that both APs advertise each
-> other and the client picks on signal.
+> **A client associated, went idle, was deauthenticated, and the driver failed
+> 66 seconds later.** That sequence is in every pre-reset log too; this is the
+> first time it was observed rather than reconstructed, and it explains why the
+> device looked healthy for hours whenever no client was on it.
 >
-> So what is established is that the device survives configuration, polling,
-> applies and hours of uptime. What is **not** established is that it survives a
-> client, which is the only condition every failure had in common. Getting that
-> answer needs a client that prefers the WRT — moving one out of the C6's range,
-> or taking the C6 down for a while.
+> #### The failure mode that invalidates a management-plane check
 >
-> If it wedges again, `sysrq` is still the only recovery and the
-> reflash-or-replace question is still open.
+> Worse than the wedge, and found only by scanning the air from the other
+> device: for roughly **14 hours** the WRT beaconed `wrt-cleanroom` — an SSID
+> that existed in **no configuration anywhere on the device** — while
+> `/etc/config/wireless`, hostapd's running conf, `iwinfo`, ubus **and the
+> kernel's own `iw dev info`** all reported `oonfee-roam`. A `wifi reload` did
+> not clear it. Only a hard reset did.
+>
+> The stale SSID lived in firmware state nothing in Linux could see. This is the
+> fourth mwlwifi entry in the same family as the mesh-point and `txpower=0`
+> quirks, and the most consequential, because **every management interface can
+> agree on a configuration the radio is not running.**
+>
+> #### What that means for this project's own claims
+>
+> Earlier readings in this file of "no wedge in 3h36m" and "14 hours healthy"
+> were measuring whether hostapd answered ubus. It did — throughout the period
+> the radio was transmitting the wrong SSID. **An ubus read is not an RF
+> measurement**, and anything claiming hardware verification of a wireless
+> property needs a scan from a second device to mean what it says. §5t's
+> neighbour verification is affected: the C6's half was real, the WRT's half was
+> read from hostapd, and for those 14 hours the WRT's `oonfee-roam` was not on
+> the air at all.
+>
+> #### Recommendation
+>
+> Stop putting WLANs on it and stop using it as a reference device. It fails
+> within 9–30 minutes of a client associating and going idle, and no software
+> change in this project can affect that. A firmware reflash is worth one
+> attempt before writing it off; after that it is a hardware replacement. The
+> Archer C6 has run 16+ hours through every experiment here without a stumble.
 
 **Wireless currently on air:**
 
@@ -2397,6 +2399,14 @@ written and believed.
   "Radios" listing BSSes, and one channel's occupancy printed once per BSS so
   that one measurement looked like two. None of the three had a wrong number in
   it, and all three told the reader something untrue.
+- **A management-plane read is not a measurement of the physical world.** The
+  WRT3200ACM beaconed an SSID that existed in no configuration for fourteen
+  hours while `/etc/config`, hostapd's running conf, `iwinfo`, ubus AND the
+  kernel's `iw dev info` all reported the correct one. Every check this project
+  had was on the wrong side of the driver. The consequence was not just a wrong
+  reading — it was hours of "verified on hardware" claims about wireless
+  behaviour that no radio was performing. Where a property is physical, confirm
+  it physically: a scan from a second device costs one command.
 - **A topology written down once is a topology that is wrong later.** This file
   described the lab as "cabled LAN-to-LAN, C6 behind the WRT", with the dev Mac
   at an address and interface that had both changed. It also never mentioned
