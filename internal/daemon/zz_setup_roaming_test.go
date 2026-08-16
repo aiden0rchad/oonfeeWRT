@@ -17,8 +17,8 @@ import (
 // commands someone has to remember.
 //
 //	OONFEE_ROAM=1 OONFEE_SEED_DIR=/path OONFEE_SEED_PASSFILE=/path/pass \
-//	OONFEE_AP1=192.168.1.1 OONFEE_AP1_PASS=... \
-//	OONFEE_AP2=192.168.1.2 OONFEE_AP2_PASS=... \
+//	OONFEE_AP1=192.168.1.1 OONFEE_AP2=192.168.1.2 \
+//	OONFEE_ADMIN_USER=root OONFEE_ADMIN_PASS= \
 //	OONFEE_WLAN_SSID=... OONFEE_WLAN_KEY=... \
 //	go test -tags=integration ./internal/daemon/ -run TestZZSetupRoaming -v
 func TestZZSetupRoaming(t *testing.T) {
