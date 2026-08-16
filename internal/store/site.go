@@ -49,6 +49,9 @@ func (db *DB) Site(ctx context.Context) (model.Site, error) {
 	if s.WLANs, err = db.wlans(ctx); err != nil {
 		return model.Site{}, err
 	}
+	if s.Uplinks, err = db.uplinks(ctx); err != nil {
+		return s, err
+	}
 	if s.Meshes, err = db.meshes(ctx); err != nil {
 		return model.Site{}, err
 	}
@@ -562,6 +565,91 @@ func (db *DB) DeleteMesh(ctx context.Context, id int) error {
 	res, err := db.sql.ExecContext(ctx, `DELETE FROM meshes WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("store: delete mesh %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// uplinks loads every wireless uplink in the site.
+func (db *DB) uplinks(ctx context.Context) ([]model.Uplink, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT id, device_id, wlan_id, band, enabled FROM uplinks ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list uplinks: %w", err)
+	}
+	defer rows.Close()
+	var out []model.Uplink
+	for rows.Next() {
+		var u model.Uplink
+		var band string
+		if err := rows.Scan(&u.ID, &u.DeviceID, &u.WLANID, &band, &u.Enabled); err != nil {
+			return nil, err
+		}
+		u.Band = model.Band(band)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// SaveUplink creates or updates a device's wireless uplink.
+//
+// One per device, enforced by a UNIQUE constraint rather than by this function
+// checking first: a router with two wireless uplinks into the same network is a
+// layer-2 loop rather than redundancy, and a check-then-insert would let two
+// concurrent writers past it. The constraint is turned into a sentence here
+// because "UNIQUE constraint failed: uplinks.device_id" tells an operator
+// nothing about loops.
+func (db *DB) SaveUplink(ctx context.Context, u *model.Uplink) error {
+	if u.DeviceID == 0 {
+		return fmt.Errorf("store: a wireless uplink needs a device")
+	}
+	if u.Band == "" {
+		return fmt.Errorf("store: a wireless uplink needs a band — a device " +
+			"joins on one radio and leaves the other free to serve clients")
+	}
+	if u.ID == 0 {
+		res, err := db.sql.ExecContext(ctx,
+			`INSERT INTO uplinks (device_id, wlan_id, band, enabled) VALUES (?,?,?,?)`,
+			u.DeviceID, u.WLANID, string(u.Band), u.Enabled)
+		if err != nil {
+			if strings.Contains(err.Error(), "UNIQUE") {
+				return fmt.Errorf("store: this device already has a wireless " +
+					"uplink. A device with two would bridge the same network to " +
+					"itself twice, which is a layer-2 loop rather than " +
+					"redundancy — edit the existing one instead")
+			}
+			return fmt.Errorf("store: create uplink: %w", err)
+		}
+		id, _ := res.LastInsertId()
+		u.ID = int(id)
+		return nil
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE uplinks SET device_id=?, wlan_id=?, band=?, enabled=? WHERE id=?`,
+		u.DeviceID, u.WLANID, string(u.Band), u.Enabled, u.ID)
+	if err != nil {
+		return fmt.Errorf("store: update uplink %d: %w", u.ID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteUplink removes an uplink.
+//
+// The row going away is what makes the renderer prune the station section from
+// the device — and on a device with no cable that section is its only route, so
+// this is the one delete in the site model that can strand a device. The apply
+// path is where that is caught: applyengine.IsUplinkSection makes the prune
+// count as touching the management path, so it needs an explicit
+// acknowledgment rather than going through as an ordinary wireless change.
+func (db *DB) DeleteUplink(ctx context.Context, id int) error {
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM uplinks WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("store: delete uplink %d: %w", id, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound

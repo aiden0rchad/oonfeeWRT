@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
@@ -329,4 +330,112 @@ func meshByID(t *testing.T, db *DB, id int) model.Mesh {
 	}
 	t.Fatalf("mesh %d not found", id)
 	return model.Mesh{}
+}
+
+// AllowUplink rides options_json rather than a column of its own.
+//
+// Worth pinning: a column was written and then removed, because WLANOptions is
+// already persisted whole and a second home for the same fact is how two
+// sources of one truth start disagreeing. This asserts the round trip AND the
+// default, since every WLAN that existed before the flag has no such key in its
+// stored JSON and must come back false — a network nobody asked to accept
+// wireless bridges does not accept them.
+func TestAllowUplinkRoundTripsAndDefaultsOff(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	netID, groupID := seedSite(t, db)
+
+	plain := &model.WLAN{SSID: "plain", NetworkID: netID, GroupID: groupID,
+		Bands: []model.Band{model.Band5G}, Enabled: true}
+	if err := db.SaveWLAN(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	bridged := &model.WLAN{SSID: "bridged", NetworkID: netID, GroupID: groupID,
+		Bands: []model.Band{model.Band5G}, Enabled: true,
+		Options: model.WLANOptions{AllowUplink: true}}
+	if err := db.SaveWLAN(ctx, bridged); err != nil {
+		t.Fatal(err)
+	}
+
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range site.WLANs {
+		switch w.SSID {
+		case "plain":
+			if w.Options.AllowUplink {
+				t.Error("a WLAN nobody asked to accept bridges came back accepting them")
+			}
+		case "bridged":
+			if !w.Options.AllowUplink {
+				t.Error("AllowUplink did not survive the round trip")
+			}
+		}
+	}
+}
+
+// One wireless uplink per device, enforced by the schema rather than by a
+// check-then-insert that two concurrent writers could both pass.
+//
+// The constraint is not arbitrary tidiness: a device with two uplinks bridges
+// the same network to itself twice, which is a layer-2 loop. The error has to
+// say that, because "UNIQUE constraint failed: uplinks.device_id" tells an
+// operator nothing they can act on.
+func TestOneUplinkPerDeviceAndTheErrorSaysWhy(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	netID, groupID := seedSite(t, db)
+
+	w := &model.WLAN{SSID: "roam", NetworkID: netID, GroupID: groupID,
+		Bands: []model.Band{model.Band5G}, Enabled: true,
+		Options: model.WLANOptions{AllowUplink: true}}
+	if err := db.SaveWLAN(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	// A real device row: uplinks reference devices, and that FK is doing real
+	// work — an uplink naming a device that does not exist would render for
+	// nobody and prune for nobody.
+	at := int64(1)
+	dev := &Device{MAC: "60:38:e0:00:0e:01", Host: "192.168.1.9", Name: "no-cable",
+		Scheme: "http", AdoptedAt: &at}
+	if err := db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+
+	first := &model.Uplink{DeviceID: dev.ID, WLANID: w.ID, Band: model.Band5G, Enabled: true}
+	if err := db.SaveUplink(ctx, first); err != nil {
+		t.Fatalf("first uplink: %v", err)
+	}
+
+	second := &model.Uplink{DeviceID: dev.ID, WLANID: w.ID, Band: model.Band2G, Enabled: true}
+	err := db.SaveUplink(ctx, second)
+	if err == nil {
+		t.Fatal("a second uplink on one device was accepted; that bridges the " +
+			"same network to itself twice")
+	}
+	if !strings.Contains(err.Error(), "loop") {
+		t.Errorf("the refusal does not explain the hazard: %v", err)
+	}
+
+	// And it round-trips into the site model.
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(site.Uplinks) != 1 || site.Uplinks[0].Band != model.Band5G {
+		t.Fatalf("uplink did not survive the round trip: %+v", site.Uplinks)
+	}
+	if u, ok := site.UplinkFor(dev.ID); !ok || u.WLANID != w.ID {
+		t.Errorf("UplinkFor did not find it: %+v %v", u, ok)
+	}
+
+	if err := db.DeleteUplink(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	site, _ = db.Site(ctx)
+	if len(site.Uplinks) != 0 {
+		t.Errorf("delete left %d uplinks", len(site.Uplinks))
+	}
 }

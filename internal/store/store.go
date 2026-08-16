@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -89,6 +89,34 @@ var migrations = map[int][]string{
 		   key TEXT NOT NULL DEFAULT '',
 		   enabled INTEGER NOT NULL DEFAULT 1
 		 )`,
+	},
+	8: {
+		// Wireless uplinks: a device that reaches the network over the air
+		// rather than over a cable.
+		//
+		// A table rather than a column on devices, and one row per device by
+		// UNIQUE, because a router with two wireless uplinks into the same
+		// network is a layer-2 loop rather than redundancy — the constraint
+		// says so once, here, instead of every writer remembering.
+		//
+		// ON DELETE CASCADE from devices: an un-adopted device's uplink is not
+		// a thing to keep. It describes how that device reaches a network it
+		// is no longer part of, and leaving it behind would put a row in the
+		// site model that renders for nobody.
+		`CREATE TABLE IF NOT EXISTS uplinks (
+		   id INTEGER PRIMARY KEY,
+		   device_id INTEGER NOT NULL UNIQUE REFERENCES devices(id) ON DELETE CASCADE,
+		   wlan_id INTEGER NOT NULL REFERENCES wlans(id),
+		   band TEXT NOT NULL,
+		   enabled INTEGER NOT NULL DEFAULT 1
+		 )`,
+		// No column for the AP half. WLANOptions is stored whole in
+		// wlans.options_json, so AllowUplink persists with the rest of it and
+		// an `allow_uplink` column would be a second place for the same fact to
+		// live — which is how two sources of one truth start disagreeing. It
+		// defaults to false for every existing row because a missing JSON key
+		// unmarshals to the zero value, which is the answer we want: a network
+		// nobody asked to accept wireless bridges does not accept them.
 	},
 }
 

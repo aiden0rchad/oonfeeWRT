@@ -166,3 +166,16 @@ CREATE TABLE IF NOT EXISTS events (
   event TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+
+-- Wireless uplinks (migration v8). One row per device by UNIQUE: a router with
+-- two wireless uplinks into the same network is a layer-2 loop rather than
+-- redundancy, so the constraint says it once instead of every writer
+-- remembering. ON DELETE CASCADE because an un-adopted device's uplink
+-- describes how it reaches a network it is no longer part of.
+CREATE TABLE IF NOT EXISTS uplinks (
+  id INTEGER PRIMARY KEY,
+  device_id INTEGER NOT NULL UNIQUE REFERENCES devices(id) ON DELETE CASCADE,
+  wlan_id INTEGER NOT NULL REFERENCES wlans(id),
+  band TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
