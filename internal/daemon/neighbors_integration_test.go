@@ -218,12 +218,43 @@ func adoptOrReuse(ctx context.Context, t *testing.T, d *Daemon, host string) (in
 		// may have gained the rrm grants since it was last looked at, and the
 		// capability record is what gates the distribution below.
 		pr, perr := d.Reprobe(ctx, dev.ID)
-		if perr != nil {
-			return 0, fmt.Errorf("reusing %s (%s): %w", dev.Name, host, perr)
+		if perr == nil {
+			t.Logf("reusing already-adopted %s: %s", host, dev.Name)
+			t.Logf("  neighbor-report: %s", pr.Registry.State("neighbor-report"))
+			return dev.ID, nil
 		}
-		t.Logf("reusing already-adopted %s: %s", host, dev.Name)
-		t.Logf("  neighbor-report: %s", pr.Registry.State("neighbor-report"))
-		return dev.ID, nil
+
+		// The stored credential does not work. On a device that answers at all,
+		// the overwhelmingly likely cause is a factory reset — which removes
+		// the rpcd login and the ACL file and leaves the controller holding a
+		// record of a device that no longer knows it.
+		//
+		// The recovery is un-adopt then adopt, and un-adopt has to be FORCED:
+		// the footprint it exists to remove is already gone, so phase 2 has
+		// nothing to do and reports that it could not confirm a clean removal.
+		t.Logf("%s: stored credential rejected (%v) — assuming a factory reset "+
+			"and re-adopting", host, perr)
+		if _, uerr := d.Unadopt(ctx, api.UnadoptRequest{
+			DeviceID: dev.ID,
+			Username: os.Getenv("OONFEE_ADMIN_USER"),
+			Password: os.Getenv("OONFEE_ADMIN_PASS"),
+			Force:    true,
+		}); uerr != nil {
+			return 0, fmt.Errorf("could not clear the stale record for %s: %w", host, uerr)
+		}
+		res, aerr := d.Adopt(ctx, api.AdoptRequest{
+			Host:     host,
+			Username: os.Getenv("OONFEE_ADMIN_USER"),
+			Password: os.Getenv("OONFEE_ADMIN_PASS"),
+			Name:     "ap-" + strings.ReplaceAll(host, ".", "-"),
+			Role:     string(model.RoleAP),
+		})
+		if aerr != nil {
+			return 0, fmt.Errorf("re-adopting %s after a reset: %w", host, aerr)
+		}
+		t.Logf("re-adopted %s: %s (%s) class=%s", host, res.Name, res.Model, res.Class)
+		t.Logf("  neighbor-report: %s", featureState(res, "neighbor-report"))
+		return res.DeviceID, nil
 	}
 	return 0, err
 }

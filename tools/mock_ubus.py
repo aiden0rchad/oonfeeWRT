@@ -504,9 +504,19 @@ def handle_one(req):
     p = req.get("params", [])
 
     if method == "list":
-        if p and isinstance(p[0], str) and len(p[0]) == 32:
-            return {"jsonrpc": "2.0", "id": rid, "result": OBJECTS}
-        return {"jsonrpc": "2.0", "id": rid, "result": {}}
+        # `list` needs NO session, and that is the whole reason discovery uses
+        # it: no credential, no session, no failed-login record, and it returns
+        # the object graph, which is a far stronger fingerprint than anything a
+        # login attempt yields.
+        #
+        # This used to answer `{}` unless the first parameter was 32 characters
+        # long — i.e. unless it looked like a session token — which is backwards
+        # from the device. Discovery sends `params: ["*"]`, so against this mock
+        # it saw an empty object list and graded a perfectly good OpenWrt box as
+        # merely "reachable". Nothing caught it because discovery's own tests
+        # use their own fixture; it surfaced when a daemon test asked discovery
+        # to identify the mock.
+        return {"jsonrpc": "2.0", "id": rid, "result": OBJECTS}
     if method != "call":
         return {"jsonrpc": "2.0", "id": rid,
                 "error": {"code": -32601, "message": "unknown method"}}

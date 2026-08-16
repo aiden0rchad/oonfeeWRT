@@ -358,3 +358,59 @@ func TestIncompleteCycleNeverShrinksAList(t *testing.T) {
 		}
 	}
 }
+
+// A device that was factory reset is not a device that is broken.
+//
+// A reset removes the rpcd login and the ACL file and leaves everything else
+// intact, so the controller keeps a credential for a box that is on the
+// network, healthy, and has never heard of it. Without the distinction that
+// reads as PERMISSION_DENIED once a minute forever — the same message as a
+// rotated password, a narrowed ACL, or the wrong keyring.
+func TestConnectExplainsAFactoryResetDevice(t *testing.T) {
+	addr := startMock(t)
+	d := openDaemon(t)
+
+	// Adopted, pointed at a live device, with a credential that device will not
+	// accept. That is exactly the post-reset state.
+	dev := seedAP(t, d, "60:38:e0:00:0c:01", "was-reset", addr, capability.Present)
+	blob, err := d.Keys.SealCredential(dev.MAC, "oonfeewrt", "not-the-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev.CredEnc = blob
+	if err := d.Store.UpsertDevice(context.Background(), dev); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = d.Connect(context.Background(), dev)
+	if err == nil {
+		t.Fatal("a wrong credential was accepted")
+	}
+	if !strings.Contains(err.Error(), "factory reset") {
+		t.Errorf("a reachable device that refused the credential was not "+
+			"diagnosed: %v", err)
+	}
+	// The underlying failure must survive. A caller matching on the real error
+	// has to keep working.
+	if !strings.Contains(err.Error(), "log in to") {
+		t.Errorf("the hint replaced the error instead of adding to it: %v", err)
+	}
+}
+
+// And the other half, which is the one that makes the first half safe to trust:
+// an unreachable device must NOT be described as reset. Telling someone to
+// re-adopt a router that is merely unplugged sends them to rebuild something
+// that only needs to come back.
+func TestConnectDoesNotBlameAdoptionForAnUnreachableDevice(t *testing.T) {
+	d := openDaemon(t)
+	dev := seedAP(t, d, "60:38:e0:00:0c:02", "unplugged", "127.0.0.1:1",
+		capability.Present)
+
+	_, err := d.Connect(context.Background(), dev)
+	if err == nil {
+		t.Fatal("connecting to a dead address succeeded")
+	}
+	if strings.Contains(err.Error(), "factory reset") {
+		t.Errorf("an unreachable device was reported as reset: %v", err)
+	}
+}
