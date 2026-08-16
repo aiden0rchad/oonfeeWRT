@@ -1905,6 +1905,30 @@ it exists to remove is already gone, so phase 2 can never report a clean
 removal. That is exactly the case §5b's `Force` fix was for, met for real. The
 two-AP setup helper now does it by itself.
 
+#### A factory reset also breaks LuCI, and that is not the controller's doing
+
+Found while the WRT was being investigated for something else, and worth
+recording because anyone following this project's adopt/reset lifecycle will
+meet it. After the reset the web interface returned **403** on
+`/cgi-bin/luci` while `/` and HTTPS served fine.
+
+Stock `/etc/config/uhttpd` carries `lua_prefix` pointing at
+`/usr/lib/lua/luci/sgi/uhttpd.lua`. On LuCI 26.x that file does not exist —
+LuCI is ucode now — and `uhttpd-mod-lua` is not installed. The `ucode_prefix`
+line that makes it work is added by `luci-base` through a uci-defaults script,
+which runs **at package install and not on a factory reset**. So the reset
+restores the base config and LuCI's addition never comes back. The handler
+itself, `/usr/share/ucode/luci/uhttpd.uc`, is present the whole time and simply
+unwired.
+
+    uci del uhttpd.main.lua_prefix
+    uci add_list uhttpd.main.ucode_prefix='/cgi-bin/luci=/usr/share/ucode/luci/uhttpd.uc'
+    uci commit uhttpd && /etc/init.d/uhttpd restart
+
+Nothing in oonfeeWRT causes or fixes this — it is recorded so that a reset
+during an adoption experiment does not get mistaken for something the
+controller did, which is exactly how the first ten minutes of finding it went.
+
 #### The mock was wrong about the one call discovery depends on
 
 Found while testing the above. `tools/mock_ubus.py` answered `list` with `{}`
