@@ -53,68 +53,87 @@ OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   g
 | radios | mwlwifi ×2 | ath10k (5G) + ath9k (2.4G) |
 | firmware | OpenWrt 25.12.5 | OpenWrt 25.12.5 |
 | mesh | **gated off** (driver quirk, §5q) | **Present**, verified working |
+| our footprint | **none** — wiped by the reset | ACL + rpcd login installed |
 | airtime-split | absent (dead counters) | **Present** — only device with it |
-| neighbour reports | **Present** | **Present** |
+| neighbour reports | Present *(before the reset; needs re-adoption)* | **Present** |
 | wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
-| health | **unstable — see below** | stable, 2h+ uptime unattended |
+| health | **factory reset 2026-08-16 after four wedges — see below** | stable, 2h+ uptime unattended |
 
 Cabled LAN-to-LAN, C6 behind the WRT. Both left byte-identical to how they were
 found except the WLANs listed below, which were applied deliberately.
 
-> ### ⚠ The WRT3200ACM's wireless stack wedges, twice in one session
+> ### ⚠ The WRT3200ACM's wireless stack wedged four times, then was factory reset
 >
-> Both times, roughly **28–30 minutes after boot**, `hostapd` entered
-> uninterruptible sleep (`D` state) and every hostapd ubus method plus `iwinfo`
-> began timing out, while the rest of the device stayed perfectly responsive —
-> SSH, `ubus system board`, `ip link` all fine, and all four BSSes still `UP`
-> and bridged. The kernel log shows the driver failing underneath it:
+> Each time, `hostapd` (and on the last occasion `rpcd` too) entered
+> uninterruptible sleep (`D` state). Every hostapd ubus method and `iwinfo`
+> began timing out while the rest of the device stayed perfectly responsive —
+> SSH, `ubus system board`, `ip link` all fine, all BSSes still `UP` and
+> bridged. The kernel log shows the driver failing underneath:
 >
 >     nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
 >     nl80211: wpa_driver_nl80211_event_receive->nl_recvmsgs failed: -5
 >     phy0-ap0: nl80211: kernel reports: key addition failed
 >
-> **A clean `reboot` does not work** — procd waits forever for a process it
-> cannot kill. The only recovery found is a hard reset:
+> **The intervals shortened: ~28 min, ~28 min, ~12 min, ~9 min**, and once it
+> rebooted unprompted. **A clean `reboot` does not work** — procd waits forever
+> for a process it cannot kill. The only recovery found:
 >
 > ```bash
 > ssh root@192.168.1.1 'sync; printf b > /proc/sysrq-trigger'
 > ```
 >
-> **What is NOT established is the cause.** It is tempting to blame the
-> `rrm_nr_get_own` call that happened to be in flight the first time, and that
-> is wrong: on a freshly booted device the same call returns instantly and
-> leaves hostapd healthy, verified deliberately. The `key addition failed` lines
-> also predate any call of mine. The honest statement is that this radio has
-> been unreliable since the `txpower=0` incident (§5s) and that no specific
-> operation has been shown to trigger it.
+> **The cause is NOT established, and one plausible suspect was ruled out.** It
+> is tempting to blame the `rrm_nr_get_own` that happened to be in flight the
+> first time, which would be a fourth mwlwifi "advertises it, accepts it, fails
+> in hardware" quirk of exactly the shape §5q and §5s document. That is wrong:
+> on a freshly booted device the same call returns instantly and leaves hostapd
+> healthy, checked deliberately, and the `key addition failed` lines predate any
+> call of mine. See §6, "the last thing you did is not the cause" — recording
+> that quirk would have gated a working feature off working hardware forever,
+> with a measurement's authority behind it.
 >
-> **For the user:** this is worth investigating on the device itself — a
-> firmware reflash, or checking whether the 5 GHz radio has a hardware fault.
-> The C6 has been up for hours through all the same work without a stumble.
+> **The user factory reset the device on 2026-08-16.** That wiped our entire
+> footprint — ACL file, rpcd login, our wifi-iface sections, nlbwmon — and left
+> stock OpenWrt 25.12.5. A clean-room watch was then run with **nothing of ours
+> installed**: stock config, both radios up on a hand-made WPA2 SSID, no
+> controller polling it.
+>
+> **Read that result carefully when you find it below.** The earlier wedges all
+> happened with a client associating and roaming; a clean-room run with no
+> clients is weaker evidence than it looks, and a quiet AP staying up does not
+> establish that the device is healthy. If it wedges with nothing of ours on it,
+> that is decisive; if it does not, the next step is restoring the load and
+> watching again.
 
-**Wireless currently on air** (four BSSes per SSID pair):
+**Wireless currently on air:**
 
-- `oonfee-roam` on **both** APs, 2.4 + 5 GHz — the controller-managed WLAN, WPA2-PSK
-  with 802.11r/k/v, `mobility_domain=90e4`. This is the roaming test bed.
-- `oonfeewrt-probe-5g` / `-2g` on the WRT — pre-existing, not ours.
-- `oonfee-c6-5g` / `-2g` on the C6 — created by hand to enable its radios
-  (stock OpenWrt ships them disabled, and enabling them unsecured would have
-  broadcast two open networks).
+- `oonfee-roam` on the **C6**, 2.4 + 5 GHz — the controller-managed WLAN,
+  WPA2-PSK with 802.11r/k/v, `mobility_domain=90e4`, and the neighbour lists
+  §5t distributes. **Gone from the WRT** with the factory reset; restoring it is
+  an apply away once the device is re-adopted.
+- `oonfee-c6-5g` / `-2g` on the C6 — created by hand to enable its radios (stock
+  OpenWrt ships them disabled, and enabling them unsecured would broadcast two
+  open networks).
+- `wrt-cleanroom` on the WRT, both bands — **not ours**, made by hand after the
+  reset purely to get hostapd running for the watch above. Delete it when the
+  device is re-adopted.
 
-**Both devices' controller credentials now live in `.run/keyring.json`**, sealed
-by the operator passphrase, because the two-AP integration test doubles as the
-setup helper (`OONFEE_SEED_DIR`). Nothing in this repo holds a password, and
-nothing should. The `oonfee-roam` passphrase is not recorded here either; §7 has
-how to check or reset any of them by asking the device rather than a document.
+**Credentials.** The C6's controller login is sealed in `.run/keyring.json`
+under the operator passphrase, and that is the only copy — adoption never
+returns the password it generates. **The WRT's record in `.run` is now stale**:
+the reset removed the login it refers to. The controller diagnoses that itself
+now (§5u) and the setup helper recovers from it by force-un-adopting and
+re-adopting. Nothing in this repo holds a password and nothing should; §7 has
+how to check or reset one by asking the device rather than a document.
 
 **Root has no password on either device.** The adoption flow warns about it and
 it is still true. That is also what lets adoption bootstrap over SSH with an
 empty credential, which is how both devices were re-adopted for the ACL change —
 convenient, and exactly the thing worth fixing on the devices.
 
-**One habit worth inheriting:** before any experiment that writes to the device's
+**One habit worth inheriting:** before any experiment that writes to a device's
 network config, arm a restore on the device itself first (§6, "arm the undo
-before the experiment"). It saved this session three times.
+before the experiment"). It saved this work three times.
 
 ---
 
@@ -424,6 +443,7 @@ the useful part — the code is in git either way.
 | §5r | **Two devices at last** — fast roaming verified across different SoCs |
 | §5s | The roam demo — what it proved, what it did not, and the txpower trap |
 | §5t | **Neighbour reports** — the first thing built that hand configuration cannot do |
+| §5u | What a factory reset looks like from the controller, and why it used to look like nothing |
 
 ### 5a. What discovery corrected
 
@@ -1712,6 +1732,61 @@ hostapd was wedged, its re-probe recorded `neighbor-report: not-observable` —
 **not absent**. The three-state rule held under a real fault, on a device that
 genuinely has the capability, without anyone arranging it.
 
+### 5u. A factory reset, seen from the controller
+
+The reference device was factory reset mid-session. That is a real lifecycle
+event — someone recovering a misbehaving router does it without telling their
+controller — and the controller handled it badly enough to be worth fixing on
+the spot.
+
+A reset removes the rpcd login and the ACL file **and leaves everything else
+intact**. So the controller is left holding a sealed credential for a box that
+is on the network, healthy, answering, and has never heard of it. What that
+produced was `ubus session.login: PERMISSION_DENIED`, once a minute, forever.
+
+That message is also what an operator sees when a password was rotated, when an
+ACL was narrowed, and when the keyring is wrong. Four different problems behind
+one sentence, and only one of them has an obvious fix.
+
+`Connect` now adds a diagnosis when the device answers discovery's
+unauthenticated `list` and still refuses the credential. Three things about how
+it does it:
+
+- **It adds to the error rather than replacing it.** The login failure is still
+  what happened, and callers matching on it have to keep working.
+- **It says nothing when the device did not answer.** Telling someone to
+  re-adopt a router that is merely unplugged sends them to rebuild something
+  that only needs to come back. The check is asymmetric on purpose: answering
+  proves the credential is the problem, and silence proves nothing.
+- **It reuses `discovery.Probe` rather than rolling its own call.** A
+  hand-written `session.list` is refused by a stock ACL, and a refusal is not
+  the question being asked.
+
+Recovery is un-adopt then adopt, and un-adopt must be **forced**: the footprint
+it exists to remove is already gone, so phase 2 can never report a clean
+removal. That is exactly the case §5b's `Force` fix was for, met for real. The
+two-AP setup helper now does it by itself.
+
+#### The mock was wrong about the one call discovery depends on
+
+Found while testing the above. `tools/mock_ubus.py` answered `list` with `{}`
+unless its first parameter was 32 characters long — i.e. unless it looked like a
+session token.
+
+That is backwards from the device. `list` needs **no session**, and that is
+precisely why discovery uses it (§5a): no credential, no session, no failed-login
+record, and it returns the whole object graph. Discovery sends `params: ["*"]`,
+so against the mock it saw an empty object list and graded a perfectly good
+OpenWrt box as merely *reachable* rather than *OpenWrt*.
+
+Nothing caught it because discovery's own tests use their own fixture. It
+surfaced only when a daemon test asked discovery to identify the mock — one
+component's fixture being checked by a different component's expectations, which
+is the only thing that finds this class of bug. Same family as §6's "a mock that
+is easier to write than the real thing is testing the wrong thing", one level
+further out: the mock was not simpler here, it was *inverted*, and every test
+that never asked this question passed either way.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -1838,6 +1913,15 @@ written and believed.
   it. The cost of getting this wrong is not a wasted hour — it is a quirk
   recorded in the capability model, gating a working feature off working
   hardware forever, with a measurement's authority behind it.
+- **One component's fixture, checked by another component's expectations.**
+  The mock answered ubus `list` with `{}` unless its first parameter looked like
+  a session token — backwards, since `list` needs no session and that is exactly
+  why discovery uses it. Discovery's own tests use their own fixture, so the
+  disagreement was invisible for the life of the project; it surfaced the first
+  time a daemon test asked discovery to identify the mock. Not the usual
+  mock-is-simpler failure: this mock was *inverted*, and every test that never
+  asked the question passed either way. Where two components share a fixture,
+  make at least one test cross the boundary.
 - **A test helper that computes an identity its own way will invent a second
   device.** The seed helpers wrote device MACs as literals while adoption reads
   the LAN bridge, so a seeded row and a real adoption of one physical box
