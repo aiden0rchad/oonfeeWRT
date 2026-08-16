@@ -382,12 +382,34 @@ most-worth-doing first.
    the real device, and nobody has *looked* at any of them. Every UI defect this
    project has found was found by looking — see the standing gap below. `.run`
    is seeded with both APs and the roaming WLAN, so this is one command away.
-2. **Broaden hardware support** — the stated direction: any old router flashed
+2. **A mesh backhaul whose health cannot be seen is half a feature.** §5m's own
+   note says this is "the first thing worth building once there are two nodes",
+   and there are two nodes now. The readout is closer than that note thought:
+   802.11s peers appear in `iw dev <mesh-if> station dump`, and
+   `/usr/sbin/iw dev * station dump` is **already granted** — so peer count,
+   signal and inactivity need no ACL change. `mpath dump` (the forwarding
+   table) does.
+
+   The catch, and it is not small: **this cannot be verified on the hardware
+   here.** Mesh is Present on the C6 and gated off on the WRT (§5q), so a
+   two-node mesh is not buildable with these two devices. Build it against the
+   mock by all means, but do not record it as verified, and expect the first
+   real mesh to find something — every other device-facing feature in this
+   project has.
+3. **Broaden hardware support** — the stated direction: any old router flashed
    with OpenWrt, adopted from the network like a UniFi device, working as an AP,
-   a switch, or a bridge/mesh node. §5m is the audit of what that needs and what
-   currently assumes otherwise. It is the largest remaining piece of work and
-   most of it needs no hardware to start.
-3. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+   a switch, or a bridge/mesh node. §5m is the audit. The largest remaining
+   piece, and most of it needs no hardware to start — **a WDS/relay bridge is
+   still entirely unmodelled**, which is the half of "AP bridge mesh" that
+   802.11s does not cover.
+4. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+
+**Landed 2026-08-16 alongside the neighbour work**, all from things the session
+tripped over rather than planned: a factory reset is now diagnosed instead of
+reported as a permission error (§5u); adoption refuses a second device at one
+address; the setup helpers adopt instead of assuming a login exists; and an
+unmeasured hardware class names its board target instead of rendering a bare
+`?` (§5m item 3).
 
 ### Blocked, and by what
 
