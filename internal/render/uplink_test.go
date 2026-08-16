@@ -148,11 +148,58 @@ func TestWLANCarriesWDSOnlyWhenBridgesAreAllowed(t *testing.T) {
 			"the AP, so no station could ever bridge to it")
 	}
 
+	// Off must render wds=0, NOT omit the option.
+	//
+	// This test used to assert the opposite and was wrong, which hardware
+	// showed: a plan compares only the keys it writes, so omitting the option
+	// leaves whatever was last applied sitting on the device. Measured — after
+	// turning the flag off and applying, the access points still carried
+	// wds='1'. An AP still accepting 4-address frames while the screen says it
+	// does not is a security posture nobody chose.
 	w.Options.AllowUplink = false
 	sec, _ = renderWifiIface(site, w, model.Network{Name: "lan"}, "radio0", caps)
-	if _, present := sec.Values["wds"]; present {
-		t.Error("wds was rendered on a WLAN that does not accept bridges; that " +
-			"changes what the AP accepts from the air without anyone asking")
+	if sec.Values["wds"] != "0" {
+		t.Errorf("wds = %q, want an explicit \"0\": omitting it leaves a stale "+
+			"wds=1 on the device that no later apply will ever clear",
+			sec.Values["wds"])
+	}
+}
+
+// A device cannot bridge to a network it publishes itself.
+//
+// Found on hardware: the station came up in Client mode on the same radio
+// already serving that SSID, and never associated — channel 0, signal 0. There
+// is nothing wrong to LOOK at in that config, which is why this is refused
+// rather than warned about: it is indistinguishable from a driver refusing
+// 4-address framing, and an operator would spend the afternoon on the wrong
+// question.
+func TestUplinkRefusesToJoinANetworkTheDevicePublishes(t *testing.T) {
+	site := model.Site{
+		Groups: []model.APGroup{{ID: 1, Name: "all", DeviceIDs: []int64{7}}},
+		WLANs: []model.WLAN{{
+			ID: 3, SSID: "oonfee-roam", GroupID: 1, Enabled: true,
+			Bands:   []model.Band{model.Band5G},
+			Options: model.WLANOptions{AllowUplink: true},
+		}},
+	}
+	u := model.Uplink{DeviceID: 7, WLANID: 3, Band: model.Band5G, Enabled: true}
+
+	errs := u.Validate(site)
+
+	var found bool
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "publishes") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a device was allowed to bridge to a network it serves: %v", errs)
+	}
+
+	// A device NOT in that group is fine — this must not refuse every uplink.
+	u.DeviceID = 8
+	if errs := u.Validate(site); len(errs) != 0 {
+		t.Errorf("a device outside the AP group was refused: %v", errs)
 	}
 }
 

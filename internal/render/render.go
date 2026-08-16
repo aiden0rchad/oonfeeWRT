@@ -393,12 +393,22 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	if w.Options.MaxAssoc > 0 {
 		v["maxassoc"] = strconv.Itoa(w.Options.MaxAssoc)
 	}
-	// The AP half of a wireless uplink. One option, and the half people forget:
-	// configure the joining device and not this, and the station associates as
-	// an ordinary client while everything behind it stays dark — a failure that
-	// looks like a driver refusing 4-address frames and is not.
+	// The AP half of a wireless uplink. The half people forget: configure the
+	// joining device and not this, and the station associates as an ordinary
+	// client while everything behind it stays dark — a failure that looks like
+	// a driver refusing 4-address frames and is not.
+	//
+	// Written explicitly in BOTH directions, like ft_over_ds above, and for a
+	// reason measured on hardware. A plan compares only the keys it writes
+	// (plan.go), so omitting the option when the flag is off leaves whatever
+	// was last applied sitting on the device — an access point still accepting
+	// 4-address frames after an operator turned that off, with the UI showing
+	// it off. This option decides what an AP accepts from the air, so a stale
+	// one is a security posture nobody chose.
 	if w.Options.AllowUplink {
 		v["wds"] = "1"
+	} else {
+		v["wds"] = "0"
 	}
 
 	v[OwnershipTag] = "1"

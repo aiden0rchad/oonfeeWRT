@@ -74,6 +74,28 @@ func (u Uplink) Validate(site Site) []error {
 				"for the network, or the access points will not carry the "+
 				"4-address frames this needs and the link will never form", w.SSID))
 	}
+	// A device cannot bridge to a network it publishes itself.
+	//
+	// Found on hardware: the station came up in Client mode on the same radio
+	// that was already serving that SSID, and never associated — channel 0,
+	// signal 0, silence. Nothing in the config is wrong to look at, which is
+	// what makes it worth refusing rather than warning about: it is
+	// indistinguishable from a driver refusing 4-address framing, and an
+	// operator would spend the afternoon on the wrong question.
+	//
+	// The check is group membership rather than "is this SSID on the air here",
+	// because the site model is what the controller controls and the air is
+	// not.
+	for _, g := range site.Groups {
+		if g.ID == w.GroupID && g.Contains(u.DeviceID) {
+			errs = append(errs, fmt.Errorf(
+				"wireless uplink: this device publishes %q itself, so it cannot "+
+					"also join it — a station and an access point for one network "+
+					"on one device is not a bridge to anywhere. Remove the device "+
+					"from that network's AP group, or bridge it to a different "+
+					"network", w.SSID))
+		}
+	}
 	if !w.PublishesOn(u.Band) {
 		errs = append(errs, fmt.Errorf(
 			"wireless uplink: %q is not published on %s, so there is nothing to "+
