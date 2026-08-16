@@ -28,6 +28,7 @@ func Probe(ctx context.Context, c *ubus.Client) (*Registry, error) {
 	probePreflight(ctx, c, r)
 	probeAccounting(ctx, c, r)
 	probeMesh(ctx, c, r)
+	probeUplink(ctx, c, r)
 
 	return r, nil
 }
@@ -971,4 +972,73 @@ func trimVersion(s string) string {
 		}
 	}
 	return s
+}
+
+// probeUplink decides whether this device could join a network over the air.
+//
+// # What a package list can and cannot settle
+//
+// A 4-address (WDS) uplink needs two halves, and only one of them is a package
+// question. The station side runs `wpa_supplicant`, which ships inside every
+// `wpad*` build and inside no bare `hostapd*` build — so a device carrying only
+// hostapd can serve an AP and can never join one, and that IS answerable here.
+//
+// The other half is whether the radio will actually carry a 4addr station, and
+// nothing installable answers that. `iw phy info` would, and it is not in the
+// ACL and should not be: §5m measured the alternatives and none of them
+// reports interface modes.
+//
+// So Present here means "the software is there", not "this will work" — stated
+// in the note, because §5q is precisely what happens when a capability inferred
+// from a daemon is read as a promise about a driver. The renderer treats it the
+// same way it treats mesh: it gates on Present and says which of the two
+// possible Absents it is looking at.
+func probeUplink(ctx context.Context, c *ubus.Client, r *Registry) {
+	pkgs, err := installedPackages(ctx, c)
+	if err != nil {
+		r.Set(FeatWirelessUplink, NotObservable)
+		r.Note("wireless uplink undetermined: the installed-package list could "+
+			"not be read (%v), and it is the only source that says whether a "+
+			"supplicant is present", err)
+		return
+	}
+	state := uplinkFromPackages(pkgs)
+	r.Set(FeatWirelessUplink, state)
+	if state == Present {
+		r.Note("a supplicant is installed (%s), so this device could join a "+
+			"network over the air. Whether its radio will carry a 4-address "+
+			"station is NOT settled by that and no readable source answers it — "+
+			"the same gap that let a mesh apply cleanly and never come up",
+			describeWpad(pkgs))
+	}
+}
+
+// uplinkFromPackages is the rule, split out so it is testable without a device.
+//
+// Deliberately more permissive than meshFromPackages. Mesh needs a build named
+// for carrying 802.11s, and a build that is not named for its feature set
+// therefore settles nothing. A supplicant is different: it is in every wpad
+// build including wpad-basic and wpad-mini, which are named for lacking MESH
+// and not for lacking a supplicant. So `wpad` in any form is Present, and the
+// only Absent is a device carrying hostapd alone or no daemon at all.
+func uplinkFromPackages(pkgs []string) State {
+	var wpad, hostapdOnly bool
+	for _, p := range pkgs {
+		switch {
+		case strings.HasPrefix(p, "wpad"):
+			wpad = true
+		case strings.HasPrefix(p, "hostapd"):
+			hostapdOnly = true
+		}
+	}
+	if wpad {
+		return Present
+	}
+	if hostapdOnly {
+		// An AP daemon and no supplicant: this device can serve a network and
+		// cannot join one. A real absence, and fixable by installing wpad.
+		return Absent
+	}
+	// No 802.11 daemon at all. It cannot do wireless anything.
+	return Absent
 }

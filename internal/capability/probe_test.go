@@ -353,3 +353,70 @@ func TestNeighborReportIsNotAskedWithoutHostapd(t *testing.T) {
 		}
 	}
 }
+
+// A supplicant is what lets a device JOIN a network rather than serve one, and
+// it is the half of a wireless uplink that a package list can settle.
+func TestUplinkFromPackages(t *testing.T) {
+	cases := []struct {
+		name string
+		pkgs []string
+		want State
+	}{
+		// Every wpad build carries a supplicant, including the ones named for
+		// lacking things. wpad-basic is named for lacking MESH, not for lacking
+		// the ability to join a network — which is why this rule is more
+		// permissive than meshFromPackages and not a copy of it.
+		{"full build", []string{"wpad-openssl-2025.08.26-r2"}, Present},
+		{"mesh build", []string{"wpad-mesh-openssl-2025.08.26-r2"}, Present},
+		{"basic build", []string{"wpad-basic-mbedtls-2025.08.26-r2"}, Present},
+		{"mini build", []string{"wpad-mini-2025.08.26-r2"}, Present},
+		// hostapd alone serves an AP and cannot join one. A real absence, and
+		// one an operator can fix by installing wpad.
+		{"hostapd only", []string{"hostapd-openssl-2025.08.26-r2"}, Absent},
+		{"no 802.11 daemon", []string{"dnsmasq-2.90", "busybox-1.37"}, Absent},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := uplinkFromPackages(c.pkgs); got != c.want {
+				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// Mesh and uplink must not be confused: a build can carry a supplicant and no
+// 802.11s, and reading one from the other is how a capability model starts
+// lying. wpad-basic is the case that separates them.
+func TestUplinkAndMeshDisagreeWhereTheyShould(t *testing.T) {
+	basic := []string{"wpad-basic-mbedtls-2025.08.26-r2"}
+
+	if uplinkFromPackages(basic) != Present {
+		t.Error("wpad-basic carries a supplicant; it is named for lacking mesh")
+	}
+	if meshFromPackages(basic) != Absent {
+		t.Error("wpad-basic is named for lacking 802.11s")
+	}
+}
+
+// Present here means the SOFTWARE is there, and the note has to say so. §5q is
+// exactly what happens when a capability inferred from a daemon gets read as a
+// promise about a driver.
+func TestUplinkPresentSaysWhatItDoesNotProve(t *testing.T) {
+	r, err := Probe(context.Background(), dial(t))
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if r.State(FeatWirelessUplink) != Present {
+		t.Fatalf("uplink = %s, want Present", r.State(FeatWirelessUplink))
+	}
+	var caveated bool
+	for _, n := range r.Notes {
+		if strings.Contains(n, "4-address") && strings.Contains(n, "NOT settled") {
+			caveated = true
+		}
+	}
+	if !caveated {
+		t.Errorf("nothing records that the radio half is unproven; notes = %q",
+			r.Notes)
+	}
+}
