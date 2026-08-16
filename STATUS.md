@@ -482,20 +482,47 @@ address; the setup helpers adopt instead of assuming a login exists; and an
 unmeasured hardware class names its board target instead of rendering a bare
 `?` (§5m item 3).
 
-### Blocked, and by what
+### Built but NOT TESTED, and what each one waits on
+
+Nothing here is broken. Each is complete in code and tested from unit level up,
+and each has a specific claim nobody has been able to check. Listed together so
+a reader can see the shape of what the lab cannot reach — **the answer to almost
+all of it is one more router**, and as of 2026-08-16 there is not one.
+
+| what | untested claim | what would settle it |
+|---|---|---|
+| **Mesh `peered`** (§5w) | that two nodes find each other and the backhaul carries | any second mesh-capable device |
+| **Wireless uplink** (§5x) | that a station associates and bridges | a device whose radio runs station mode — measured, neither of these two does |
+| **Three-AP fan-out** | ROADMAP Phase 2's stated proof | any third AP |
+| **Class B / C budget** | DEVICE-BUDGET's CPU and RAM rows | specifically an **MT7621** (class C) or **MT7981/filogic** (class B) |
+
+The last row is narrower than the others and worth not conflating with them: an
+ath79 or ipq40xx box closes the first three and leaves the fourth exactly where
+it is, because `classify()` would call it `?` and no measured number would
+attach to a class. **Class C sets the budget**, so that row is the one where the
+shipped defaults are least justified — every figure in DEVICE-BUDGET comes from
+the comfortable class.
+
+Two things worth saying about this list. None of it blocks further development:
+the pipeline is not per-device, so a third AP needs hardware rather than code.
+And none of it should be quietly closed by reasoning — §5q, §5w and §5x are each
+a case where every available signal said a thing would work and the device
+disagreed.
+
+### Blocked on something other than hardware
 
 - **`usteer` / `dawn` configuration and state readout.** Neither is installed on
-  the reference device; both are in the official feeds. This sits behind the
+  the reference devices; both are in the official feeds. This sits behind the
   package-installation flow ARCHITECTURE §6 step 3 describes and nothing has
   built. Writing config for an absent package would be untestable, so it was not
   written.
-- **A second and third AP.** The WLAN fan-out is proven across two bands of one
-  device. ROADMAP's Phase 2 sentence says three APs. Nothing in the pipeline is
-  per-device — render is driven by group membership and the mobility domain is
-  derived rather than agreed — so this needs hardware, not code.
-- **Class B and C devices.** Class C (MT7621) *sets* the budget and every number
-  so far comes from class A. The budget harness runs anywhere; it has only ever
-  run against the comfortable class.
+- **The WRT3200ACM under a client.** Not a hardware purchase — a client that
+  prefers it. It has now run 13 hours since the factory reset with no wedge,
+  through polling, applies, a mesh and an 802.11k reconciler, and has carried
+  **zero clients** the entire time, because the one client on this network
+  associates to the C6 and stays. A client was the single condition every
+  pre-reset failure shared, so the reset cannot be called a fix until one is on
+  it. See §0.
 
 ### Before starting anything, read these
 
