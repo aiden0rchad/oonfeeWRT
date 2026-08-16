@@ -1003,12 +1003,38 @@ func probeUplink(ctx context.Context, c *ubus.Client, r *Registry) {
 		return
 	}
 	state := uplinkFromPackages(pkgs)
+
+	// Measured 2026-08-16, and it is why the note below is worded as it is.
+	//
+	// On an Archer C6 v2 (ath10k, OpenWrt 25.12.5) a station interface can be
+	// created and cannot associate. Everything a controller can consult says it
+	// should work: wpad-mesh-openssl is installed, wpa_supplicant is running and
+	// opens a control socket for the interface, and `iw phy` declares
+	// `#{ managed } <= 16` alongside the APs on one channel. The interface comes
+	// up in Client mode at channel 0 with 0 dBm, `iw link` says "Not connected",
+	// and a scan returns zero BSSes.
+	//
+	// Isolated properly rather than guessed at: it fails identically with a
+	// hand-written UCI section and no controller involved, WITHOUT `wds` as well
+	// as with it, and with every AP on that radio disabled so the station is
+	// alone. So it is not the controller, not 4-address framing, and not a
+	// concurrency limit — station mode does not work on that radio.
+	//
+	// NOT recorded as a Quirk, deliberately. A quirk here would gate the feature
+	// off, and one board is not a driver: this could be that board, that
+	// firmware build, or ath10k generally, and the three send an operator to
+	// three different places. What it does instead is refuse to let Present be
+	// read as a promise — see the note.
 	r.Set(FeatWirelessUplink, state)
 	if state == Present {
-		r.Note("a supplicant is installed (%s), so this device could join a "+
-			"network over the air. Whether its radio will carry a 4-address "+
-			"station is NOT settled by that and no readable source answers it — "+
-			"the same gap that let a mesh apply cleanly and never come up",
+		r.Note("a supplicant is installed (%s), so the SOFTWARE for joining a "+
+			"network over the air is present. Whether this radio will actually "+
+			"carry a station is NOT settled by that, and no source the ACL can "+
+			"reach answers it. Measured on an ath10k board where every "+
+			"available signal said yes — supplicant running, `iw phy` declaring "+
+			"the combination valid — and the station never associated on any "+
+			"channel. Treat Present here as 'worth trying', and expect a station "+
+			"that comes up and never associates to be the way it fails",
 			describeWpad(pkgs))
 	}
 }
