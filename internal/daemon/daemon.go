@@ -154,7 +154,7 @@ func (d *Daemon) openKeyring(cfg Config) error {
 
 	keeper, created, err := secrets.OpenOrCreate(path, pass, secrets.DefaultParams())
 	if err != nil {
-		return err
+		return unlockHint(cfg, path, err)
 	}
 	d.Keys = keeper
 	if created {
