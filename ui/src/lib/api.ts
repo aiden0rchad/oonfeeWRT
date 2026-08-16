@@ -397,6 +397,45 @@ export interface SiteOverride {
  *  mesh ID rather than an SSID (it is not beaconed for clients), and exactly ONE
  *  band rather than a list — nodes peer only with nodes on the same band, so
  *  "one mesh" on two bands would be two disjoint backhauls. */
+/** One BSS's part in a neighbour-distribution cycle. */
+export interface NeighbourBSS {
+  iface: string
+  ssid: string
+  bssid: string
+  neighbours: number
+  changed?: boolean
+  failed?: string
+}
+
+export interface NeighbourDevice {
+  device_id: number
+  name: string
+  error?: string
+  /** Why this device took no part, when that is a standing property rather
+   *  than a failure. Separate from error because an operator responds to the
+   *  two differently, and a screen that renders both as red teaches people to
+   *  ignore red. */
+  skipped?: string
+  updated: number
+  unchanged: number
+  bsses?: NeighbourBSS[]
+}
+
+/** What one 802.11k distribution cycle did.
+ *
+ *  An AP cannot learn its neighbours by itself — it knows its own BSS and
+ *  nothing about the AP down the hall. This is the controller telling each one
+ *  about the others, which is the whole reason 802.11k is worth enabling. */
+export interface NeighbourResult {
+  ssids: string[]
+  updated: number
+  unchanged: number
+  devices: NeighbourDevice[]
+  /** Explains an empty run. All zeroes with no sentence is indistinguishable
+   *  from a broken feature. */
+  note?: string
+}
+
 export interface Mesh {
   id: number
   mesh_id: string
@@ -557,6 +596,7 @@ export const api = {
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
+  distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
   focus: (id: number, seconds = 30) =>
     post<{ focused_for_seconds: number }>(`/devices/${id}/focus?seconds=${seconds}`),
   clients: (q: {

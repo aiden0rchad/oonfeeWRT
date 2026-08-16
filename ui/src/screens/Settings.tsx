@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { APGroup, Device, Mesh, PreviewResult, Site, WLAN } from '../lib/api'
+import type {
+  APGroup,
+  Device,
+  Mesh,
+  NeighbourDevice,
+  NeighbourResult,
+  PreviewResult,
+  Site,
+  WLAN,
+} from '../lib/api'
 import { Banner, Button, Card, Field, Prop } from '../components/ui'
 import { ago } from '../components/Chart'
 
@@ -215,6 +224,7 @@ export function Settings({ devices }: { devices: Device[] }) {
       </Card>
 
       <Groups site={site} devices={devices} onChanged={load} />
+      <Neighbours site={site} />
       <Deviations site={site} devices={devices} onChanged={load} />
       <Networks site={site} onChanged={load} />
 
@@ -1264,5 +1274,145 @@ function MeshEditor({
         </div>
       </div>
     </Card>
+  )
+}
+
+/**
+ * Neighbour reports — the one thing a controller can do that hand configuration
+ * cannot.
+ *
+ * An AP knows its own BSS and nothing about the AP down the hall; the two never
+ * talk. So 802.11k, which lets a client ask "what else is around?" and scan
+ * three channels instead of all of them, is switched on across the fleet and
+ * answered with an empty list unless something tells each AP about the others.
+ * That something has to know the whole fleet, which is this.
+ *
+ * The card runs on demand and reports what it did. It is not a settings form:
+ * there is nothing to configure, because every input is either the site model
+ * (which WLANs asked for 802.11k) or the devices themselves (where their radios
+ * currently are).
+ */
+function Neighbours({ site }: { site: Site }) {
+  const [res, setRes] = useState<NeighbourResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  // What the card can say before it has run. Derived from the site model rather
+  // than from a device, so it costs nothing and is honest about being a
+  // statement of intent: the WLANs that ASKED for 802.11k, which is not the
+  // same as the APs that can carry it.
+  const asked = site.wlans.filter((w) => w.enabled && w.roaming.kv).map((w) => w.ssid)
+
+  async function run() {
+    setBusy(true)
+    try {
+      setRes(await api.distributeNeighbours())
+      setErr('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card
+      title="Neighbour reports (802.11k)"
+      actions={
+        <Button onClick={run} disabled={busy || asked.length === 0}>
+          {busy ? 'Distributing…' : 'Distribute now'}
+        </Button>
+      }
+    >
+      {err && <Banner tone="critical">{err}</Banner>}
+
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
+        Each access point is told the BSSIDs and channels of the others carrying
+        the same SSID, so a roaming client scans those channels instead of all of
+        them. No AP can learn this by itself. This runs automatically every 15
+        minutes and after every apply — an AP that restarts comes back with an
+        empty list, so it is re-checked rather than assumed.
+      </div>
+
+      {asked.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          No wireless network has neighbour reports switched on, so there is
+          nothing to distribute. Turn on <strong>802.11k/v</strong> for a network
+          above to use this.
+        </div>
+      ) : (
+        <Prop label="Networks">{asked.join(', ')}</Prop>
+      )}
+
+      {res && (
+        <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+          <div style={{ fontSize: 12 }}>
+            {res.updated > 0
+              ? `Updated ${res.updated} access point radio${res.updated === 1 ? '' : 's'}`
+              : 'Every access point was already up to date'}
+            {res.unchanged > 0 && (
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}
+                · {res.unchanged} already correct
+              </span>
+            )}
+          </div>
+          {res.note && (
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{res.note}</div>
+          )}
+          {res.devices.map((d) => (
+            <NeighbourDeviceRow key={d.device_id} d={d} />
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function NeighbourDeviceRow({ d }: { d: NeighbourDevice }) {
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 6,
+        padding: '6px 8px',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>{d.name}</div>
+      {/* A failure and a standing limitation are rendered differently on
+          purpose. "Could not reach this device" is something to go and fix now;
+          "this device was adopted before the controller could ask" is a fact
+          about the device that will not change until it is re-adopted. Colouring
+          both red teaches people to ignore red. */}
+      {d.error && (
+        <div style={{ color: 'var(--critical)', marginTop: 2 }}>{d.error}</div>
+      )}
+      {d.skipped && (
+        <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{d.skipped}</div>
+      )}
+      {d.bsses?.map((b) => (
+        <div
+          key={b.iface}
+          style={{
+            display: 'flex',
+            gap: 8,
+            marginTop: 3,
+            color: b.failed ? 'var(--critical)' : 'var(--text-secondary)',
+          }}
+        >
+          <code style={{ minWidth: 78 }}>{b.iface}</code>
+          <span style={{ minWidth: 120 }}>{b.ssid}</span>
+          <span>
+            {b.failed
+              ? b.failed
+              : `knows ${b.neighbours} neighbour${b.neighbours === 1 ? '' : 's'}`}
+          </span>
+          {b.changed && !b.failed && (
+            <span style={{ color: 'var(--text-muted)' }}>updated</span>
+          )}
+        </div>
+      ))}
+    </div>
   )
 }

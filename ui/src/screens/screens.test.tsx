@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 /**
  * Screen-level tests.
@@ -24,6 +24,7 @@ const api = {
   deviceSeries: vi.fn(),
   overhead: vi.fn(),
   reprobe: vi.fn(),
+  distributeNeighbours: vi.fn(),
 }
 vi.mock('../lib/api', () => ({
   api,
@@ -348,5 +349,135 @@ describe('Devices — re-probe panel', () => {
     await waitFor(() =>
       expect(screen.getByText(/reported no radios/i)).toBeTruthy(),
     )
+  })
+})
+
+describe('Settings — neighbour reports', () => {
+  const wlan = (over: Record<string, unknown> = {}) => ({
+    id: 1,
+    ssid: 'oonfee-roam',
+    network_id: 1,
+    group_id: 1,
+    bands: ['2g', '5g'],
+    security_mode: 'psk2',
+    pmf: '1',
+    has_key: true,
+    enabled: true,
+    roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: true },
+    hidden: false,
+    isolate: false,
+    max_assoc: 0,
+    ...over,
+  })
+
+  const siteWith = (wlans: unknown[]) => ({
+    name: 'Site',
+    uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
+    wlans,
+    meshes: [],
+    groups: [{ id: 1, name: 'all', device_ids: [] }],
+    networks: [
+      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+    ],
+    problems: [],
+    overrides: [],
+    overridable: [],
+    override_note: '',
+  })
+
+  // A WLAN with 802.11k switched off must not offer to distribute anything. The
+  // renderer writes no rrm_neighbor_report for it, so the AP will not answer a
+  // client's request — a button that fills a list nobody reads is a feature that
+  // is not there.
+  it('offers nothing when no network asked for 802.11k', async () => {
+    api.site.mockResolvedValue(siteWith([wlan({ roaming: { ft: true, kv: false } })]))
+    render(<Settings devices={[]} />)
+
+    await waitFor(() => expect(screen.getByText(/Neighbour reports/)).toBeTruthy())
+    expect(screen.getByText(/No wireless network has neighbour reports/)).toBeTruthy()
+    expect((screen.getByText('Distribute now') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('names the networks it would distribute across', async () => {
+    api.site.mockResolvedValue(siteWith([wlan()]))
+    render(<Settings devices={[]} />)
+
+    await waitFor(() => expect(screen.getByText(/Neighbour reports/)).toBeTruthy())
+    // Scoped to the card: the SSID also appears in the WLAN list above, and a
+    // document-wide match would pass even if the card named nothing.
+    const card = screen.getByText(/Neighbour reports/).closest('section') as HTMLElement
+    expect(within(card).getByText('oonfee-roam')).toBeTruthy()
+    expect((screen.getByText('Distribute now') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  // The distinction the whole capability model exists to protect, at the UI
+  // layer. "Could not reach this device" is something to go and fix now; "this
+  // device was adopted before the controller could ask" is a standing fact that
+  // will not change until it is re-adopted. Rendering both as an error teaches
+  // people to ignore errors.
+  it('separates a device that failed from one that was skipped', async () => {
+    api.site.mockResolvedValue(siteWith([wlan()]))
+    api.distributeNeighbours.mockResolvedValue({
+      ssids: ['oonfee-roam'],
+      updated: 2,
+      unchanged: 0,
+      devices: [
+        {
+          device_id: 1,
+          name: 'ap-one',
+          updated: 2,
+          unchanged: 0,
+          bsses: [
+            {
+              iface: 'phy0-ap1',
+              ssid: 'oonfee-roam',
+              bssid: '32:23:03:db:be:43',
+              neighbours: 3,
+              changed: true,
+            },
+          ],
+        },
+        {
+          device_id: 2,
+          name: 'ap-old',
+          updated: 0,
+          unchanged: 0,
+          skipped: 'this device has not been shown to accept neighbour lists — re-adopt it',
+        },
+        { device_id: 3, name: 'ap-gone', updated: 0, unchanged: 0, error: 'could not reach this device' },
+      ],
+    })
+
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText(/Neighbour reports/)).toBeTruthy())
+    fireEvent.click(screen.getByText('Distribute now'))
+
+    await waitFor(() => expect(screen.getByText(/Updated 2 access point/)).toBeTruthy())
+    expect(screen.getByText(/knows 3 neighbours/)).toBeTruthy()
+
+    const skipped = screen.getByText(/re-adopt it/)
+    const failed = screen.getByText(/could not reach this device/)
+    expect(skipped.getAttribute('style')).not.toEqual(failed.getAttribute('style'))
+  })
+
+  // Zero updates is a success, not an empty screen. A run that says nothing is
+  // indistinguishable from a broken feature.
+  it('says so plainly when everything was already correct', async () => {
+    api.site.mockResolvedValue(siteWith([wlan()]))
+    api.distributeNeighbours.mockResolvedValue({
+      ssids: ['oonfee-roam'],
+      updated: 0,
+      unchanged: 4,
+      devices: [],
+    })
+
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText(/Neighbour reports/)).toBeTruthy())
+    fireEvent.click(screen.getByText('Distribute now'))
+
+    await waitFor(() =>
+      expect(screen.getByText(/already up to date/)).toBeTruthy(),
+    )
+    expect(screen.getByText(/4 already correct/)).toBeTruthy()
   })
 })
