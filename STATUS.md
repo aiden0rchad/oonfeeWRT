@@ -1175,13 +1175,18 @@ Confirmed on hardware: `mesh-80211s` present, from `wpad-mesh-openssl`.
    is the first thing worth building once there are two nodes.
 3. **`classify()` covers three SoC families.** mvebu, filogic/MT7981, MT7621 —
    everything else is `ClassUnknown`, which is *most* old routers: ath79,
-   ramips/MT7620, ipq40xx, bcm53xx, lantiq. The consequence today is mild
-   (Management Overhead reports no CPU figure, correctly, because none has been
-   measured) but a "support old hardware" controller that shrugs at ath79 is
-   not finished. **Adding targets to that map without measuring them would be a
-   guess wearing a measurement's clothes** — the fix is to measure, or to
-   surface the board target so an operator can see what the controller is
-   looking at.
+   ramips/MT7620, ipq40xx, bcm53xx, lantiq. **Adding targets to that map
+   without measuring them would be a guess wearing a measurement's clothes**, so
+   the map is unchanged and the second half of this item is done instead: the
+   device panel now renders `?` with the board target and the actual
+   consequence — polled at the conservative default, no CPU cost claimed —
+   rather than a bare question mark that reads as a fault. The C6 was the
+   device that made this visible, reporting `class=?` for `ath79/generic`.
+
+   Three UI tests, and the third is the one that matters: a device with **no**
+   class is distinct from one whose class is *unmeasured*. "We never asked" and
+   "we asked and nobody has measured this" are different claims, which is the
+   same distinction the whole capability model turns on.
 4. **Class B and C remain unmeasured.** Class C (MT7621) sets the budget and
    every number in this project comes from class A. The budget harness runs
    anywhere; it has only ever run against the comfortable class — and §5k is
