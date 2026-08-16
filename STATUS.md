@@ -1797,6 +1797,14 @@ hostapd was wedged, its re-probe recorded `neighbor-report: not-observable` —
 **not absent**. The three-state rule held under a real fault, on a device that
 genuinely has the capability, without anyone arranging it.
 
+**And then it ran unattended.** A controller left up for an hour logged nine
+lines in total, none of them a distribution: four 15-minute cycles found the
+fleet converged and said nothing, which is what the "only a cycle that changed
+something is worth a line" rule is for. Checked against the devices rather than
+inferred from the silence — every managed BSS still holding three neighbours,
+every unmanaged SSID still holding none. Quiet because there was nothing to do,
+which is the only version of quiet worth having.
+
 ### 5u. A factory reset, seen from the controller
 
 The reference device was factory reset mid-session. That is a real lifecycle
