@@ -467,7 +467,17 @@ function WLANEditor({
             { v: 'none', l: 'Open' },
           ]}
           value={[draft.security_mode ?? 'sae-mixed']}
-          onChange={([m]) => set({ security_mode: m as WLAN['security_mode'] })}
+          onChange={([m]) =>
+            // The PMF value travels with the mode. Changing to WPA2/WPA3 while
+            // PMF was "Disabled" left a draft holding a value that mode does
+            // not offer: no button rendered as selected, and saving stored a
+            // setting the form never showed. The renderer coerces it safely,
+            // but a form should not produce a value it will not display.
+            set({
+              security_mode: m as WLAN['security_mode'],
+              pmf: clampPMF(m as WLAN['security_mode'], draft.pmf),
+            })
+          }
         />
 
         {/* Protected management frames.
@@ -1916,4 +1926,29 @@ function Picker({
       </select>
     </label>
   )
+}
+
+
+/**
+ * The PMF value a security mode can actually hold.
+ *
+ * Mirrors the renderer, which is the authority: nothing for Open, required for
+ * WPA3 and Enhanced Open since both mandate it, and at least optional for
+ * transitional WPA2/WPA3 where disabling it silently removes the WPA3 half of a
+ * network still advertising it. Keeping the two in step matters because the
+ * renderer will coerce regardless — and a form that shows one thing while the
+ * device gets another is the failure this project keeps finding.
+ */
+function clampPMF(mode: WLAN['security_mode'], pmf: WLAN['pmf'] | undefined): WLAN['pmf'] {
+  switch (mode) {
+    case 'none':
+      return '0'
+    case 'sae':
+    case 'owe':
+      return '2'
+    case 'sae-mixed':
+      return pmf === '2' ? '2' : '1'
+    default:
+      return pmf ?? '1'
+  }
 }

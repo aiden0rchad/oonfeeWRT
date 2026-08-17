@@ -697,6 +697,12 @@ describe('Settings — wireless uplinks', () => {
       expect(screen.queryByText('Protected management frames')).toBeNull(),
     )
 
+    // Back to WPA2 and choose Disabled — the state the lab device is in, and
+    // the one that makes the next step interesting.
+    fireEvent.click(screen.getByText('WPA2 only'))
+    await waitFor(() => expect(screen.getByText('Disabled')).toBeTruthy())
+    fireEvent.click(screen.getByText('Disabled'))
+
     // Transitional WPA2/WPA3 keeps the control but must not offer Disabled:
     // that silently removes the WPA3 half of a network still advertising it.
     fireEvent.click(screen.getByText('WPA2/WPA3'))
@@ -705,6 +711,19 @@ describe('Settings — wireless uplinks', () => {
     )
     expect(screen.queryByText('Disabled')).toBeNull()
     expect(screen.getByText('Required')).toBeTruthy()
+
+    // And the draft must not still hold the value that mode does not offer.
+    // Found by looking: coming from WPA2-with-PMF-disabled left neither option
+    // selected, and saving stored a setting the form never showed.
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(api.saveWLAN).toHaveBeenCalled())
+    const saved = api.saveWLAN.mock.calls.at(-1)?.[0] as { pmf?: string }
+    if (saved.pmf === '0') {
+      throw new Error(
+        'saved pmf="0" for a WPA2/WPA3 network, which the picker does not ' +
+          'offer and the renderer would override',
+      )
+    }
   })
 
   // A network that does not accept bridges must not be offered as somewhere to
