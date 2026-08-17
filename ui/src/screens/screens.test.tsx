@@ -1161,6 +1161,86 @@ describe('Unadopt', () => {
     expect(screen.getByText(/Read-only file system/)).toBeTruthy()
   })
 
+  // The fleet list has to learn about the removal however this panel is left.
+  //
+  // onDone refreshes the fleet AND closes; it used to fire the instant the
+  // request returned, which is what threw the report away. Moving it to Close
+  // made the slide-over's own × a second exit that refreshes nothing, so a
+  // removed device stayed in the table — a controller listing a router it had
+  // just deleted. The × lives outside this component, so unmounting is the only
+  // place it can be caught.
+  it('tells the fleet list about a removal even when dismissed by unmounting', async () => {
+    api.unadopt.mockResolvedValueOnce({
+      removed_from_inventory: true, footprint_remains: false,
+      reverted_sections: 1, login_removed: true, acl_removed: true,
+      needs_operator_credential: false, errors: [],
+    })
+    api.device.mockResolvedValue({
+      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: false, owned_sections: ['wireless.oowrt_wlan1_radio0'],
+    })
+    const { Unadopt } = await import('./Unadopt')
+    const onDone = vi.fn()
+    const { unmount } = render(
+      <Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />,
+    )
+    await waitFor(() =>
+      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByText(/reverts the sections above/))
+    await waitFor(() => {
+      const r = screen.getByText('Remove completely').closest('button')!
+      if (r.disabled) throw new Error('still disabled after confirming')
+    })
+    fireEvent.click(screen.getByText('Remove completely'))
+    await waitFor(() => expect(screen.getByText(/was removed/)).toBeTruthy())
+    expect(onDone).not.toHaveBeenCalled()
+
+    // Dismissed from outside — the slide-over's ×, not our Close button.
+    unmount()
+    expect(onDone).toHaveBeenCalledTimes(1)
+  })
+
+  // And exactly once when the button is used, rather than again on unmount.
+  //
+  // onDone must actually unmount here, the way it does in the app: it calls
+  // setOpenID(null), which tears the slide-over down and runs the cleanup. A
+  // spy that only records leaves the component mounted, so the cleanup never
+  // fires and the double-refresh this asserts against cannot happen — the test
+  // would pass whether or not the flag is cleared.
+  it('refreshes the fleet once, not twice, when Close is used', async () => {
+    api.unadopt.mockResolvedValueOnce({
+      removed_from_inventory: true, footprint_remains: false,
+      reverted_sections: 1, login_removed: true, acl_removed: true,
+      needs_operator_credential: false, errors: [],
+    })
+    api.device.mockResolvedValue({
+      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: false, owned_sections: ['wireless.oowrt_wlan1_radio0'],
+    })
+    const { Unadopt } = await import('./Unadopt')
+    let teardown = () => {}
+    const onDone = vi.fn(() => teardown())
+    const r = render(
+      <Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />,
+    )
+    teardown = r.unmount
+
+    await waitFor(() =>
+      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByText(/reverts the sections above/))
+    await waitFor(() => {
+      const b = screen.getByText('Remove completely').closest('button')!
+      if (b.disabled) throw new Error('still disabled after confirming')
+    })
+    fireEvent.click(screen.getByText('Remove completely'))
+    await waitFor(() => expect(screen.getByText(/was removed/)).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Close'))
+    expect(onDone).toHaveBeenCalledTimes(1)
+  })
+
   // A report with NO residue is still a report.
   //
   // Real case: phase 1 fails to revert one section, phase 2 cleans up fine, so

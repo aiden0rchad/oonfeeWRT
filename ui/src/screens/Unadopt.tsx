@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { UnadoptResult } from '../lib/api'
 import { Button, Field, Banner, Card, Toggle } from '../components/ui'
@@ -80,6 +80,43 @@ export function Unadopt({
   // to be reachable is cleaned properly rather than abandoned on our say-so.
   const [triedWithCredential, setTriedWithCredential] = useState(false)
 
+  // Whether a removal has actually happened, so that dismissing this panel by
+  // ANY route still tells the fleet list.
+  //
+  // onDone both refreshes the fleet and closes the panel, and it used to fire
+  // the instant the request returned — which is what threw the report away. Now
+  // that Close owns it, the slide-over's own × became a second exit that
+  // refreshes nothing, and the removed device stayed in the table until
+  // something else reloaded it: a controller listing a router it has just
+  // deleted. The × is outside this component and cannot be intercepted, so the
+  // unmount is where it is caught.
+  const removed = useRef(false)
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  useEffect(
+    () => () => {
+      if (removed.current) doneRef.current()
+    },
+    [],
+  )
+
+  // Dismissal through the button, which handles the refresh itself — the flag is
+  // cleared first so the unmount does not repeat it.
+  function dismiss() {
+    removed.current = false
+    onDone()
+  }
+
+  // One place accepts a report, because a report arrives on BOTH paths and the
+  // worst case arrives on the failure one: a forced removal whose phase 2 could
+  // not commit returns 502 with removed_from_inventory already true. Setting the
+  // flag beside only the success path would leave exactly that case listing a
+  // router the controller has deleted.
+  function accept(report: UnadoptResult) {
+    setResult(report)
+    if (report.removed_from_inventory) removed.current = true
+  }
+
   async function run(withCredential: boolean, force = false) {
     setErr('')
     setBusy(true)
@@ -97,7 +134,7 @@ export function Unadopt({
         ...(withCredential ? { username, password } : {}),
         ...(force ? { force: true } : {}),
       })
-      setResult(res)
+      accept(res)
       setPassword('')
       // NOT onDone() here. That unmounted the whole panel the instant a removal
       // succeeded, so the report underneath — including the residue, which is
@@ -114,7 +151,7 @@ export function Unadopt({
       // record left of what is on the device, so falling through to a bare
       // error banner destroyed it.
       if (e instanceof ApiError && isReport(e.body)) {
-        setResult(e.body)
+        accept(e.body)
       } else {
         setErr(e instanceof Error ? e.message : String(e))
       }
@@ -175,7 +212,9 @@ export function Unadopt({
              operator to re-type one that is already correct. */
           <Banner tone="warning">
             {deviceName} is still in the inventory, and the removal did not
-            finish. {result.error ?? 'See what happened below.'}
+            finish. {/* Truthiness, not ??: an empty string is not a message,
+                        and `'' ?? x` keeps the empty string. */}
+            {result.error || 'See what happened below.'}
           </Banner>
         )}
 
@@ -237,7 +276,7 @@ export function Unadopt({
               closes this form. Which one is correct depends on whether the row
               is actually gone, and calling onDone the moment the request
               returned is what threw the report away. */}
-          <Button onClick={result.removed_from_inventory ? onDone : onCancel}>
+          <Button onClick={result.removed_from_inventory ? dismiss : onCancel}>
             Close
           </Button>
         </div>
