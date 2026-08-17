@@ -472,13 +472,34 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	if w.Security.Mode.NeedsKey() {
 		v["key"] = w.Security.Key
 	}
-	if w.Security.PMF != "" {
-		v["ieee80211w"] = string(w.Security.PMF)
-	}
-	// WPA3 mandates protected management frames; rendering sae without it
-	// produces an AP that clients reject for reasons nobody enjoys debugging.
-	if w.Security.Mode == model.SecSAE && v["ieee80211w"] != string(model.PMFRequired) {
+	// Protected management frames, constrained by what the security mode can
+	// actually carry.
+	//
+	// The stored value is not trusted on its own. Every new WLAN is created
+	// with pmf="1" and the editor hides the control for modes that cannot use
+	// it, so a WLAN switched to Open keeps a PMF setting nobody chose and
+	// nobody can clear — and it was rendered onto the device, where it is
+	// meaningless without RSN and, on a Marvell radio, triggered a driver
+	// warning the operator had no control to act on.
+	switch w.Security.Mode {
+	case model.SecNone:
+		// No RSN, so no protected management frames. Nothing to write.
+	case model.SecSAE, model.SecOWE:
+		// Both mandate PMF. Rendering either without it produces an AP that
+		// clients reject for reasons nobody enjoys debugging.
 		v["ieee80211w"] = string(model.PMFRequired)
+	case model.SecSAEMixed:
+		// The WPA3 half needs it at least optional. "Disabled" here silently
+		// removes SAE from a network still advertising it.
+		if w.Security.PMF == model.PMFDisabled || w.Security.PMF == "" {
+			v["ieee80211w"] = string(model.PMFOptional)
+		} else {
+			v["ieee80211w"] = string(w.Security.PMF)
+		}
+	default:
+		if w.Security.PMF != "" {
+			v["ieee80211w"] = string(w.Security.PMF)
+		}
 	}
 
 	// Roaming. The mobility domain is derived, not configured — that is the

@@ -1296,3 +1296,57 @@ func TestAutoChannelFallsBackToTheObservedChannel(t *testing.T) {
 			"the unparseable value overwrote the only evidence there was")
 	}
 }
+
+// PMF must be constrained by what the security mode can actually carry.
+//
+// Every new WLAN is created with pmf="1", and the editor hides the control for
+// modes that cannot use it — so a WLAN switched to Open keeps a setting nobody
+// chose and nobody can clear. It was then rendered onto the device, where it is
+// meaningless without RSN and, on a Marvell radio, triggered a driver warning
+// the operator had no control to act on.
+func TestPMFIsConstrainedByTheSecurityMode(t *testing.T) {
+	cases := []struct {
+		mode model.SecurityMode
+		pmf  model.PMF
+		want string // "" means the option must not be written at all
+		why  string
+	}{
+		{model.SecNone, model.PMFOptional, "",
+			"an open network has no RSN, so PMF is meaningless there"},
+		{model.SecSAE, model.PMFDisabled, "2",
+			"WPA3 mandates PMF; disabled produces an AP clients reject"},
+		{model.SecOWE, model.PMFDisabled, "2",
+			"OWE mandates PMF just as SAE does"},
+		{model.SecSAEMixed, model.PMFDisabled, "1",
+			"disabling PMF on a transitional network silently removes its WPA3 half"},
+		{model.SecSAEMixed, model.PMFRequired, "2",
+			"an explicit choice above the floor is kept"},
+		{model.SecPSK2, model.PMFDisabled, "0",
+			"WPA2 may legitimately run without PMF, which is the mwlwifi mitigation"},
+	}
+	for _, c := range cases {
+		t.Run(string(c.mode)+"/"+string(c.pmf), func(t *testing.T) {
+			site := testSite()
+			site.WLANs[0].Security = model.Security{Mode: c.mode, Key: "s3cret", PMF: c.pmf}
+			site.WLANs[0].Roaming = model.Roaming{}
+			doc, _, err := Render(site, model.Device{ID: 7, Role: "ap"}, dualBandCaps(), Existing{})
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if len(doc.Sections) == 0 {
+				t.Fatal("nothing rendered")
+			}
+			got, present := doc.Sections[0].Values["ieee80211w"]
+			if c.want == "" {
+				if present {
+					t.Errorf("ieee80211w=%q written for %s — %s", got, c.mode, c.why)
+				}
+				return
+			}
+			if got != c.want {
+				t.Errorf("ieee80211w=%q, want %q for %s/%s — %s",
+					got, c.want, c.mode, c.pmf, c.why)
+			}
+		})
+	}
+}

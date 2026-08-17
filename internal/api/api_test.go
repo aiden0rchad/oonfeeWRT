@@ -1953,3 +1953,47 @@ func TestTheLastNeighbourCycleCanBeReadWithoutRunningOne(t *testing.T) {
 		t.Errorf("reading still triggered %d cycle(s)", ran)
 	}
 }
+
+// "with no errors" must not be claimed from a response that cannot support it.
+//
+// DistributeNeighbours returns a nil error when the CYCLE ran and individual
+// devices failed — their reasons land in res.Devices[].Error — so a screen
+// reading only the top-level error reports a clean run for one in which half
+// the fleet was unreachable.
+func TestTheLastNeighbourRunCountsPerDeviceFailures(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	res := &NeighbourResult{
+		Updated: 1, Unchanged: 1,
+		Devices: []NeighbourDevice{
+			{DeviceID: 1, Name: "ok-ap", Updated: 1},
+			{DeviceID: 2, Name: "dead-ap", Error: "could not reach this device"},
+			// A standing reason is NOT a failure and must not be counted.
+			{DeviceID: 3, Name: "old-acl", Skipped: "its ACL predates neighbour reports"},
+		},
+	}
+	h.srv.LastNeighbours = func() (*NeighbourResult, string, time.Time, bool) {
+		return res, "", time.Now(), true
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/roaming/neighbours", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET: %d %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Ran           bool `json:"ran"`
+		DevicesFailed int  `json:"devices_failed"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Ran {
+		t.Fatal("a completed cycle reported as not run")
+	}
+	if got.DevicesFailed != 1 {
+		t.Errorf("devices_failed=%d, want 1: one device errored and one was "+
+			"skipped for a standing reason, which is not a failure",
+			got.DevicesFailed)
+	}
+}

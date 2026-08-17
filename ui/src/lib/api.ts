@@ -735,9 +735,16 @@ export const api = {
    *  cycle has completed since the controller started — not that nothing
    *  needed doing. */
   lastNeighbours: () =>
-    get<{ ran: boolean; at?: number; error?: string; result?: NeighbourResult }>(
-      '/roaming/neighbours',
-    ),
+    get<{
+      ran: boolean
+      at?: number
+      error?: string
+      result?: NeighbourResult
+      /** Devices whose distribution failed while the CYCLE itself succeeded.
+       *  A run can complete with half the fleet unreachable, and the top-level
+       *  error is empty in that case. */
+      devices_failed?: number
+    }>('/roaming/neighbours'),
   meshHealth: () => get<MeshHealthResult>('/site/mesh-health'),
   saveUplink: (u: Partial<Uplink> & { id?: number }) =>
     post<{ uplink: Uplink; note: string }>(

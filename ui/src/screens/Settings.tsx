@@ -479,15 +479,32 @@ function WLANEditor({
             shown-and-ignored when SAE is selected — the renderer forces it back
             on there regardless, and offering a choice the renderer overrides is
             worse than offering none. */}
-        {draft.security_mode !== 'sae' && draft.security_mode !== 'none' && (
+        {/* Hidden where the mode fixes the answer, and constrained where it
+            sets a floor. Offering a value the renderer will override is worse
+            than offering none: SAE and OWE both mandate PMF, and on a
+            transitional network "Disabled" silently removes the WPA3 half of a
+            network still advertising it. Open has no RSN, so nothing to
+            protect — and a WLAN switched to Open used to keep the pmf="1" every
+            draft is created with, which then rendered onto the device where an
+            operator could not see it, let alone clear it. */}
+        {draft.security_mode !== 'sae' &&
+          draft.security_mode !== 'owe' &&
+          draft.security_mode !== 'none' && (
           <>
             <Choice
               label="Protected management frames"
-              options={[
-                { v: '1', l: 'Optional' },
-                { v: '2', l: 'Required' },
-                { v: '0', l: 'Disabled' },
-              ]}
+              options={
+                draft.security_mode === 'sae-mixed'
+                  ? [
+                      { v: '1', l: 'Optional' },
+                      { v: '2', l: 'Required' },
+                    ]
+                  : [
+                      { v: '1', l: 'Optional' },
+                      { v: '2', l: 'Required' },
+                      { v: '0', l: 'Disabled' },
+                    ]
+              }
               value={[draft.pmf ?? '1']}
               onChange={([v]) => set({ pmf: v as WLAN['pmf'] })}
             />
@@ -1401,6 +1418,7 @@ function Neighbours({ site }: { site: Site }) {
     ran: boolean
     at?: number
     error?: string
+    devices_failed?: number
   } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -1468,7 +1486,9 @@ function Neighbours({ site }: { site: Site }) {
             ? 'No cycle has run since the controller started. The first lands within 15 minutes.'
             : last.error
               ? `Last automatic run failed: ${last.error}`
-              : `Last automatic run ${ago(last.at ?? 0)}, with no errors.`}
+              : last.devices_failed
+                ? `Last automatic run ${ago(last.at ?? 0)}, but ${last.devices_failed} device${last.devices_failed === 1 ? '' : 's'} could not be reached.`
+                : `Last automatic run ${ago(last.at ?? 0)}, with no errors.`}
         </div>
       )}
 

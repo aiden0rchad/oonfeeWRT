@@ -98,6 +98,21 @@ func (s *Server) handleLastNeighbours(w http.ResponseWriter, r *http.Request) {
 	}
 	if res != nil {
 		out["result"] = res
+		// Per-device failures, counted here rather than left for the caller to
+		// find. DistributeNeighbours returns a nil error when the CYCLE ran and
+		// individual devices failed — their reasons land in res.Devices[].Failed
+		// — so a screen reading only the top-level error would report "no
+		// errors" for a run in which half the fleet was unreachable.
+		// Error, not Skipped. A device that took no part for a standing reason
+		// — an ACL predating the feature, no managed WLAN — is not a failure,
+		// and counting it as one teaches people to ignore the number.
+		var failed int
+		for _, d := range res.Devices {
+			if d.Error != "" {
+				failed++
+			}
+		}
+		out["devices_failed"] = failed
 	}
 	writeJSON(w, http.StatusOK, out)
 }

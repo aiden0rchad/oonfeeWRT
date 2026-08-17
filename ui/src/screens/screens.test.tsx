@@ -688,6 +688,23 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() =>
       expect(screen.queryByText('Protected management frames')).toBeNull(),
     )
+
+    // Open has no RSN at all, so there is nothing to protect. This is the case
+    // that used to leave a WLAN carrying the pmf="1" every draft is created
+    // with, rendered onto the device where nobody could see or clear it.
+    fireEvent.click(screen.getByText('Open'))
+    await waitFor(() =>
+      expect(screen.queryByText('Protected management frames')).toBeNull(),
+    )
+
+    // Transitional WPA2/WPA3 keeps the control but must not offer Disabled:
+    // that silently removes the WPA3 half of a network still advertising it.
+    fireEvent.click(screen.getByText('WPA2/WPA3'))
+    await waitFor(() =>
+      expect(screen.getByText('Protected management frames')).toBeTruthy(),
+    )
+    expect(screen.queryByText('Disabled')).toBeNull()
+    expect(screen.getByText('Required')).toBeTruthy()
   })
 
   // A network that does not accept bridges must not be offered as somewhere to
