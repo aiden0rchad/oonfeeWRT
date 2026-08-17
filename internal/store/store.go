@@ -569,6 +569,47 @@ func (db *DB) OwnedSections(ctx context.Context, deviceID int64) ([]OwnedSection
 	return out, rows.Err()
 }
 
+// ReplaceOwned makes the recorded claims for a device exactly this set.
+//
+// Replace rather than merge, because an apply PRUNES. Doc.Prune removes every
+// section carrying our marker that the render no longer produces, so after a
+// confirmed apply the device holds exactly the rendered set — and recording
+// only the additions left a claim behind for every section ever pruned.
+//
+// Observed on the lab C6: it claimed oowrt_mesh1_radio0 and oowrt_up1_radio0
+// months after the mesh and the uplink were deleted from the site model and
+// removed from the device. Harmless to the apply path, and not harmless to the
+// operator: the un-adopt panel lists what it is about to revert, and listing
+// sections that are not there is exactly the kind of wrong detail that makes
+// someone doubt the rest of the screen.
+//
+// One transaction, so a failure cannot leave the record half-updated — which
+// would be worse than either state.
+func (db *DB) ReplaceOwned(ctx context.Context, deviceID int64, secs []OwnedSection) error {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: replace ownership claims: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM owned_sections WHERE device_id=?`, deviceID); err != nil {
+		return fmt.Errorf("store: clear ownership claims: %w", err)
+	}
+	for _, s := range secs {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO owned_sections (device_id, config, section, rendered_hash, applied_at)
+VALUES (?, ?, ?, ?, ?)`,
+			deviceID, s.Config, s.Section, s.RenderedHash, s.AppliedAt); err != nil {
+			return fmt.Errorf("store: record ownership claim: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit ownership claims: %w", err)
+	}
+	return nil
+}
+
 // ForgetOwned drops our ownership claims for a device. Used at un-adopt, after
 // the sections themselves have been reverted on the device.
 func (db *DB) ForgetOwned(ctx context.Context, deviceID int64) error {

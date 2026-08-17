@@ -262,7 +262,10 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 			RenderedHash: s.Hash(), AppliedAt: now,
 		})
 	}
-	if err := r.Store.RecordOwned(ctx, owned); err != nil {
+	// Replace, not merge. The apply just pruned every owned section the render
+	// no longer produces, so the device holds exactly this set — and merging
+	// left a claim behind for everything ever pruned.
+	if err := r.Store.ReplaceOwned(ctx, deviceID, owned); err != nil {
 		return res, fmt.Errorf("reconcile: applied but could not record ownership: %w", err)
 	}
 	return res, nil

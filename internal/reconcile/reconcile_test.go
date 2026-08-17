@@ -715,3 +715,63 @@ func TestPlanWarnsWhenARadioIsSwitchedOff(t *testing.T) {
 		t.Error("a switched-off radio blocked the plan; it is a warning, not a conflict")
 	}
 }
+
+// An ownership claim must not outlive the section it describes.
+//
+// The apply PRUNES: Doc.Prune removes every section carrying our marker that
+// the render no longer produces. Recording only the additions therefore left a
+// claim behind for everything ever pruned — observed on the lab C6, which
+// claimed a mesh and an uplink section long after both were deleted from the
+// site model and removed from the device.
+//
+// Harmless to the apply path, and not harmless to the operator: the un-adopt
+// panel lists what it is about to revert, and listing sections that are not
+// there is the kind of wrong detail that makes someone doubt the rest of it.
+func TestAPrunedSectionLosesItsOwnershipClaim(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	// Apply a site with one WLAN, then confirm both radios are claimed.
+	full := site(dev.ID)
+	p, err := r.PlanDevice(ctx, c, full, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, p, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	before, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) == 0 {
+		t.Fatal("nothing was claimed after the first apply")
+	}
+
+	// Now render a site with NO WLANs at all. Everything previously written is
+	// pruned from the device.
+	empty := full
+	empty.WLANs = nil
+	p2, err := r.PlanDevice(ctx, c, empty, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice (empty): %v", err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, p2, nil); err != nil {
+		t.Fatalf("Apply (empty): %v", err)
+	}
+
+	after, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 0 {
+		var names []string
+		for _, o := range after {
+			names = append(names, o.Config+"."+o.Section)
+		}
+		t.Errorf("every section was pruned from the device, yet %d claim(s) "+
+			"survived: %v", len(after), names)
+	}
+}
