@@ -469,6 +469,32 @@ func (db *DB) SetPollInterval(ctx context.Context, id int64, seconds int) error 
 	return nil
 }
 
+// SetName renames a device.
+//
+// A narrow write like SetPollInterval rather than a full UpsertDevice: the
+// latter rewrites the sealed credential and the capability record, and a rename
+// has no business touching either.
+//
+// The name is display only. Nothing keys on it — the MAC is the identity, and
+// the id is what group membership and telemetry reference — so this cannot
+// orphan anything. Rejecting the empty string is the whole validation: the
+// column is NOT NULL, and a device with a blank name renders as an empty cell
+// nobody can click.
+func (db *DB) SetName(ctx context.Context, id int64, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("store: a device name cannot be empty")
+	}
+	res, err := db.sql.ExecContext(ctx, `UPDATE devices SET name=? WHERE id=?`, name, id)
+	if err != nil {
+		return fmt.Errorf("store: rename device %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // SetCertFP records a trust-on-first-use certificate pin.
 //
 // It writes only when the column is still empty. A pin that silently updates

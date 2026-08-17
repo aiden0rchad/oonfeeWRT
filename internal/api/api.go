@@ -193,6 +193,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/devices/{id}/overhead", s.handleOverhead)
 	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
 	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
+	private.HandleFunc("POST /api/v1/devices/{id}/name", s.handleRename)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)

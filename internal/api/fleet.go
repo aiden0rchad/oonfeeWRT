@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -534,6 +535,72 @@ func (s *Server) handlePollInterval(w http.ResponseWriter, r *http.Request) {
 		Detail: map[string]any{"seconds": req.Seconds, "mac": dev.MAC},
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"poll_interval_s": req.Seconds})
+}
+
+// handleRename changes a device's display name.
+//
+// The default comes from the device's own model string at adoption, which is
+// what an operator recognises when looking at a shelf of routers — "TP-Link
+// Archer C6 v2" beats "ap-192-168-1-2". But two of the same model in one site
+// are then indistinguishable, so the name has to be editable.
+//
+// An empty name restores that default rather than being refused, which is the
+// useful reading of clearing the field: the model from the capability record,
+// then the MAC. Exactly adoption's own fallback chain, so renaming to nothing
+// puts back what adoption would have chosen.
+func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	dev, err := s.deviceByID(r, id)
+	if handleStoreErr(w, err, "device") {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = deviceModel(dev)
+	}
+	if name == "" {
+		name = dev.MAC
+	}
+	// Long enough for a model string with a revision in it, short enough that
+	// it cannot wreck a table or a log line.
+	if len(name) > 120 {
+		writeErr(w, http.StatusBadRequest, "a device name must be 120 characters or fewer")
+		return
+	}
+	if err := s.Store.SetName(r.Context(), id, name); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	devID := id
+	_ = s.Store.LogEvent(r.Context(), store.Event{
+		DeviceID: &devID, Category: "audit", Severity: "info",
+		Event:  "device.renamed",
+		Detail: map[string]any{"from": dev.Name, "to": name, "mac": dev.MAC},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"name": name})
+}
+
+// deviceModel digs the board model out of the stored capability record, which
+// is where adoption got the default name from in the first place.
+func deviceModel(dev *store.Device) string {
+	var caps struct {
+		Board struct {
+			Model string `json:"Model"`
+		} `json:"Board"`
+	}
+	if err := json.Unmarshal([]byte(dev.CapsJSON), &caps); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(caps.Board.Model)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

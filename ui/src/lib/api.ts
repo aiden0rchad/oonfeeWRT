@@ -734,6 +734,10 @@ export const api = {
   overhead: (id: number) => get<OverheadReport>(`/devices/${id}/overhead`),
   setPollInterval: (id: number, seconds: number) =>
     post<{ poll_interval_s: number }>(`/devices/${id}/poll-interval`, { seconds }),
+  /** Rename a device. An empty name restores the default the device reports
+   *  for itself — its board model — which is what adoption chose. */
+  renameDevice: (id: number, name: string) =>
+    post<{ name: string }>(`/devices/${id}/name`, { name }),
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),

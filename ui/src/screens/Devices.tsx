@@ -243,6 +243,9 @@ function DeviceDetailPanel({
         <Prop label="Status">
           <Status value={detail.status} />
         </Prop>
+        <Prop label="Name">
+          <DeviceName detail={detail} onRenamed={load} />
+        </Prop>
         <Prop label="Address">{detail.host}</Prop>
         <Prop label="MAC">{detail.mac}</Prop>
         <Prop label="Firmware">
@@ -1129,5 +1132,96 @@ function TakeoverBriefBlock({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The device name, editable in place.
+ *
+ * The default is the device's own board model — "TP-Link Archer C6 v2" rather
+ * than "ap-192-168-1-2" — which is what someone recognises when looking at a
+ * shelf of routers. That default only breaks down when a site has two of the
+ * same model, so the name has to be editable, and until now it was not: there
+ * was no rename anywhere, in the store, the API or here.
+ *
+ * Clearing the field restores the model rather than being refused. That is the
+ * useful reading of an empty box, and it is adoption's own fallback chain, so
+ * "undo my rename" needs no separate control.
+ */
+function DeviceName({
+  detail,
+  onRenamed,
+}: {
+  detail: DeviceDetail
+  onRenamed: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(detail.name)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function save() {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.renameDevice(detail.id, draft)
+      setEditing(false)
+      onRenamed()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+        {detail.name || detail.mac}
+        <Button
+          onClick={() => {
+            setDraft(detail.name)
+            setErr('')
+            setEditing(true)
+          }}
+        >
+          Rename
+        </Button>
+      </span>
+    )
+  }
+  return (
+    <span style={{ display: 'grid', gap: 4 }}>
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <input
+          value={draft}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          style={{
+            background: 'var(--surface-2)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--border)',
+            borderRadius: 4,
+            padding: '4px 6px',
+            fontSize: 12,
+            minWidth: 220,
+          }}
+        />
+        <Button kind="primary" disabled={busy} onClick={save}>
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+        <Button disabled={busy} onClick={() => setEditing(false)}>
+          Cancel
+        </Button>
+      </span>
+      <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        Leave it empty to go back to the name the device reports for itself.
+      </span>
+      {err && <span style={{ fontSize: 11, color: 'var(--critical)' }}>{err}</span>}
+    </span>
   )
 }
