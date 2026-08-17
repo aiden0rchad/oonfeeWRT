@@ -2,7 +2,6 @@ package capability
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -90,14 +89,24 @@ type Defect struct {
 
 	// Triggers reports whether a rendered wifi-iface would hit this defect.
 	//
-	// Nil means the defect is a property of the hardware itself and applies
-	// whatever the configuration — those are reported once against the device
-	// rather than against each WLAN.
+	// Nil means the defect is not caused by anything this controller writes.
 	Triggers func(vals map[string]string) bool
+
+	// TriggersRadio reports whether a radio's CURRENT state hits this defect,
+	// independently of anything we render.
+	//
+	// Needed because not every dangerous setting is one we own. The renderer
+	// emits no wifi-device sections at all — channel and width are not
+	// controller-managed — so a defect about the channel a radio is on cannot
+	// be found by inspecting our own output. An earlier version tried, reading
+	// "channel" from a wifi-iface that never carries one, and the guard could
+	// therefore never fire.
+	TriggersRadio func(Radio) bool
 }
 
-// Configured reports whether this defect is triggered by configuration at all.
-func (d Defect) Configured() bool { return d.Triggers != nil }
+// Configured reports whether this defect is triggered by configuration at all,
+// from either direction.
+func (d Defect) Configured() bool { return d.Triggers != nil || d.TriggersRadio != nil }
 
 // knownDefects is the registry.
 //
@@ -153,16 +162,23 @@ var knownDefects = []Defect{
 		Source:     "https://openwrt.org/toh/linksys/wrt3200acm",
 		Confidence: ConfDeviceDoc,
 		Severity:   SevRadioDeath,
-		Mitigation: "Use channel 36, or auto, on the 5 GHz radio.",
-		Triggers: func(v map[string]string) bool {
-			return isDFSChannel(v["channel"])
-		},
+		Mitigation: "Use channel 36, or auto, on the 5 GHz radio. The controller " +
+			"does not manage channels, so this one has to be changed on the device.",
+		TriggersRadio: func(r Radio) bool { return isDFSChannel(r.Channel) },
 	},
 	{
 		ID:       "mwlwifi-firmware-hang",
 		Hardware: "marvell",
 		Summary:  "this radio's firmware can stop responding, taking every radio on the device with it",
-		Detail: "Measured on the reference WRT3200ACM: the 5 GHz firmware stops " +
+		Detail: "The driver has no firmware recovery path at all. In " +
+			"hif/pcie/pcie.c (kaloz/mwlwifi db97edf2, the commit OpenWrt pins), a " +
+			"host command that times out logs, sets cmd_timeout and returns -EIO; " +
+			"nothing resets or re-initialises the chip, and the firmware is " +
+			"re-downloaded only on PCI probe. So neither a `wifi` restart nor " +
+			"re-applying config can recover it. That much is driver-wide, shared " +
+			"across the 88W8864/8997/8964; the hang itself is what the 88W8964 " +
+			"does in the field. Measured on the reference WRT3200ACM: the 5 GHz " +
+			"firmware stops " +
 			"answering (the repeating \"cmd 0x801d=MEMAddrAccess timed out\" is the " +
 			"driver's own heartbeat probe failing, so it confirms the firmware is " +
 			"already dead rather than causing it), hostapd blocks in " +
@@ -170,12 +186,14 @@ var knownDefects = []Defect{
 			"other radio on the device stops answering too — including a healthy one. " +
 			"Recovery needs a power cycle. Seen at 17, 28 and 50 minutes after boot on " +
 			"one device; it is not known how widely it affects this model.",
-		Source:     "STATUS.md §5aa",
+		Source:     "STATUS.md §5aa; hif/pcie/pcie.c in kaloz/mwlwifi db97edf2",
 		Confidence: ConfMeasuredHere,
 		Severity:   SevRadioDeath,
-		Mitigation: "None proven. The controller cannot recover it — that is below " +
-			"the level any management protocol reaches. Both observed wedges were " +
-			"preceded by a key-install failure on a client during an 802.11r " +
+		Mitigation: "Power cycle. Do NOT try `rmmod mwlwifi; modprobe mwlwifi` — it " +
+			"is the most commonly repeated remedy and it was measured here to make " +
+			"things worse, leaving modprobe hung with no radios at all and still " +
+			"needing the reboot. Nothing preventive is proven. Both observed wedges " +
+			"were preceded by a key-install failure on a client during an 802.11r " +
 			"association, so disabling PMF and fast transition on this hardware is " +
 			"worth trying, but it is untested and the correlation is two samples.",
 		// No Triggers: nothing in the configuration causes it, so it is reported
@@ -186,23 +204,42 @@ var knownDefects = []Defect{
 // isDFSChannel reports a 5 GHz channel in a band that requires radar detection.
 //
 // Channels 52–64 and 100–144 are DFS in both ETSI and FCC regions. 149+ and
-// 36–48 are not. Deliberately conservative: an unparseable or absent channel is
-// not reported as DFS, because "auto" is a real and common answer and warning
-// about it would be noise.
-func isDFSChannel(ch string) bool {
-	n, err := strconv.Atoi(strings.TrimSpace(ch))
-	if err != nil {
+// 36–48 are not. Zero means the channel is not known — a radio with no
+// interface reports none — and is deliberately not treated as DFS: "we could
+// not tell" must not be rendered as a specific accusation.
+func isDFSChannel(ch int) bool {
+	return (ch >= 52 && ch <= 64) || (ch >= 100 && ch <= 144)
+}
+
+// HardwareIdentified reports whether ANY radio told us what it is.
+//
+// This gates every claim this file makes, and it has to, because the hardware
+// name comes from `iwinfo.info` and iwinfo only answers for a radio that has an
+// interface. Stock OpenWrt ships its radios disabled, so a freshly adopted
+// router reports no hardware at all — and matching nothing would otherwise be
+// indistinguishable from "this hardware has no known defects".
+//
+// That is this package's cardinal error reaching the defect registry, and fresh
+// adoption is the worst possible moment for it: it is exactly when an operator
+// is choosing the security settings the registry exists to warn about.
+func HardwareIdentified(r *Registry) bool {
+	if r == nil {
 		return false
 	}
-	return (n >= 52 && n <= 64) || (n >= 100 && n <= 144)
+	for _, radio := range r.Radios {
+		if strings.TrimSpace(radio.Hardware) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // DefectsFor returns the known defects of the radios this device actually has.
 //
-// An empty result is not a clean bill of health — it means nothing in the
-// registry matched, and the registry covers only what somebody has written down
-// with a source. A device whose radios could not be listed at all matches
-// nothing here for the same reason it matches nothing anywhere else.
+// An empty result is not a clean bill of health. It means either that nothing
+// in the registry matched — the registry covers only what somebody has written
+// down with a source — or that no radio said what it was, which callers must
+// distinguish with HardwareIdentified before reporting anything reassuring.
 func DefectsFor(r *Registry) []Defect {
 	if r == nil {
 		return nil
@@ -235,8 +272,30 @@ func DefectsFor(r *Registry) []Defect {
 func TriggeredBy(r *Registry, vals map[string]string) []Defect {
 	var out []Defect
 	for _, d := range DefectsFor(r) {
-		if d.Configured() && d.Triggers(vals) {
+		if d.Triggers != nil && d.Triggers(vals) {
 			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// TriggeredByRadios returns the defects the device's CURRENT radio state hits,
+// whether or not this controller put it in that state.
+func TriggeredByRadios(r *Registry) []Defect {
+	if r == nil {
+		return nil
+	}
+	var out []Defect
+	seen := map[string]bool{}
+	for _, d := range DefectsFor(r) {
+		if d.TriggersRadio == nil {
+			continue
+		}
+		for _, radio := range r.Radios {
+			if !seen[d.ID] && d.TriggersRadio(radio) {
+				seen[d.ID] = true
+				out = append(out, d)
+			}
 		}
 	}
 	return out

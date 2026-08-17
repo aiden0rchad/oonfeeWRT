@@ -12,7 +12,14 @@ func radioCaps(n int) *capability.Registry {
 	r := capability.NewRegistry()
 	r.Set(capability.FeatSurvey, capability.Present)
 	for i := 0; i < n; i++ {
-		r.Radios = append(r.Radios, capability.Radio{Phy: "phy" + string(rune('0'+i))})
+		// A hardware name, because a real probe of a broadcasting radio always
+		// gets one. Without it every device here would trip the
+		// "could not be checked against the known-defect list" note, which is
+		// correct behaviour but not what these tests are about.
+		r.Radios = append(r.Radios, capability.Radio{
+			Phy:      "phy" + string(rune('0'+i)),
+			Hardware: "Generic MAC80211",
+		})
 	}
 	r.Ports = capability.Ports{Bridge: "br-lan", LAN: []string{"lan1"}, WAN: "wan"}
 	return r
@@ -85,7 +92,8 @@ func TestRoleFitFlagsAGatewayWithNoWANOnlyWhenPortsWereReadable(t *testing.T) {
 	// established, so there is nothing to report.
 	blind := capability.NewRegistry()
 	blind.Set(capability.FeatSurvey, capability.Present)
-	blind.Radios = append(blind.Radios, capability.Radio{Phy: "phy0"})
+	blind.Radios = append(blind.Radios, capability.Radio{
+		Phy: "phy0", Hardware: "Generic MAC80211"})
 	if got := roleFit(model.RoleGateway, blind); len(got) != 0 {
 		t.Errorf("an unreadable port map was reported as a missing WAN: %v", got)
 	}
@@ -150,5 +158,33 @@ func TestAdoptionIsSilentForUncataloguedHardware(t *testing.T) {
 		if strings.Contains(w, "known defect") {
 			t.Errorf("warned about hardware with no registry entry: %q", w)
 		}
+	}
+}
+
+// A device whose radios cannot be identified must be TOLD it was not checked.
+//
+// This is the cardinal error of the capability package reaching the defect
+// registry. The hardware name comes from iwinfo, iwinfo only answers for a
+// radio that has an interface, and stock OpenWrt ships its radios disabled —
+// so the freshly adopted router, the one whose operator is at that moment
+// choosing the security settings the registry exists to warn about, is exactly
+// the device that would otherwise look defect-free.
+func TestAdoptionSaysWhenItCouldNotCheckTheHardware(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Radios = []capability.Radio{{Phy: "phy0"}, {Phy: "phy1"}} // no Hardware
+
+	var said bool
+	for _, w := range roleFit(model.RoleAP, caps) {
+		if strings.Contains(w, "could not be checked") {
+			said = true
+			if !strings.Contains(w, "not a clean bill of health") {
+				t.Errorf("the note does not say silence means nothing: %q", w)
+			}
+		}
+	}
+	if !said {
+		t.Error("adopting a device whose radios named nothing produced no note; " +
+			"matching zero defects is not the same as having none")
 	}
 }

@@ -14,15 +14,17 @@ func dualBandCaps() *capability.Registry {
 	r := capability.NewRegistry()
 	r.Class = capability.ClassA
 	r.Radios = []capability.Radio{
-		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180},
-		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412},
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180, Hardware: "Generic MAC80211"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412, Hardware: "Generic MAC80211"},
 	}
 	return r
 }
 
 func singleBandCaps() *capability.Registry {
 	r := capability.NewRegistry()
-	r.Radios = []capability.Radio{{Device: "phy0-ap0", Phy: "phy0", Frequency: 2412}}
+	r.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 2412, Hardware: "Generic MAC80211"},
+	}
 	return r
 }
 
@@ -1040,9 +1042,34 @@ func TestCleanHardwareGetsNoWarnings(t *testing.T) {
 // A radio whose hardware string is unknown must not be assumed clean. This is
 // the package's cardinal rule reaching the defect registry: not matching is
 // "nothing was written down", never "this hardware is fine".
-func TestUnknownHardwareMatchesNothingAndClaimsNothing(t *testing.T) {
-	caps := dualBandCaps() // Hardware is "" on these
+func TestUnknownHardwareMatchesNothingAndSaysSo(t *testing.T) {
+	caps := dualBandCaps()
+	for i := range caps.Radios {
+		caps.Radios[i].Hardware = "" // a radio with no interface names nothing
+	}
 	if got := capability.DefectsFor(caps); len(got) != 0 {
 		t.Errorf("matched %d defects against radios with no hardware string", len(got))
+	}
+	if capability.HardwareIdentified(caps) {
+		t.Error("HardwareIdentified is true with no hardware anywhere")
+	}
+
+	// Matching nothing must not read as "no known defects". Stock OpenWrt
+	// ships radios disabled, iwinfo only names a radio that has an interface,
+	// so this is precisely the freshly adopted device — the one whose operator
+	// is choosing the security settings the registry exists to warn about.
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var said bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "hardware-unidentified" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("a device whose radios could not be identified got no warning " +
+			"at all; that is a clean bill of health from a check that never ran")
 	}
 }

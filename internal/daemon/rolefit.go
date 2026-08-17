@@ -96,6 +96,17 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 // enabled it is noise, and noise is how real warnings get ignored.
 func hardwareDefectWarnings(caps *capability.Registry) []string {
 	var out []string
+	// Adoption is the likeliest moment for this to be unanswerable, and the
+	// worst one for it to pass silently: stock OpenWrt ships radios disabled,
+	// iwinfo only names a radio that has an interface, so a device adopted
+	// before it carries a WLAN reports no hardware at all. Matching nothing
+	// would then read exactly like "no known defects".
+	if len(caps.Radios) > 0 && !capability.HardwareIdentified(caps) {
+		out = append(out, "this device's radios could not be checked against "+
+			"the known-defect list: none reported a hardware name, which is "+
+			"what happens when a radio has no interface yet. This is not a "+
+			"clean bill of health. Re-probe once a WLAN is applied.")
+	}
 	for _, d := range capability.DefectsFor(caps) {
 		if d.Configured() {
 			continue

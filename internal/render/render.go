@@ -381,6 +381,33 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			rep.Warnings = append(rep.Warnings, warn("", d))
 		}
 	}
+	// Defects triggered by the radio's CURRENT state rather than by anything we
+	// write — a DFS channel, say. The controller does not manage channels, so
+	// these can only be found by looking at the device.
+	for _, d := range capability.TriggeredByRadios(caps) {
+		rep.Warnings = append(rep.Warnings, warn("", d))
+	}
+	// And when nothing could be checked at all, say so. Silence here would be a
+	// clean bill of health from a check that never ran: the hardware name comes
+	// from iwinfo, iwinfo only answers for a radio with an interface, and stock
+	// OpenWrt ships its radios disabled. A freshly adopted router is therefore
+	// the case most likely to look defect-free and the case where the operator
+	// is choosing the settings this exists to warn about.
+	if caps != nil && len(caps.Radios) > 0 && !capability.HardwareIdentified(caps) {
+		rep.Warnings = append(rep.Warnings, Warning{
+			DefectID: "hardware-unidentified",
+			Summary: "this device's radios could not be checked against the " +
+				"known-defect list",
+			Detail: "No radio reported a hardware name. That comes from iwinfo, " +
+				"which only answers for a radio that has an interface, so a device " +
+				"whose radios are still disabled cannot be identified. This is not " +
+				"a clean bill of health — it means the check did not run.",
+			Confidence: string(capability.ConfMeasuredHere),
+			Severity:   string(capability.SevSilentlyIgnored),
+			Mitigation: "Apply a WLAN and re-probe; once a radio is broadcasting it " +
+				"reports what it is.",
+		})
+	}
 	return doc, rep, nil
 }
 
