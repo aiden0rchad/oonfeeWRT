@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { DataGrid, FilterRail, Pager, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
-import { axisLabels, fmt } from './Chart'
+import { axisLabels, fmt, widenTo } from './Chart'
 
 /**
  * Component tests for the shared grid.
@@ -389,6 +389,33 @@ describe('axisLabels', () => {
   // by a gap that does not exist.
   it('survives an axis with one tick', () => {
     expect(axisLabels([63.2], fmt.percent)).toEqual(['63%'])
+  })
+})
+
+describe('widenTo', () => {
+  // uPlot fits the axis to the data, so a series that barely moves is magnified
+  // until its rounding noise fills the chart. Channel occupancy sitting between
+  // 63.020% and 63.030% was drawn as a dramatic climb, with three-decimal
+  // labels too wide for the gutter and clipped on screen to "i3.030%".
+  it('stops a flat series being magnified into a trend', () => {
+    const [lo, hi] = widenTo(63.02, 63.03, 1)
+    expect(hi - lo).toBeCloseTo(1)
+    // Still centred on the data, so the flat line sits in the middle.
+    expect((lo + hi) / 2).toBeCloseTo(63.025)
+    // And the labels that come out of it are narrow enough to render.
+    expect(axisLabels([lo, (lo + hi) / 2, hi], fmt.percent).every((s) => s.length <= 7)).toBe(true)
+  })
+
+  it('leaves a range that is already wide enough alone', () => {
+    expect(widenTo(60, 80, 1)).toEqual([60, 80])
+  })
+
+  // Percentages and rates cannot go negative, so widening near zero must not
+  // draw axis room for values that cannot occur.
+  it('does not open a negative floor', () => {
+    const [lo, hi] = widenTo(0.1, 0.2, 1)
+    expect(lo).toBe(0)
+    expect(hi).toBeGreaterThanOrEqual(1)
   })
 })
 

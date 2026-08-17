@@ -421,6 +421,7 @@ function DeviceDetailPanel({
           seriesKey={iface}
           format={fmt.percent}
           colour="var(--series-3)"
+          minSpan={1}
           note="BSS load, as hostapd advertises it to clients"
         />
       ))}
@@ -433,6 +434,7 @@ function DeviceDetailPanel({
           seriesKey={iface}
           format={fmt.percent}
           colour="var(--series-5)"
+          minSpan={1}
           note="the driver's own busy/active ratio, read only while this panel is open"
           emptyNote={
             'Nothing in this window. The survey this comes from is too ' +
@@ -735,6 +737,7 @@ function ChartBlock({
   colour,
   note,
   emptyNote,
+  minSpan,
 }: {
   title: string
   deviceID: number
@@ -746,6 +749,7 @@ function ChartBlock({
    *  charts of the same quantity be mistaken for each other. */
   note?: string
   emptyNote?: string
+  minSpan?: number
 }) {
   const [data, setData] = useState<Series | null>(null)
   const [range, setRange] = useState<1 | 24 | 168>(1)
@@ -815,6 +819,7 @@ function ChartBlock({
         window={window}
         note={note}
         emptyNote={emptyNote}
+        minSpan={minSpan}
       />
     </div>
   )

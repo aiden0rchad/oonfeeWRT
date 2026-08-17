@@ -30,6 +30,7 @@ export function TimeChart({
   window,
   note,
   emptyNote,
+  minSpan,
 }: {
   points: Point[]
   label: string
@@ -37,6 +38,16 @@ export function TimeChart({
   height?: number
   colour?: string
   resolution?: string
+  /** The narrowest y-range worth drawing, in the series' own units.
+   *
+   *  uPlot fits the axis to the data, so a series that barely moves gets
+   *  magnified until its rounding noise fills the chart: channel occupancy
+   *  sitting between 63.020% and 63.030% was drawn as a dramatic climb, with
+   *  three-decimal labels too wide for the gutter and clipped to "i3.030%".
+   *  That is the same wrong this file already refuses for the noise floor — a
+   *  convincing line made of nothing. A flat series should look flat, so give
+   *  percentages a floor of about a point. */
+  minSpan?: number
   /** The requested [from, to] in unix seconds. */
   window?: [number, number]
   /** What this series measures, when two charts of the same quantity from
@@ -86,7 +97,12 @@ export function TimeChart({
       // single sample produce a degenerate range — it renders year labels for
       // data from this afternoon — and, worse, silently rescales so a series
       // with two hours of history looks identical to one with two weeks.
-      scales: { x: { time: true, range: window ? () => window : undefined } },
+      scales: {
+        x: { time: true, range: window ? () => window : undefined },
+        y: minSpan
+          ? { range: (_u, dMin, dMax) => widenTo(dMin, dMax, minSpan) }
+          : {},
+      },
       axes: [
         {
           stroke: ink,
@@ -184,6 +200,25 @@ function hexWithAlpha(hex: string, alpha: number): string {
   if (!m) return hex
   const n = parseInt(m[1], 16)
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
+}
+
+/**
+ * Widen a data range to at least `min`, keeping it centred.
+ *
+ * Clamped at zero on the low side, because every series this is used for is a
+ * percentage or a rate and a negative floor would draw axis room for values
+ * that cannot occur.
+ */
+export function widenTo(
+  dMin: number,
+  dMax: number,
+  min: number,
+): [number, number] {
+  const span = dMax - dMin
+  if (!(min > 0) || span >= min) return [dMin, dMax]
+  const pad = (min - span) / 2
+  const lo = dMin - pad
+  return lo < 0 ? [0, Math.max(min, dMax)] : [lo, dMax + pad]
 }
 
 /**
