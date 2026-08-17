@@ -2606,6 +2606,74 @@ INFO. It had been retrying at the 10-minute capped interval for two and a half
 hours, exactly as `DefaultMaxInterval` documents, and picked the device back up
 within a minute of its return without a restart.
 
+### 5ab. Known-hardware-defect warnings
+
+**Done 2026-08-16.** oonfeeWRT rendered `ieee80211w=1` onto a WRT3200ACM for
+weeks. OpenWrt's own page for that board says plainly **not** to enable 802.11w,
+because mwlwifi does not support it properly and it is off by default there for
+that reason. The device accepted it without complaint, and nothing anywhere
+would have told the operator.
+
+That is a failure the capability model cannot reach. The three-state model asks
+the device what it can do, and a driver broken in this particular way answers
+**yes** — it takes the config, reports success, and does not work. `Quirk` covers
+the narrow case of one field that is present and wrong; this is wider, a property
+of a driver that no probing will reveal because the device does not know it is
+broken.
+
+`internal/capability/defects.go` is a small sourced registry matched on the
+radio's reported hardware string. Two rules:
+
+- **Warn, never rewrite.** A controller that silently downgrades the security
+  settings a user asked for is worse than one that says what will not work and
+  why. Auto-remediation would also make the defect invisible, and an invisible
+  workaround becomes folklore the moment the driver is fixed. The test asserts
+  the config still renders with the operator's PMF value untouched.
+- **Say how well it is known.** Every entry carries `documented` / `measured` /
+  `reported` / `anecdotal` and a Source, and the UI shows both with a tooltip
+  explaining each — so folklore is never shown with a maintainer's authority,
+  and a warning that goes stale can be traced and deleted rather than repeated
+  forever.
+
+Warnings are split by where the operator can act: config-triggered defects at
+render time (on the **rendered** values, so it catches what the renderer derives
+— WPA3 forcing PMF on is exactly that), radio-state defects against the device,
+and defects no configuration causes once at adoption, while someone is still
+deciding whether to build on the hardware.
+
+#### The research pass was worth more for what it killed
+
+A fan-out over the driver source and trackers produced 90 claims; **7 of 8
+non-anecdotal ones were refuted** on adversarial re-check — including one traced
+to a ticket that had been fixed upstream eight years earlier ("the claimant read
+the ticket, not the driver repo"). Only entries traceable to the device's own
+OpenWrt page or to measurements here were shipped. `irqbalance`, the most-cited
+workaround for this board, is not even installed on the reference device.
+
+The one claim that survived is now in the entry: **mwlwifi has no firmware
+recovery path.** A timed-out host command logs, sets `cmd_timeout`, returns
+`-EIO`; nothing resets the chip, and firmware is re-downloaded only on PCI
+probe — which is why no `wifi` restart or re-apply can recover it. Driver-wide
+across 88W8864/8997/8964; the hang is what the 8964 does in the field.
+
+And the refutation caught a piece of folklore in the *fix*: it recommended
+`rmmod mwlwifi; modprobe mwlwifi`, checked STATUS.md, and found this project had
+already measured that leaving `modprobe` hung with no radios at all and still
+needing the reboot. The registry now warns against it. A registry whose job is
+to stop people acting on folklore must not ship any.
+
+#### Two bugs in it, found by review within the hour
+
+- **A clean bill from a check that never ran.** `Hardware` comes from
+  `iwinfo.info`, which only answers for a radio that has an **interface** — so a
+  stock OpenWrt router matched nothing and got silence. Same root cause as the
+  §5z adoption bug, on the same devices. `HardwareIdentified()` separates them
+  and both the preview and adoption now say the check did not run.
+- **A guard that could not fire.** The DFS entry read `channel` from a
+  wifi-iface, which never carries one — the renderer emits no `wifi-device`
+  sections at all. Defects about the radio's current state now get
+  `TriggersRadio` and are evaluated against the device.
+
 ---
 
 ## 6. Working practices that earned their place
