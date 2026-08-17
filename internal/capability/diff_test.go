@@ -2,6 +2,7 @@ package capability
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -376,5 +377,63 @@ func TestAMarvellRadioGatesMeshOffDespiteTheDaemonSupportingIt(t *testing.T) {
 	lower.Radios = []Radio{{Phy: "phy0", Hardware: "marvell 88w8964"}}
 	if marvellRadio(lower) == "" {
 		t.Error("the match is case-sensitive; hardware names are free text")
+	}
+}
+
+// A radio that reports the same modes under a new name is the same radio.
+//
+// The identifier is not stable — it comes from how the probe enumerates radios,
+// and that changed under this project once already. Every radio on every device
+// was then reported as lost AND gained, and the loss carried "WLANs targeted at
+// its band will not render on this device" about hardware that was working and
+// did render. A firmware upgrade that renames interfaces would do this to any
+// user.
+func TestARenamedRadioIsNotReportedAsLost(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{
+		{Phy: "radio0", HWModes: []string{"n", "ac"}},
+		{Phy: "radio1", HWModes: []string{"b", "g", "n"}},
+	}
+	after := NewRegistry()
+	after.Radios = []Radio{
+		{Phy: "phy0", HWModes: []string{"n", "ac"}},
+		{Phy: "phy1", HWModes: []string{"b", "g", "n"}},
+	}
+
+	for _, c := range Diff(before, after) {
+		if c.Kind != "radio" {
+			continue
+		}
+		if c.Effect == EffectLost {
+			t.Errorf("a renamed radio was reported as lost: %s", c.Detail)
+		}
+		if c.Effect == EffectGained {
+			t.Errorf("a renamed radio was reported as newly appeared: %s", c.Detail)
+		}
+		if strings.Contains(c.Detail, "will not render") {
+			t.Errorf("a rename claimed WLANs would stop rendering: %s", c.Detail)
+		}
+	}
+}
+
+// But a radio that genuinely goes away must still be reported. The rename
+// pairing must not become a way to lose a real loss.
+func TestARadioThatGenuinelyVanishesIsStillReported(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{
+		{Phy: "phy0", HWModes: []string{"n", "ac"}},
+		{Phy: "phy1", HWModes: []string{"b", "g", "n"}},
+	}
+	after := NewRegistry()
+	after.Radios = []Radio{{Phy: "phy1", HWModes: []string{"b", "g", "n"}}}
+
+	var lost bool
+	for _, c := range Diff(before, after) {
+		if c.Kind == "radio" && c.Effect == EffectLost {
+			lost = true
+		}
+	}
+	if !lost {
+		t.Error("a radio that disappeared with no replacement was not reported")
 	}
 }

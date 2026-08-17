@@ -233,10 +233,66 @@ func radioChanges(old, new *Registry) []Change {
 	}
 	sort.Strings(keys)
 
+	// Pair a radio that vanished with one that appeared carrying the same
+	// modes, and call it what it is: a rename.
+	//
+	// The identifier is not stable. It comes from how the probe enumerates
+	// radios, and that changed under this project once already — every radio on
+	// every device was then reported as lost AND gained, with "WLANs targeted at
+	// its band will not render on this device" attached to hardware that was
+	// working and did render. A firmware upgrade that renames interfaces would
+	// do the same to any user.
+	//
+	// Modes are the evidence: a radio that reports the same modes under a new
+	// name is the same radio. Anything left unpaired is still reported as a
+	// genuine loss or gain, because that is what it looks like.
+	renamedFrom := map[string]string{}
+	renamedTo := map[string]bool{}
+	for _, p := range keys {
+		if _, hadBefore := before[p]; !hadBefore {
+			continue
+		}
+		if _, hasNow := after[p]; hasNow {
+			continue
+		}
+		for _, q := range keys {
+			if _, had := before[q]; had {
+				continue
+			}
+			a, hasNow := after[q]
+			if !hasNow || renamedTo[q] || len(a.HWModes) == 0 {
+				continue
+			}
+			if sameModes(before[p].HWModes, a.HWModes) {
+				renamedFrom[q] = p
+				renamedTo[q] = true
+				break
+			}
+		}
+	}
+	renamedAway := map[string]bool{}
+	for _, from := range renamedFrom {
+		renamedAway[from] = true
+	}
+
 	var out []Change
 	for _, p := range keys {
 		b, hadBefore := before[p]
 		a, hasNow := after[p]
+		if from, isRename := renamedFrom[p]; isRename {
+			out = append(out, Change{
+				Kind: "radio", Name: p, Effect: EffectChanged,
+				From: from, To: p,
+				Detail: fmt.Sprintf("radio %s is now called %s. It reports the "+
+					"same modes (%s), so this is the same hardware under a new "+
+					"name and nothing about what it can carry has changed",
+					from, p, strings.Join(a.HWModes, ",")),
+			})
+			continue
+		}
+		if renamedAway[p] {
+			continue // reported above, from the new name's side
+		}
 		switch {
 		case !hadBefore && hasNow:
 			out = append(out, Change{
