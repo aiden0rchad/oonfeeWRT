@@ -49,6 +49,10 @@ type Fleet interface {
 	// Standing limitations rather than events — see collector.Degraded.
 	Degraded(deviceID int64) ([]collector.Degradation, bool)
 
+	// Broadcasting reports every BSS the last poll saw on a device, including
+	// ones this controller does not manage.
+	Broadcasting(deviceID int64) ([]collector.AP, bool)
+
 	// LiveClients reports the most recent associated-station count for a
 	// device, and whether it is known at all.
 	//

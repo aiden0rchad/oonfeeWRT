@@ -32,6 +32,16 @@ type stubFleet struct {
 	clients  map[int64]*int
 	overhead map[int64]collector.Overhead
 	degraded map[int64][]collector.Degradation
+	// aps is what each device is broadcasting. Nil for a device means no poll
+	// has looked, which the API must report differently from "no BSS".
+	aps map[int64][]collector.AP
+}
+
+func (f *stubFleet) Broadcasting(id int64) ([]collector.AP, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.aps[id]
+	return v, ok
 }
 
 func newStubFleet() *stubFleet {
@@ -1579,5 +1589,78 @@ func TestClientAPAttributionIgnoresWriteOrder(t *testing.T) {
 					"it belongs to the other AP", *got.RetryPct)
 			}
 		})
+	}
+}
+
+// An AP adopted with SSIDs already on it keeps broadcasting them — correctly,
+// because the controller never touches config it did not write. Until now it
+// never showed them either, so the device screen answered "what is this AP
+// broadcasting?" with only half the truth, and the missing half was the half
+// nobody is administering.
+//
+// Reported from the lab: the Archer C6 was on the air with oonfee-c6-2g and
+// oonfee-c6-5g alongside the managed SSID, and the controller showed only the
+// managed one.
+func TestDeviceDetailShowsUnmanagedSSIDs(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	dev := h.seedDevice("ap-c6", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:01"},
+		{Iface: "phy0-ap1", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
+		{Iface: "phy1-ap1", SSID: "oonfee-c6-2g", BSSID: "aa:bb:cc:00:00:03"},
+	}}
+	h.fleet.mu.Unlock()
+	_ = ctx
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if !detail.BroadcastKnown {
+		t.Fatal("a poll that saw BSSes reported the list as unknown")
+	}
+	if len(detail.Broadcasting) != 3 {
+		t.Fatalf("want all three SSIDs on the air, got %d: %+v",
+			len(detail.Broadcasting), detail.Broadcasting)
+	}
+	got := map[string]bool{}
+	for _, b := range detail.Broadcasting {
+		got[b.SSID] = b.Managed
+	}
+	for _, ssid := range []string{"oonfee-c6-2g", "oonfee-c6-5g"} {
+		if _, listed := got[ssid]; !listed {
+			t.Errorf("%s is on the air and was not listed at all", ssid)
+		} else if got[ssid] {
+			t.Errorf("%s is not in the site model but was marked managed", ssid)
+		}
+	}
+}
+
+// An empty list must not claim the radios are silent. No poll having looked and
+// a poll having found nothing are different answers, and only one of them is
+// about the device.
+func TestDeviceDetailSeparatesNoBSSFromNotLookedAt(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-unpolled", true, nil)
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d", w.Code)
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.BroadcastKnown {
+		t.Error("no poll has looked, but the empty list was reported as known")
 	}
 }

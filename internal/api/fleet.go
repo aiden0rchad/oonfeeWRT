@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -110,6 +112,31 @@ type deviceDetail struct {
 	// limitation the controller knows about and never shows is one an operator
 	// discovers from a number being quietly wrong.
 	Degraded []degradation `json:"degraded,omitempty"`
+
+	// Broadcasting is every SSID this device is actually putting on the air,
+	// including the ones oonfeeWRT does not manage.
+	//
+	// The controller deliberately never touches config it did not write, so an
+	// AP adopted with SSIDs already on it keeps broadcasting them — correctly,
+	// and until now invisibly. Not showing them made the device screen answer
+	// "what is this AP broadcasting?" with only half the truth, and the missing
+	// half is the half nobody is administering.
+	Broadcasting []broadcastView `json:"broadcasting,omitempty"`
+
+	// BroadcastKnown separates "the last poll saw no BSS" from "no poll has
+	// looked". Without it an empty list would claim the radios are silent.
+	BroadcastKnown bool `json:"broadcast_known"`
+}
+
+// broadcastView is one BSS on the air.
+type broadcastView struct {
+	SSID  string `json:"ssid"`
+	Iface string `json:"iface"`
+	BSSID string `json:"bssid,omitempty"`
+	// Managed is whether this SSID is one the site model puts here. False means
+	// nobody is administering it through this controller — it predates
+	// adoption, or someone made it by hand.
+	Managed bool `json:"managed"`
 }
 
 // degradation is one call the poll could not use, with the consequence spelled
@@ -183,6 +210,33 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
+	if s.Fleet != nil {
+		if aps, ok := s.Fleet.Broadcasting(id); ok {
+			detail.BroadcastKnown = true
+			// "Managed" is decided by SSID against the site model rather than by
+			// UCI section name, because the poll sees interfaces and SSIDs and
+			// never sees section names. It is the honest approximation: a
+			// foreign section carrying one of our SSIDs would read as managed,
+			// and that specific case is already caught, loudly, as a render
+			// conflict.
+			managed := s.managedSSIDs(ctx, id)
+			for _, ap := range aps {
+				if ap.SSID == "" {
+					continue
+				}
+				detail.Broadcasting = append(detail.Broadcasting, broadcastView{
+					SSID: ap.SSID, Iface: ap.Iface, BSSID: ap.BSSID,
+					Managed: managed[ap.SSID],
+				})
+			}
+			sort.Slice(detail.Broadcasting, func(i, j int) bool {
+				if detail.Broadcasting[i].SSID != detail.Broadcasting[j].SSID {
+					return detail.Broadcasting[i].SSID < detail.Broadcasting[j].SSID
+				}
+				return detail.Broadcasting[i].Iface < detail.Broadcasting[j].Iface
+			})
+		}
+	}
 	detail.Interfaces, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindIfaceRx))
 	detail.Radios, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindChanBusy))
 	detail.Stations, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindStaRSSI))
@@ -543,4 +597,29 @@ func (s *Server) liveClientCount(deviceID int64) (int, bool) {
 		return 0, false
 	}
 	return s.Fleet.LiveClients(deviceID)
+}
+
+// managedSSIDs is the set of SSIDs the site model puts on one device.
+//
+// Includes mesh IDs: a mesh point is a BSS on the air like any other, and
+// reporting the backhaul as unmanaged would send an operator looking for a
+// rogue network they configured themselves.
+func (s *Server) managedSSIDs(ctx context.Context, deviceID int64) map[string]bool {
+	out := map[string]bool{}
+	site, err := s.Store.Site(ctx)
+	if err != nil {
+		// An unreadable site model means we cannot say what is ours. Everything
+		// then reports as unmanaged, which overstates the problem — but the
+		// opposite default would hide a genuinely foreign SSID, and only one of
+		// those two errors is dangerous.
+		s.Log.Debug("could not read the site model to mark managed SSIDs", "err", err)
+		return out
+	}
+	for _, w := range site.WLANsFor(deviceID) {
+		out[w.SSID] = true
+	}
+	for _, m := range site.MeshesFor(deviceID) {
+		out[m.MeshID] = true
+	}
+	return out
 }

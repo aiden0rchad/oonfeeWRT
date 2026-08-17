@@ -105,12 +105,27 @@ export interface Degradation {
   costs?: string
 }
 
+/** One BSS on the air, whether or not this controller put it there. */
+export interface Broadcast {
+  ssid: string
+  iface: string
+  bssid?: string
+  /** False means nobody is administering this SSID through oonfeeWRT — it
+   *  predates adoption, or someone made it by hand on the device. */
+  managed: boolean
+}
+
 export interface DeviceDetail extends Device {
   capabilities: Registry | null
   interfaces: string[]
   radios: string[]
   stations: string[]
   degraded?: Degradation[]
+  /** Every SSID the device is actually putting on the air. */
+  broadcasting?: Broadcast[]
+  /** Distinguishes "the last poll saw no BSS" from "no poll has looked". An
+   *  empty list with this false is not a claim that the radios are silent. */
+  broadcast_known: boolean
 }
 
 export interface Registry {

@@ -61,6 +61,14 @@ func (f fleetAdapter) Quiesced(deviceID int64) bool {
 	return c != nil && c.Quiesced(deviceID)
 }
 
+func (f fleetAdapter) Broadcasting(deviceID int64) ([]collector.AP, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return nil, false
+	}
+	return c.Broadcasting(deviceID)
+}
+
 func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
 	return f.d.liveClients(deviceID)
 }

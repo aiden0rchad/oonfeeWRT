@@ -415,6 +415,31 @@ func (c *Collector) Degraded(deviceID int64) ([]Degradation, bool) {
 	return out, true
 }
 
+// Broadcasting is every BSS the last poll saw on this device, including the
+// ones this controller does not manage.
+//
+// Worth surfacing precisely because the controller leaves foreign config alone:
+// an AP adopted with SSIDs already on it keeps broadcasting them, correctly and
+// invisibly. An operator who cannot see them from here cannot tell an SSID they
+// forgot about from one that is not there, and the first is a security
+// question.
+func (c *Collector) Broadcasting(deviceID int64) ([]AP, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.apsKnown {
+		return nil, false
+	}
+	out := make([]AP, len(p.aps))
+	copy(out, p.aps)
+	return out, true
+}
+
 func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -538,6 +563,11 @@ type poller struct {
 	// separates "the last poll found none" from "no poll has completed".
 	degraded      []Degradation
 	degradedKnown bool
+	// aps is what the last poll saw BROADCASTING, whether or not this
+	// controller put it there. apsKnown separates "the last poll saw none" from
+	// "no poll has looked".
+	aps      []AP
+	apsKnown bool
 	// ifaceModes is each wireless interface's configured mode, cached beside
 	// the interface list and refreshed with it.
 	ifaceModes map[string]string
@@ -658,6 +688,9 @@ func (p *poller) tick(ctx context.Context) {
 	// "did not ask" are different, and only the first should update the cache.
 	p.mu.Lock()
 	p.degraded, p.degradedKnown = snap.Degraded, true
+	if len(snap.APs) > 0 {
+		p.aps, p.apsKnown = snap.APs, true
+	}
 	p.mu.Unlock()
 
 	if snap.IfacesFresh {
