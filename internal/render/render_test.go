@@ -1063,7 +1063,8 @@ func TestUnknownHardwareMatchesNothingAndSaysSo(t *testing.T) {
 	}
 
 	// Matching nothing must not read as "no known defects". Stock OpenWrt
-	// ships radios disabled, iwinfo only names a radio that has an interface,
+	// ships its default wifi-iface disabled, iwinfo only names a radio that has
+	// an interface,
 	// so this is precisely the freshly adopted device — the one whose operator
 	// is choosing the security settings the registry exists to warn about.
 	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
@@ -1079,5 +1080,65 @@ func TestUnknownHardwareMatchesNothingAndSaysSo(t *testing.T) {
 	if !said {
 		t.Error("a device whose radios could not be identified got no warning " +
 			"at all; that is a clean bill of health from a check that never ran")
+	}
+}
+
+// A radio switched off swallows the WLAN silently.
+//
+// The section we write is correct, the apply succeeds, and nothing broadcasts —
+// then the health check fails looking for an SSID that was never going to
+// appear, for a reason no screen could explain. Nothing in the controller read
+// a radio's disabled flag at all, in any source.
+func TestAWLANOnASwitchedOffRadioIsWarnedAbout(t *testing.T) {
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {
+			"radio0": {".type": "wifi-device", "disabled": "1", "band": "5g"},
+			"radio1": {".type": "wifi-device", "band": "2g"}, // absent = enabled
+		},
+	})
+
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, dualBandCaps(), existing)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var off []string
+	for _, w := range rep.Warnings {
+		if w.DefectID == "radio-disabled" {
+			off = append(off, w.Summary)
+		}
+	}
+	if len(off) != 1 {
+		t.Fatalf("want exactly one disabled-radio warning (radio0), got %d: %v",
+			len(off), off)
+	}
+	if !strings.Contains(off[0], "radio0") {
+		t.Errorf("the warning does not name the radio: %q", off[0])
+	}
+	// radio1 has no `disabled` option at all, which is UCI's default for
+	// enabled. Warning about it would send an operator to fix a working radio.
+	if strings.Contains(off[0], "radio1") {
+		t.Error("a radio with no disabled option was reported as switched off")
+	}
+	// And the config is still written: the controller does not silently drop a
+	// WLAN, it says what will happen.
+	if rep.HasConflicts() {
+		t.Error("a disabled radio must not abort the render")
+	}
+}
+
+// A radio the renderer knows nothing about must not be accused of being off.
+// The warning tells an operator to go and change something on their device.
+func TestAnUnknownRadioIsNotCalledDisabled(t *testing.T) {
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"},
+		dualBandCaps(), Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, w := range rep.Warnings {
+		if w.DefectID == "radio-disabled" {
+			t.Errorf("no wireless config was readable, yet a radio was reported "+
+				"switched off: %s", w.Summary)
+		}
 	}
 }

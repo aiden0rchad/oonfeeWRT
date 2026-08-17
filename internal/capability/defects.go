@@ -215,7 +215,8 @@ func isDFSChannel(ch int) bool {
 //
 // This gates every claim this file makes, and it has to, because the hardware
 // name comes from `iwinfo.info` and iwinfo only answers for a radio that has an
-// interface. Stock OpenWrt ships its radios disabled, so a freshly adopted
+// interface. Stock OpenWrt ships with its default wifi-iface disabled, so
+// nothing on a freshly flashed router is broadcasting and a freshly adopted
 // router reports no hardware at all — and matching nothing would otherwise be
 // indistinguishable from "this hardware has no known defects".
 //

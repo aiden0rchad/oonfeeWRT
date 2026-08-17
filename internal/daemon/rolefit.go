@@ -97,7 +97,8 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 func hardwareDefectWarnings(caps *capability.Registry) []string {
 	var out []string
 	// Adoption is the likeliest moment for this to be unanswerable, and the
-	// worst one for it to pass silently: stock OpenWrt ships radios disabled,
+	// worst one for it to pass silently: stock OpenWrt ships its default
+	// wifi-iface disabled so nothing is broadcasting,
 	// iwinfo only names a radio that has an interface, so a device adopted
 	// before it carries a WLAN reports no hardware at all. Matching nothing
 	// would then read exactly like "no known defects".

@@ -165,7 +165,8 @@ func TestAdoptionIsSilentForUncataloguedHardware(t *testing.T) {
 //
 // This is the cardinal error of the capability package reaching the defect
 // registry. The hardware name comes from iwinfo, iwinfo only answers for a
-// radio that has an interface, and stock OpenWrt ships its radios disabled —
+// radio that has an interface, and stock OpenWrt ships its default wifi-iface
+// disabled so nothing is broadcasting —
 // so the freshly adopted router, the one whose operator is at that moment
 // choosing the security settings the registry exists to warn about, is exactly
 // the device that would otherwise look defect-free.

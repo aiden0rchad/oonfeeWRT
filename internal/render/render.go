@@ -318,6 +318,32 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			for _, d := range capability.TriggeredBy(caps, sec.Values) {
 				rep.addWarning(warn(w.SSID, d))
 			}
+			// A radio switched off swallows the WLAN silently. The section we
+			// write is correct, the apply succeeds, and nothing broadcasts —
+			// then the health check fails looking for an SSID that was never
+			// going to appear, for a reason no screen could explain.
+			//
+			// Read from the device's own config rather than from the capability
+			// record, because the record is a snapshot from adoption and a
+			// radio can be switched off in LuCI any time after it.
+			if radioIsDisabled(existing, radio) {
+				rep.addWarning(Warning{
+					WLAN:     w.SSID,
+					DefectID: "radio-disabled",
+					Summary: fmt.Sprintf("radio %s is switched off on this device, "+
+						"so this network will not go on the air there", radio),
+					Detail: "The wireless section will be written correctly and the " +
+						"apply will report success. Nothing will broadcast, and the " +
+						"health check will then fail looking for an SSID that was " +
+						"never going to appear. oonfeeWRT does not switch radios on: " +
+						"it only changes config it wrote, and this radio is not that.",
+					Confidence: string(capability.ConfMeasuredHere),
+					Severity:   string(capability.SevSilentlyIgnored),
+					Mitigation: fmt.Sprintf("Enable it on the device: "+
+						"`uci set wireless.%s.disabled='0'; uci commit wireless; "+
+						"wifi reload`", radio),
+				})
+			}
 			doc.Sections = append(doc.Sections, sec)
 			rep.Omissions = append(rep.Omissions, omissions...)
 			rendered++
@@ -405,7 +431,8 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// And when nothing could be checked at all, say so. Silence here would be a
 	// clean bill of health from a check that never ran: the hardware name comes
 	// from iwinfo, iwinfo only answers for a radio with an interface, and stock
-	// OpenWrt ships its radios disabled. A freshly adopted router is therefore
+	// OpenWrt ships with its default wifi-iface disabled, so nothing on a fresh
+	// router is broadcasting. A freshly adopted router is therefore
 	// the case most likely to look defect-free and the case where the operator
 	// is choosing the settings this exists to warn about.
 	if caps != nil && len(caps.Radios) > 0 && !capability.HardwareIdentified(caps) {
@@ -607,4 +634,18 @@ func orderedBands(bands []model.Band) []model.Band {
 	out := append([]model.Band(nil), bands...)
 	sort.Slice(out, func(i, j int) bool { return order[out[i]] < order[out[j]] })
 	return out
+}
+
+// radioIsDisabled reports a radio the device has switched off.
+//
+// Only an explicit "1" counts. An absent option means enabled — that is UCI's
+// own default and what every healthy device in the lab reports — and a radio we
+// could not read anything about must not be accused of being off, because the
+// warning tells an operator to go and change something.
+func radioIsDisabled(existing Existing, radio string) bool {
+	sec, ok := existing.In("wireless")[radio]
+	if !ok {
+		return false
+	}
+	return sec["disabled"] == "1"
 }
