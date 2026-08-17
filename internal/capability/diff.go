@@ -39,6 +39,16 @@ const (
 	EffectHidden Effect = "no-longer-observable"
 	// EffectFirst: the first determination, from no prior knowledge.
 	EffectFirst Effect = "first-observation"
+	// EffectRenamed: the same thing under a new identifier, with nothing about
+	// what it can do different.
+	//
+	// Its own category because none of the others is true of it. It is not a
+	// gain, not a loss, and not a visibility change — we could see it before
+	// and we can see it now. Reporting it as EffectChanged made it Actionable,
+	// which offered a rename as the probable cause of a WLAN that did not
+	// render; reporting it as now-observable would assert a visibility change
+	// that did not happen.
+	EffectRenamed Effect = "renamed"
 	// EffectChanged: a value that is not three-state — a radio, the class, the
 	// port map, the firmware string.
 	EffectChanged Effect = "changed"
@@ -281,7 +291,7 @@ func radioChanges(old, new *Registry) []Change {
 		a, hasNow := after[p]
 		if from, isRename := renamedFrom[p]; isRename {
 			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectChanged,
+				Kind: "radio", Name: p, Effect: EffectRenamed,
 				From: from, To: p,
 				Detail: fmt.Sprintf("radio %s is now called %s. It reports the "+
 					"same modes (%s), so this is the same hardware under a new "+

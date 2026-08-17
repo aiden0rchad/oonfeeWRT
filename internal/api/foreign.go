@@ -90,6 +90,15 @@ func buildBrief(b broadcastView, mode string, modesKnown bool,
 	}
 
 	switch {
+	case !isUCIName(b.Section) || len(b.Section) > 64:
+		// The section name comes from the DEVICE's own reply and is printed
+		// into commands an operator is told to run as root. Anything that is
+		// not a UCI identifier did not come from a healthy device, and the
+		// controller will not put it in a shell line on the strength of that.
+		f.SafeToDisable = false
+		f.Refusal = "This interface reports a section name that is not a UCI " +
+			"identifier, so no commands are offered for it. Look at " +
+			"/etc/config/wireless on the device directly."
 	case !modesKnown || mode == "":
 		f.SafeToDisable = false
 		f.Refusal = "This device has not reported what mode this interface is " +
@@ -156,9 +165,31 @@ func (s *Server) handleForeignNote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The device must exist, like every sibling route on this prefix. Without
+	// it, clearing a note for a device that was removed an hour ago answered
+	// 200 {"cleared":true} — a DELETE matching no rows is not an error, so the
+	// caller was told a thing had happened to a device that is not there.
+	if _, err := s.deviceByID(r, id); err != nil {
+		if handleStoreErr(w, err, "device") {
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not read device")
+		return
+	}
 	section := r.PathValue("section")
 	if section == "" {
 		writeErr(w, http.StatusBadRequest, "which section?")
+		return
+	}
+	// Bounded, and shaped like a UCI section name.
+	//
+	// It is half of a primary key and it comes from a path, so an unbounded
+	// value writes an unbounded row keyed on something the device could never
+	// have reported. UCI section names are identifiers; anything else did not
+	// come from a device.
+	if len(section) > 64 || !isUCIName(section) {
+		writeErr(w, http.StatusBadRequest,
+			"a section name is a UCI identifier: letters, digits and underscores")
 		return
 	}
 	var req struct {
@@ -196,4 +227,24 @@ func sortedNames(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
+}
+
+// isUCIName reports a plausible UCI section name.
+//
+// Deliberately strict. This value is half a primary key, arrives in a URL path,
+// and is echoed into the shell commands the brief prints for an operator to run
+// as root — so the only safe answer is the shape UCI itself uses.
+func isUCIName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }

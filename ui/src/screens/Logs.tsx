@@ -192,13 +192,22 @@ function severityTone(s: string): string {
 
 function summarise(detail: unknown): string {
   if (!detail || typeof detail !== 'object') return ''
-  const parts: string[] = []
+  const shown: string[] = []
+  let dropped = 0
   for (const [k, v] of Object.entries(detail as Record<string, unknown>)) {
     if (v === null || v === '' || (Array.isArray(v) && v.length === 0)) continue
-    parts.push(`${k}=${brief(v)}`)
-    if (parts.length >= 4) break
+    if (shown.length >= 4) {
+      dropped++
+      continue
+    }
+    shown.push(`${k}=${brief(v)}`)
   }
-  return parts.join('  ')
+  // Say when the cell is not the whole detail. It stopped at four keys and
+  // joined what it had, so a row with more looked complete and was not — an
+  // apply event carrying device, ssid, changes, omissions and outcome showed
+  // the first four and silently dropped the outcome.
+  const more = dropped > 0 ? `  (+${dropped} more)` : ''
+  return shown.join('  ') + more
 }
 
 /**

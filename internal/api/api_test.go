@@ -2045,3 +2045,65 @@ func TestTheFanOutCostSaysWhenItCouldNotBeDetermined(t *testing.T) {
 		}
 	}
 }
+
+// The section name comes from the device's own reply and is printed into
+// commands an operator is told to run as root. Anything that is not a UCI
+// identifier did not come from a healthy device.
+func TestTheBriefRefusesToPrintCommandsForAnOddSectionName(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-odd", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "odd", BSSID: "aa:bb:cc:00:00:05"},
+	}}
+	h.fleet.sections = map[int64]map[string]string{dev.ID: {
+		"phy0-ap0": "default_radio0; reboot #",
+	}}
+	h.fleet.modes = map[int64]map[string]string{dev.ID: {"phy0-ap0": "ap"}}
+	h.fleet.mu.Unlock()
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range detail.Broadcasting {
+		if b.Brief == nil {
+			continue
+		}
+		if b.Brief.SafeToDisable || len(b.Brief.Recipe) != 0 {
+			t.Errorf("commands were offered for a section name the device "+
+				"should never have reported: %v", b.Brief.Recipe)
+		}
+		if b.Brief.Refusal == "" {
+			t.Error("refused without saying why")
+		}
+	}
+}
+
+// A note for a device that does not exist must not report success.
+//
+// store.ClearForeignNote returns nil when the DELETE matches nothing, so
+// without a device check the caller was told a thing had happened to a device
+// that was removed an hour ago.
+func TestANoteForAMissingDeviceIsRejected(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	w := h.do(http.MethodPost, "/api/v1/devices/9999/foreign/default_radio0/note",
+		map[string]any{"ssid": "x", "note": ""})
+	if w.Code != http.StatusNotFound {
+		t.Errorf("clearing a note for a missing device returned %d, want 404: %s",
+			w.Code, w.Body.String())
+	}
+
+	dev := h.seedDevice("ap-real", true, nil)
+	bad := h.do(http.MethodPost,
+		fmt.Sprintf("/api/v1/devices/%d/foreign/%s/note", dev.ID, "not%20a%20section!"),
+		map[string]any{"ssid": "x", "note": "hi"})
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("an unshaped section name returned %d, want 400", bad.Code)
+	}
+}

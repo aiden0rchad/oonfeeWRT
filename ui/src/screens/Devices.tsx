@@ -904,6 +904,7 @@ function TakeoverBriefBlock({
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState(b.brief?.note ?? '')
   const [saving, setSaving] = useState(false)
+  const [noteErr, setNoteErr] = useState('')
   const brief = b.brief
 
   return (
@@ -988,9 +989,16 @@ function TakeoverBriefBlock({
               disabled={saving}
               onClick={async () => {
                 setSaving(true)
+                setNoteErr('')
                 try {
                   await api.noteForeign(deviceID, b.section ?? '', b.ssid, note)
                   onNoted()
+                } catch (e) {
+                  // Reported, not swallowed. request() throws on any non-2xx,
+                  // and a try/finally with no catch left a rejected write
+                  // looking exactly like a successful one — the operator
+                  // believes a decision is recorded that is not.
+                  setNoteErr(e instanceof Error ? e.message : String(e))
                 } finally {
                   setSaving(false)
                 }
@@ -999,6 +1007,11 @@ function TakeoverBriefBlock({
               {note.trim() ? 'Record' : 'Clear'}
             </Button>
           </div>
+          {noteErr && (
+            <div style={{ color: 'var(--critical, #d05a5a)' }}>
+              The note was not saved: {noteErr}
+            </div>
+          )}
         </div>
       )}
     </div>

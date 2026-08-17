@@ -437,3 +437,34 @@ func TestARadioThatGenuinelyVanishesIsStillReported(t *testing.T) {
 		t.Error("a radio that disappeared with no replacement was not reported")
 	}
 }
+
+// A rename must not be offered as the probable cause of anything.
+//
+// Reporting it as EffectChanged made it Actionable, and the capability-cause
+// panel then suggested a rename — which the code itself describes as changing
+// nothing about what the radio can carry — as the explanation for a WLAN that
+// did not render.
+func TestARenameIsNotActionable(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{{Phy: "radio0", HWModes: []string{"n", "ac"}}}
+	after := NewRegistry()
+	after.Radios = []Radio{{Phy: "phy0", HWModes: []string{"n", "ac"}}}
+
+	var seen bool
+	for _, c := range Diff(before, after) {
+		if c.Kind != "radio" {
+			continue
+		}
+		seen = true
+		if c.Effect != EffectRenamed {
+			t.Errorf("a rename reported as %q", c.Effect)
+		}
+		if c.Effect.Actionable() {
+			t.Error("a rename was marked actionable, so it will be offered as " +
+				"the cause of something it cannot have caused")
+		}
+	}
+	if !seen {
+		t.Fatal("the rename was not reported at all")
+	}
+}

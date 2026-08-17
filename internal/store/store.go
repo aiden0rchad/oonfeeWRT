@@ -132,10 +132,15 @@ type DB struct {
 // "sqlite" (modernc.org/sqlite — pure Go, per decision D3, which is what lets
 // the container be FROM scratch with CGO_ENABLED=0).
 func Open(ctx context.Context, driverName, path string) (*DB, error) {
-	dsn := path
-	if driverName == "sqlite" {
-		dsn = dsnWithPragmas(path)
-	}
+	// Applied for any driver, not only the one named "sqlite".
+	//
+	// Open takes driverName so this package does not force a SQLite driver on
+	// its dependents, and gating the pragmas on that exact string quietly
+	// undid the guarantee for every other one — a fork registering the same
+	// driver under another name would run with foreign keys OFF and every
+	// ON DELETE CASCADE in the schema inert. The parameters are inert
+	// themselves on a driver that does not understand them.
+	dsn := dsnWithPragmas(path)
 	sqldb, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)

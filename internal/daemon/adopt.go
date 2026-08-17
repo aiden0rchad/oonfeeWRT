@@ -406,11 +406,21 @@ func (d *Daemon) deleteDevice(ctx context.Context, id int64) error {
 	// device adopted takes the id of one that was removed and inherits its
 	// claims. A later un-adopt would then try to revert sections that device
 	// never had, and report a footprint from another router's config.
+	// Logged, not returned. The device row is already gone by this point, so
+	// the removal HAPPENED — returning an error here would report a failure for
+	// something that succeeded, and the caller would tell an operator to try
+	// again on a device that is no longer in the inventory.
+	//
+	// Both tables cascade on the delete anyway, and SweepOrphans catches
+	// whatever a failure here leaves behind, so the cost of continuing is a row
+	// that the next maintenance tick removes.
 	if err := d.Store.ForgetOwned(ctx, id); err != nil {
-		return fmt.Errorf("daemon: forget ownership claims for device %d: %w", id, err)
+		d.Log.Warn("could not drop ownership claims for a removed device; the "+
+			"orphan sweep will clear them", "device", id, "err", err)
 	}
 	if err := d.Store.ForgetForeignNotes(ctx, id); err != nil {
-		return fmt.Errorf("daemon: forget foreign notes for device %d: %w", id, err)
+		d.Log.Warn("could not drop foreign-SSID notes for a removed device; the "+
+			"orphan sweep will clear them", "device", id, "err", err)
 	}
 	if err := d.Store.SweepOrphans(ctx); err != nil {
 		d.Log.Error("could not sweep telemetry of the removed device", "err", err)
