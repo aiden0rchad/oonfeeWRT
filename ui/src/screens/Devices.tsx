@@ -131,6 +131,13 @@ function DeviceDetailPanel({
   const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
 
+  // SSIDs on this device that the site model does not put here. Derived from
+  // the detail response rather than guessed in the browser, because only the
+  // server knows which WLANs and meshes this device is assigned.
+  const unmanaged = new Set(
+    (detail?.broadcasting ?? []).filter((b) => !b.managed).map((b) => b.ssid),
+  )
+
   // Hoisted out of the effect so a re-probe can refresh the pane: a probe
   // rewrites the capability record, and leaving the panel showing the previous
   // one is how "I pressed re-probe and nothing happened" happens.
@@ -273,6 +280,21 @@ function DeviceDetailPanel({
                     <span style={{ color: 'var(--text-muted)' }}>
                       {ap.iface} · ch {ap.channel}
                     </span>
+                    {/* This list has always shown every BSS on the device,
+                        including ones oonfeeWRT did not put there — it just
+                        never said which was which, so an SSID left over from
+                        before adoption looked exactly like a managed one. The
+                        controller deliberately never touches config it did not
+                        write, which is precisely why the distinction has to be
+                        visible: nobody is administering these through here. */}
+                    {unmanaged.has(ap.ssid) && (
+                      <span
+                        style={{ color: 'var(--warning)', marginLeft: 6 }}
+                        title="Not managed by oonfeeWRT. It was on this device before it was adopted, or was made by hand. The controller leaves it alone — changing or removing it means editing the device directly."
+                      >
+                        unmanaged
+                      </span>
+                    )}
                   </span>
                   <span className="num">
                     {ap.clients === null ? (
@@ -352,41 +374,6 @@ function DeviceDetailPanel({
           deviceID={id}
           onChanged={() => api.overhead(id).then(setOverhead).catch(() => {})}
         />
-      )}
-
-      {/* What this AP is actually putting on the air.
-          The controller never touches config it did not write, so an AP
-          adopted with SSIDs already on it keeps broadcasting them — correctly,
-          and until now invisibly. Showing only the managed ones answered "what
-          is this AP broadcasting?" with the half that is administered and
-          silently dropped the half that is not. */}
-      {detail.broadcast_known && detail.broadcasting && detail.broadcasting.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-            On the air here
-          </div>
-          <div style={{ display: 'grid', gap: 4 }}>
-            {detail.broadcasting.map((b) => (
-              <div
-                key={`${b.iface}.${b.ssid}`}
-                style={{ fontSize: 11, color: 'var(--text-secondary)' }}
-              >
-                <code style={{ color: 'var(--text-primary)' }}>{b.ssid}</code>{' '}
-                on {b.iface}
-                {b.managed ? (
-                  ' — from the site model'
-                ) : (
-                  <span style={{ color: 'var(--warning)' }}>
-                    {' '}
-                    — not managed by oonfeeWRT. It was on this device before it
-                    was adopted, or was made by hand. The controller leaves it
-                    alone; changing or removing it means editing the device.
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {detail.degraded && detail.degraded.length > 0 && (
