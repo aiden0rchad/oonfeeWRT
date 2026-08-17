@@ -2852,6 +2852,63 @@ early-warning claim — **three key-install failures have now occurred with no
 wedge following**, so that signature is a frequent event that sometimes precedes
 a wedge, not a predictor.
 
+### 5af. Reviewing the fixes, and what un-adopt was missing
+
+**Done 2026-08-17.** The fixes from §5ae had been written quickly, to close
+findings, and nobody had reviewed them. So they got the same treatment — four
+dimensions, then a refuter on **every** candidate rather than the first fourteen,
+because §5ae's own run had capped verification silently and that is the rule it
+was written to catch.
+
+**19 candidates, 19 verified, 13 confirmed.** The second round found more than
+the first.
+
+#### The worst finding was a fix that committed the error it was fixing
+
+`APsFresh` was set from `len(ifaces) > 0` **before the batch ran** — from the
+intent to ask, not from an answer. A device whose hostapd calls were all refused
+then reported `broadcast_known: true` with an empty list: a positive claim that
+nothing is on the air, from a check that never answered.
+
+Measured rather than argued: the same input gives `known=true` on the fixed
+version and `known=false` on the code it replaced. **That case was made strictly
+worse by the fix for a different one.** It is now computed from the answers.
+
+#### Six tests of mine asserted nothing
+
+All six were caught by mutation testing, none by reading:
+
+- the `APsFresh` producer had **no test at all** — hardcoding the line to either
+  constant left the whole suite green
+- the provenance test rendered zero rows, because the live channel was mocked to
+  a no-op
+- the PMF clamp test used a fixture value already valid for every mode
+- the DFS "other direction" used a snapshot channel already non-DFS, so it held
+  under any implementation including one ignoring the live channel entirely
+- the `Enhanced open` PMF exclusion had no coverage
+- the seed clamp had none either
+
+#### Un-adopt had less ceremony than the operation it undoes
+
+Found by opening the last screen nobody had looked at:
+
+| | apply | un-adopt |
+|---|---|---|
+| rollback armed | yes | **no** |
+| confirmation | "I understand" | **none** |
+| shows what it touches | full preview | **a count, afterwards** |
+| destructive button | secondary | **primary** |
+
+All four are now aligned the other way. And **listing the sections immediately
+found a bug in the data behind the list**: the C6 claimed a mesh section and an
+uplink section that had not existed on that device for months. The apply prunes,
+but `RecordOwned` only upserted, so every pruned section left its claim behind
+and `owned_sections` grew monotonically. `ReplaceOwned` makes the record exactly
+the rendered set.
+
+That one is worth remembering as a method: **a count could not have surfaced it.**
+Showing the individual items is what made the data wrong in a visible way.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -2894,10 +2951,19 @@ written and believed.
   obvious per-radio fix is a trap: excluding a radio that has not identified
   itself turns a real warning into silence, which is the cardinal error wearing
   a different hat. Exclude only what is KNOWN to be different.
-- **A test that passes while asserting nothing is worse than no test.** The
-  first version of the provenance test opened a panel whose live channel was
-  mocked to a no-op, so it rendered zero rows and passed. Mutation testing is
-  what catches this: revert the fix, and a real test fails.
+- **A test that passes while asserting nothing is worse than no test.** Six of
+  these were shipped in two days and every one was caught by mutation testing
+  rather than by reading. Revert the fix; if the test still passes, it tests
+  nothing. The commonest causes: a fixture value already satisfying the
+  assertion, a mock returning undefined so the path never runs, and asserting
+  the absence of something never present in that fixture.
+- **Review the fixes, not just the code.** A fix written quickly to close a
+  finding is where the next bug is. The second review round found MORE than the
+  first, including a fix that committed the exact error it was fixing.
+- **Show the items, not the count.** The un-adopt panel was changed to list the
+  sections it would revert instead of counting them afterwards, and the list
+  immediately exposed two claims for sections that no longer existed. A count
+  cannot be wrong in a way anybody notices.
 - **Mock-green is not hardware-green.** The mock passed throughout while real
   hardware exposed the shared-session bug that reverted healthy changes.
 - **A fix for one defect is not a fix for the next one in the same field.**
