@@ -483,11 +483,13 @@ most-worth-doing first.
    which needs no lab is done (§5m item 3): the panel names the board target
    instead of a bare `?`. Adding targets to the map still needs measuring.
 
-4. **Look at the three new screens, and the Clients grid with a real client on
-   it.** The neighbour card, the backhaul-health card and the wireless-uplink
-   card have all been built since the last browser pass and only the first has
-   been seen. §5v's count stands at nineteen defects found by looking, four of
-   them in one sitting, and none of them reachable by any test in the repo.
+4. ~~**Look at the three new screens, and the Clients grid with a real client on
+   it.**~~ **Done 2026-08-16** — §5ad. All three cards seen, plus the Clients
+   grid with a real client, the Logs screen and the adopt/discovery screen. Four
+   more defects, **count now twenty-three**, still none reachable by any test.
+
+   **Still unlooked-at:** the unadopt flow, and any screen under a fleet larger
+   than two devices.
 
 5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
    Both halves pinned and mutation-verified, and the fixture gained the two
@@ -2742,6 +2744,39 @@ an AP produced the first `sta_rssi` series this deployment has ever held, and th
 grid attributed the iPhone to `ap-192-168-1-1` at −81 dBm. Checked against
 hostapd on both APs: the iPhone is indeed on the WRT. The Watch, on the C6, still
 shows a dash — correct, because no focused poll has covered it yet.
+
+### 5ad. The browser pass that closed §5 item 4
+
+**Done 2026-08-16.** Four defects, none reachable by any test in the repo. The
+count is now **twenty-three found by looking**.
+
+- **The 802.11k card showed nothing until you made it happen.** It renders the
+  last distribution only after somebody presses "Distribute now" — on a feature
+  whose own text in that same card says it runs every fifteen minutes. So on
+  arrival an operator could not tell whether 802.11k was working, and the only
+  way to find out was to trigger it, which is not an observation. Every
+  automatic cycle that had run all day left no trace anywhere a user looks. The
+  daemon now remembers its last cycle and `GET /roaming/neighbours` reports it
+  **without running one** — the test asserts that reading does not trigger.
+- **The event log never said which device an event was about.** Every device
+  event carries a `device_id`, the API has always returned it, the UI type has
+  always declared it, and the grid had no column for it. Not hidden behind
+  Customize columns: absent. `device.unreachable` told you something was
+  unreachable and not what.
+- **A whole serialised array in one table cell.** The Detail summariser
+  `JSON.stringify`d anything object-shaped, so a `config.apply` event put its
+  omissions — each a full sentence of prose — into a single cell, which ran off
+  the screen and forced a horizontal scrollbar. Lists are counted now:
+  `omissions=2 items` says there is something to look at without pretending the
+  cell can hold it, and the count can never quietly drop the fact that more
+  exists.
+- **Two networks rendered as one token.** The discovery plan separated CIDRs
+  with a CSS margin, so the DOM said `192.168.1.0/2410.7.42.0/24` — a gap made
+  only of CSS disappears in copied text and in a screen reader.
+
+The wireless-uplink card, the per-device override card and the adopt form all
+read correctly. The discovery card's "2 things not scanned" disclosure — tunnel
+interfaces and IPv6 — is exactly the kind of honesty this project is for.
 
 ---
 

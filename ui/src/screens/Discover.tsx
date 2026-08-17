@@ -60,10 +60,15 @@ export function Discover({ onPick }: { onPick: (host: string) => void }) {
               <>
                 Will probe <strong>{plan.hosts}</strong> address
                 {plan.hosts === 1 ? '' : 'es'} on{' '}
-                {plan.networks.map((n) => (
-                  <code key={n} style={{ marginRight: 6 }}>
-                    {n}
-                  </code>
+                {/* Comma-separated, not margin-separated. A gap made only of
+                    CSS disappears in copied text and in a screen reader, so two
+                    networks read as one token — "192.168.1.0/2410.7.42.0/24" is
+                    what the DOM actually said. */}
+                {plan.networks.map((n, i) => (
+                  <span key={n}>
+                    {i > 0 && ', '}
+                    <code>{n}</code>
+                  </span>
                 ))}
               </>
             ) : (
