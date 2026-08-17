@@ -22,7 +22,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 8
+const schemaVersion = 9
 
 // migrations are applied in order for any database below schemaVersion.
 //
@@ -117,6 +117,16 @@ var migrations = map[int][]string{
 		// defaults to false for every existing row because a missing JSON key
 		// unmarshals to the zero value, which is the answer we want: a network
 		// nobody asked to accept wireless bridges does not accept them.
+	},
+	9: {
+		// The device's SSH host key, pinned at adoption.
+		//
+		// NULL for every device adopted before this migration, and that is the
+		// honest value: nobody recorded a key for them, and inventing one would
+		// pin whatever answers next — which is the thing a pin exists to catch.
+		// Those devices stay trust-on-first-use until an un-adopt learns their
+		// key (see daemon.Unadopt).
+		`ALTER TABLE devices ADD COLUMN host_key_fp TEXT`,
 	},
 }
 
@@ -297,12 +307,18 @@ var ErrNotFound = errors.New("store: not found")
 // and requested again at un-adopt, because a controller that could remove its
 // own ACL could also rewrite it (ARCHITECTURE §6).
 type Device struct {
-	ID        int64
-	MAC       string
-	Host      string
-	Port      int
-	Scheme    string
-	CertFP    string
+	ID     int64
+	MAC    string
+	Host   string
+	Port   int
+	Scheme string
+	CertFP string
+	// HostKeyFP pins the SSH host key of the bootstrap channel. Empty means
+	// unpinned — either the device predates the pin, or nothing has ever
+	// opened SSH to it. Only adoption and un-adoption use that channel, so an
+	// empty value costs nothing in steady state and everything at un-adopt,
+	// which carries the operator's administrator password.
+	HostKeyFP string
 	Name      string
 	Role      string
 	AdoptedAt *int64
@@ -342,17 +358,27 @@ func (db *DB) UpsertDevice(ctx context.Context, d *Device) error {
 		d.CapsJSON = "{}"
 	}
 	res, err := db.sql.ExecContext(ctx, `
-INSERT INTO devices (mac, host, port, scheme, cert_fp, name, role, adopted_at,
-                     cred_enc, class, caps_json, fw_release, last_seen, poll_state)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO devices (mac, host, port, scheme, cert_fp, host_key_fp, name, role,
+                     adopted_at, cred_enc, class, caps_json, fw_release,
+                     last_seen, poll_state)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(mac) DO UPDATE SET
   host=excluded.host, port=excluded.port, scheme=excluded.scheme,
   cert_fp=excluded.cert_fp, name=excluded.name, role=excluded.role,
   adopted_at=excluded.adopted_at, cred_enc=excluded.cred_enc,
   class=excluded.class, caps_json=excluded.caps_json,
   fw_release=excluded.fw_release, last_seen=excluded.last_seen,
-  poll_state=excluded.poll_state`,
-		d.MAC, d.Host, d.Port, d.Scheme, nullString(d.CertFP), d.Name, d.Role,
+  poll_state=excluded.poll_state,
+  -- The pin is set on INSERT and never replaced by an upsert. COALESCE on the
+  -- stored value, not on the incoming one, so a caller that does not carry the
+  -- field cannot blank it and a caller that carries a DIFFERENT one cannot
+  -- quietly re-pin: the only way past an existing pin is SetHostKeyFP, which
+  -- refuses. cert_fp deliberately keeps the older take-the-new-value rule —
+  -- it is re-derived on every https connection and a certificate legitimately
+  -- rotates, whereas a host key changing means the box was reflashed.
+  host_key_fp=COALESCE(devices.host_key_fp, excluded.host_key_fp)`,
+		d.MAC, d.Host, d.Port, d.Scheme, nullString(d.CertFP),
+		nullString(d.HostKeyFP), d.Name, d.Role,
 		d.AdoptedAt, d.CredEnc, nullString(d.Class), d.CapsJSON,
 		nullString(d.FWRelease), d.LastSeen, d.PollState)
 	if err != nil {
@@ -401,8 +427,8 @@ func (db *DB) Devices(ctx context.Context) ([]*Device, error) {
 }
 
 const deviceCols = `SELECT id, mac, host, port, scheme, COALESCE(cert_fp,''),
- name, role, adopted_at, cred_enc, COALESCE(class,''), caps_json,
- COALESCE(fw_release,''), last_seen, poll_state,
+ COALESCE(host_key_fp,''), name, role, adopted_at, cred_enc,
+ COALESCE(class,''), caps_json, COALESCE(fw_release,''), last_seen, poll_state,
  COALESCE(poll_interval_s,0) FROM devices`
 
 type scanner interface{ Scan(dest ...any) error }
@@ -410,8 +436,8 @@ type scanner interface{ Scan(dest ...any) error }
 func scanDevice(s scanner) (*Device, error) {
 	var d Device
 	err := s.Scan(&d.ID, &d.MAC, &d.Host, &d.Port, &d.Scheme, &d.CertFP,
-		&d.Name, &d.Role, &d.AdoptedAt, &d.CredEnc, &d.Class, &d.CapsJSON,
-		&d.FWRelease, &d.LastSeen, &d.PollState, &d.PollInterval)
+		&d.HostKeyFP, &d.Name, &d.Role, &d.AdoptedAt, &d.CredEnc, &d.Class,
+		&d.CapsJSON, &d.FWRelease, &d.LastSeen, &d.PollState, &d.PollInterval)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -458,6 +484,36 @@ func (db *DB) SetCertFP(ctx context.Context, deviceID int64, fp string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("store: device %d already has a pinned certificate; "+
+			"re-pinning must be an explicit operator action", deviceID)
+	}
+	return nil
+}
+
+// SetHostKeyFP records a trust-on-first-use SSH host key pin.
+//
+// Same rule as SetCertFP and for a stronger reason. A device's certificate is
+// re-derived on every https connection and can legitimately rotate; its SSH
+// host key is generated once at first boot and changes only if the box was
+// reflashed or is not the box we think it is. So the second key must be
+// refused, and re-pinning has to be a deliberate act by someone who knows which
+// of those two happened.
+//
+// Adoption does not call this — it inserts the pin with the row, which is
+// genuinely first use. This exists for the devices adopted before the column
+// did: their first SSH after the migration is unpinned by necessity, and this
+// is what makes the second one pinned.
+func (db *DB) SetHostKeyFP(ctx context.Context, deviceID int64, fp string) error {
+	if fp == "" {
+		return errors.New("store: refusing to pin an empty SSH host key")
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE devices SET host_key_fp=? WHERE id=? AND (host_key_fp IS NULL OR host_key_fp='')`,
+		fp, deviceID)
+	if err != nil {
+		return fmt.Errorf("store: pin SSH host key for device %d: %w", deviceID, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: device %d already has a pinned SSH host key; "+
 			"re-pinning must be an explicit operator action", deviceID)
 	}
 	return nil

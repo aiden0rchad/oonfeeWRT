@@ -288,6 +288,107 @@ func TestSetCertFPIsTrustOnFirstUseOnly(t *testing.T) {
 	}
 }
 
+// The SSH pin has a stronger version of the same rule, and a second guard the
+// certificate does not need.
+//
+// A certificate is re-derived on every https connection and legitimately
+// rotates. An SSH host key is generated once at first boot, so a second one
+// means the box was reflashed or is not the box — which is precisely what
+// un-adopt must not walk into carrying the operator's password.
+func TestTheSSHHostKeyPinSurvivesAnUpsert(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	// Adoption's own write, which is genuinely first use.
+	d := &Device{MAC: "aa:bb:cc:dd:ee:ff", Host: "192.168.1.1", Name: "ap1",
+		HostKeyFP: "SHA256:adopted"}
+	if err := db.UpsertDevice(ctx, d); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	got, err := db.DeviceByMAC(ctx, d.MAC)
+	if err != nil {
+		t.Fatalf("DeviceByMAC: %v", err)
+	}
+	if got.HostKeyFP != "SHA256:adopted" {
+		t.Fatalf("adoption's pin did not survive the round trip: %q", got.HostKeyFP)
+	}
+
+	// An upsert that does not carry the field must not blank it. Every field on
+	// Device is written by UpsertDevice, so any future caller that builds a row
+	// from something other than an adoption result would otherwise silently
+	// un-pin the device — and an un-pinned device is indistinguishable from one
+	// that predates the column, so nothing would report it.
+	if err := db.UpsertDevice(ctx, &Device{
+		MAC: d.MAC, Host: "192.168.1.9", Name: "ap1"}); err != nil {
+		t.Fatalf("second UpsertDevice: %v", err)
+	}
+	got, err = db.DeviceByMAC(ctx, d.MAC)
+	if err != nil {
+		t.Fatalf("DeviceByMAC: %v", err)
+	}
+	if got.HostKeyFP != "SHA256:adopted" {
+		t.Fatalf("an upsert blanked the host key pin: %q", got.HostKeyFP)
+	}
+	if got.Host != "192.168.1.9" {
+		t.Fatalf("the upsert did not take at all, so this proves nothing: %+v", got)
+	}
+
+	// Nor may an upsert quietly REPLACE it. That is the same non-guard wearing
+	// a different hat: a pin that updates itself when something new answers is
+	// not a pin.
+	if err := db.UpsertDevice(ctx, &Device{
+		MAC: d.MAC, Host: "192.168.1.9", Name: "ap1",
+		HostKeyFP: "SHA256:someone-else"}); err != nil {
+		t.Fatalf("third UpsertDevice: %v", err)
+	}
+	got, _ = db.DeviceByMAC(ctx, d.MAC)
+	if got.HostKeyFP != "SHA256:adopted" {
+		t.Fatalf("an upsert re-pinned the device to %q", got.HostKeyFP)
+	}
+}
+
+func TestSetHostKeyFPIsTrustOnFirstUseOnly(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+
+	// A device adopted before the column existed: no pin, so its next SSH is
+	// unpinned by necessity and this is what makes the one after that checked.
+	d := &Device{MAC: "aa:bb:cc:dd:ee:ff", Host: "192.168.1.1", Name: "ap1"}
+	if err := db.UpsertDevice(ctx, d); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	if err := db.SetHostKeyFP(ctx, d.ID, "SHA256:first"); err != nil {
+		t.Fatalf("first SetHostKeyFP: %v", err)
+	}
+	got, err := db.DeviceByMAC(ctx, d.MAC)
+	if err != nil {
+		t.Fatalf("DeviceByMAC: %v", err)
+	}
+	if got.HostKeyFP != "SHA256:first" {
+		t.Fatalf("HostKeyFP = %q, want %q", got.HostKeyFP, "SHA256:first")
+	}
+
+	if err := db.SetHostKeyFP(ctx, d.ID, "SHA256:second"); err == nil {
+		t.Error("SetHostKeyFP silently replaced an existing pin")
+	}
+	got, _ = db.DeviceByMAC(ctx, d.MAC)
+	if got.HostKeyFP != "SHA256:first" {
+		t.Fatalf("pin changed to %q despite the refusal", got.HostKeyFP)
+	}
+
+	// An empty fingerprint is refused rather than stored. The caller reads it
+	// from a Bootstrap, and a fake — or a bootstrap that never handshook —
+	// returns "". Writing that would leave the column looking un-pinned while
+	// having been "set", and the first-use branch would never run again.
+	fresh := &Device{MAC: "11:22:33:44:55:66", Host: "192.168.1.2", Name: "ap2"}
+	if err := db.UpsertDevice(ctx, fresh); err != nil {
+		t.Fatalf("UpsertDevice: %v", err)
+	}
+	if err := db.SetHostKeyFP(ctx, fresh.ID, ""); err == nil {
+		t.Error("an empty host key was accepted as a pin")
+	}
+}
+
 // The whole point of a facet count is that it is NOT the count of what came
 // back. UI-SPEC §5 says so, and the log endpoint returns a few hundred of what
 // can be tens of thousands of rows — so a count taken from the page reports

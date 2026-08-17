@@ -162,7 +162,7 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	now := time.Now().Unix()
 	dev := &store.Device{
 		MAC: mac, Host: req.Host, Port: req.Port, Name: name,
-		Role: string(role), CertFP: res.CertFP,
+		Role: string(role), CertFP: res.CertFP, HostKeyFP: res.HostKeyFP,
 		AdoptedAt: &now, CredEnc: blob,
 		Class: string(res.Caps.Class), CapsJSON: string(caps),
 		FWRelease: res.Caps.Board.Release,
@@ -196,7 +196,14 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		DeviceID: dev.ID, MAC: mac, Name: name,
 		Model: res.Caps.Board.Model, Class: string(res.Caps.Class),
 		Firmware: res.Caps.Board.Release, CertFP: res.CertFP,
-		Notes: res.Caps.Notes,
+		// The pin that was just recorded, so an operator standing at the device
+		// can compare it against `ssh-keygen -lf` on the host key there. The
+		// field has existed on this type since adoption was written and was
+		// never filled in — a fingerprint nobody is shown is one nobody can
+		// check, and this is the single moment both ends are known to be the
+		// same box.
+		HostKeyFP: res.HostKeyFP,
+		Notes:     res.Caps.Notes,
 	}
 	for f, st := range res.Caps.Features {
 		if st.Buildable() {
@@ -282,18 +289,60 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 
 	// Phase 2 goes over SSH, because that is the only channel that can remove
 	// what only SSH could install.
+	//
+	// Pinned to the host key recorded at adoption. This is the dial the pin
+	// exists for: the operator has just typed their administrator password into
+	// the un-adopt panel, and it is about to be offered to whatever answers on
+	// port 22 at the stored address. Adoption itself is genuinely first use and
+	// stays unpinned — there is nothing to check against, and refusing to adopt
+	// until someone has collected fingerprints by hand is a worse answer.
+	//
+	// dev.HostKeyFP is empty for devices adopted before the pin existed, which
+	// makes this an unpinned first use for them too; the successful dial below
+	// records what it saw so the NEXT one is checked.
 	var boot adoption.Bootstrap
 	if req.Username != "" {
 		b, err := adoption.DialSSH(ctx, adoption.SSHOptions{
 			Host: dev.Host, Username: req.Username, Password: req.Password,
-			PrivateKey: []byte(req.PrivateKey), Timeout: 30 * time.Second,
+			PrivateKey: []byte(req.PrivateKey), HostKeyFP: dev.HostKeyFP,
+			Timeout: 30 * time.Second,
 		})
-		if err != nil {
+		switch {
+		case err != nil && req.Force:
+			// Force means "take it out of the inventory even if the device
+			// cannot be reached", and a refused host key is one way not to
+			// reach it — the commonest reason a host key changes is a reflash,
+			// which also wipes the footprint we came to remove. Refusing here
+			// would make a reflashed device permanently un-removable, so the
+			// failure is reported and phase 2 is skipped rather than the whole
+			// removal being abandoned. The residue is still reported honestly:
+			// with no SSH session, RemoveFootprint never runs and the report
+			// says the login and ACL remain.
+			out.Errors = append(out.Errors, fmt.Sprintf(
+				"could not open an SSH session with the supplied administrator "+
+					"credential, and removal was forced, so the controller's "+
+					"footprint was NOT removed from the device: %v", err))
+			d.Log.Warn("forced un-adopt could not open SSH", "mac", dev.MAC,
+				"host", dev.Host, "err", err)
+		case err != nil:
 			return nil, fmt.Errorf("could not open an SSH session with the "+
 				"supplied administrator credential: %w", err)
+		default:
+			boot = b
+			defer b.Close()
+			// Learn the key if this device predates the pin. First use only —
+			// SetHostKeyFP refuses to replace one, so a device that is already
+			// pinned cannot be re-pinned by connecting to it, and the dial
+			// above has in any case already checked it.
+			if dev.HostKeyFP == "" {
+				if fp := b.Fingerprint(); fp != "" {
+					if err := d.Store.SetHostKeyFP(ctx, dev.ID, fp); err != nil {
+						d.Log.Warn("could not pin the device's SSH host key",
+							"mac", dev.MAC, "err", err)
+					}
+				}
+			}
 		}
-		boot = b
-		defer b.Close()
 	}
 
 	owned, err := d.ownedSections(ctx, dev.ID)
