@@ -148,9 +148,11 @@ var knownDefects = []Defect{
 			"through fast-transition roams that logged the identical \"key " +
 			"addition failed\" line, and stayed up — the firmware only died once " +
 			"PMF was added. Turning off fast roaming instead would cost you " +
-			"seamless handover and would not be the fix. (Not measured: PMF on " +
-			"with 802.11r off. If you need PMF on this hardware, that is the " +
-			"experiment to run, and it has not been.)",
+			"seamless handover and would not be the fix. Whether PMF also kills " +
+			"this radio with fast roaming disabled is untested and not worth " +
+			"testing: the hardware's own documentation says not to enable " +
+			"802.11w at all, and the failure it produces needs somebody to " +
+			"physically power-cycle the device. Leave PMF off here.",
 		Triggers: func(v map[string]string) bool {
 			return v["ieee80211w"] != "" && v["ieee80211w"] != "0"
 		},

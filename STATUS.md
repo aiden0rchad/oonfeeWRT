@@ -3530,13 +3530,22 @@ the whole buffer is at 16:42:36 — after PMF went on.
 |---|---|---|
 | 802.11r FT, PMF **off** | yes | key-install failure, **no wedge**, 10h+ clean after |
 | 802.11r FT, PMF **on** | yes | **wedge in 85s** |
-| PMF on, 802.11r **off** | **no** | unknown |
+| PMF on, 802.11r **off** | **no — and deliberately not** | unknown |
 
 So **fast roaming is what exposes the defect, not what causes it.** An operator
 told only "turn off PMF" might reasonably turn off 802.11r as well and lose
-seamless handover for nothing. The mitigation now says to keep it, and names the
-one cell of that table nobody has filled in — which is the honest way to state a
-result that isolated one variable and not the other.
+seamless handover for nothing. The mitigation now says to keep it.
+
+**The empty cell stays empty, on purpose.** Filling it was started and stopped —
+correctly. The recommendation cannot change whichever way it goes: the hardware's
+own documentation says not to enable 802.11w at all, and the failure costs
+somebody a trip to the device to pull its power. An experiment whose result
+cannot alter the advice is not worth a radio. The mitigation says so rather than
+inviting the reader to try it, which is what it did for one commit.
+
+*A gap in a table is not automatically a task.* Noting a variable was not
+isolated is honest; treating that note as a to-do is how a measured, settled
+answer turns back into an open question.
 
 **What shipped as a result.** The registry entry for
 `mwlwifi-80211w-unsupported` moves from `ConfDeviceDoc` to **`ConfMeasuredHere`**
@@ -3692,6 +3701,12 @@ written and believed.
   one plan silently enabled a different one. If a screen is careful that stale
   DATA never sits beside an enabled button, it has to be equally careful about
   stale CONSENT.
+- **A gap in a table is not automatically a task.** Having isolated one variable
+  and not another, the missing cell reads like an invitation. It is not one when
+  the answer cannot change the recommendation — and here the cost of filling it
+  was a dead radio and somebody walking to the device. Recording "not measured"
+  is honest; treating it as a to-do turns a settled answer back into an open
+  question and spends hardware to learn nothing.
 - **Gate on what the operator asked for, not on how bad it is.** Requiring
   acknowledgement for every radio-death defect would have demanded a tick before
   every apply to the reference device forever, because one of its defects is
