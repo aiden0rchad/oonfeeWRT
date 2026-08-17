@@ -345,6 +345,10 @@ export interface UnadoptResult {
   residue?: string[]
   errors?: string[]
   needs_operator_credential: boolean
+  /** The call's overall failure, when there was one. Present on a non-2xx that
+   *  still carries the whole report — a phase-2 failure, or a forced removal
+   *  that connected and then could not commit. */
+  error?: string
 }
 
 /** What a scan would cover, before running one. */

@@ -97,6 +97,11 @@ type UnadoptResult struct {
 	// NeedsOperator marks the case where phase 1 succeeded and phase 2 could
 	// not run for want of the device's admin credential.
 	NeedsOperator bool `json:"needs_operator_credential"`
+	// Error carries the call's overall failure when there IS one, so that a
+	// non-2xx response can still be this whole report rather than a bare
+	// string. Named to match what every other endpoint puts in an error body,
+	// so a generic client reads it without knowing about un-adopt.
+	Error string `json:"error,omitempty"`
 }
 
 // ErrOperatorRequired is returned by an Enroller when phase 2 needs the
@@ -188,6 +193,22 @@ func (s *Server) handleUnadopt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		// The report is still the answer when the call ALSO failed, and
+		// discarding it to send a bare error string threw away the one thing
+		// that cannot be recovered.
+		//
+		// Un-adopt can remove the inventory row and report that the device kept
+		// a footprint, in the same call: a forced removal whose phase 2 got as
+		// far as connecting and then failed to commit. Once that row is gone,
+		// res.Residue is the ONLY remaining record of what is installed on that
+		// device — and it went to a `{"error": "..."}` body that no client could
+		// render. The same applied without Force, where the residue list is
+		// exactly what the panel exists to show.
+		if res != nil {
+			res.Error = err.Error()
+			writeJSON(w, http.StatusBadGateway, res)
+			return
+		}
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}

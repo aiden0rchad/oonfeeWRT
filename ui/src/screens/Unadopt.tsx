@@ -24,6 +24,21 @@ import { Button, Field, Banner, Card, Toggle } from '../components/ui'
  * never leave the inventory — it stayed listed, polled and counted forever,
  * and the only way out was a hand-written API call.
  */
+/**
+ * Is this response body an un-adopt report rather than a plain error?
+ *
+ * Keyed on `removed_from_inventory`, which is the one field the Go type always
+ * emits — no `omitempty` — so its presence distinguishes a report from the
+ * `{"error": "..."}` every other failure returns. Checking a field that can be
+ * omitted would read a real report as a plain error whenever it happened to be
+ * empty.
+ */
+function isReport(b: unknown): b is UnadoptResult {
+  return (
+    typeof b === 'object' && b !== null && 'removed_from_inventory' in b
+  )
+}
+
 export function Unadopt({
   deviceID,
   deviceName,
@@ -69,6 +84,14 @@ export function Unadopt({
     setErr('')
     setBusy(true)
     setTriedWithCredential(withCredential)
+    // Every attempt re-earns the forced-removal confirmation. It used to
+    // persist, so someone who ticked it, thought better of it, and retried with
+    // a corrected password was one click from a forced removal the moment the
+    // second attempt failed — which is the speed bump gone at exactly the point
+    // it exists for. The ordinary confirmation above deliberately does NOT
+    // reset: that one is consent to un-adopt this device, which a retry of the
+    // same operation does not withdraw.
+    setForceOK(false)
     try {
       const res = await api.unadopt(deviceID, {
         ...(withCredential ? { username, password } : {}),
@@ -81,11 +104,17 @@ export function Unadopt({
       // the last copy of what is still on the device once the row is gone —
       // was rendered and discarded in the same tick. Close does it instead.
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && e.body) {
-        // Not a failure. Phase 1 ran; phase 2 needs a credential the controller
-        // deliberately does not hold, and the body carries the residue — which
-        // is the useful part of the answer.
-        setResult(e.body as UnadoptResult)
+      // Any report-shaped body IS the answer, whatever the status.
+      //
+      // This used to accept only 409 — phase 1 done, phase 2 needing a
+      // credential the controller deliberately does not hold. But a 502 can
+      // carry the same report: a phase-2 failure with the credential supplied,
+      // and a forced removal that connected and then could not commit. In that
+      // last case the row is already gone and the residue list is the only
+      // record left of what is on the device, so falling through to a bare
+      // error banner destroyed it.
+      if (e instanceof ApiError && isReport(e.body)) {
+        setResult(e.body)
       } else {
         setErr(e instanceof Error ? e.message : String(e))
       }
@@ -133,11 +162,20 @@ export function Unadopt({
               ? 'A footprint remains on the device — see below.'
               : 'Nothing of ours is left on it.'}
           </Banner>
-        ) : (
+        ) : result.needs_operator_credential ? (
           <Banner>
             {deviceName} is still in the inventory. Phase 1 finished; removing
             the login and the ACL file needs the device's administrator
             credential.
+          </Banner>
+        ) : (
+          /* Not the same thing, and it used to say it was. This branch is
+             reached when a credential WAS supplied and phase 2 failed anyway,
+             which the old copy described as needing a credential — sending the
+             operator to re-type one that is already correct. */
+          <Banner tone="warning">
+            {deviceName} is still in the inventory, and the removal did not
+            finish. {result.error ?? 'See what happened below.'}
           </Banner>
         )}
 

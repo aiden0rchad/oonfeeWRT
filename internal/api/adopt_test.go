@@ -194,6 +194,79 @@ func TestUnadoptWithoutOperatorCredentialReports409AndTheResidue(t *testing.T) {
 	}
 }
 
+// A failed un-adopt that still produced a report must send the report.
+//
+// The worst case is the forced removal whose phase 2 connected and then could
+// not commit: the inventory row is GONE and Residue is the only surviving
+// record of what is installed on that device. Sending `{"error": "..."}` and
+// dropping the body destroyed exactly that — and no client could recover it,
+// because the row it described no longer exists to ask about.
+func TestAFailedUnadoptStillReturnsItsReport(t *testing.T) {
+	h, e := harnessWithEnroller(t)
+	e.unaErr = errors.New("adoption: un-adopt completed with 1 error(s)")
+	e.unaRes = &UnadoptResult{
+		Removed:          true, // forced: the row is already gone
+		FootprintRemains: true,
+		Errors:           []string{"uci commit rpcd: Read-only file system"},
+		Residue: []string{
+			"/usr/share/rpcd/acl.d/oonfeewrt.json",
+			"config login 'oonfeewrt' in /etc/config/rpcd",
+		},
+	}
+	dev := h.seedDevice("ap-w", true, nil)
+
+	w := h.do(http.MethodPost, "/api/v1/devices/"+itoa(int(dev.ID))+"/unadopt",
+		map[string]any{"username": "root", "password": "p", "force": true})
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502: %s", w.Code, w.Body.String())
+	}
+	var res UnadoptResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Residue) != 2 {
+		t.Fatalf("the residue did not survive the error response: %+v", res)
+	}
+	if !res.Removed {
+		t.Error("the response does not say the row was removed, which is what " +
+			"makes the residue list irrecoverable")
+	}
+	if len(res.Errors) != 1 {
+		t.Errorf("the specific failure was not carried: %v", res.Errors)
+	}
+	// And a generic client that knows nothing about un-adopt still finds a
+	// message where every other endpoint puts one.
+	if !strings.Contains(res.Error, "1 error(s)") {
+		t.Errorf("no top-level error for a generic client: %q", res.Error)
+	}
+}
+
+// With no report there is nothing to preserve, so the ordinary error body is
+// still the right answer — a bare `{"error": ...}` rather than an empty report
+// that would render as "nothing was removed and nothing remains".
+func TestAnUnadoptFailureWithNoReportStaysAPlainError(t *testing.T) {
+	h, e := harnessWithEnroller(t)
+	e.unaErr = errors.New("store: not found")
+	e.unaRes = nil
+	dev := h.seedDevice("ap-x", true, nil)
+
+	w := h.do(http.MethodPost, "/api/v1/devices/"+itoa(int(dev.ID))+"/unadopt",
+		map[string]any{"username": "root", "password": "p"})
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("got %d, want 502: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["removed_from_inventory"]; ok {
+		t.Errorf("an absent report was sent as an empty one: %v", body)
+	}
+	if s, _ := body["error"].(string); !strings.Contains(s, "not found") {
+		t.Errorf("error not reported: %v", body)
+	}
+}
+
 func TestUnadoptPassesTheDeviceID(t *testing.T) {
 	h, e := harnessWithEnroller(t)
 	dev := h.seedDevice("ap-v", true, nil)

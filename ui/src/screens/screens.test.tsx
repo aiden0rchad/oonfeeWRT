@@ -72,6 +72,11 @@ api.devices.mockResolvedValue({ devices: [] })
 // The 802.11k card asks what the last automatic cycle did, on mount.
 api.lastNeighbours.mockResolvedValue({ ran: false })
 
+// Dynamic, like the screens below: the mock factory defines ApiError, and the
+// panel checks `e instanceof ApiError` before trusting a body, so a test that
+// constructs some other Error cannot reach that branch at all.
+const { ApiError } = await import('../lib/api')
+
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')
 const { DeviceClass, Devices } = await import('./Devices')
@@ -1096,6 +1101,119 @@ describe('Unadopt', () => {
     // skips it when the connection fails, so a device that turns out to be
     // reachable is cleaned properly rather than abandoned on our say-so.
     expect(req.username).toBe('root')
+  })
+
+  // The speed bump has to be re-earned. Someone who ticks the forced-removal
+  // confirmation, thinks better of it, and retries with a corrected password was
+  // one click from a forced removal the instant the second attempt failed —
+  // which is the confirmation gone at exactly the point it exists for.
+  it('makes every attempt re-confirm a forced removal', async () => {
+    api.unadopt.mockRejectedValueOnce(new Error('first failure'))
+    await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText('Remove from the inventory anyway')).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByText(/footprint stays on the device/))
+    await waitFor(() => {
+      const b = screen.getByText('Remove from the inventory anyway').closest('button')!
+      if (b.disabled) throw new Error('still disabled after confirming')
+    })
+
+    // Second thoughts: retry the ordinary path instead. It fails too.
+    api.unadopt.mockRejectedValueOnce(new Error('second failure'))
+    fireEvent.click(screen.getByText('Remove completely'))
+    await waitFor(() => expect(screen.getByText(/second failure/)).toBeTruthy())
+
+    const b = screen.getByText('Remove from the inventory anyway').closest('button')!
+    if (!b.disabled) {
+      throw new Error(
+        'the forced-removal confirmation survived a second attempt, so the ' +
+          'destructive action is one click away without being re-confirmed',
+      )
+    }
+  })
+
+  // A 502 can carry the whole report, and the worst case is the forced removal
+  // whose phase 2 connected and then could not commit: the row is already gone
+  // and the residue list is the only surviving record of what is installed. The
+  // panel accepted a body only on 409, so that case fell through to a bare
+  // error banner and the list was destroyed.
+  it('renders a report that arrives with an error status', async () => {
+    const err = Object.assign(new ApiError(502, 'stub'), {
+      status: 502,
+      message: 'adoption: un-adopt completed with 1 error(s)',
+      body: {
+        removed_from_inventory: true, footprint_remains: true,
+        reverted_sections: 1, login_removed: false, acl_removed: false,
+        needs_operator_credential: false,
+        residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
+        errors: ['uci commit rpcd: Read-only file system'],
+        error: 'adoption: un-adopt completed with 1 error(s)',
+      },
+    })
+    api.unadopt.mockRejectedValueOnce(err)
+    await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy(),
+    )
+    expect(screen.getByText(/Read-only file system/)).toBeTruthy()
+  })
+
+  // A report with NO residue is still a report.
+  //
+  // Real case: phase 1 fails to revert one section, phase 2 cleans up fine, so
+  // the row is removed and nothing is left on the device — an error, an empty
+  // residue, and the only record of which section was not handed back. Keying
+  // the recognition on an omittable field would read this as a plain error and
+  // discard it, which is why it is keyed on the one field the Go type always
+  // emits.
+  it('recognises a report that carries no residue', async () => {
+    const err = Object.assign(new ApiError(502, 'stub'), {
+      status: 502,
+      message: 'adoption: un-adopt completed with 1 error(s)',
+      body: {
+        removed_from_inventory: true, footprint_remains: false,
+        reverted_sections: 1, login_removed: true, acl_removed: true,
+        needs_operator_credential: false,
+        errors: ['revert wireless.oowrt_wlan1_radio1: Permission denied'],
+        error: 'adoption: un-adopt completed with 1 error(s)',
+      },
+    })
+    api.unadopt.mockRejectedValueOnce(err)
+    await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText(/Permission denied/)).toBeTruthy(),
+    )
+    expect(screen.getByText(/Nothing of ours is left on it/)).toBeTruthy()
+  })
+
+  // "Still in the inventory" and "needs the administrator credential" are not
+  // the same statement, and one banner made both. A phase-2 failure WITH a
+  // credential supplied was described as needing one, sending the operator off
+  // to re-type a password that was already correct.
+  it('does not blame a missing credential for a phase-2 failure', async () => {
+    const err = Object.assign(new ApiError(502, 'stub'), {
+      status: 502,
+      message: 'boom',
+      body: {
+        removed_from_inventory: false, footprint_remains: true,
+        reverted_sections: 2, login_removed: false, acl_removed: false,
+        needs_operator_credential: false,
+        residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
+        errors: ['uci commit rpcd: Read-only file system'],
+        error: 'the removal did not complete',
+      },
+    })
+    api.unadopt.mockRejectedValueOnce(err)
+    await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText(/did not finish/)).toBeTruthy(),
+    )
+    expect(screen.queryByText(/needs the device's administrator credential/)).toBeNull()
   })
 
   // The report is the LAST copy of what is still installed on a device whose
