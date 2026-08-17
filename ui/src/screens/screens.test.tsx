@@ -1505,3 +1505,156 @@ describe('Dashboard', () => {
     expect(screen.queryByText(/no panel is open/)).toBeNull()
   })
 })
+
+describe('Settings — the hazard a rollback cannot undo', () => {
+  const site = {
+    name: 'Site',
+    uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
+    wlans: [],
+    meshes: [],
+    groups: [{ id: 1, name: 'all', device_ids: [] }],
+    networks: [
+      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+    ],
+    problems: [],
+    overrides: [],
+    overridable: [],
+    override_note: '',
+  }
+
+  const defect = (over: Record<string, unknown> = {}) => ({
+    wlan: 'oonfee-roam',
+    defect_id: 'mwlwifi-80211w-unsupported',
+    summary: '802.11w is not properly supported by this radio driver',
+    detail: 'measured: the firmware stops answering 85s after a fast transition',
+    confidence: 'measured',
+    severity: 'radio-death',
+    mitigation: 'set PMF to disabled on this WLAN',
+    source: 'STATUS.md §5an',
+    ...over,
+  })
+
+  const previewWith = (defects: unknown[]) => ({
+    devices: [
+      {
+        device_id: 1, name: 'ap-wrt', role: 'ap',
+        changes: [{ config: 'wireless', section: 's', action: 'update', options: ['x'] }],
+        blocked: false, touches_traversal: false,
+        driver_defects: defects,
+      },
+    ],
+    site_errors: [],
+  })
+
+  beforeEach(() => {
+    api.site.mockResolvedValue(site)
+  })
+
+  async function previewThen(defects: unknown[]) {
+    api.preview.mockResolvedValue(previewWith(defects))
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalled())
+  }
+
+  const applyBtn = () =>
+    screen.getAllByText(/^Apply/).map((n) => n.closest('button')!).find(Boolean)!
+
+  // The screen already stops for touches_traversal — editing the path the
+  // controller reaches a device through — and tells the reader a rollback
+  // restores it within 90 seconds. That is true there and false here: a radio
+  // that stops answering cannot be reached to revert, and stays down until
+  // somebody physically power-cycles the box. The lesser, recoverable hazard
+  // demanded an acknowledgement; the greater, unrecoverable one demanded none.
+  it('will not apply a change that is known to kill the radio until acknowledged', async () => {
+    await previewThen([defect()])
+
+    await waitFor(() =>
+      expect(screen.getByText(/take the radio down until someone power-cycles it/)).toBeTruthy(),
+    )
+    if (!applyBtn().disabled) {
+      throw new Error('Apply was enabled for a change measured to kill the radio')
+    }
+    // And it says the rollback does not cover it, because the line above the
+    // button promises the opposite.
+    expect(screen.getByText(/rollback does not cover this/i)).toBeTruthy()
+
+    fireEvent.click(screen.getByText(/take the radio down until someone power-cycles it/))
+    await waitFor(() => {
+      if (applyBtn().disabled) throw new Error('still disabled after acknowledging')
+    })
+  })
+
+  // The same reset, for the acknowledgement that already existed. Covered
+  // separately because a mutation that reset only the new one passed every
+  // other test here — the two halves are one line apart and independently
+  // wrong-able.
+  it('makes every preview re-earn the traversal acknowledgement too', async () => {
+    api.preview.mockResolvedValue({
+      devices: [
+        {
+          device_id: 1, name: 'ap-gw', role: 'gateway',
+          changes: [{ config: 'network', section: 's', action: 'update', options: ['x'] }],
+          blocked: false, touches_traversal: true, driver_defects: [],
+        },
+      ],
+      site_errors: [],
+    })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalled())
+
+    await waitFor(() =>
+      expect(screen.getByText(/apply the network changes/)).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByText(/apply the network changes/))
+    await waitFor(() => {
+      if (applyBtn().disabled) throw new Error('still disabled after acknowledging')
+    })
+
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    if (!applyBtn().disabled) {
+      throw new Error('a stale traversal acknowledgement carried to a fresh preview')
+    }
+  })
+
+  // A defect of the HARDWARE that no configuration causes and none can avoid
+  // has no wlan attached. Gating on those would demand a tick before every
+  // apply to that device forever — the cry-wolf failure that makes a warning
+  // worth ignoring on the day it matters.
+  it('does not gate on a hardware defect no configuration asked for', async () => {
+    await previewThen([defect({ wlan: undefined })])
+
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    expect(screen.queryByText(/take the radio down until someone power-cycles it/)).toBeNull()
+    expect(applyBtn().disabled).toBe(false)
+  })
+
+  // Consent to one plan must not carry to the next. Acknowledgements used to
+  // persist across previews, so ticking once and then editing the site left
+  // Apply enabled for a different set of changes nobody had agreed to.
+  it('makes every preview re-earn the acknowledgement', async () => {
+    await previewThen([defect()])
+    fireEvent.click(screen.getByText(/take the radio down until someone power-cycles it/))
+    await waitFor(() => {
+      if (applyBtn().disabled) throw new Error('still disabled after acknowledging')
+    })
+
+    fireEvent.click(screen.getByText('Preview changes'))
+    // Wait for the preview to FINISH first. Apply is also disabled while
+    // busy==='preview', so asserting straight after the click passes on the
+    // transient state and says nothing about the acknowledgement — which is
+    // exactly how the first version of this test passed with the reset removed.
+    await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.getByText('Preview changes')).toBeTruthy(),
+    )
+    if (!applyBtn().disabled) {
+      throw new Error('a stale acknowledgement carried to a fresh preview')
+    }
+  })
+})

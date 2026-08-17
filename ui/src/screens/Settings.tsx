@@ -39,6 +39,7 @@ export function Settings({ devices }: { devices: Device[] }) {
   const [err, setErr] = useState('')
   const [applied, setApplied] = useState<string | null>(null)
   const [ackTraversal, setAckTraversal] = useState(false)
+  const [ackFatal, setAckFatal] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -56,6 +57,15 @@ export function Settings({ devices }: { devices: Device[] }) {
   async function runPreview() {
     setBusy('preview')
     setApplied(null)
+    // Every preview re-earns both acknowledgements.
+    //
+    // They used to persist. Tick "apply the network changes", edit the site,
+    // preview again, and Apply was enabled for a DIFFERENT set of changes that
+    // nobody had acknowledged — consent to one plan silently carried to the
+    // next. The screen is careful that a stale preview never sits beside an
+    // enabled Apply; a stale acknowledgement is the same defect one level down.
+    setAckTraversal(false)
+    setAckFatal(false)
     try {
       setPreview(await api.preview())
       setErr('')
@@ -99,6 +109,29 @@ export function Settings({ devices }: { devices: Device[] }) {
 
   const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
   const traversal = preview?.devices.filter((d) => d.touches_traversal) ?? []
+
+  // Defects that this change ASKS FOR, and that kill the radio.
+  //
+  // Filtered on both halves, and both matter. `wlan` is set only when a WLAN's
+  // configuration triggers the defect — the operator chose something the driver
+  // cannot do. A defect with no `wlan` is a property of the hardware that no
+  // configuration causes and none can avoid, and gating on those would demand a
+  // tick before every apply to that device forever, which is the cry-wolf
+  // failure that makes a warning worth ignoring on the day it matters.
+  //
+  // Severity is the other half. The screen already stops for `touches_traversal`
+  // — editing the path the controller reaches a device through — and reassures
+  // the reader that a rollback restores it within 90 seconds. That is true
+  // there and FALSE here: a dead radio cannot be reached to confirm or revert,
+  // and the firmware stays dead until somebody physically power-cycles the box
+  // (STATUS §5an, measured). So the lesser, recoverable hazard asked for an
+  // acknowledgement and the greater, unrecoverable one asked for nothing.
+  const fatal =
+    preview?.devices.flatMap((d) =>
+      (d.driver_defects ?? [])
+        .filter((f) => f.wlan && f.severity === 'radio-death')
+        .map((f) => ({ device: d.name, ...f })),
+    ) ?? []
 
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
@@ -250,7 +283,8 @@ export function Settings({ devices }: { devices: Device[] }) {
               pending === 0 ||
               (preview.site_errors?.length ?? 0) > 0 ||
               preview.devices.some((d) => d.blocked) ||
-              (traversal.length > 0 && !ackTraversal)
+              (traversal.length > 0 && !ackTraversal) ||
+              (fatal.length > 0 && !ackFatal)
             }
             onClick={runApply}
           >
@@ -288,6 +322,46 @@ export function Settings({ devices }: { devices: Device[] }) {
                 label="I understand — apply the network changes"
                 on={ackTraversal}
                 onChange={setAckTraversal}
+              />
+            </Banner>
+          </div>
+        )}
+
+        {/* The one hazard on this screen a rollback cannot undo. */}
+        {fatal.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Banner tone="critical">
+              <div>
+                This change asks{' '}
+                <strong>
+                  {[...new Set(fatal.map((f) => f.device))].join(', ')}
+                </strong>{' '}
+                to do something its wireless driver is known to get wrong badly
+                enough to take the radio down.
+              </div>
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                {fatal.map((f) => (
+                  <li key={`${f.device}-${f.defect_id}`}>
+                    <strong>{f.device}</strong> — {f.summary}{' '}
+                    <span style={{ color: 'var(--text-muted)' }}>
+                      [{f.confidence}]
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {/* Said plainly, because the line above the Apply button promises
+                  the opposite and is right about every other change. */}
+              <div style={{ marginTop: 6, fontSize: 11 }}>
+                <strong>The rollback does not cover this.</strong> A radio that
+                stops answering cannot be reached to confirm or revert, and on
+                the reference hardware it stayed down until the device was
+                physically power-cycled. Details and a mitigation are under each
+                device below.
+              </div>
+              <Toggle
+                label="I understand this can take the radio down until someone power-cycles it"
+                on={ackFatal}
+                onChange={setAckFatal}
               />
             </Banner>
           </div>

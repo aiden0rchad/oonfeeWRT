@@ -524,7 +524,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty-seven** defects have been found
+- **Look at a screen in a browser.** **Thirty-nine** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3549,6 +3549,61 @@ one was confirmed.
 
 ---
 
+### 5ao. The one hazard on the apply screen a rollback cannot undo
+
+**Done 2026-08-17,** as the direct consequence of §5an. Once the Marvell PMF
+defect became **measured** rather than documented, the question was whether the
+controller does enough with it. It did not.
+
+The first suspicion was wrong and worth saying so: `Apply` and `Preview` are
+separate buttons, so an operator looked able to apply without ever seeing the
+warning. They are not — `disabled={… || !preview || …}`, with a comment saying
+it is "deliberately unreachable without previewing first". Checked before
+changing anything.
+
+**What was actually wrong is an asymmetry.** This screen already stops for
+`touches_traversal` — editing the network path the controller reaches a device
+through — and demands an explicit acknowledgement toggle. Its own banner
+explains why that is safe: *"applied with a rollback armed, so a device that
+comes back unreachable restores itself within 90 seconds."*
+
+That is true there and **false** for a radio-death defect. A radio that stops
+answering cannot be reached to confirm or revert, and on the reference hardware
+it stayed down until the box was physically power-cycled. So:
+
+| hazard | recoverable? | gated? |
+|---|---|---|
+| edits the controller's own path | yes — rollback, 90s | **acknowledgement required** |
+| measured to kill the radio | **no — needs physical access** | *nothing* |
+
+The lesser hazard asked for consent; the greater one asked for none. And the
+reassurance printed immediately above the Apply button — every change has a
+rollback armed — is the one line on the screen that is wrong about this case.
+
+Now gated by the same pattern, with the banner saying plainly that the rollback
+does not cover it. **Filtered on two things, both load-bearing:** the defect must
+carry a `wlan` — meaning the configuration being applied asks for it — and be
+`radio-death`. Gating on severity alone would catch the *hardware* defect that
+no configuration causes and none can avoid, demanding a tick before every apply
+to that device forever, which is §6's cry-wolf failure made mandatory.
+
+#### And both acknowledgements were sticky
+
+Found while adding the new one. `runPreview` never reset `ackTraversal`: tick
+it, edit the site, preview again, and **Apply was enabled for a different set of
+changes nobody had acknowledged.** Consent to one plan carried silently to the
+next. The screen is careful that a stale preview never sits beside an enabled
+Apply — a stale *acknowledgement* is the same defect one level down, and it is
+the third time this session that a confirmation has turned out to persist past
+the thing it confirmed (§5aj was the un-adopt one).
+
+Four mutations, four failures — and two of the tests had to be fixed first. One
+asserted on the transient `busy` disable rather than the acknowledgement, so it
+passed with the reset removed; the other covered only the new toggle, so a
+mutation that reset it and left the traversal one sticky passed everything.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3605,6 +3660,17 @@ written and believed.
   it, no test — and each one reads as a harmless omission unless you already
   know about the other four. Reading a file at a time cannot find this; tracing
   one value from where it is produced to where it is checked can.
+- **A confirmation must be re-earned, every time.** Three separate ones this
+  session persisted past the thing they confirmed: the forced-removal toggle
+  (§5aj), and both acknowledgements on the apply screen (§5ao), where a tick for
+  one plan silently enabled a different one. If a screen is careful that stale
+  DATA never sits beside an enabled button, it has to be equally careful about
+  stale CONSENT.
+- **Gate on what the operator asked for, not on how bad it is.** Requiring
+  acknowledgement for every radio-death defect would have demanded a tick before
+  every apply to the reference device forever, because one of its defects is
+  unconditional hardware. The useful line is whether the configuration being
+  applied *asks* for it — a hazard you chose, versus one you merely have.
 - **Bound a remote call from the client, never with a binary on the device.**
   `timeout 5 ubus call …` printed nothing for both radios and read exactly like
   "the radios are dead" — on a device that had just come back healthy. Busybox
