@@ -19,6 +19,7 @@ const api = {
   saveWLAN: vi.fn(),
   noteForeign: vi.fn(),
   lastNeighbours: vi.fn(),
+  events: vi.fn(),
   site: vi.fn(),
   saveMesh: vi.fn(),
   deleteMesh: vi.fn(),
@@ -33,6 +34,7 @@ const api = {
   saveUplink: vi.fn(),
   deleteUplink: vi.fn(),
 }
+
 vi.mock('../lib/api', () => ({
   api,
   ApiError: class extends Error {},
@@ -54,6 +56,9 @@ api.lastNeighbours.mockResolvedValue({ ran: false })
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')
 const { DeviceClass, Devices } = await import('./Devices')
+// Dynamic, like the others: a static import evaluates the module before the
+// api mock is registered, and the factory then reads `api` in its TDZ.
+const { Logs } = await import('./Logs')
 
 const emptyFacets = { presence: [], connection: [], scope: [] }
 
@@ -726,5 +731,63 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() =>
       expect(screen.getByText(/removes the station interface/)).toBeTruthy(),
     )
+  })
+})
+
+describe('Logs', () => {
+  const ev = (over: Record<string, unknown> = {}) => ({
+    TS: 1755400000, DeviceID: null, Category: 'device', Severity: 'info',
+    Event: 'device.reachable', Detail: {}, ...over,
+  })
+
+  // Every device event carries a device_id, the API has always returned it, and
+  // the grid had no column for it — not hidden, absent. So "device.unreachable"
+  // never said which device. On a two-device lab you can guess; on a fleet the
+  // row is useless, and answering "what happened to what" is the entire job of
+  // an event log.
+  it('names the device an event is about', async () => {
+    api.devices.mockResolvedValue({
+      devices: [{ id: 7, name: 'hallway-ap', adopted: true }],
+    })
+    api.events.mockResolvedValue({
+      events: [
+        ev({ DeviceID: 7, Event: 'device.unreachable', Severity: 'warning' }),
+        ev({ DeviceID: null, Event: 'auth.login', Category: 'audit' }),
+      ],
+      total: 2, limit: 100, offset: 0,
+      facets: { category: [], severity: [] },
+    })
+    render(<Logs />)
+    await waitFor(() => expect(screen.getByText('device.unreachable')).toBeTruthy())
+    expect(screen.getByText('hallway-ap')).toBeTruthy()
+  })
+
+  // A whole serialised array of apply omissions used to land in one cell, each
+  // with a full sentence of prose. It ran off the screen and forced the table
+  // into a horizontal scrollbar. Counting is the honest summary: it says there
+  // is something to look at without pretending the cell can hold it.
+  it('summarises a list by counting it, never by dumping it', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockResolvedValue({
+      events: [
+        ev({
+          Event: 'config.apply',
+          Detail: {
+            omissions: [
+              { WLAN: 'lan', Reason: 'VLAN 1 and untagged traffic are the device’s existing LAN, which oonfeeWRT does not own and will not rewrite.' },
+              { WLAN: 'lan', Reason: 'another long sentence that has no business being in a table cell at all' },
+            ],
+          },
+        }),
+      ],
+      total: 1, limit: 100, offset: 0,
+      facets: { category: [], severity: [] },
+    })
+    render(<Logs />)
+    await waitFor(() => expect(screen.getByText('config.apply')).toBeTruthy())
+
+    expect(screen.getByText(/omissions=2 items/)).toBeTruthy()
+    // The prose must not be in the cell.
+    expect(screen.queryByText(/will not rewrite/)).toBeNull()
   })
 })

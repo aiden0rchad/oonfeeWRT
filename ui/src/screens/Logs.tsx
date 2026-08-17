@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { EventPage, EventRow } from '../lib/api'
+import type { Device, EventPage, EventRow } from '../lib/api'
 import { Banner, Card, DataGrid, FilterRail, Pager, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 
@@ -27,6 +27,9 @@ export function Logs() {
   const [page, setPage] = useState<EventPage | null>(null)
   const [err, setErr] = useState('')
   const [colPrefs, setColPrefs] = useColumnPrefs('logs')
+  // Only to turn a device id into a name. Fetched once: the log reloads every
+  // 10s and the roster does not change on that timescale.
+  const [devices, setDevices] = useState<Device[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -44,6 +47,15 @@ export function Logs() {
     const t = setInterval(load, 10_000)
     return () => clearInterval(t)
   }, [load])
+
+  useEffect(() => {
+    // A failure here costs the Device column its names, not its answers — the
+    // row falls back to the id — so it is not surfaced as an error over the log.
+    api
+      .devices()
+      .then((r) => setDevices(r.devices))
+      .catch(() => {})
+  }, [])
 
   // Changing a filter has to reset the offset. Page 4 of the unfiltered log is
   // not page 4 of the filtered one, and keeping the offset lands on an empty
@@ -81,6 +93,26 @@ export function Logs() {
       sortBy: (e) => e.Category,
     },
     { key: 'event', header: 'Event', render: (e) => e.Event, sortBy: (e) => e.Event },
+    {
+      key: 'device',
+      header: 'Device',
+      width: 150,
+      // Every device event carries a device_id, the API has always returned it,
+      // and this screen had no column for it — not hidden, absent. So
+      // "device.unreachable" never said which device. On a two-device lab you
+      // can guess; on a fleet it makes the row useless, and the whole point of
+      // an event log is answering "what happened to what".
+      render: (e) =>
+        e.DeviceID == null ? (
+          <span style={{ color: 'var(--text-muted)' }}>—</span>
+        ) : (
+          (devices.find((d) => d.id === e.DeviceID)?.name ?? `device ${e.DeviceID}`)
+        ),
+      sortBy: (e) =>
+        e.DeviceID == null
+          ? ''
+          : (devices.find((d) => d.id === e.DeviceID)?.name ?? String(e.DeviceID)),
+    },
     {
       key: 'detail',
       header: 'Detail',
@@ -163,8 +195,33 @@ function summarise(detail: unknown): string {
   const parts: string[] = []
   for (const [k, v] of Object.entries(detail as Record<string, unknown>)) {
     if (v === null || v === '' || (Array.isArray(v) && v.length === 0)) continue
-    parts.push(`${k}=${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+    parts.push(`${k}=${brief(v)}`)
     if (parts.length >= 4) break
   }
   return parts.join('  ')
+}
+
+/**
+ * One value, short enough to sit in a table cell.
+ *
+ * This used to be JSON.stringify for anything object-shaped, which put a whole
+ * serialised array of apply omissions — each with a full sentence of prose —
+ * into a single cell. It ran off the side of the screen, forced the table into
+ * a horizontal scrollbar, and was unreadable even after scrolling to it.
+ *
+ * Counting is the honest summary for a list: "3 items" tells a reader there is
+ * something to look at without pretending the cell can hold it. It must never
+ * silently drop the fact that more exists, which is why the count is the
+ * summary rather than the first element.
+ */
+function brief(v: unknown): string {
+  if (Array.isArray(v)) {
+    return `${v.length} item${v.length === 1 ? '' : 's'}`
+  }
+  if (typeof v === 'object' && v !== null) {
+    const keys = Object.keys(v as Record<string, unknown>)
+    return `{${keys.slice(0, 3).join(', ')}${keys.length > 3 ? ', …' : ''}}`
+  }
+  const s = String(v)
+  return s.length > 80 ? `${s.slice(0, 79)}…` : s
 }
