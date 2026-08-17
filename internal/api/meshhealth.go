@@ -75,8 +75,8 @@ func (s *Server) handleMeshHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(res.Links) == 0 && res.Note == "" {
-		res.Note = "no mesh backhaul is configured on any adopted device. Add a " +
-			"mesh under Mesh backhauls and apply it to see its health here"
+		res.Note = "No mesh backhaul is configured on any adopted device. Add a " +
+			"mesh under Mesh backhauls and apply it to see its health here."
 	}
 	writeJSON(w, http.StatusOK, res)
 }

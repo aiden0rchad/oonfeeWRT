@@ -104,8 +104,10 @@ func (d *Daemon) reconcileNeighboursOnce(ctx context.Context) {
 	res, err := d.DistributeNeighbours(ctx)
 	if err != nil {
 		d.Log.Warn("could not distribute 802.11k neighbour lists", "err", err)
+		d.rememberNeighbourRun(nil, err)
 		return
 	}
+	d.rememberNeighbourRun(res, nil)
 	// Only a cycle that changed something is worth a line. In the steady state
 	// this runs every fifteen minutes forever and has nothing to say, and a log
 	// that reports "0 updated" ninety-six times a day is a log nobody reads.
@@ -522,4 +524,47 @@ func (d *Daemon) nudgeNeighbours() {
 				"updated", res.Updated, "unchanged", res.Unchanged)
 		}
 	}()
+}
+
+// The last neighbour cycle, kept so the screen can show what happened without
+// making it happen.
+//
+// The card used to render nothing until an operator pressed "Distribute now" —
+// on a feature whose own description says it runs automatically every fifteen
+// minutes. So the only way to find out whether 802.11k was working was to
+// trigger it, which is not an observation, and the fifteen-minute cycles that
+// had been running all along left no trace anywhere a user looks.
+//
+// In memory rather than in the database on purpose. This is the state of a
+// process, not a fact about the fleet: after a restart the honest answer is
+// "no cycle has run since this controller started", and the first one lands
+// within fifteen minutes. Persisting it would let a stale row outlive the
+// truth it described.
+type neighbourRun struct {
+	Result *api.NeighbourResult
+	Err    string
+	At     time.Time
+}
+
+func (d *Daemon) rememberNeighbourRun(res *api.NeighbourResult, err error) {
+	d.nbrMu.Lock()
+	defer d.nbrMu.Unlock()
+	run := &neighbourRun{Result: res, At: time.Now()}
+	if err != nil {
+		run.Err = err.Error()
+	}
+	d.lastNeighbourRun = run
+}
+
+// LastNeighbourRun reports the most recent cycle, or nil when none has run
+// since start. Nil is a real answer and must not be rendered as "nothing to
+// do": it means nobody has looked yet.
+func (d *Daemon) LastNeighbourRun() (*api.NeighbourResult, string, time.Time, bool) {
+	d.nbrMu.Lock()
+	defer d.nbrMu.Unlock()
+	if d.lastNeighbourRun == nil {
+		return nil, "", time.Time{}, false
+	}
+	r := d.lastNeighbourRun
+	return r.Result, r.Err, r.At, true
 }

@@ -22,7 +22,15 @@ func (d *Daemon) routes() http.Handler {
 	d.api.Scan = d
 	d.api.Provision = d
 	d.api.Reprobe = d
-	d.api.Neighbours = d.DistributeNeighbours
+	// Wrapped rather than passed directly so a manual run is remembered too.
+	// Otherwise pressing "Distribute now" and reloading would show nothing,
+	// which is the defect this exists to fix wearing a different hat.
+	d.api.Neighbours = func(ctx context.Context) (*api.NeighbourResult, error) {
+		res, err := d.DistributeNeighbours(ctx)
+		d.rememberNeighbourRun(res, err)
+		return res, err
+	}
+	d.api.LastNeighbours = d.LastNeighbourRun
 	d.api.MeshHealth = d.MeshHealthReport
 	d.api.OnAir = d.OnAirReport
 	// Lets a poll-interval change take effect immediately: the collector holds

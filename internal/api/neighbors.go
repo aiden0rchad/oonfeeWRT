@@ -71,3 +71,33 @@ func (s *Server) handleNeighbours(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, res)
 }
+
+// handleLastNeighbours reports the most recent cycle WITHOUT running one.
+//
+// The screen had no way to ask this. It rendered nothing until an operator
+// pressed "Distribute now" — on a feature whose own description says it runs
+// automatically every fifteen minutes — so the only way to learn whether
+// 802.11k was working was to trigger it, which is not an observation. Every
+// automatic cycle that had been running all along left no trace anywhere a user
+// looks.
+func (s *Server) handleLastNeighbours(w http.ResponseWriter, r *http.Request) {
+	if s.LastNeighbours == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ran": false})
+		return
+	}
+	res, errText, at, ok := s.LastNeighbours()
+	if !ok {
+		// Not an error and not "nothing to do": no cycle has run since this
+		// controller started, and the first lands within the interval.
+		writeJSON(w, http.StatusOK, map[string]any{"ran": false})
+		return
+	}
+	out := map[string]any{"ran": true, "at": at.Unix()}
+	if errText != "" {
+		out["error"] = errText
+	}
+	if res != nil {
+		out["result"] = res
+	}
+	writeJSON(w, http.StatusOK, out)
+}

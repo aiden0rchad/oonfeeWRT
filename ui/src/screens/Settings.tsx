@@ -1393,6 +1393,15 @@ function MeshEditor({
  */
 function Neighbours({ site }: { site: Site }) {
   const [res, setRes] = useState<NeighbourResult | null>(null)
+  // What the AUTOMATIC cycle last did. The card used to show nothing until
+  // somebody pressed the button, on a feature whose own description says it
+  // runs every fifteen minutes — so the only way to learn whether 802.11k was
+  // working was to trigger it, which is not an observation.
+  const [last, setLast] = useState<{
+    ran: boolean
+    at?: number
+    error?: string
+  } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -1401,6 +1410,15 @@ function Neighbours({ site }: { site: Site }) {
   // statement of intent: the WLANs that ASKED for 802.11k, which is not the
   // same as the APs that can carry it.
   const asked = site.wlans.filter((w) => w.enabled && w.roaming.kv).map((w) => w.ssid)
+
+  useEffect(() => {
+    // Read-only: reports the last cycle, never triggers one. A card that had to
+    // run the thing to tell you about it would make observing it change it.
+    api
+      .lastNeighbours()
+      .then(setLast)
+      .catch(() => {})
+  }, [])
 
   async function run() {
     setBusy(true)
@@ -1441,6 +1459,17 @@ function Neighbours({ site }: { site: Site }) {
         </div>
       ) : (
         <Prop label="Networks">{asked.join(', ')}</Prop>
+      )}
+
+      {/* The state on arrival, before anyone presses anything. */}
+      {!res && last && asked.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+          {!last.ran
+            ? 'No cycle has run since the controller started. The first lands within 15 minutes.'
+            : last.error
+              ? `Last automatic run failed: ${last.error}`
+              : `Last automatic run ${ago(last.at ?? 0)}, with no errors.`}
+        </div>
       )}
 
       {res && (

@@ -18,6 +18,7 @@ const api = {
   devices: vi.fn(),
   saveWLAN: vi.fn(),
   noteForeign: vi.fn(),
+  lastNeighbours: vi.fn(),
   site: vi.fn(),
   saveMesh: vi.fn(),
   deleteMesh: vi.fn(),
@@ -47,6 +48,8 @@ vi.mock('../lib/live', () => ({
 // is about, which is how two unrelated Clients tests broke when the column
 // landed.
 api.devices.mockResolvedValue({ devices: [] })
+// The 802.11k card asks what the last automatic cycle did, on mount.
+api.lastNeighbours.mockResolvedValue({ ran: false })
 
 const { Clients } = await import('./Clients')
 const { Settings } = await import('./Settings')

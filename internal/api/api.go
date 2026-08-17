@@ -91,6 +91,11 @@ type Server struct {
 	// requests and still answers them with nothing, which is where this
 	// project was before the endpoint existed.
 	Neighbours func(context.Context) (*NeighbourResult, error)
+	// LastNeighbours reports the most recent distribution without running one,
+	// so the screen can show what the automatic cycle did rather than only what
+	// a button press does. The bool is false when none has run since start —
+	// which is a different answer from "nothing needed doing".
+	LastNeighbours func() (*NeighbourResult, string, time.Time, bool)
 	// MeshHealth reports what every configured backhaul is doing. Optional,
 	// and free: it reads no device.
 	MeshHealth func(context.Context) (*MeshHealthResult, error)
@@ -195,6 +200,7 @@ func (s *Server) Routes() http.Handler {
 	// any device — the controller does not touch config it did not create.
 	private.HandleFunc("POST /api/v1/devices/{id}/foreign/{section}/note", s.handleForeignNote)
 	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
+	private.HandleFunc("GET /api/v1/roaming/neighbours", s.handleLastNeighbours)
 	private.HandleFunc("GET /api/v1/site/mesh-health", s.handleMeshHealth)
 	private.HandleFunc("POST /api/v1/site/verify-on-air", s.handleOnAir)
 	// The site model (Phase 2). Editing any of this changes nothing on any

@@ -39,6 +39,11 @@ type Daemon struct {
 	Store  *store.DB
 	Keys   *secrets.Keeper
 
+	// nbrMu guards lastNeighbourRun: the most recent 802.11k cycle, kept so the
+	// screen can report what happened without making it happen.
+	nbrMu            sync.Mutex
+	lastNeighbourRun *neighbourRun
+
 	// applies tracks in-flight applies so shutdown can wait for them.
 	applies applyBarrier
 

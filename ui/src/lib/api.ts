@@ -731,6 +731,13 @@ export const api = {
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
   distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
+  /** The most recent distribution, WITHOUT running one. `ran: false` means no
+   *  cycle has completed since the controller started — not that nothing
+   *  needed doing. */
+  lastNeighbours: () =>
+    get<{ ran: boolean; at?: number; error?: string; result?: NeighbourResult }>(
+      '/roaming/neighbours',
+    ),
   meshHealth: () => get<MeshHealthResult>('/site/mesh-health'),
   saveUplink: (u: Partial<Uplink> & { id?: number }) =>
     post<{ uplink: Uplink; note: string }>(

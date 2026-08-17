@@ -1874,3 +1874,69 @@ func TestTheBriefRefusesWhenTheModeIsUnknown(t *testing.T) {
 		}
 	}
 }
+
+// The 802.11k card must be able to say what the AUTOMATIC cycle did, without
+// running one.
+//
+// It used to render nothing until an operator pressed "Distribute now" — on a
+// feature whose own description says it runs every fifteen minutes. So the only
+// way to learn whether 802.11k was working was to trigger it, which is not an
+// observation, and every automatic cycle that had been running left no trace
+// anywhere a user looks.
+func TestTheLastNeighbourCycleCanBeReadWithoutRunningOne(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	var ran int
+	h.srv.Neighbours = func(context.Context) (*NeighbourResult, error) {
+		ran++
+		return &NeighbourResult{Updated: 2, Unchanged: 1}, nil
+	}
+	var last *NeighbourResult
+	var lastAt time.Time
+	var haveLast bool
+	h.srv.LastNeighbours = func() (*NeighbourResult, string, time.Time, bool) {
+		return last, "", lastAt, haveLast
+	}
+
+	// Before any cycle: a real answer, and NOT "nothing needed doing".
+	w := h.do(http.MethodGet, "/api/v1/roaming/neighbours", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET last neighbours: %d %s", w.Code, w.Body.String())
+	}
+	var before struct {
+		Ran    bool             `json:"ran"`
+		Result *NeighbourResult `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &before); err != nil {
+		t.Fatal(err)
+	}
+	if before.Ran {
+		t.Error("reported a cycle before any had run")
+	}
+	if ran != 0 {
+		t.Fatalf("reading the last cycle TRIGGERED %d; observing it must not "+
+			"change it", ran)
+	}
+
+	// After one.
+	last, lastAt, haveLast = &NeighbourResult{Updated: 2, Unchanged: 1}, time.Now(), true
+	w = h.do(http.MethodGet, "/api/v1/roaming/neighbours", nil)
+	var after struct {
+		Ran    bool             `json:"ran"`
+		At     int64            `json:"at"`
+		Result *NeighbourResult `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Ran || after.Result == nil || after.Result.Updated != 2 {
+		t.Errorf("the completed cycle was not reported back: %+v", after)
+	}
+	if after.At == 0 {
+		t.Error("no timestamp, so the reader cannot tell a fresh run from a stale one")
+	}
+	if ran != 0 {
+		t.Errorf("reading still triggered %d cycle(s)", ran)
+	}
+}
