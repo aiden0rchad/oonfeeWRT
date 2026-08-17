@@ -549,20 +549,29 @@ Then, in order of value:
 
   | reviewed | not yet |
   |---|---|
-  | `applyengine`, `adoption`, `ubus`, `secrets`, `store` (§5ag) | **`render`** |
-  | `collector` (§5aq) | **`capability`** |
-  | `telemetry` (§5ar) | **`reconcile`** |
+  | `applyengine`, `adoption`, `ubus`, `secrets`, `store` (§5ag) | **`capability`** |
+  | `collector` (§5aq), `telemetry` (§5ar) | **`reconcile`** |
+  | `render` (§5as) | |
 
-  Start with **`render`**: it decides what is actually written to a device and
-  is the last unreviewed package on the write path. The three passes on
-  2026-08-17 produced five real defects, every one a number or a claim that
-  looked completely fine on screen.
+  Start with **`reconcile`**: it is the only package that both reads a device
+  and writes the store, and §5as left it one named question — see below. Then
+  `capability`, which decides everything `render` acts on.
 
-  **Where they were all hiding: the seam between what was ASKED and what came
-  BACK.** A refused call that leaves no entry, a flag standing in for a
+  **Where they have all been hiding: the seam between what was ASKED and what
+  came BACK.** A refused call that leaves no entry, a flag standing in for a
   freshness check, a counter whose decrease has two possible causes. Read every
   function that builds a collection by appending on success, and ask what its
-  length means when something failed.
+  length means when something failed. Four passes, nine defects, every one of
+  them there.
+
+  **One finding is already waiting for the `reconcile` pass.** `flatten` maps a
+  UCI list and a space-joined string option to the same Go value, so
+  `plan.matches` cannot tell them apart. A section holding
+  `option ports 'lan1:t lan2:t'` where UCI wants `list ports` therefore reads as
+  "already matches" and is never corrected — and that exact malformed write is
+  the one `Section.Lists` documents as having taken the LAN down after a
+  confirmed, healthy apply. Nothing writes that form today; a previous version
+  of us did.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -3881,6 +3890,157 @@ pinned by a test that fails on exactly that edit.
 
 ---
 
+### 5as. Render's first review — where the guest deleted the host's furniture
+
+**Done 2026-08-17.** `render` decides what is actually written to a device, and
+had never had a review pass. Four defects, three of them silent, and every one
+of them the same seam: **something the render did not know, spent as though it
+were something the render had decided.**
+
+#### A refused capability read deleted every interface we own
+
+`Prune` removes owned sections the render no longer produces. That is exactly
+right when the absence is a *decision* — the WLAN was deleted, the device left
+the AP group, the role changed to one that does not broadcast. It is
+catastrophic when the absence is *ignorance*.
+
+`capability.probeRadios` has two early returns that record **no radios and
+`FeatSurvey` NotObservable**: `iwinfo.devices` denied, and `getWirelessDevices`
+failing with iwinfo listing nothing to fall back on. Either one is a real stored
+`CapsJSON` — the one ACL JSON file is load-bearing, so this is a device adopted
+under a narrower ACL, not a hypothetical.
+
+From there: `radiosByBand` yields an empty map, every band lookup misses,
+nothing wireless renders, and `Prune` reads that as *the operator emptied this
+device*. It deletes every `wifi-iface` we own — the WLANs, the mesh backhaul,
+**and the wireless uplink that may be the device's only path to the network.**
+The apply reports success.
+
+This is §6's cardinal error — NotObservable collapsed into Absent — committed at
+the point of **deletion** rather than the point of probing. That is why the
+`capability` package's considerable care about it was not enough on its own: the
+distinction was preserved all the way to the last consumer, and the last
+consumer threw it away.
+
+The render *already knew*. It emits `hardware-unidentified`, whose text says in
+as many words *"this is not a clean bill of health — it means the check did not
+run"*, and then produced a plan to delete on the strength of it. Worse, that
+warning's stated remedy is **"Apply a WLAN and re-probe"** — and the apply was
+the thing doing the deleting. The advice could never work, and on a device with
+nothing owned yet no WLAN could ever be applied at all: the same chicken-and-egg
+`probeRadios` fixed for the *empty* iwinfo list was still fully present for the
+*refused* one.
+
+The same shape on the wired side: a device that did not report its port layout
+renders no VLAN, no addressing, no DHCP and no firewall zone — pruned too, on
+the config that carries the controller's own route to the device.
+
+`Doc` now carries the distinction it always had and discarded. **`Retain`** names
+exact sections a feature gate could not decide about (mesh and uplink, where the
+radio is known so the name is known); **`Blind`** names configs the render could
+not see into at all. `Prune` honours both, and the report says which sections
+survived only because a check did not run — silence there is a preview reading
+"no changes" for a device we can no longer account for.
+
+The operator-facing text was making the same claim in words: **"device has no
+2.4 GHz radio"**, printed from a refused call. That is a statement about
+hardware derived from a question nobody answered — verbatim what `probe.py` said
+about DSA.
+
+#### Two distinct networks became one on the device
+
+`name TEXT NOT NULL UNIQUE` in the schema, and `safe()` then truncated every
+name it produced to 11 characters. **"Guest Network A"** and **"Guest Network
+B"** both became `guest_netwo`, so they rendered *one* `oowrt_net_guest_netwo`,
+*one* `oowrt_dhcp_guest_netwo` and *one* `oowrt_zone_guest_netwo` between them.
+UCI keeps the last. VLAN 20 got its bridge-VLAN tagged onto the ports and
+nothing else — no gateway address, no leases, no firewall zone — with **no
+omission, no conflict and no warning**.
+
+11 characters is fw4's limit on a zone *name*. UCI section names have no such
+limit. The cap existed to stop two zones colliding past it, and applied to
+section names it produced precisely that collision. It now applies only where
+fw4 reads it, and two zone names that collapse to one are refused rather than
+merged.
+
+The test that should have caught this **asserted it instead** — *"two zones must
+not collide past fw4's 11-character cap"* written above a check that the cap was
+applied. Its loop also read `got != want && len(got) > 11`, which fails only
+when a value is both wrong *and* too long, so every wrong-but-short answer
+passed.
+
+#### Every network the product could create asked for a second zone named `lan`
+
+A zone is identified by its name, and zones were rendered once per *network*.
+Two networks sharing one produced two sections with the same name, of which the
+device keeps the last — leaving the other network in **no zone at all**, which
+in fw4 means every packet on it is dropped.
+
+Not a corner case: **the default path.** `store.SaveNetwork` stamped every
+network with zone `"lan"` and no screen ever set it. So every VLAN network asked
+for a second firewall zone named `lan` beside the device's own, carrying `input
+REJECT` and `forward REJECT`.
+
+Zones are now rendered once per zone, holding their networks as a UCI **list** —
+also the only form that can hold more than one. And the ownership rule now
+covers the namespace fw4 actually keys on: our section name would not have
+collided and the *zone* would, so a zone name the device already uses is a
+conflict rather than something to write a duplicate of. `Conflict`'s own doc
+comment always said *"a colliding name **or a conflicting function**"*; only the
+first half had ever been implemented. New networks default to a zone named after
+themselves, which is what the renderer's own fallback already assumed.
+
+#### A nil capability record panicked in the half that writes
+
+`radiosByBand`, `radioBySection` and `withLiveChannels` all check for nil.
+`renderNetwork` and `bridgeIsVLANAware` did not. Not reachable from the daemon —
+`deviceCaps` never returns a nil registry without an error — but a contract half
+a package honours is not a contract, and the half ignoring it was the half that
+decides what gets written.
+
+#### What the mutation pass cost, and caught
+
+Fifteen mutations across the four fixes, all killed — but **not on the first
+attempt, and the reason is worth keeping.** The first round used
+`git checkout <file>` to undo each mutation while the *fixes themselves were
+still uncommitted*, so every "undo" silently reverted the fix as well. Three of
+five mutations then "failed" against code that had no fix in it at all. The
+evidence looked like a clean kill sheet and meant nothing.
+
+*Mutation testing needs a known-good baseline, and `git checkout` only restores
+the last commit. Commit the fix first, or restore from a file copy.*
+
+Once the harness was honest, two mutations survived and exposed genuinely
+untested branches — the `Retain` path, and the wired blindness — both of which
+needed new tests. Three more tests exist purely to stop the fix becoming *"never
+delete anything"*: a device whose radio list was **read** and was empty still
+prunes, a device in no AP group still prunes, and a gate that decided **against**
+the device — the driver will not run a mesh point — still prunes.
+
+#### Checked and left alone
+
+- **`ReadExisting` fails closed.** A denied `uci get` returns ubus status 6 and
+  errors the whole plan; only status 4 (genuinely no such config) is skipped. The
+  read seam that would have fed `Prune` a false empty is already shut.
+- **`MobilityDomain` is derived, not stored** — every AP computes the same value
+  from (site UUID, WLAN id) with no coordination, which is the property that
+  makes fan-out ordering irrelevant.
+- **`Uplink.Validate` covers the dangling-WLAN case** before `Render` can reach
+  it, so the unreported `!found` branch in the uplink block is unreachable rather
+  than silent.
+
+#### Carried forward to the `reconcile` review
+
+`flatten` maps a UCI list and a space-joined string option to the same Go value,
+so `plan.matches` cannot tell them apart. A section holding `option ports 'lan1:t
+lan2:t'` where UCI wants `list ports` reads as **"already matches"** and is never
+corrected — and that exact malformed write is the one `Section.Lists` documents
+as having taken the LAN down *after a confirmed, healthy apply*. Nothing writes
+that form today; a previous version of us did. The fix belongs in `flatten`,
+which is where the type is discarded.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4237,6 +4397,30 @@ written and believed.
   `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
   means "not caught misbehaving", and the code, the docs and the field name all
   say so, because a future reader will otherwise round it to "verified".
+- **Mutation testing needs a COMMITTED baseline.** `git checkout <file>` restores
+  the last commit, not the state before the mutation — so undoing a mutation
+  while the fix is still uncommitted reverts the fix too, and every subsequent
+  mutation "fails" against code that never had the fix in it. That produces a
+  clean-looking kill sheet that proves nothing. Commit the fix first, or restore
+  from a file copy. Found in §5as, three mutations into a run that looked fine.
+- **Follow a three-state value all the way to its LAST consumer.** `capability`
+  is meticulous about Denied vs Absent and carries the distinction perfectly
+  into `render` — which then let `Prune` read "no sections" as "the operator
+  removed them" and delete every interface on the device. The producer being
+  careful is not the property that matters; the property that matters is that
+  nobody downstream re-collapses it. **Deletion is where the collapse costs
+  most**, because it converts a missing answer into a destroyed fact.
+- **A normalising transform that SHORTENS a name can only merge things.** A
+  uniqueness constraint upstream guarantees nothing once a renderer truncates
+  what it guaranteed. `safe()` capped names at 11 characters to prevent two
+  zones colliding and thereby collided every pair of networks sharing a prefix.
+  Ask which namespace each limit actually belongs to — fw4's zone names are
+  capped; UCI section names are not — and never apply one namespace's limit to
+  another's identifiers.
+- **When a warning tells the operator what to do, check that doing it works.**
+  `hardware-unidentified` advised "apply a WLAN and re-probe" while the apply was
+  the very thing deleting the WLAN. A mitigation string is a claim about
+  behaviour and ages exactly like code, with nothing compiling it.
 
 ---
 
