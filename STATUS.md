@@ -516,14 +516,53 @@ most-worth-doing first.
 
 ### If you are picking this up cold
 
+**State as of 2026-08-17, end of session.** Working tree clean, everything
+pushed to `origin/main`. All Go packages green, 100 UI tests green, `gofmt`
+clean, `tools/secret-scan.sh` clean. The daemon runs from a scratch build:
+
+```bash
+go build -o /tmp/oonfeewrtd ./cmd/oonfeewrtd
+/tmp/oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080 \
+  -passphrase-file ~/.oonfeewrt/passphrase
+```
+
+Sessions are in memory by design, so **every restart signs the operator out** —
+batch UI changes and restart once, or you will ask them to sign in repeatedly.
+Rebuild the UI (`npm --prefix ui run build`) before restarting or the browser
+keeps serving the old bundle.
+
+**The one long-running question is closed.** The WRT3200ACM's wedge is PMF
+(§5an): key installation fails during an 802.11r roam and the 5 GHz firmware
+stops answering 85 seconds later, taking every radio with it. Keep
+`ieee80211w=0` on Marvell. Do **not** re-run the PMF experiments — §5an explains
+why the remaining untested combination is not worth a radio.
+
 Read **§0** first (the reference hardware lies, and why), then **§6** (the
 mistakes already made and the rules that came out of them). Those two explain
 most of the decisions in the code.
 
 Then, in order of value:
 
-- **There is no open finding and no numbered item left.** Everything below is a
-  way of working rather than a task, and the yield from each has been measured.
+- **Finish the package-by-package review sweep. This is the highest-yield work
+  right now and it has a definite end.** Six packages have had a first pass;
+  three have not.
+
+  | reviewed | not yet |
+  |---|---|
+  | `applyengine`, `adoption`, `ubus`, `secrets`, `store` (§5ag) | **`render`** |
+  | `collector` (§5aq) | **`capability`** |
+  | `telemetry` (§5ar) | **`reconcile`** |
+
+  Start with **`render`**: it decides what is actually written to a device and
+  is the last unreviewed package on the write path. The three passes on
+  2026-08-17 produced five real defects, every one a number or a claim that
+  looked completely fine on screen.
+
+  **Where they were all hiding: the seam between what was ASKED and what came
+  BACK.** A refused call that leaves no entry, a flag standing in for a
+  freshness check, a counter whose decrease has two possible causes. Read every
+  function that builds a collection by appending on success, and ask what its
+  length means when something failed.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -537,12 +576,13 @@ Then, in order of value:
 - **Mutation-test every new test.** Revert the fix; if the test still passes it
   asserts nothing. Six were caught that way in two days, none by reading.
 
-**Two things need the operator, not the next session:**
+**What the operator has already done** (do not re-raise): the Archer C6's WPA
+passphrase was rotated on 2026-08-17, closing the leak from `02e99d0`. The
+WRT3200ACM was power-cycled to recover from the deliberate PMF wedge, and both
+devices are adopted, named after their models, and carrying `oonfee-roam`.
 
-1. **Rotate the Archer C6's WPA passphrase.** It was committed to this public
-   repository on 2026-08-16 (`02e99d0`, removed in `5982cec`) and must be
-   treated as compromised. `tools/secret-scan.sh` confirms nothing else leaked.
-2. **A third router** unblocks the whole remaining backlog at once — mesh
+**One thing still needs the operator, not the next session:**
+- **A third router** unblocks the whole remaining backlog at once — mesh
    `peered`, the wireless uplink, three-AP fan-out, and the first class B/C
    budget measurement. Any cheap MT7621 or ath79 box does all four.
 
