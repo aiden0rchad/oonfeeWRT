@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,4 +327,109 @@ func marker(t *testing.T, c *ubus.Client, config string) string {
 		t.Fatalf("read marker: %v", err)
 	}
 	return out.Value
+}
+
+// A clean revert of a section we ALREADY OWN must report Reverted.
+//
+// This is the shape render actually produces and the existing tests never did:
+// an OpSet carrying the WHOLE section, most of whose keys are unchanged by the
+// apply — the ownership tag above all, which a section we already own still
+// carries after a perfect revert.
+//
+// planStillApplied returned "still applied" on the first key that read back
+// equal, so it matched on the tag and reported Unknown + Stranded: the audit
+// event went out at error severity telling an operator to hand-reverse a device
+// whose config was already correct. Every apply after the first to an owned
+// section hit it — a re-key, an SSID rename, a channel change, a mesh edit.
+//
+// The cost is not the noise. It is that the engine's one alarming signal stops
+// meaning anything, so a genuinely stranded change looks like all the others.
+func TestARevertOfAnOwnedSectionIsNotStranded(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+
+	// Seed a section that already carries the ownership tag, as one written by
+	// a previous confirmed apply would.
+	_ = c.Call(ctx, "uci", "add", map[string]any{
+		"config": "oonfeewrt_probe2", "type": "probe", "name": "probe",
+		"values": map[string]string{"marker": "BASE", OwnershipTag: "1"}}, nil)
+	if err := c.Call(ctx, "uci", "commit",
+		map[string]any{"config": "oonfeewrt_probe2"}, nil); err != nil {
+		t.Fatalf("seed commit: %v", err)
+	}
+
+	boom := errors.New("ssid missing from the air")
+	res, err := fastEngine().Apply(ctx, c, Plan{
+		Timeout: 2 * time.Second,
+		Ops: []Op{{
+			Kind: OpSet, Config: "oonfeewrt_probe2", Section: "probe",
+			// The whole section, exactly as render emits it: the changed key
+			// AND the tag that cannot change.
+			Values: map[string]string{"marker": "DOOMED", OwnershipTag: "1"},
+		}},
+	}, func(context.Context, *ubus.Client) error { return boom })
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if res.Outcome != Reverted {
+		t.Errorf("a clean revert reported %s — reason: %s", res.Outcome, res.Reason)
+	}
+	if res.Stranded {
+		t.Errorf("a device that reverted perfectly was reported stranded, which "+
+			"tells an operator to go and hand-reverse correct config: %s", res.Reason)
+	}
+
+	// And the device really did revert.
+	fresh, err := c.FreshSession(ctx)
+	if err != nil {
+		t.Fatalf("fresh: %v", err)
+	}
+	defer fresh.Destroy(ctx)
+	if got := marker(t, fresh, "oonfeewrt_probe2"); got != "BASE" {
+		t.Errorf("the device holds %q; the test's premise (a clean revert) does "+
+			"not hold, so its verdict assertions prove nothing", got)
+	}
+}
+
+// The confirm-failure path must finish inside the caller's deadline.
+//
+// Both waits used to be anchored at "now": confirmPoll started its window after
+// the health check returned, and awaitRevert then waited a SECOND full window
+// after the poll had already spent the first. With the shipped constants that
+// is 90s + 105s against a 180s apply deadline — so the context expired inside
+// the wait, the fresh-session verification never ran, and a device that had
+// reverted cleanly was reported Unknown and Stranded.
+//
+// Scaled down here, with the same shape: a deadline of twice the plan timeout,
+// which the old anchoring overran and the arm-anchored one fits inside.
+func TestConfirmFailureStillReachesVerificationInsideTheDeadline(t *testing.T) {
+	c := dial(t)
+	seed(t, c, "oonfeewrt_probe", "BASE3")
+
+	e := fastEngine()
+	// Make confirm impossible: the window is spent polling, exactly as it is
+	// when rpcd restarts inside it.
+	e.ConfirmInterval = 50 * time.Millisecond
+
+	timeout := 1 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 2*timeout+e.RevertGrace)
+	defer cancel()
+
+	p := plan("oonfeewrt_probe", "DOOMED3")
+	p.Timeout = timeout
+
+	// Health passes, so the engine goes on to confirm — and confirm is what
+	// fails, because the applying session is destroyed underneath it.
+	res, err := e.Apply(ctx, c, p, func(hctx context.Context, _ *ubus.Client) error {
+		c.Destroy(hctx) // the session that alone could confirm
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.Outcome == Unknown && strings.Contains(res.Reason, "cancelled before verification") {
+		t.Fatalf("the deadline expired before the revert could be verified: %s", res.Reason)
+	}
+	t.Logf("outcome=%s stranded=%v reason=%s", res.Outcome, res.Stranded, res.Reason)
 }

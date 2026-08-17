@@ -70,6 +70,20 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 		return res, err
 	}
 
+	// What each planned option held BEFORE anything was staged.
+	//
+	// Read here, and only here, because the applier session has no delta yet —
+	// so uci.get returns committed state rather than the overlay of our own
+	// staged writes (IMPLEMENTATION §6).
+	//
+	// This exists to make the revert check able to tell the two states apart.
+	// render emits an OpSet carrying the WHOLE section, so most of its keys are
+	// unchanged by the apply — including the ownership tag, which a section we
+	// already own necessarily still has after a clean revert. Comparing every
+	// key therefore matched on one that could never have differed, and reported
+	// a device that reverted perfectly as Unknown and Stranded.
+	before := e.snapshotPlanned(ctx, applier, plan)
+
 	// ---- STAGE --------------------------------------------------------
 	// Staged only. Never commit here: uci.apply is what commits the delta
 	// together with the rollback snapshot, so committing first leaves nothing
@@ -97,6 +111,17 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	err = applier.Call(ctx, "uci", "apply", map[string]any{
 		"rollback": true, "timeout": int(timeout.Seconds()),
 	}, nil)
+	// When the DEVICE's timer started. Every later wait is measured from here.
+	//
+	// Both used to be anchored at "now": confirmPoll after the health check
+	// returned, and awaitRevert after confirmPoll had already spent the whole
+	// window. With the shipped constants that is 90s + 105s against a 180s
+	// apply deadline — so on the confirm-failure path the context expired
+	// inside the wait, the verification never ran, and a device that reverted
+	// cleanly was reported Unknown and Stranded. Anchoring at the arm time
+	// also stops the poll continuing past the point where confirm could
+	// possibly work.
+	armed := e.now()
 	if err != nil {
 		_ = e.revertStaged(ctx, applier, plan)
 		// status 6 here is NOT an authorization failure: uci.apply is globally
@@ -114,8 +139,8 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 		// Do nothing. Declining to confirm is the whole point of the ordering:
 		// the device reverts itself and we pay nothing.
 		endWindow()
-		out := e.awaitRevert(ctx, applier, plan, timeout,
-			fmt.Sprintf("health check failed: %v", healthErr))
+		out := e.awaitRevert(ctx, applier, plan, armed, timeout,
+			fmt.Sprintf("health check failed: %v", healthErr), before)
 		e.discardStaged(ctx, applier, plan)
 		out.HealthErr = healthErr
 		out.Started = res.Started
@@ -123,15 +148,15 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	}
 
 	// ---- CONFIRM (on the applying session, always) ---------------------
-	confirmErr := e.confirmPoll(ctx, applier, timeout)
+	confirmErr := e.confirmPoll(ctx, applier, armed.Add(timeout))
 	endWindow()
 	if confirmErr == nil {
 		res.Outcome = Applied
 		res.Reason = "health passed and confirm landed"
 		return res, nil
 	}
-	out := e.awaitRevert(ctx, applier, plan, timeout,
-		fmt.Sprintf("confirm never landed: %v", confirmErr))
+	out := e.awaitRevert(ctx, applier, plan, armed, timeout,
+		fmt.Sprintf("confirm never landed: %v", confirmErr), before)
 	e.discardStaged(ctx, applier, plan)
 	out.Started = res.Started
 	return out, nil
@@ -387,8 +412,7 @@ func (e *Engine) runHealth(ctx context.Context, applier *ubus.Client, health Hea
 //
 // Always on the applying session. Reconnecting the socket is fine; the token,
 // not the connection, is what confirm is bound to.
-func (e *Engine) confirmPoll(ctx context.Context, applier *ubus.Client, timeout time.Duration) error {
-	deadline := e.now().Add(timeout)
+func (e *Engine) confirmPoll(ctx context.Context, applier *ubus.Client, deadline time.Time) error {
 	var last error
 	for e.now().Before(deadline) {
 		err := applier.Call(ctx, "uci", "confirm", struct{}{}, nil)
@@ -421,17 +445,23 @@ func (e *Engine) confirmPoll(ctx context.Context, applier *ubus.Client, timeout 
 // It assumes nothing. An rpcd restart inside the window destroys the timer, so
 // "we did not confirm" does not imply "it reverted" — that is the Unknown
 // outcome, and it is the only alarming one.
-func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Plan, timeout time.Duration, reason string) Result {
+func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Plan, armed time.Time, timeout time.Duration, reason string, before preApply) Result {
 	res := Result{Started: e.now(), Reason: reason}
 
-	select {
-	case <-ctx.Done():
-		res.Outcome = Unknown
-		res.Stranded = true
-		res.Reason = reason + " (and the wait was cancelled before verification)"
-		res.Finished = e.now()
-		return res
-	case <-time.After(timeout + e.RevertGrace):
+	// What is LEFT of the device's window, not another whole one. On the
+	// confirm-failure path the poll has already spent it, so verification runs
+	// immediately instead of waiting past the caller's deadline and never
+	// running at all.
+	if wait := armed.Add(timeout + e.RevertGrace).Sub(e.now()); wait > 0 {
+		select {
+		case <-ctx.Done():
+			res.Outcome = Unknown
+			res.Stranded = true
+			res.Reason = reason + " (and the wait was cancelled before verification)"
+			res.Finished = e.now()
+			return res
+		case <-time.After(wait):
+		}
 	}
 
 	verify, err := applier.FreshSession(ctx)
@@ -450,7 +480,7 @@ func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Pla
 	// somebody else's config.
 	defer verify.Close()
 
-	stillThere, checked, checkErr := planStillApplied(ctx, verify, plan)
+	stillThere, checked, checkErr := planStillApplied(ctx, verify, plan, before)
 	res.Finished = e.now()
 	switch {
 	case checkErr == nil && !checked:
@@ -475,12 +505,74 @@ func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Pla
 	return res
 }
 
-// planStillApplied reports whether the plan's writes survive on the device.
+// preApply is what each planned option held before anything was staged, keyed
+// by config/section/option. A missing entry means the read failed; an entry
+// with found=false means the option was not there.
+type preApply map[[3]string]struct {
+	value string
+	found bool
+}
+
+// snapshotPlanned records the committed value of every option the plan will
+// write, so the revert check can tell which of them carry information.
+//
+// Errors are recorded as absence-of-entry rather than failing the apply: a
+// snapshot is an aid to the verdict, not a precondition for applying. What it
+// must not do is pretend — an option it could not read simply does not appear,
+// and planStillApplied treats that as "cannot distinguish".
+func (e *Engine) snapshotPlanned(ctx context.Context, c *ubus.Client, plan Plan) preApply {
+	out := preApply{}
+	for _, op := range plan.Ops {
+		if op.Kind == OpDelete || len(op.Values) == 0 {
+			continue
+		}
+		section := op.Section
+		if section == "" {
+			section = op.Name
+		}
+		if section == "" {
+			continue
+		}
+		for k := range op.Values {
+			var got struct {
+				Value string `json:"value"`
+			}
+			err := c.Call(ctx, "uci", "get", map[string]any{
+				"config": op.Config, "section": section, "option": k}, &got)
+			key := [3]string{op.Config, section, k}
+			if err == nil {
+				out[key] = struct {
+					value string
+					found bool
+				}{got.Value, true}
+				continue
+			}
+			var se *ubus.StatusError
+			if errors.As(err, &se) &&
+				(se.Status == ubus.StatusNotFound || se.Status == ubus.StatusNoData) {
+				out[key] = struct {
+					value string
+					found bool
+				}{"", false}
+			}
+			// Anything else: no entry, so this option cannot vote.
+		}
+	}
+	return out
+}
+
 // planStillApplied reports whether the plan's writes survive, and whether it
 // was able to check anything at all. "Nothing to check" must not read as
 // "reverted" — a plan of pure deletes leaves no value to look for, and
 // answering Reverted there is a guess wearing a verdict's clothes.
-func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan) (still, checked bool, err error) {
+//
+// Only options that can DISTINGUISH the two states are consulted. render emits
+// an OpSet carrying the whole section, so most of its keys hold the value they
+// already held — the ownership tag above all, which a section we already own
+// still has after a clean revert. Comparing those matched on a key that could
+// never have differed and reported a perfect revert as Unknown and Stranded,
+// which is the engine's one alarming signal spent on a non-event.
+func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan, before preApply) (still, checked bool, err error) {
 	for _, op := range plan.Ops {
 		if op.Kind == OpDelete || len(op.Values) == 0 {
 			continue
@@ -493,6 +585,15 @@ func planStillApplied(ctx context.Context, verify *ubus.Client, plan Plan) (stil
 			continue
 		}
 		for k, want := range op.Values {
+			// Skip options that already held the planned value: after a revert
+			// they read the same as after an apply, so they answer a different
+			// question from the one being asked. An option we could not read
+			// beforehand is skipped for the same reason — we do not know
+			// whether it distinguishes.
+			prev, known := before[[3]string{op.Config, section, k}]
+			if !known || (prev.found && prev.value == want) {
+				continue
+			}
 			var out struct {
 				Value string `json:"value"`
 			}
