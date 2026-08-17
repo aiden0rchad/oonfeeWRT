@@ -34,6 +34,7 @@ const api = {
   saveUplink: vi.fn(),
   deleteUplink: vi.fn(),
   unadopt: vi.fn(),
+  stats: vi.fn(),
 }
 
 vi.mock('../lib/api', () => ({
@@ -335,6 +336,75 @@ describe('Devices — re-probe panel', () => {
     api.device.mockResolvedValue(detail)
     api.deviceSeries.mockResolvedValue({ series: {} })
     api.overhead.mockRejectedValue(new Error('none'))
+    // Every chart on this panel renders its empty state, which is what the
+    // focused-tier test below is about.
+    api.stats.mockRejectedValue(new Error('none'))
+  })
+
+  // Channel utilization is the one chart here whose series is NOT written on
+  // every poll: it comes from iwinfo.survey, which is focused-tier only, so it
+  // is recorded while this panel is open and not otherwise.
+  //
+  // The shared empty message says "telemetry is written every five minutes",
+  // which told the operator to wait — and waiting means closing the panel,
+  // which is exactly what stops the collection. Measured on the reference
+  // device: 25 rollup buckets against 236 for a baseline series, newest an hour
+  // old with the panel shut, while the card above showed a live busy percentage
+  // read from the same radio seconds earlier.
+  it('says why the survey chart is empty, not the generic reason', async () => {
+    api.deviceSeries.mockResolvedValue({
+      series: { chan_busy_pct: ['phy0-ap0'], ap_airtime_pct: ['phy0-ap0'] },
+    })
+    await openPanel()
+
+    await waitFor(() =>
+      expect(screen.getByText(/recorded only while this panel is open/)).toBeTruthy(),
+    )
+    // And it must not repeat the advice that cannot work.
+    const note = screen.getByText(/recorded only while this panel is open/)
+    expect(note.textContent).toMatch(/waiting with it closed will not fill this in/i)
+  })
+
+  // BSS load runs on every poll and was charted nowhere — 189 rollup buckets
+  // unused, while the card above showed a live percentage from the same field.
+  // It is also what hostapd advertises to clients, so it is the figure they act
+  // on when deciding whether to roam.
+  it('charts the utilization series that is recorded on every poll', async () => {
+    api.deviceSeries.mockResolvedValue({
+      series: { chan_busy_pct: ['phy0-ap0'], ap_airtime_pct: ['phy0-ap0'] },
+    })
+    await openPanel()
+
+    await waitFor(() =>
+      expect(screen.getByText(/as hostapd advertises it to clients/)).toBeTruthy(),
+    )
+    // Both are drawn, and each says what it measures: they agree to within 1.6
+    // points on average but diverge by up to 16 in a single bucket, so neither
+    // substitutes for the other and a reader must be able to tell them apart.
+    expect(screen.getByText(/Channel utilization — phy0/)).toBeTruthy()
+    expect(screen.getByText(/Channel occupancy \(survey\) — phy0/)).toBeTruthy()
+  })
+
+  // Both quantities belong to the RADIO, and both sources report them per
+  // interface, so a radio carrying two SSIDs produced two identical series and
+  // the panel drew each chart twice — four on the Archer C6, two of them
+  // duplicates to the decimal.
+  it('draws one chart per radio, not one per BSS', async () => {
+    api.deviceSeries.mockResolvedValue({
+      series: {
+        ap_airtime_pct: ['phy0-ap0', 'phy0-ap1', 'phy1-ap0', 'phy1-ap1'],
+        chan_busy_pct: ['phy0-ap0', 'phy0-ap1', 'phy1-ap0', 'phy1-ap1'],
+      },
+    })
+    await openPanel()
+
+    await waitFor(() =>
+      expect(screen.getAllByText(/Channel utilization — phy/).length).toBe(2),
+    )
+    expect(screen.getAllByText(/Channel occupancy \(survey\) — phy/).length).toBe(2)
+    // Named by radio, so nothing implies the reading belongs to one SSID.
+    expect(screen.getByText(/Channel utilization — phy0$/)).toBeTruthy()
+    expect(screen.getByText(/Channel utilization — phy1$/)).toBeTruthy()
   })
 
   async function openPanel() {

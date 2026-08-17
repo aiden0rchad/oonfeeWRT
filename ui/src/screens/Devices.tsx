@@ -382,15 +382,64 @@ function DeviceDetailPanel({
           colour="var(--series-1)"
         />
       )}
-      {series['chan_busy_pct']?.map((radio) => (
+      {/* Two utilization charts per radio, from two sources, because they are
+          two measurements and only one of them has history.
+
+          BSS load comes from hostapd.get_status, which runs on EVERY poll, so
+          it is the one with a continuous line — and it is the figure hostapd
+          advertises in its beacons, so it is what clients actually act on when
+          deciding whether to roam. It was recorded on every poll and charted
+          nowhere: 189 buckets sitting unused while the panel showed a live
+          percentage from the same field in the card above.
+
+          The survey figure is the driver's own channel occupancy and is finer,
+          but iwinfo.survey is focused-tier only, so it is recorded while this
+          panel is open and not otherwise. Measured on the reference device: 31
+          buckets against 189, and the newest an hour old with the panel shut.
+          Its empty message has to say that — the shared one ("telemetry is
+          written every five minutes") told the operator to wait, and waiting
+          means closing the panel, which is the one thing that guarantees it
+          stays empty. Confirmed by opening the panel and watching a bucket
+          appear.
+
+          They agree closely but are NOT interchangeable — measured over paired
+          buckets on both devices, the means are within 1.6 points while single
+          buckets diverge by up to 16 on a busy 2.4 GHz radio. Neither is
+          therefore a substitute for the other, which is why both are drawn.
+
+          One chart per RADIO, not per BSS. Both quantities are properties of
+          the radio, and both sources report them per interface, so a device
+          with two SSIDs on a radio produced two identical series and the panel
+          drew the same chart twice — four charts on the Archer C6, two of them
+          duplicates to the decimal. */}
+      {oneKeyPerRadio(series['ap_airtime_pct']).map((iface) => (
         <ChartBlock
-          key={radio}
-          title={`Channel utilization — ${radio}`}
+          key={`bss-${iface}`}
+          title={`Channel utilization — ${radioOf(iface)}`}
           deviceID={id}
-          kind="chan_busy_pct"
-          seriesKey={radio}
+          kind="ap_airtime_pct"
+          seriesKey={iface}
           format={fmt.percent}
           colour="var(--series-3)"
+          note="BSS load, as hostapd advertises it to clients"
+        />
+      ))}
+      {oneKeyPerRadio(series['chan_busy_pct']).map((iface) => (
+        <ChartBlock
+          key={`survey-${iface}`}
+          title={`Channel occupancy (survey) — ${radioOf(iface)}`}
+          deviceID={id}
+          kind="chan_busy_pct"
+          seriesKey={iface}
+          format={fmt.percent}
+          colour="var(--series-5)"
+          note="the driver's own busy/active ratio, read only while this panel is open"
+          emptyNote={
+            'Nothing in this window. The survey this comes from is too ' +
+            'expensive for the idle budget, so it is recorded only while this ' +
+            'panel is open. Leave it open — waiting with it closed will not ' +
+            'fill this in. The chart above is recorded continuously.'
+          }
         />
       ))}
       <ChartBlock
@@ -648,6 +697,35 @@ function formatBytes(n: number): string {
   return `${n.toFixed(i === 0 ? 0 : 1)} ${u[i]}`
 }
 
+/** The radio an AP interface belongs to: "phy0-ap1" → "phy0". */
+function radioOf(iface: string): string {
+  const cut = iface.indexOf('-')
+  return cut > 0 ? iface.slice(0, cut) : iface
+}
+
+/**
+ * One series key per radio, in the order given.
+ *
+ * Channel utilization and BSS load are properties of the RADIO, and both
+ * hostapd and iwinfo report them per interface — so a radio carrying two SSIDs
+ * yields two series holding the same numbers. Measured on the Archer C6:
+ * phy0-ap0 and phy0-ap1 agreed to the decimal across every paired bucket. The
+ * panel drew both, so a two-SSID device showed each chart twice.
+ *
+ * Keeping the FIRST key rather than merging them: they are not two readings to
+ * reconcile, they are one reading reported twice, and picking one is honest
+ * about that in a way averaging would not be.
+ */
+function oneKeyPerRadio(keys: string[] | undefined): string[] {
+  const seen = new Set<string>()
+  return (keys ?? []).filter((k) => {
+    const radio = radioOf(k)
+    if (seen.has(radio)) return false
+    seen.add(radio)
+    return true
+  })
+}
+
 function ChartBlock({
   title,
   deviceID,
@@ -655,6 +733,8 @@ function ChartBlock({
   seriesKey,
   format,
   colour,
+  note,
+  emptyNote,
 }: {
   title: string
   deviceID: number
@@ -662,6 +742,10 @@ function ChartBlock({
   seriesKey: string
   format: (v: number) => string
   colour: string
+  /** What this series actually measures, when the title alone would let two
+   *  charts of the same quantity be mistaken for each other. */
+  note?: string
+  emptyNote?: string
 }) {
   const [data, setData] = useState<Series | null>(null)
   const [range, setRange] = useState<1 | 24 | 168>(1)
@@ -695,6 +779,11 @@ function ChartBlock({
           marginBottom: 6,
         }}
       >
+        {/* Title alone on this row. The note went here first and wrapped mid
+            phrase into the 1h/1D/1W buttons — this is a flex row with
+            space-between, so a sentence in it squeezes them. It belongs with
+            the resolution footnote, which is the same kind of fact about the
+            series. */}
         <span style={{ fontSize: 12, fontWeight: 600 }}>{title}</span>
         <span style={{ display: 'flex', gap: 4 }}>
           {([1, 24, 168] as const).map((h) => (
@@ -724,6 +813,8 @@ function ChartBlock({
         height={140}
         resolution={data?.resolution}
         window={window}
+        note={note}
+        emptyNote={emptyNote}
       />
     </div>
   )

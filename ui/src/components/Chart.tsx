@@ -28,6 +28,8 @@ export function TimeChart({
   colour = 'var(--series-1)',
   resolution,
   window,
+  note,
+  emptyNote,
 }: {
   points: Point[]
   label: string
@@ -37,6 +39,20 @@ export function TimeChart({
   resolution?: string
   /** The requested [from, to] in unix seconds. */
   window?: [number, number]
+  /** What this series measures, when two charts of the same quantity from
+   *  different sources sit next to each other and the title cannot say it
+   *  without becoming a sentence. Rendered with the resolution rather than in
+   *  the title row, which is a flex row whose buttons a sentence squeezes. */
+  note?: string
+  /** What to say when there is nothing to draw.
+   *
+   *  The default explains the ordinary case — a series that is recorded on
+   *  every poll and has not had five minutes yet. It is WRONG for a series
+   *  collected only in the focused tier, where waiting is precisely the thing
+   *  that does not help: the operator would close the panel to wait, and
+   *  closing it is what stops the collection. Any chart whose series is not
+   *  written on every baseline poll has to say so itself. */
+  emptyNote?: string
 }) {
   const host = useRef<HTMLDivElement>(null)
   const plot = useRef<uPlot | null>(null)
@@ -115,20 +131,42 @@ export function TimeChart({
     }
   }, [points, label, format, height, colour, window])
 
+  // Below the chart in BOTH states, deliberately. The note is what tells two
+  // charts of the same quantity apart, and an empty one is exactly when that
+  // matters most — "why is this one blank and the one above it not?" is a
+  // question only the note answers.
+  const footnote = (resolution || note) && (
+    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+      {note}
+      {note && resolution && points.length > 0 && ' · '}
+      {resolution && points.length > 0 && (
+        <>
+          {resolution === '1h' ? 'hourly' : '5-minute'} rollup · shaded band is
+          min/max within each bucket
+        </>
+      )}
+    </div>
+  )
+
   if (points.length === 0) {
     return (
-      <div
-        style={{
-          height,
-          display: 'grid',
-          placeItems: 'center',
-          color: 'var(--text-muted)',
-          fontSize: 12,
-          border: '1px dashed var(--border)',
-          borderRadius: 6,
-        }}
-      >
-        No data yet — telemetry is written every five minutes
+      <div>
+        <div
+          style={{
+            height,
+            display: 'grid',
+            placeItems: 'center',
+            color: 'var(--text-muted)',
+            fontSize: 12,
+            border: '1px dashed var(--border)',
+            borderRadius: 6,
+            padding: '0 12px',
+            textAlign: 'center',
+          }}
+        >
+          {emptyNote ?? 'No data yet — telemetry is written every five minutes'}
+        </div>
+        {footnote}
       </div>
     )
   }
@@ -136,12 +174,7 @@ export function TimeChart({
   return (
     <div>
       <div ref={host} />
-      {resolution && (
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-          {resolution === '1h' ? 'hourly' : '5-minute'} rollup · shaded band is
-          min/max within each bucket
-        </div>
-      )}
+      {footnote}
     </div>
   )
 }
