@@ -16,6 +16,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 const api = {
   clients: vi.fn(),
   devices: vi.fn(),
+  saveWLAN: vi.fn(),
   site: vi.fn(),
   saveMesh: vi.fn(),
   deleteMesh: vi.fn(),
@@ -641,7 +642,7 @@ describe('Settings — wireless uplinks', () => {
   // cannot do it, with nowhere to do so.
   it('lets PMF be changed, and hides it where WPA3 mandates it', async () => {
     api.site.mockResolvedValue({ ...base, wlans: [wlan({ security_mode: 'psk2' })] })
-    api.saveWLAN = vi.fn().mockResolvedValue({})
+    api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
     await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
 
