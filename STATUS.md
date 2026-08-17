@@ -3515,12 +3515,38 @@ takes every radio on the box with it → power cycle.**
 passed harmlessly with PMF off — but it **is** the failing step when PMF is on.
 Both readings of the earlier evidence were half right.
 
+#### It isolates further than expected: keep 802.11r
+
+The evidence already collected answers a second question, and the answer is
+useful rather than merely tidy. §5aa guessed that "disabling PMF **and** fast
+transition on this hardware is worth trying". Only one of those is needed.
+
+At **06:29**, with PMF **off**, a fast-transition roam onto phy0 logged the
+identical `nl80211: kernel reports: key addition failed`. The device then ran
+**another ten hours** with zero firmware timeouts. The first `MEMAddrAccess` in
+the whole buffer is at 16:42:36 — after PMF went on.
+
+| | measured? | outcome |
+|---|---|---|
+| 802.11r FT, PMF **off** | yes | key-install failure, **no wedge**, 10h+ clean after |
+| 802.11r FT, PMF **on** | yes | **wedge in 85s** |
+| PMF on, 802.11r **off** | **no** | unknown |
+
+So **fast roaming is what exposes the defect, not what causes it.** An operator
+told only "turn off PMF" might reasonably turn off 802.11r as well and lose
+seamless handover for nothing. The mitigation now says to keep it, and names the
+one cell of that table nobody has filled in — which is the honest way to state a
+result that isolated one variable and not the other.
+
 **What shipped as a result.** The registry entry for
 `mwlwifi-80211w-unsupported` moves from `ConfDeviceDoc` to **`ConfMeasuredHere`**
-and carries the reproduction and the 85-second figure. Every oonfeeWRT user with
-Marvell hardware now gets a warning backed by a measurement instead of a
-repeated wiki line — which is what that whole registry was built for. A test
-pins the confidence so a rewording cannot quietly demote it to hearsay again.
+and carries the reproduction, the 85-second figure, and the keep-802.11r
+guidance. Every oonfeeWRT user with Marvell hardware now gets a warning backed
+by a measurement instead of a repeated wiki line — which is what that whole
+registry was built for. A test pins the confidence and severity so a rewording
+cannot quietly demote it to hearsay again. The prose itself is deliberately
+**not** asserted on: a test that pins wording breaks on every improvement to it
+and protects nothing that matters.
 
 **Left safe.** The WRT's stored config was set back to `ieee80211w=0` over SSH —
 a file write, no phy0 contact — so its next boot comes up clean; the C6 was

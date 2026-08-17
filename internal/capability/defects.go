@@ -142,7 +142,15 @@ var knownDefects = []Defect{
 			"not overridable. So turning it off here turns it off for every AP " +
 			"carrying this WLAN — if the others are healthy, not publishing it on " +
 			"this one keeps them protected. Note also that WPA3/SAE requires PMF, " +
-			"so this hardware cannot run WPA3 at all.",
+			"so this hardware cannot run WPA3 at all. " +
+			"KEEP 802.11r: fast roaming is what exposes this, but it is not what " +
+			"breaks it. The same device ran 14h50m with 802.11r on and PMF off, " +
+			"through fast-transition roams that logged the identical \"key " +
+			"addition failed\" line, and stayed up — the firmware only died once " +
+			"PMF was added. Turning off fast roaming instead would cost you " +
+			"seamless handover and would not be the fix. (Not measured: PMF on " +
+			"with 802.11r off. If you need PMF on this hardware, that is the " +
+			"experiment to run, and it has not been.)",
 		Triggers: func(v map[string]string) bool {
 			return v["ieee80211w"] != "" && v["ieee80211w"] != "0"
 		},
