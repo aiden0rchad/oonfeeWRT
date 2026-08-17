@@ -110,8 +110,14 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		},
 		// Says plainly why most rows have no RF data, so the UI can explain it
 		// rather than leaving a column mysteriously empty.
-		"note": "signal and retry data come from the focused poll tier, so they " +
-			"are present only for devices a screen is currently watching",
+		//
+		// Names every column it covers. It listed only signal and retry until
+		// the access-point column was added and not added here, and an empty
+		// column beside an explanation that does not mention it reads as a
+		// column that is broken — which is how it was first reported.
+		"note": "which access point a client is on, along with its signal and " +
+			"retry rate, comes from the focused poll tier, so all three are " +
+			"present only for devices a screen is currently watching",
 		// The scoping caveat, in the response rather than only in the UI, so an
 		// API consumer gets it too.
 		"scope_note": "clients are scoped by which of the device's own IPv4 " +
