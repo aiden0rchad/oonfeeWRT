@@ -235,10 +235,6 @@ export function Unadopt({
       </Card>
 
       {err && <Banner tone="critical">{err}</Banner>}
-      {/* A hard failure never produces a result, so without this the only way
-          past a refused SSH connection — a changed host key, a dead address, a
-          wrong password — is to give up. */}
-      {err && forceBlock}
 
       <Card title="Device administrator credential">
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
@@ -285,6 +281,15 @@ export function Unadopt({
           Cancel
         </Button>
       </div>
+      {/* Last, deliberately. A hard failure never produces a result, so without
+          this the only way past a refused SSH connection — a changed host key,
+          a dead address, a wrong password — is to give up. But it sits BELOW
+          the credential form and the ordinary buttons, because the commonest
+          reason to be here is a typo in the password, and an escape hatch
+          offered above the retry is an invitation to abandon a device that was
+          one keystroke from being cleaned properly. */}
+      {err && forceBlock}
+
       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         “Revert config only” hands the settings back and leaves the login and
         ACL file in place, listed so you can delete them by hand. Use it when
