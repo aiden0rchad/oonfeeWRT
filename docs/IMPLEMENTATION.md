@@ -1116,11 +1116,14 @@ found three things in the first hour, each invisible to a mock.
 | prune after deleting the WLAN | both our sections removed, the human's kept |
 | preview once converged | 0 changes |
 
-The proof's "three APs" remains unmet for want of a second and third device —
-the fan-out is across two bands of one AP. That is the same open hardware item
-`STATUS.md` already tracks, and nothing in the pipeline is per-device: the
-render is driven by group membership, and the mobility domain is derived rather
-than coordinated precisely so that adding an AP needs no new mechanism.
+The proof's "three APs" remains unmet for want of a **third** device. The
+fan-out has since been run across **two** APs and four radios — a second device
+was adopted 2026-08-16 — so what is unverified is the step from two to three,
+not the idea of fanning out at all. That is the same open hardware item
+`STATUS.md` and the README's not-tested table both track, and nothing in the
+pipeline is per-device: the render is driven by group membership, and the
+mobility domain is derived rather than coordinated precisely so that adding an
+AP needs no new mechanism.
 
 ### Networks on the device, and the limit that stops them (measured 2026-08-14)
 

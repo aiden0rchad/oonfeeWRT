@@ -85,6 +85,14 @@ Everything before this was a nicer LuCI. This is where it becomes a controller.
 across two bands each, with no manual per-device work, and a hand-edited LuCI
 section elsewhere on those devices is untouched.
 
+> **Status: met for TWO APs, not three.** Everything in the proof has been run
+> on real hardware across two devices and four radios — including the untouched
+> hand-edited section. The "three" is unmet purely for want of a third device;
+> see the not-tested table in the README. Nothing in the pipeline is per-device
+> — the render is driven by group membership and the mobility domain is derived
+> rather than coordinated, precisely so that adding an AP needs no new mechanism
+> — but that is a reason to expect it to work, not evidence that it does.
+
 ---
 
 ## Phase 3 — Networks, zones, policy

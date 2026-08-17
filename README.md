@@ -80,8 +80,40 @@ One screen where you define a **site** — networks, VLANs, WiFi, firewall zones
 and it reconciles onto every OpenWrt device you've pointed it at. Plus the live
 view UniFi is loved for: topology, clients, radios, traffic, logs.
 
-Change an SSID password once. It lands on three APs across two bands each,
+Change an SSID password once. It lands on every AP across two bands each,
 correctly, with automatic rollback if anything goes wrong. That's the product.
+
+---
+
+## What is NOT tested yet
+
+Stated up front rather than discovered later. Everything below is **built and
+unit-tested, and has never run on the hardware it is for** — because the lab has
+exactly two devices: a Linksys WRT3200ACM and a TP-Link Archer C6 v2.
+
+Nothing here is known to be broken. It is unverified, which is a different claim,
+and this project's whole position is that those two must not be blurred.
+
+| Feature | The claim nobody has checked | What would settle it |
+|---|---|---|
+| **Mesh `peered`** | that two nodes find each other and the backhaul carries traffic | a second *mesh-capable* device — only one of these two is: the WRT advertises mesh support and its driver then refuses to bring the interface up, which is one of the defects the controller warns about |
+| **Wireless uplink** | that a station associates and bridges | a device whose radio runs station mode — measured, *neither* of the two here does |
+| **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
+| **Class B / C device budget** | the CPU and RAM figures in [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
+| **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
+
+The budget row is the one worth not lumping in with the others: an ath79 or
+ipq40xx box closes the first three and leaves it exactly where it is, because
+**class C sets the budget** and every measured figure in `DEVICE-BUDGET.md` comes
+from the roomiest class.
+
+**What HAS been verified on real hardware** — adoption and clean un-adoption,
+apply with armed rollback, 802.11r/k roaming across two APs, capability probing
+and the driver-defect warnings, telemetry and the whole UI. Plus one thing
+learned the hard way: on Marvell hardware, PMF (`ieee80211w`) kills the 5 GHz
+radio within ~90 seconds of a fast-transition roam and needs a physical power
+cycle. The controller warns before it lets you do that, with the measurement
+attached.
 
 ---
 
