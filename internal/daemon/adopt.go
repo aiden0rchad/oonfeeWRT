@@ -409,6 +409,9 @@ func (d *Daemon) deleteDevice(ctx context.Context, id int64) error {
 	if err := d.Store.ForgetOwned(ctx, id); err != nil {
 		return fmt.Errorf("daemon: forget ownership claims for device %d: %w", id, err)
 	}
+	if err := d.Store.ForgetForeignNotes(ctx, id); err != nil {
+		return fmt.Errorf("daemon: forget foreign notes for device %d: %w", id, err)
+	}
 	if err := d.Store.SweepOrphans(ctx); err != nil {
 		d.Log.Error("could not sweep telemetry of the removed device", "err", err)
 	}

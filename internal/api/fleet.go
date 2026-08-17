@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -155,6 +156,11 @@ type broadcastView struct {
 	// Section is the wifi-iface that created this interface, when the device
 	// said. Shown because it is what an operator needs to act on it.
 	Section string `json:"section,omitempty"`
+	// Brief is what it would take to bring a foreign SSID under management,
+	// and what that would cost. Present only for foreign sections, because it
+	// is the only case where the question arises.
+	Brief *foreignSection `json:"brief,omitempty"`
+
 	// Origin is decided from the SECTION, not from the SSID.
 	//
 	// It was decided by SSID for exactly one hour, and that was wrong in a way
@@ -258,6 +264,9 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 				sectionsKnown = false
 				s.Log.Debug("could not read ownership claims", "device", id, "err", err)
 			}
+			modes, modesKnown := s.Fleet.IfaceModes(id)
+			notes, _ := s.Store.ForeignNotes(ctx, id)
+			elsewhere := s.wouldAlsoBroadcast(ctx, id)
 			for _, ap := range aps {
 				if ap.SSID == "" {
 					continue
@@ -273,6 +282,13 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 							v.Origin = ProvForeign
 						}
 					}
+				}
+				if v.Origin == ProvForeign {
+					brief := buildBrief(v, modes[ap.Iface], modesKnown, elsewhere)
+					if n, ok := notes[v.Section]; ok {
+						brief.Note, brief.DecidedBy, brief.DecidedAt = n.Note, n.DecidedBy, n.DecidedAt
+					}
+					v.Brief = &brief
 				}
 				detail.Broadcasting = append(detail.Broadcasting, v)
 			}
@@ -644,4 +660,51 @@ func (s *Server) liveClientCount(deviceID int64) (int, bool) {
 		return 0, false
 	}
 	return s.Fleet.LiveClients(deviceID)
+}
+
+// wouldAlsoBroadcast names the OTHER devices that would start transmitting a
+// WLAN recreated on this device's groups.
+//
+// The site model has no per-device WLANs: a WLAN belongs to an AP group and
+// fans out to every device in it. Recreating a foreign SSID therefore does not
+// bring one network under management — it starts that network on every other AP
+// in the group. Named as devices rather than as a group, because "all-aps"
+// reads as a label and "wrt3200acm would start broadcasting it" reads as a
+// consequence.
+func (s *Server) wouldAlsoBroadcast(ctx context.Context, deviceID int64) []string {
+	site, err := s.Store.Site(ctx)
+	if err != nil {
+		return nil
+	}
+	devs, err := s.Store.Devices(ctx)
+	if err != nil {
+		return nil
+	}
+	nameOf := map[int64]string{}
+	for _, d := range devs {
+		nameOf[d.ID] = d.Name
+	}
+	seen := map[int64]bool{}
+	var out []string
+	for _, g := range site.Groups {
+		var carries bool
+		for _, member := range g.DeviceIDs {
+			if member == deviceID {
+				carries = true
+			}
+		}
+		if !carries {
+			continue
+		}
+		for _, member := range g.DeviceIDs {
+			if member == deviceID || seen[member] {
+				continue
+			}
+			seen[member] = true
+			if n := nameOf[member]; n != "" {
+				out = append(out, n)
+			}
+		}
+	}
+	return sortedNames(out)
 }

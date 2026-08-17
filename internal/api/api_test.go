@@ -38,6 +38,16 @@ type stubFleet struct {
 	// sections maps a device's interfaces to their UCI wifi-iface sections.
 	// Absent means no poll has read it, which must not read as "foreign".
 	sections map[int64]map[string]string
+	// modes is each interface's configured mode. Absent means no poll has read
+	// it, which must never be taken as "they are all APs".
+	modes map[int64]map[string]string
+}
+
+func (f *stubFleet) IfaceModes(id int64) (map[string]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.modes[id]
+	return v, ok
 }
 
 func (f *stubFleet) IfaceSections(id int64) (map[string]string, bool) {
@@ -1724,5 +1734,143 @@ func TestDeviceDetailSeparatesNoBSSFromNotLookedAt(t *testing.T) {
 	}
 	if detail.BroadcastKnown {
 		t.Error("no poll has looked, but the empty list was reported as known")
+	}
+}
+
+// The brief must never carry the operator's passphrase, and that must be
+// provable rather than asserted.
+//
+// Marshals the WHOLE device-detail response and searches the bytes for the real
+// lab passphrase. A field-by-field check would pass on a payload that leaked it
+// through some field nobody thought to look at.
+func TestTheTakeoverBriefNeverCarriesThePassphrase(t *testing.T) {
+	const labKey = "cugVNxnLne9bwYYYaT9k" // the C6's actual key, read from uci
+
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-c6", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
+	}}
+	h.fleet.sections = map[int64]map[string]string{dev.ID: {"phy0-ap0": "default_radio0"}}
+	h.fleet.modes = map[int64]map[string]string{dev.ID: {"phy0-ap0": "ap"}}
+	h.fleet.mu.Unlock()
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), labKey) {
+		t.Fatal("the response carries the foreign network's passphrase")
+	}
+	// And nothing that would let one be added later without noticing.
+	if strings.Contains(strings.ToLower(w.Body.String()), `"key"`) {
+		t.Error("the response has a \"key\" field; the brief must have nowhere " +
+			"for a passphrase to live")
+	}
+
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	var brief *foreignSection
+	for _, b := range detail.Broadcasting {
+		if b.Brief != nil {
+			brief = b.Brief
+		}
+	}
+	if brief == nil {
+		t.Fatal("no brief for a foreign section")
+	}
+	if !brief.SafeToDisable || len(brief.Recipe) == 0 {
+		t.Fatalf("a plain AP got no recipe: %+v", brief)
+	}
+	// The reload is the step that actually takes the BSS off the air. A recipe
+	// that stops at `uci commit` leaves someone believing an SSID is gone while
+	// it keeps transmitting.
+	var reloads bool
+	for _, step := range brief.Recipe {
+		if strings.Contains(step, "wifi reload") {
+			reloads = true
+		}
+	}
+	if !reloads {
+		t.Errorf("the recipe never reloads wifi, so it would not take the BSS "+
+			"off the air: %v", brief.Recipe)
+	}
+}
+
+// A section that is not a plain access point must get no disable instructions
+// at all. It may be the only way the device reaches the network, and the
+// controller cannot tell from here.
+func TestTheBriefRefusesToAdviseDisablingANonAP(t *testing.T) {
+	for _, mode := range []string{"sta", "mesh"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHarness(t)
+			h.setup()
+			dev := h.seedDevice("ap-repeater", true, nil)
+
+			h.fleet.mu.Lock()
+			h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+				{Iface: "phy0-sta0", SSID: "upstream-wisp", BSSID: "aa:bb:cc:00:00:07"},
+			}}
+			h.fleet.sections = map[int64]map[string]string{dev.ID: {"phy0-sta0": "wwan"}}
+			h.fleet.modes = map[int64]map[string]string{dev.ID: {"phy0-sta0": mode}}
+			h.fleet.mu.Unlock()
+
+			w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("device detail: %d", w.Code)
+			}
+			var detail deviceDetail
+			if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+				t.Fatal(err)
+			}
+			for _, b := range detail.Broadcasting {
+				if b.Brief == nil {
+					continue
+				}
+				if b.Brief.SafeToDisable {
+					t.Errorf("%s mode was marked safe to disable", mode)
+				}
+				if len(b.Brief.Recipe) != 0 {
+					t.Errorf("instructions offered for a %s interface, which "+
+						"may be the device's only path to the network: %v",
+						mode, b.Brief.Recipe)
+				}
+				if b.Brief.Refusal == "" {
+					t.Error("refused without saying why")
+				}
+			}
+		})
+	}
+}
+
+// An unknown mode must be refused too. "No poll has read it" is not "it is an
+// access point", and guessing wrong here costs someone their device.
+func TestTheBriefRefusesWhenTheModeIsUnknown(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-unread", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "mystery", BSSID: "aa:bb:cc:00:00:08"},
+	}}
+	h.fleet.sections = map[int64]map[string]string{dev.ID: {"phy0-ap0": "default_radio0"}}
+	h.fleet.modes = nil // getWirelessDevices never answered
+	h.fleet.mu.Unlock()
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range detail.Broadcasting {
+		if b.Brief != nil && b.Brief.SafeToDisable {
+			t.Error("advised disabling an interface whose mode was never read")
+		}
 	}
 }

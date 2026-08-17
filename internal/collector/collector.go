@@ -467,6 +467,28 @@ func (c *Collector) IfaceSections(deviceID int64) (map[string]string, bool) {
 	return out, true
 }
 
+// IfaceModes is each wireless interface's CONFIGURED mode. False means no poll
+// has read it, which must not be taken as "everything is an AP" by anything
+// that would then advise an operator to disable it.
+func (c *Collector) IfaceModes(deviceID int64) (map[string]string, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ifaceModes == nil {
+		return nil, false
+	}
+	out := make(map[string]string, len(p.ifaceModes))
+	for k, v := range p.ifaceModes {
+		out[k] = v
+	}
+	return out, true
+}
+
 func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]

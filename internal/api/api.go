@@ -57,6 +57,10 @@ type Fleet interface {
 	// created each. False means no poll has read it — never "none have one".
 	IfaceSections(deviceID int64) (map[string]string, bool)
 
+	// IfaceModes is each wireless interface's configured mode. False means no
+	// poll has read it, never "they are all APs".
+	IfaceModes(deviceID int64) (map[string]string, bool)
+
 	// LiveClients reports the most recent associated-station count for a
 	// device, and whether it is known at all.
 	//
@@ -187,6 +191,9 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
+	// Records a DECISION about a foreign wireless section. Writes nothing to
+	// any device — the controller does not touch config it did not create.
+	private.HandleFunc("POST /api/v1/devices/{id}/foreign/{section}/note", s.handleForeignNote)
 	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
 	private.HandleFunc("GET /api/v1/site/mesh-health", s.handleMeshHealth)
 	private.HandleFunc("POST /api/v1/site/verify-on-air", s.handleOnAir)

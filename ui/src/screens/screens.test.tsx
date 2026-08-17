@@ -17,6 +17,7 @@ const api = {
   clients: vi.fn(),
   devices: vi.fn(),
   saveWLAN: vi.fn(),
+  noteForeign: vi.fn(),
   site: vi.fn(),
   saveMesh: vi.fn(),
   deleteMesh: vi.fn(),

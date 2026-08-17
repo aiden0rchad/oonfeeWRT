@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../lib/api'
 import type {
-  CapEffect, Device, DeviceDetail, OverheadReport, Point, ReprobeResult, Series,
+  Broadcast, CapEffect, Device, DeviceDetail, OverheadReport, Point,
+  ReprobeResult, Series,
 } from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
@@ -310,13 +311,11 @@ function DeviceDetailPanel({
                     not already suspicious, and this is the sentence that
                     explains why a button to change it does not exist. */}
                 {originOf.get(ap.iface)?.origin === 'foreign' && (
-                  <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
-                    oonfeeWRT did not create this network — it is section{' '}
-                    <code>{originOf.get(ap.iface)?.section ?? 'unknown'}</code>{' '}
-                    on the device, from before adoption or made by hand. The
-                    controller leaves config it did not write alone, so changing
-                    or removing this means editing the device directly.
-                  </div>
+                  <TakeoverBriefBlock
+                    deviceID={id}
+                    b={originOf.get(ap.iface)!}
+                    onNoted={load}
+                  />
                 )}
               </div>
             ))}
@@ -866,5 +865,134 @@ export function DeviceClass({ cls, target }: { cls?: string | null; target?: str
         polled at the conservative default and no CPU cost is claimed for it
       </span>
     </span>
+  )
+}
+
+
+/**
+ * What it would take to bring a foreign SSID under management — and the reason
+ * oonfeeWRT will not do it for you.
+ *
+ * The controller only manages sections it wrote, because that is what makes
+ * un-adopt a promise rather than a hope: it can put back exactly what it added.
+ * Automating a takeover means deleting a section it did not write, which is the
+ * one thing that rule exists to forbid. Two automated designs were written and
+ * reviewed before this one, and both would have confirmed their own
+ * irreversible step with a health check that could not see it.
+ *
+ * So this prints the recipe and the cost, and the operator runs it on their own
+ * device. The other half is the note: most foreign SSIDs should simply be left
+ * alone, and someone who has decided that deserves to stop being asked.
+ */
+function TakeoverBriefBlock({
+  deviceID,
+  b,
+  onNoted,
+}: {
+  deviceID: number
+  b: Broadcast
+  onNoted: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [note, setNote] = useState(b.brief?.note ?? '')
+  const [saving, setSaving] = useState(false)
+  const brief = b.brief
+
+  return (
+    <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
+      <div>
+        oonfeeWRT did not create this network — it is section{' '}
+        <code>{b.section || 'unknown'}</code> on the device, from before adoption
+        or made by hand. The controller leaves config it did not write alone.
+      </div>
+      {brief?.note && (
+        <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
+          Left alone deliberately: {brief.note}
+          {brief.decided_by ? ` — ${brief.decided_by}` : ''}
+        </div>
+      )}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          marginTop: 2,
+          color: 'var(--accent)',
+          cursor: 'pointer',
+          font: 'inherit',
+        }}
+      >
+        {open ? 'Hide' : 'What would it take to manage this?'}
+      </button>
+
+      {open && brief && (
+        <div
+          style={{
+            borderLeft: '2px solid var(--border-strong)',
+            paddingLeft: 8,
+            marginTop: 6,
+            display: 'grid',
+            gap: 6,
+          }}
+        >
+          {!brief.safe_to_disable ? (
+            <div style={{ color: 'var(--warning)' }}>{brief.refusal}</div>
+          ) : (
+            <>
+              <div>
+                Run this on the device. oonfeeWRT will not do it for you: it
+                would mean deleting config it did not write, and then it could
+                not put it back.
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: 8,
+                  overflowX: 'auto',
+                  background: 'var(--bg-inset, rgba(127,127,127,0.12))',
+                  color: 'var(--text-primary)',
+                }}
+              >
+                {brief.recipe?.join('\n')}
+              </pre>
+              <div>Then recreate it as a wireless network here. What it costs:</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {brief.cost?.map((c: string) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          <div>
+            Or leave it alone and say why — it stops being an open question and
+            the reason survives for whoever looks next.
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. guest network a flatmate maintains by hand"
+              style={{ flex: 1, font: 'inherit', padding: 4 }}
+            />
+            <Button
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true)
+                try {
+                  await api.noteForeign(deviceID, b.section ?? '', b.ssid, note)
+                  onNoted()
+                } finally {
+                  setSaving(false)
+                }
+              }}
+            >
+              {note.trim() ? 'Record' : 'Clear'}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

@@ -118,6 +118,33 @@ export interface Broadcast {
    *  "unknown": the device did not say, or no poll has read the list. Not
    *  foreign — a check that could not run must not return a verdict. */
   origin: 'ours' | 'foreign' | 'unknown'
+  /** Present only for foreign sections: what it would take to bring this SSID
+   *  under management, and what it would cost. The controller runs none of it. */
+  brief?: TakeoverBrief
+}
+
+/** What it would take to manage an SSID oonfeeWRT did not create.
+ *
+ *  There is no passphrase field, and no field saying whether one exists. The
+ *  controller does not read key material it did not set. */
+export interface TakeoverBrief {
+  section: string
+  ssid: string
+  iface: string
+  mode?: string
+  /** False for anything that is not a plain access point, including an
+   *  interface whose mode was never read. It may be the device's only path to
+   *  the network, and no instructions are offered for that. */
+  safe_to_disable: boolean
+  refusal?: string
+  /** The OTHER devices that would start transmitting this SSID if it were
+   *  recreated here — oonfeeWRT has no per-device WLANs. */
+  would_start_broadcasting?: string[]
+  recipe?: string[]
+  cost?: string[]
+  note?: string
+  decided_by?: string
+  decided_at?: number
 }
 
 export interface DeviceDetail extends Device {
@@ -689,6 +716,13 @@ export const api = {
 
   dashboard: () => get<Dashboard>('/dashboard'),
   devices: () => get<{ devices: Device[] }>('/devices'),
+  /** Records a decision ABOUT a foreign section. Writes nothing to any device.
+   *  An empty note clears it. */
+  noteForeign: (deviceID: number, section: string, ssid: string, note: string) =>
+    post<{ recorded?: boolean; cleared?: boolean }>(
+      `/devices/${deviceID}/foreign/${encodeURIComponent(section)}/note`,
+      { ssid, note },
+    ),
   device: (id: number) => get<DeviceDetail>(`/devices/${id}`),
   overhead: (id: number) => get<OverheadReport>(`/devices/${id}/overhead`),
   setPollInterval: (id: number, seconds: number) =>

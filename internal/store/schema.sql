@@ -179,3 +179,20 @@ CREATE TABLE IF NOT EXISTS uplinks (
   band TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1
 );
+
+-- A decision an operator recorded ABOUT a foreign wireless section.
+--
+-- It holds no copy of the section: no values, no passphrase, nothing to leak
+-- and nothing that could later be restored wrongly. The section stays where it
+-- has always been — on the operator's device, owned by them. All this records
+-- is that a human looked at it and decided something, so the controller can
+-- stop reporting it as an open question.
+CREATE TABLE IF NOT EXISTS foreign_ssid_notes (
+  device_id  INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  section    TEXT NOT NULL,
+  ssid       TEXT NOT NULL,   -- as seen when the note was written
+  note       TEXT NOT NULL,
+  decided_at INTEGER NOT NULL,
+  decided_by TEXT NOT NULL,
+  PRIMARY KEY (device_id, section)
+);
