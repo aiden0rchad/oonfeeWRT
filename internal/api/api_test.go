@@ -1744,7 +1744,20 @@ func TestDeviceDetailSeparatesNoBSSFromNotLookedAt(t *testing.T) {
 // lab passphrase. A field-by-field check would pass on a payload that leaked it
 // through some field nobody thought to look at.
 func TestTheTakeoverBriefNeverCarriesThePassphrase(t *testing.T) {
-	const labKey = "cugVNxnLne9bwYYYaT9k" // the C6's actual key, read from uci
+	// A fabricated string, never a real one.
+	//
+	// This test originally used the lab C6's ACTUAL passphrase, read off the
+	// device and committed to a public repository — in the test whose entire
+	// purpose is proving passphrases do not leak. Nothing about the test needed
+	// a real secret: the controller never reads key material for a foreign
+	// section, so any sentinel does the same work.
+	//
+	// The load-bearing assertion is the one below it, not this constant. A
+	// sentinel can only catch a leak of itself, so the test also asserts the
+	// response contains no "key" field at all — the brief must have nowhere for
+	// a passphrase to live, which is a property of the type rather than of a
+	// value anybody remembered to strip.
+	const neverALeakedKey = "not-a-real-key-2f8Qv1xLpZ"
 
 	h := newHarness(t)
 	h.setup()
@@ -1762,7 +1775,7 @@ func TestTheTakeoverBriefNeverCarriesThePassphrase(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), labKey) {
+	if strings.Contains(w.Body.String(), neverALeakedKey) {
 		t.Fatal("the response carries the foreign network's passphrase")
 	}
 	// And nothing that would let one be added later without noticing.
