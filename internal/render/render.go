@@ -269,6 +269,31 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		return doc, rep, nil
 	}
 
+	// An access point that no WLAN targets broadcasts nothing, and says so
+	// nowhere.
+	//
+	// Preview reports "already matches — nothing to do", which is true and
+	// useless: the device genuinely matches a model that asks nothing of it.
+	// The likeliest cause is group membership, and the likeliest cause of THAT
+	// is a re-adoption — un-adopt deletes the device row, its group membership
+	// goes with it by cascade, and the new row has a new id that is in no
+	// group. Observed for real: a device came back adopted, healthy, polling,
+	// and silently off the air, with a preview that said everything was fine.
+	//
+	// Only when the site HAS WLANs. On a fresh install with none, "no WLAN
+	// targets this device" is a description of the whole site rather than a
+	// problem with the device, and saying it per device is noise.
+	if len(site.WLANs) > 0 && len(site.WLANsFor(dev.ID)) == 0 {
+		rep.Omissions = append(rep.Omissions, Omission{
+			WLAN: "(none)",
+			Reason: "no WLAN targets this device, so it will broadcast nothing. " +
+				"It is not a member of any AP group that a WLAN is published to " +
+				"— check its membership under AP groups. A device that was " +
+				"un-adopted and adopted again is a new entry and keeps none of " +
+				"its old group memberships",
+		})
+	}
+
 	radios := radiosByBand(caps)
 	for _, base := range site.WLANsFor(dev.ID) {
 		// Per-device overrides are folded in here, on a copy. Mutating the site
