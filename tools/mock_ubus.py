@@ -343,28 +343,87 @@ NR_LISTS = {}
 # optional. And the real response carries the wireless passphrase in `key`, in
 # plaintext, on every entry — reproduced here so that a decoder which widens its
 # struct and starts carrying it around fails a test rather than a review.
+def _radio(band, channel, htmode, path, ifname, section, ssid):
+    """One radio as luci-rpc.getWirelessDevices actually reports it.
+
+    Captured field-for-field from an Archer C6 on OpenWrt 25.12.5. The shape
+    matters more than the values, and three details here have already cost this
+    project real bugs:
+
+      * `config.network` and `config.device` are ARRAYS, not strings. The
+        reconciler carries a comment about being bitten by exactly this — "the
+        mock returned strings throughout, which is why this survived until a
+        preview ran against hardware".
+      * `disabled` is a BOOLEAN at both radio and config level, not the string
+        "0" that `uci get` returns for the same option. A fixture that answers
+        with the uci spelling would let code pass here and misread hardware.
+      * `pending` and `retry_setup_failed` exist and are how a radio that
+        failed to come up is distinguished from one that is merely off. Nothing
+        reads them yet; the fixture carries them so that when something does,
+        it is written against the real shape.
+    """
+    return {
+        "up": True,
+        "disabled": False,
+        "pending": False,
+        "autostart": True,
+        "retry_setup_failed": False,
+        "config": {
+            "disabled": False,
+            "type": "mac80211",
+            "band": band,
+            "channel": channel,
+            "htmode": htmode,
+            "path": path,
+        },
+        "interfaces": [{
+            "ifname": ifname,
+            "section": section,
+            # stations and vlans are present and empty on a healthy AP with no
+            # clients. Absent and empty are different answers, and the device
+            # gives the second.
+            "stations": [],
+            "vlans": [],
+            "config": {
+                "network": ["lan"],
+                "device": [section.replace("default_", "")],
+                "mode": "ap",
+                "encryption": "psk2",
+                "key": "plaintext-passphrase",
+                "ssid": ssid,
+                "radios": [],
+            },
+            # The per-interface iwinfo block. The device carries a second copy
+            # of the radio's identity here, and it is where `hardware` lives —
+            # the string the capability registry matches driver defects on.
+            "iwinfo": {
+                "bssid": "00:11:22:33:44:55",
+                "channel": int(channel),
+                "country": "US",
+                "encryption": {"enabled": True},
+                "frequency": 5180 if band == "5g" else 2412,
+                "frequency_offset": 0,
+                "hardware": {"name": "Marvell 88W8964"},
+                "htmodes": ["HT20", "HT40", "VHT20", "VHT40", "VHT80"],
+                "hwmodes": ["a", "n", "ac"] if band == "5g" else ["b", "g", "n"],
+                "hwmodes_text": "802.11nac" if band == "5g" else "802.11bgn",
+                "mode": "Master",
+                "noise": 161,
+                "phy": "phy0" if band == "5g" else "phy1",
+                "quality_max": 70,
+                "ssid": ssid,
+                "txpower": 20,
+                "txpower_offset": 0,
+            },
+        }],
+    }
+
+
 WIRELESS_DEVICES = {
-    # The RADIO-level config is load-bearing and was missing here at first.
-    # `band` and `channel` live on the radio, not on its interfaces, and they
-    # are the only source that survives a device having no interfaces at all —
-    # which is the state every stock OpenWrt router ships in. A fixture without
-    # them cannot express the case that broke adoption.
-    "radio0": {
-        "up": True,
-        "config": {"band": "5g", "channel": "36", "htmode": "VHT80"},
-        "interfaces": [
-            {"ifname": "wlan0", "section": "default_radio0",
-             "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
-        ],
-    },
-    "radio1": {
-        "up": True,
-        "config": {"band": "2g", "channel": "6", "htmode": "HT20"},
-        "interfaces": [
-            {"ifname": "wlan1", "section": "default_radio1",
-             "config": {"mode": "ap", "ssid": "OpenWrt", "key": "plaintext-passphrase"}},
-        ],
-    },
+    "radio0": _radio("5g", "36", "VHT80", "pci0000:00/0000:00:00.0",
+                     "wlan0", "default_radio0", "OpenWrt"),
+    "radio1": _radio("2g", "6", "HT20", "pci0000:00/0000:00:01.0",
+                     "wlan1", "default_radio1", "OpenWrt"),
 }
 
 OBJECTS = {
@@ -694,6 +753,29 @@ def handle_one(req):
             WIRELESS_DEVICES.setdefault(radio, {"interfaces": []})
             WIRELESS_DEVICES[radio]["interfaces"].append(entry)
         return ok(rid, {"interfaces": len(WIRELESS_DEVICES[radio]["interfaces"])})
+    if obj == "__test" and meth == "switch_off_radio":
+        # A radio switched OFF, which is a different state from a radio with no
+        # interfaces and was not expressible here before.
+        #
+        # The distinction is the whole point: with no interfaces the radio is
+        # merely idle and a WLAN applied to it comes up. Switched off, the same
+        # WLAN writes a correct section, applies successfully, and broadcasts
+        # nothing — and the health check then fails looking for an SSID that was
+        # never going to appear.
+        #
+        # Both spellings are set because the device reports both, and they are
+        # not the same field: `disabled` on the radio object is what luci-rpc
+        # answers, while `wireless.<radio>.disabled` in uci is what the renderer
+        # reads. A fixture that set only one would let a bug through whichever
+        # side it was on.
+        name = args.get("radio", "radio0")
+        with lock:
+            if name in WIRELESS_DEVICES:
+                WIRELESS_DEVICES[name]["disabled"] = True
+                WIRELESS_DEVICES[name]["up"] = False
+                WIRELESS_DEVICES[name]["config"]["disabled"] = True
+            committed.setdefault("wireless", {}).setdefault(name, {})["disabled"] = "1"
+        return ok(rid, {"radio": name, "disabled": True})
     if obj == "__test" and meth == "disable_radios":
         # Strip every interface from every radio, leaving the radios
         # themselves — which is exactly how stock OpenWrt ships: the radios

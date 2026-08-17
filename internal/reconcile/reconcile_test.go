@@ -661,3 +661,57 @@ func TestDeletingAMeshPrunesItFromTheDevice(t *testing.T) {
 		t.Fatalf("deleting the mesh planned no removal: %+v", gone.Plan.Ops)
 	}
 }
+
+// A WLAN planned onto a switched-off radio must be warned about, end to end
+// against the fixture rather than against a hand-built Existing.
+//
+// This is the state that swallows a WLAN silently: the section is written
+// correctly, the apply reports success, and nothing broadcasts — then the
+// health check fails looking for an SSID that was never going to appear. The
+// fixture could not express it until the mock learned to switch a radio off,
+// which is the same reason the adoption bug survived so long.
+func TestPlanWarnsWhenARadioIsSwitchedOff(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	if err := c.Call(ctx, "__test", "switch_off_radio",
+		map[string]any{"radio": "radio0"}, nil); err != nil {
+		t.Skipf("mock cannot switch a radio off: %v", err)
+	}
+	t.Cleanup(func() {
+		// Process-wide fixture: put it back or every later test inherits a dead
+		// radio.
+		_ = c.Call(ctx, "uci", "delete", map[string]any{
+			"config": "wireless", "section": "radio0", "option": "disabled"}, nil)
+	})
+
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+
+	var warned bool
+	for _, w := range p.Report.Warnings {
+		if w.DefectID == "radio-disabled" {
+			warned = true
+			if !strings.Contains(w.Summary, "radio0") {
+				t.Errorf("the warning does not name the radio: %q", w.Summary)
+			}
+			if w.Mitigation == "" {
+				t.Error("no mitigation, so the operator is told a problem and not a fix")
+			}
+		}
+	}
+	if !warned {
+		t.Errorf("planning a WLAN onto a switched-off radio produced no warning; "+
+			"got %d warning(s): %+v", len(p.Report.Warnings), p.Report.Warnings)
+	}
+
+	// It must still be a plan, not a refusal: the controller says what will
+	// happen and does what was asked.
+	if p.Blocked() {
+		t.Error("a switched-off radio blocked the plan; it is a warning, not a conflict")
+	}
+}
