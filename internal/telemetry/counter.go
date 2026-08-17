@@ -14,6 +14,21 @@ type counterState struct {
 	// from a decrease, and it is self-evidencing: no configuration, no probe,
 	// just something we either have seen or have not.
 	wide bool
+
+	// seen is the largest rate this counter has produced, and it is what tells
+	// a wrap apart from a reset when the arithmetic cannot.
+	//
+	// A wrap and an unobserved reset look identical in the numbers: both are a
+	// decrease, and at the 60 s baseline a gigabit link could genuinely have
+	// moved the 4.29 GB a full wrap implies, so no physical bound rejects one
+	// without rejecting the other. What separates them is the interface's own
+	// history. A link that has never exceeded a few hundred kB/s did not just
+	// carry four gigabytes.
+	//
+	// The maximum rather than an average, deliberately: it is the generous
+	// reading, so the guard only fires on a value this interface has never come
+	// close to.
+	seen float64
 }
 
 // rebootState tracks a device's uptime so a restart can be recognised.
@@ -45,6 +60,20 @@ const maxPlausibleBps = 2.5e9
 // have physically fit. Above gigabit hardware this needs raising — with the
 // rest of DEVICE-BUDGET §1, which is where link speeds belong.
 const maxWrapBps = 1.25e8
+
+// wrapRateJump is how far above anything an interface has ever done a
+// reconstructed wrap may imply before it is treated as a reset instead.
+//
+// A hundredfold. Deliberately generous: a real wrap starts from a counter near
+// 2^32 and produces a small delta, so its implied rate sits in the interface's
+// normal range and this never fires. The case it catches is the opposite shape
+// — a delta close to the entire 32-bit range, implying tens of megabytes per
+// second on a link that has never exceeded a few hundred kilobytes.
+//
+// Only ever consulted when a rate has already been recorded, so a counter that
+// wraps within its first two readings keeps the old behaviour rather than being
+// rejected on no evidence.
+const wrapRateJump = 100
 
 // observeUptime records a device's uptime and reports whether it restarted.
 //
@@ -100,15 +129,27 @@ func (s *Store) observeUptime(deviceID, uptime, ts int64) bool {
 //  2. If this counter has ever exceeded 2^32, it is 64-bit and cannot have
 //     wrapped — a 64-bit byte counter needs centuries at 10 Gbit/s. Reset.
 //  3. If the interface was down and came back, netifd recreated it. Reset.
-//  4. Otherwise assume a 32-bit wrap, unless the implied rate is impossible.
+//  4. Otherwise assume a 32-bit wrap, unless the implied rate is impossible
+//     for the link, OR impossible for THIS interface.
 //
 // Step 4 is the residual guess and it is stated plainly. The wrap is accepted
 // only if the traffic it implies could physically have crossed a gigabit link
 // in the elapsed time (maxWrapBps), so a wrap is rejected outright below ~34 s
-// between readings — which covers the whole focused tier. At the 60 s baseline
-// a full wrap implies 572 Mbit/s, which a gigabit link genuinely could carry,
-// so a reset there is still indistinguishable from a wrap. That is the residue,
-// and it is one interval wide.
+// between readings — which covers the whole focused tier.
+//
+// That bound alone left a residue one interval wide, and the residue turned out
+// to be reachable rather than theoretical: at the 60 s baseline a gigabit link
+// genuinely could carry the 4.29 GB a full wrap implies, so the test passes for
+// every wrap and rejects no reset. A counter falling from 100 MB to 100 kB over
+// 60 s emitted 559 Mbit/s of traffic that never happened — and the controller
+// causes exactly that reset itself, because an apply reloads wifi and recreates
+// the AP interfaces.
+//
+// So step 4 also asks whether the implied rate is possible for this particular
+// interface (wrapRateJump). A real wrap comes from a counter near 2^32 and
+// yields a small delta at an ordinary rate; a reset from far below yields a
+// delta near the whole 32-bit range. The link's own history separates them when
+// the arithmetic cannot.
 //
 // The counter width on the reference WRT3200ACM could not be determined without
 // pushing 3 GB through it, so this is written to be correct either way rather
@@ -155,6 +196,32 @@ func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated 
 		if float64(delta)/float64(dt) > maxWrapBps {
 			return rebase()
 		}
+		// And against this interface's own history, which is what closes the
+		// residue the bound above cannot.
+		//
+		// At the 60 s baseline a gigabit link could carry the 4.29 GB a full
+		// wrap implies, so the physical test passes for every wrap and rejects
+		// none — leaving an unobserved RESET to be reconstructed as one.
+		// Measured on the previous code: a counter falling from 100 MB to
+		// 100 kB over 60 s emitted 69,917,788 B/s, or 559 Mbit/s of traffic
+		// that never happened.
+		//
+		// That is not hypothetical. An apply reloads wifi, which destroys and
+		// recreates the AP interfaces and zeroes their counters; `recreated`
+		// catches it only when a poll happened to see the interface down. Both
+		// reference devices sit in the tens of megabytes, far below 2^32, so
+		// `wide` is false for both and each was one apply away from a
+		// fabricated spike on its throughput chart.
+		//
+		// wrapRateJump is generous on purpose. A genuine wrap comes from a
+		// counter near 2^32 and yields a SMALL delta, so its implied rate is
+		// ordinary and nothing here fires; a reset from far below yields a
+		// delta near the whole range, and an interface that has never managed
+		// a hundredth of that did not suddenly manage it.
+		if implied := float64(delta) / float64(dt); st.seen > 0 &&
+			implied > st.seen*wrapRateJump {
+			return rebase()
+		}
 	}
 
 	st.last, st.lastTS = counter, ts
@@ -163,6 +230,9 @@ func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated 
 		// Reachable on a genuine 64-bit counter if the device swapped an
 		// interface underneath the same name. Refuse it rather than record it.
 		return 0, false
+	}
+	if r > st.seen {
+		st.seen = r
 	}
 	return r, true
 }
