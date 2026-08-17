@@ -524,7 +524,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty-nine** defects have been found
+- **Look at a screen in a browser.** **Forty-three** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3639,6 +3639,82 @@ mutation that reset it and left the traversal one sticky passed everything.
 
 ---
 
+### 5ap. Phase 0's second proof, finally run — and what running it cost
+
+**Done 2026-08-17.** The proof that "decides whether the project is
+trustworthy", per its own test comment, had never been executed. It now passes
+on hardware:
+
+```
+before adoption:   326 config lines,  9 ACL files
+applied to roundtrip: applied — health passed and confirm landed
+owns 2 section(s) on the device
+un-adopted: reverted=2 login_removed=true acl_removed=true remains=false
+after un-adoption: 326 config lines,  9 ACL files
+device is byte-for-byte as it was before adoption
+```
+
+Getting there took four failures, and each was a real finding.
+
+**1. The test was missing its middle step.** It quoted ROADMAP's "adopt a
+device, MAKE CHANGES, un-adopt it, and diff" and went straight from adopt to
+un-adopt, so nothing was ever owned and `RevertedSections` was structurally 0.
+It proved the narrower claim that *adoption* leaves nothing behind. It now
+saves a network, a group and a WLAN, applies them, and asserts ownership exists
+before removing it.
+
+**2. The apply reported `unknown` while the change was demonstrably on the
+device.** Cause: `TrackApply` gives every apply a context deadline of
+`Config.ApplyDrain`, and `testConfig` sets **2 seconds** — right for the unit
+tests that exercise shutdown, impossible for an operation whose device-side
+rollback window is 90s plus 15s of grace.
+
+The harness caused it; the knob deserved it. `ApplyDrain` documented itself as
+bounding applies **"at shutdown"** while actually bounding *every* apply,
+always, and `Validate` accepted any positive value. Tuning it down for a
+snappier SIGTERM would silently cap every write to every device, and the
+failure mode is the engine's one alarming outcome produced by configuration
+rather than by anything a device did. The doc now leads with what it does,
+`applyengine` exports `MinApplyBudget()` so a caller can derive the floor, and
+`Open` warns below it — warns rather than refuses, because a tiny drain is how
+the shutdown path itself gets tested.
+
+**3. A failed run stranded its footprint**, so the next run reported "adoption
+installed no ACL file" and pointed at adoption instead of at the previous
+failure. Two runs were lost to that before a `t.Cleanup` was added.
+
+**4. Re-adopting silently drops a device out of its AP groups.** Un-adopt
+deletes the device row and `ap_group_members` goes with it by cascade; the
+re-adopted device is a NEW id in no group. So no WLAN targets it, nothing
+renders, and preview says **"already matches — nothing to do"** — true, and
+useless. The device was adopted, healthy, polling, and off the air, with every
+screen agreeing it was fine. Render now says so per device and names the
+re-adoption case explicitly, guarded on the site having WLANs at all so a fresh
+install is not told the same thing about every device.
+
+#### Devices can be renamed
+
+Raised while looking at the fleet list: the model-derived default — "TP-Link
+Archer C6 v2 (US)" rather than "ap-192-168-1-2" — is the *right* default,
+because it is what someone recognises looking at a shelf of routers. It was
+already the behaviour; `ap-192-168-1-1` was never a product default at all, but
+a name left behind by `neighbors_integration_test.go`, which adopts with
+`Name: "ap-"+host`.
+
+What did not exist was any way to change it — no `SetName`, no endpoint,
+nothing in the UI. The name was decided once at adoption and fixed forever,
+which fails the moment a site holds two of the same model. Added as a narrow
+store write, an audited endpoint, and in-place editing on the device panel.
+Clearing the field restores the model rather than being refused: that is
+adoption's own fallback chain, so "undo my rename" needs no separate control.
+
+And then the review of that found the limit was checked **after** the
+fallbacks, against a string the caller never sent — so a device whose model ran
+past 120 characters could never have its name cleared, refused for a length its
+request did not have.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3701,6 +3777,14 @@ written and believed.
   one plan silently enabled a different one. If a screen is careful that stale
   DATA never sits beside an enabled button, it has to be equally careful about
   stale CONSENT.
+- **Validate what the caller sent, not what you substituted for it.** The
+  rename length check ran after the fallbacks, so an empty request came back
+  refused for being 120 characters too long. A limit exists to constrain input;
+  applying it to a value you derived yourself turns a guard into a dead end.
+- **A default nobody can change is a decision, not a default.** The device name
+  came from the board model, which is right, and there was no way to edit it —
+  fine until a site holds two of the same model. Ask of any default: what does
+  someone do when it is wrong?
 - **A gap in a table is not automatically a task.** Having isolated one variable
   and not another, the missing cell reads like an invitation. It is not one when
   the answer cannot change the recommendation — and here the cost of filling it
