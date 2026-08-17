@@ -28,7 +28,17 @@ while true; do
     # on $3 tested the VSZ column and reported hostapd_D=0 while hostapd sat in
     # uninterruptible sleep. A watchdog reading the wrong column is a watchdog
     # that reports healthy through the failure it exists to catch.
-    DSTATE=$(ps w | grep "[h]ostapd" | awk "\$4 ~ /D/" | grep -c .)
+    #
+    # Sampled five times over five seconds, and only a hostapd in D for EVERY
+    # sample counts. D is a normal, momentary state for any process in a
+    # blocking syscall, so one sample proves nothing — an earlier version fired
+    # on a device that went on to serve traffic for another two minutes. A
+    # wedged hostapd never leaves D.
+    DSTATE=1
+    for _ in 1 2 3 4 5; do
+      ps w | grep "[h]ostapd" | awk "\$4 ~ /D/" | grep -q . || DSTATE=0
+      sleep 1
+    done
     ALIVE=$(pgrep hostapd >/dev/null && echo yes || echo no)
     echo "$UP|$WEDGE|$DSTATE|$ALIVE|$FW"' 2>/dev/null)
   if [ -z "$OUT" ]; then

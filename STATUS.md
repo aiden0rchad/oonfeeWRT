@@ -2516,6 +2516,44 @@ It now watches `MEMAddrAccess timed out` as well, which is the earliest signal �
 40 seconds ahead of the netlink error and a full minute ahead of anything a user
 would notice.
 
+#### Second capture, and two refinements
+
+It wedged again **17 minutes after a clean boot** — the interval is shortening
+(~28 min, ~50 min, ~17 min), which matches what was seen before the factory
+reset. All **10** firmware timeouts were on `phy0`; `phy1` recorded none and
+still went unreachable with it, reproducing the global-blocking result exactly.
+
+Two things the second capture corrected:
+
+- **A single D-state sample proves nothing.** The watchdog fired on
+  `hostapd_D=1` while the device went on to serve traffic for another two
+  minutes — the daemon distributed neighbour lists successfully 14 seconds
+  later. `D` is a normal momentary state for any process in a blocking syscall.
+  It now requires D across five samples in five seconds; a wedged hostapd never
+  leaves it.
+- **A firmware timeout is not instantly fatal.** Two `MEMAddrAccess` timeouts
+  fired and the radio kept working. By ten, both radios were blocked. So the
+  useful signal is a *rate*, not a first occurrence — worth knowing for anything
+  that tries to detect this generally.
+
+#### Verified in passing: the neighbour reconciler self-heals a rebooted AP
+
+A reboot clears runtime `rrm_nr` state, and **a device reboot is not one of the
+three nudge triggers** (adopt, unadopt, apply). So the only thing that could
+restore it was the periodic cycle reading `rrm_nr_list` back and noticing it was
+empty — the "reconciles rather than applies" claim of §5t, which until now had
+only ever been tested against an apply.
+
+It held. The WRT came back with `0/0` neighbours and was refilled to `3/3` at the
+next 15-minute cycle, **with no apply and no adoption**.
+
+The collector's recovery held too, and its silence was misleading rather than
+wrong: `fail()` logs at Warn only on the *first* consecutive failure and at Debug
+after, so a device that stays unreachable produces one line and then nothing at
+INFO. It had been retrying at the 10-minute capped interval for two and a half
+hours, exactly as `DefaultMaxInterval` documents, and picked the device back up
+within a minute of its return without a restart.
+
 ---
 
 ## 6. Working practices that earned their place
