@@ -2674,6 +2674,75 @@ to stop people acting on folklore must not ship any.
   sections at all. Defects about the radio's current state now get
   `TriggersRadio` and are evaluated against the device.
 
+### 5ac. Foreign SSIDs: the takeover brief, and three defects in the badge
+
+**Done 2026-08-16.** A user noticed the Archer C6 broadcasting `oonfee-c6-2g`
+and `oonfee-c6-5g` and asked why oonfeeWRT did not manage them — "wouldn't it be
+better if all SSIDs were managed?"
+
+**The default is right, and the reason is worth stating plainly.** A section is
+managed **iff** this controller wrote it and can put it back. That is what makes
+un-adopt a promise rather than a hope, and what stops a bug here from eating
+config a human made by hand. Widening "managed" to mean "an SSID I have opinions
+about" would not manage more; it would make the word stop meaning anything.
+
+#### The panel killed the automated import, twice
+
+Three designs were generated and judged adversarially. **Both automated import
+designs failed the same way**: each confirmed its own irreversible step with a
+health check that could not see what it claimed to prove. One would have let
+un-adopt **delete a network the operator had before oonfeeWRT existed**, with the
+restore "confirmed" by a check that short-circuits when the render contains
+nothing to look for. The other gated on a config read — which §5y already
+established cannot tell you what is on the air.
+
+So the controller prints the recipe and runs none of it. Four properties, each a
+test rather than a sentence:
+
+| property | why |
+|---|---|
+| no passphrase field, and no field saying whether one exists | redaction as a property of the TYPE; the test marshals the whole response and greps the bytes for the C6's real key |
+| nothing but `mode='ap'` gets disable advice | a station or mesh iface may be the device's only path to the network; unknown mode refuses too |
+| the recipe ends in `wifi reload` | `uci commit` writes the file and does not take a BSS off the air |
+| the cost names the OTHER devices | there are no per-device WLANs, so recreating a foreign SSID starts it on every AP in the group |
+
+The cheaper half is a recorded decision: `foreign_ssid_notes` holds a note
+**about** a section and never a copy of one — nothing to leak, and nothing that
+could later be restored over whatever the operator has since done to their device.
+
+#### Three defects in the badge that shipped an hour earlier
+
+Found by review before a user hit them, and all three are §6 entries:
+
+1. **It answered the wrong question.** `managedSSIDs` compared the SSID *string*
+   against the site model, so creating a WLAN named `oonfee-c6-5g` would flip the
+   still-foreign, still-broadcasting BSS to "managed" and withdraw its warning —
+   while the controller still did not own the section. My own comment called it
+   "the honest approximation".
+2. **Two sources joined by a string** — the unmanaged set came from the REST
+   detail and was rendered over the live stats list. The §6 practice written that
+   morning, broken the same afternoon.
+3. **The explanation lived in a `title` tooltip.**
+
+Provenance is now keyed on the **UCI section**, three states. `ProvUnknown`
+covers a device whose ACL refuses `getWirelessDevices`: calling an operator's own
+SSID foreign for want of asking is the worse error. The test that matters carries
+a foreign section whose SSID is *identical* to a managed one.
+
+#### Verified in a browser, on the lab hardware
+
+The whole chain, seen rather than asserted: the C6 reports `section` and
+`mode='ap'` for all four interfaces; the panel marks both `default_radio*`
+unmanaged, names the section, and offers the recipe including the fan-out warning
+*"ap-192-168-1-1 would start broadcasting it too"*; the note round-tripped to the
+database attributed to `admin` and cleared cleanly.
+
+**And opening a device populated the Clients grid for the first time.** Focusing
+an AP produced the first `sta_rssi` series this deployment has ever held, and the
+grid attributed the iPhone to `ap-192-168-1-1` at −81 dBm. Checked against
+hostapd on both APs: the iPhone is indeed on the WRT. The Watch, on the C6, still
+shows a dash — correct, because no focused poll has covered it yet.
+
 ---
 
 ## 6. Working practices that earned their place
