@@ -269,3 +269,50 @@ func TestHealthCheckRejectsAnSSIDThatSurvivedItsDeletion(t *testing.T) {
 		t.Errorf("the failure does not say what is wrong: %v", err)
 	}
 }
+
+// A RENAME makes the same claim as a delete: after this applies, the old name
+// is not on the air.
+//
+// Checking only delete ops left a renamed WLAN able to go on broadcasting its
+// old SSID while the controller recorded the new one — §0's failure with an
+// extra step, and the harder one to notice because the new SSID does appear.
+func TestHealthCheckVerifiesARenamedSSIDStopped(t *testing.T) {
+	ctx := context.Background()
+	addr := startMock(t)
+	c := ubus.New(ubus.Options{Host: addr})
+	if err := c.Login(ctx, "root", "good"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer c.Close()
+
+	onAir := readSSIDs(ctx, c)
+	var old string
+	for s := range onAir {
+		old = s
+		break
+	}
+	if old == "" {
+		t.Skip("the mock is broadcasting nothing to rename")
+	}
+
+	// Rename the section's SSID rather than deleting the section. The new name
+	// is not on the air either, but the gate must fail on the OLD one still
+	// being there — that is the half a delete-only check missed.
+	plan := &reconcile.DevicePlan{
+		Existing: render.NewExisting(map[string]map[string]map[string]string{
+			"wireless": {"default_radio0": {".type": "wifi-iface", "ssid": old}},
+		}),
+		Plan: applyengine.Plan{Ops: []applyengine.Op{{
+			Kind: applyengine.OpSet, Config: "wireless", Section: "default_radio0",
+			Values: map[string]string{"ssid": "renamed-to-this"},
+		}}},
+	}
+
+	err := healthCheck(plan)(ctx, c)
+	if err == nil {
+		t.Fatalf("the gate passed a rename while %q is still being broadcast", old)
+	}
+	if !strings.Contains(err.Error(), "still being broadcast") {
+		t.Errorf("the failure blames the wrong thing: %v", err)
+	}
+}

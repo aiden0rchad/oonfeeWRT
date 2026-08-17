@@ -335,7 +335,21 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 	// device had — because a delete op names a section, not an SSID.
 	goneSSIDs := map[string]bool{}
 	for _, op := range plan.Plan.Ops {
-		if op.Kind != applyengine.OpDelete || op.Config != "wireless" || op.Option != "" {
+		if op.Config != "wireless" || op.Option != "" {
+			continue
+		}
+		// A section DELETED, and a section whose ssid is being CHANGED. The
+		// second is the rename case and it makes the same claim: after this
+		// applies, the old name is not on the air. Checking only deletes would
+		// leave a renamed WLAN able to keep broadcasting its old SSID while the
+		// controller recorded the new one — §0's failure with an extra step.
+		switch op.Kind {
+		case applyengine.OpDelete:
+		case applyengine.OpSet, applyengine.OpAdd:
+			if _, changing := op.Values["ssid"]; !changing {
+				continue
+			}
+		default:
 			continue
 		}
 		prev, ok := plan.Existing.In("wireless")[op.Section]
@@ -343,8 +357,8 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 			continue
 		}
 		if ssid := prev["ssid"]; ssid != "" && !wantSSIDs[ssid] {
-			// Not one we are also writing: an SSID moved between sections is
-			// still meant to be on the air.
+			// Not one we are also writing: an SSID moved between sections, or
+			// kept under a new section name, is still meant to be on the air.
 			goneSSIDs[ssid] = true
 		}
 	}
