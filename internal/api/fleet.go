@@ -563,18 +563,26 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	// The limit applies to what the OPERATOR typed, and only to that.
+	//
+	// It used to be checked after the fallbacks, which put it on a string the
+	// caller did not supply: a device whose board model ran past the limit
+	// could never have its name cleared, and the refusal cited a length the
+	// request did not have. The fallback is machine-derived and there is
+	// nothing to argue with, so it is trimmed rather than rejected — an
+	// unusable name is a worse answer than a shortened one.
+	const maxName = 120
 	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = deviceModel(dev)
-	}
-	if name == "" {
-		name = dev.MAC
-	}
-	// Long enough for a model string with a revision in it, short enough that
-	// it cannot wreck a table or a log line.
-	if len(name) > 120 {
-		writeErr(w, http.StatusBadRequest, "a device name must be 120 characters or fewer")
+	if len(name) > maxName {
+		writeErr(w, http.StatusBadRequest,
+			"a device name must be 120 characters or fewer")
 		return
+	}
+	if name == "" {
+		name = truncate(deviceModel(dev), maxName)
+	}
+	if name == "" {
+		name = truncate(dev.MAC, maxName)
 	}
 	if err := s.Store.SetName(r.Context(), id, name); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -587,6 +595,19 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 		Detail: map[string]any{"from": dev.Name, "to": name, "mac": dev.MAC},
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"name": name})
+}
+
+// truncate bounds a machine-derived name, cutting on a rune boundary so a
+// multi-byte character cannot be split into something unprintable.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	for len(string(r)) > max {
+		r = r[:len(r)-1]
+	}
+	return strings.TrimSpace(string(r))
 }
 
 // deviceModel digs the board model out of the stored capability record, which
