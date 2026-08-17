@@ -488,10 +488,11 @@ most-worth-doing first.
    grid with a real client, the Logs screen and the adopt/discovery screen. Four
    more defects, **count now twenty-three**, still none reachable by any test.
 
-   **The unadopt flow is now looked at too** (2026-08-17, §5ai and §5aj): seven
-   more defects, **count thirty**, and one of them made a device that cannot be
-   reached permanently un-removable. Two came from reading the panel, two from
-   driving it, and three from reviewing the first four. **Still unlooked-at:** any screen under a
+   **The unadopt flow is now looked at too** (2026-08-17, §5ai and §5aj): eight
+   more defects, **count thirty-one**, and one of them made a device that cannot
+   be reached permanently un-removable. Two came from reading the panel, two
+   from driving it, and four from three review rounds over those — 2, then 3,
+   then 1, which is the first thinning tail in a review sequence here. **Still unlooked-at:** any screen under a
    fleet larger than two devices.
 
 5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
@@ -514,7 +515,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty** defects have been found
+- **Look at a screen in a browser.** **Thirty-one** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3149,7 +3150,7 @@ refreshing only on Close.
 
 ---
 
-### 5aj. Reviewing the afternoon's own fixes — three more, one self-inflicted
+### 5aj. Reviewing the afternoon's own fixes — four more, three self-inflicted
 
 **Done 2026-08-17.** §5af's rule again, and it held again: the round that
 reviews the fixes found more than the round that found the bugs.
@@ -3191,6 +3192,33 @@ the destructive action is one click away, un-reconfirmed, at exactly the point
 the speed bump exists for. Every attempt re-earns it now. The ordinary
 confirmation deliberately does **not** reset: that one is consent to un-adopt
 this device, which retrying the same operation does not withdraw.
+
+#### A third round, and the fix's own fix
+
+Reviewing §5aj found one more, again mine, again from the commit before.
+
+**Moving `onDone` to Close made the slide-over's `×` a silent second exit.**
+`onDone` both refreshes the fleet and closes; firing it the instant the request
+returned is what threw the report away, so it moved to Close — which left the
+`×` as a way out that refreshes nothing. A removed device stayed in the table:
+**a controller listing a router it had just deleted.** The `×` lives outside the
+component and cannot be intercepted, so the unmount catches it, guarded by a
+flag that Close clears so the refresh does not happen twice.
+
+The flag is set in **one** place, because a report arrives on both paths and the
+worst case arrives on the failure one — a forced removal whose phase 2 could not
+commit returns 502 with `removed_from_inventory` already true. Setting it beside
+only the success path would leave precisely that case listing a deleted router.
+
+And one of the three tests written for it **was itself a no-op**, caught by
+mutation rather than by reading: the "refreshes once, not twice" spy only
+recorded, so the component stayed mounted, the cleanup never ran, and the
+assertion held whether or not the flag was cleared. A spy standing in for a
+callback whose *effect* is what the test depends on has to have that effect —
+`onDone` now tears the panel down the way `setOpenID(null)` does.
+
+**Three rounds on one panel: 2, then 3, then 1.** The tail is real but it is
+thinning, which is the first time that has been true of a review sequence here.
 
 #### Verified against a device that answers and can do nothing
 
@@ -3250,12 +3278,16 @@ written and believed.
   obvious per-radio fix is a trap: excluding a radio that has not identified
   itself turns a real warning into silence, which is the cardinal error wearing
   a different hat. Exclude only what is KNOWN to be different.
-- **A test that passes while asserting nothing is worse than no test.** Six of
-  these were shipped in two days and every one was caught by mutation testing
+- **A test that passes while asserting nothing is worse than no test.** Eight of
+  these were shipped in three days and every one was caught by mutation testing
   rather than by reading. Revert the fix; if the test still passes, it tests
   nothing. The commonest causes: a fixture value already satisfying the
-  assertion, a mock returning undefined so the path never runs, and asserting
-  the absence of something never present in that fixture.
+  assertion, a mock returning undefined so the path never runs, asserting the
+  absence of something never present in that fixture, keying a check on a field
+  every fixture happens to carry — and **a spy that only records when the test
+  depends on the callback's effect**. `onDone` closes a panel; a spy that did
+  not close it left the cleanup unrun, so an assertion about double-firing could
+  not fail.
 - **Follow the value, not the file.** A security guard can be correct, well
   worded and completely unreachable. The SSH host-key refusal was dead in five
   places at once — no column, no field on the result, neither call site passing
