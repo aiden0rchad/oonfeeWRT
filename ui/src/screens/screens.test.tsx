@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 /**
  * Screen-level tests.
@@ -40,8 +40,26 @@ vi.mock('../lib/api', () => ({
   ApiError: class extends Error {},
   onUnauthorized: new Set<() => void>(),
 }))
+// The live channel, with a way to push a frame. Devices.tsx paints its
+// Broadcasting list from the pushed stats and looks provenance up in the REST
+// detail, so a test that cannot push a frame cannot exercise the join between
+// them at all — which is the whole subject of the provenance rendering.
+const liveHandlers: ((msg: unknown) => void)[] = []
+function pushLive(msg: unknown) {
+  liveHandlers.forEach((h) => h(msg))
+}
 vi.mock('../lib/live', () => ({
-  live: { watch: () => () => {}, on: () => () => {}, connect: () => {} },
+  live: {
+    watch: () => () => {},
+    on: (h: (msg: unknown) => void) => {
+      liveHandlers.push(h)
+      return () => {
+        const i = liveHandlers.indexOf(h)
+        if (i >= 0) liveHandlers.splice(i, 1)
+      }
+    },
+    connect: () => {},
+  },
 }))
 
 // The Clients grid resolves its "Access point" column against the fleet roster.
@@ -731,6 +749,79 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() =>
       expect(screen.getByText(/removes the station interface/)).toBeTruthy(),
     )
+  })
+})
+
+describe('Devices — BSS provenance', () => {
+  // A BSS the detail response does not mention must not render as one we
+  // manage. The list is painted from the live frame while provenance comes
+  // from the REST detail refreshed every 30s, so a missing entry is reachable
+  // with no device quirk at all: on a freshly adopted device, or for 30s after
+  // a daemon restart, every foreign SSID read as managed.
+  it('treats a BSS with no provenance entry as unknown, not as ours', async () => {
+    const dev = {
+      id: 1, mac: 'aa:bb:cc:dd:ee:01', name: 'ap-1', host: '192.168.1.1',
+      role: 'ap', adopted: true, online: true, class: 'A',
+    }
+    api.device.mockResolvedValue({
+      ...dev,
+      capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: true,
+      // phy1-ap0 is deliberately ABSENT here while the live frame carries it.
+      broadcasting: [
+        {
+          ssid: 'oonfee-roam', iface: 'phy0-ap1',
+          section: 'oowrt_wlan1_radio0', origin: 'ours',
+        },
+      ],
+    })
+    api.deviceSeries.mockResolvedValue({ series: {} })
+    api.overhead.mockRejectedValue(new Error('none'))
+
+    const { Devices } = await import('./Devices')
+    render(
+      <Devices
+        devices={[{ ...dev, quiesced: false } as never]}
+        onAdopt={() => {}}
+        onChanged={() => {}}
+      />,
+    )
+    fireEvent.click(screen.getByText('ap-1'))
+    await waitFor(() =>
+      expect(screen.getByText('Re-probe capabilities')).toBeTruthy(),
+    )
+
+    // The live frame carries BOTH BSSes; the detail response knows only one.
+    await act(async () => {
+      pushLive({
+        type: 'stats',
+        device_id: 1,
+        ts: 1755400000,
+        tier: 'focused',
+        uptime: 3600,
+        load1: 0.1,
+        poll_ms: 120,
+        clients: 0,
+        degraded: 0,
+        aps: [
+          { iface: 'phy0-ap1', ssid: 'oonfee-roam', channel: 36, freq: 5180, clients: 0 },
+          { iface: 'phy1-ap0', ssid: 'somebody-elses', channel: 1, freq: 2412, clients: 0 },
+        ],
+        stations: [],
+      })
+    })
+
+    await waitFor(() => expect(screen.getByText('somebody-elses')).toBeTruthy())
+
+    // The unknown one must carry the marker. Without it the row renders exactly
+    // like the managed BSS above it, which is the bug.
+    const marks = document.querySelectorAll('[title*="not established"]')
+    if (marks.length === 0) {
+      throw new Error(
+        'a BSS with no provenance entry rendered bare, identically to one ' +
+          'oonfeeWRT manages',
+      )
+    }
   })
 })
 

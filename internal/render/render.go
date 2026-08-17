@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
@@ -315,7 +316,8 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			// catches settings the renderer derives rather than only the ones
 			// the operator typed. WPA3 forcing PMF on is exactly such a case,
 			// and on this hardware it is the dangerous one.
-			for _, d := range capability.TriggeredBy(caps, sec.Values) {
+			for _, d := range capability.TriggeredByOn(caps, sec.Values,
+				radioBySection(caps, radio)) {
 				rep.addWarning(warn(w.SSID, d))
 			}
 			// A radio switched off swallows the WLAN silently. The section we
@@ -425,7 +427,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// Defects triggered by the radio's CURRENT state rather than by anything we
 	// write — a DFS channel, say. The controller does not manage channels, so
 	// these can only be found by looking at the device.
-	for _, d := range capability.TriggeredByRadios(caps) {
+	for _, d := range capability.TriggeredByRadios(withLiveChannels(caps, existing)) {
 		rep.addWarning(warn("", d))
 	}
 	// And when nothing could be checked at all, say so. Silence here would be a
@@ -648,4 +650,55 @@ func radioIsDisabled(existing Existing, radio string) bool {
 		return false
 	}
 	return sec["disabled"] == "1"
+}
+
+// radioBySection finds the capability record for a UCI radio section, or nil
+// when the section matches none. Nil means "we do not know which radio", which
+// callers must treat as "could be any of them" rather than as "none".
+func radioBySection(caps *capability.Registry, section string) *capability.Radio {
+	if caps == nil {
+		return nil
+	}
+	for i := range caps.Radios {
+		if radioSection(caps.Radios[i]) == section {
+			return &caps.Radios[i]
+		}
+	}
+	return nil
+}
+
+// withLiveChannels overlays each radio's channel from the device's own wireless
+// config, keeping the capability record's value as the fallback.
+//
+// Defects that key on the channel judge a number frozen at adoption otherwise.
+// The controller does not manage channels, so that number can only change
+// behind its back — and it then fails in both directions: silent when the
+// operator moves a radio ONTO a DFS channel after adoption, and crying wolf
+// forever after they move it off.
+//
+// The snapshot is kept as the fallback rather than replaced. A radio set to
+// `channel auto` has no numeric value in UCI at all, and the probe's iwinfo
+// reading is then the only evidence of what the radio actually picked —
+// dropping it would go silent on an ACS-selected DFS channel, which is the
+// case the warning is most for.
+func withLiveChannels(caps *capability.Registry, existing Existing) *capability.Registry {
+	if caps == nil {
+		return nil
+	}
+	wireless := existing.In("wireless")
+	if len(wireless) == 0 {
+		return caps
+	}
+	out := *caps
+	out.Radios = append([]capability.Radio(nil), caps.Radios...)
+	for i := range out.Radios {
+		sec, ok := wireless[radioSection(out.Radios[i])]
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(sec["channel"])); err == nil && n > 0 {
+			out.Radios[i].Channel = n
+		}
+	}
+	return &out
 }

@@ -289,8 +289,16 @@ function DeviceDetailPanel({
                         unmanaged
                       </span>
                     )}
-                    {originOf.get(ap.iface)?.origin === 'unknown' && (
-                      <Unknown why="this device did not report which config section created this interface, so who owns it could not be determined. That is not the same as it being unmanaged." />
+                    {/* No entry is the SAME answer as origin "unknown": the
+                        controller has not been told who owns this BSS. It used
+                        to fall through to nothing, which renders identically to
+                        "ours" — and that is reachable without any device quirk.
+                        This list is painted from the live frame while
+                        provenance comes from the REST detail refreshed every
+                        30s, so on a freshly adopted device, or for 30s after a
+                        restart, every foreign SSID read as one we manage. */}
+                    {(originOf.get(ap.iface)?.origin ?? 'unknown') === 'unknown' && (
+                      <Unknown why="the controller has not been told which config section created this interface, so who owns it is not established. That is not the same as it being managed here." />
                     )}
                   </span>
                   <span className="num">

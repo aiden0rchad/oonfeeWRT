@@ -1142,3 +1142,157 @@ func TestAnUnknownRadioIsNotCalledDisabled(t *testing.T) {
 		}
 	}
 }
+
+// A defect belongs to the radio whose driver has it, not to the device.
+//
+// The warning list was device-wide, so a WLAN rendered onto an Atheros radio
+// was accused of a Marvell driver's defects. The DFS case is the cleanest: a
+// 2.4 GHz Marvell radio cannot be on a DFS channel at any value, and the
+// warning fired anyway — sourced from the 5 GHz Atheros radio beside it.
+func TestADefectDoesNotFollowTheDeviceOntoAnotherVendorsRadio(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 2412, Channel: 6,
+			Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 5500, Channel: 100,
+			Hardware: "Qualcomm Atheros QCA9880"},
+	}
+
+	site := testSite()
+	site.WLANs[0].Bands = []model.Band{model.Band5G}
+	site.WLANs[0].Security = model.Security{
+		Mode: model.SecSAE, Key: "s3cret", PMF: model.PMFRequired,
+	}
+
+	_, rep, err := Render(site, model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, w := range rep.Warnings {
+		switch w.DefectID {
+		case "mwlwifi-dfs-channels":
+			t.Errorf("the only Marvell radio here is 2.4 GHz and cannot be on a " +
+				"DFS channel; the warning came from the Atheros radio's channel")
+		case "mwlwifi-wpa3-unsupported", "mwlwifi-80211w-unsupported":
+			t.Errorf("a WLAN on the Atheros radio was accused of a Marvell "+
+				"driver defect: %s", w.DefectID)
+		}
+	}
+}
+
+// But a radio that has not said what it is must NOT silence a defect.
+//
+// This is the trap in the obvious fix. On a homogeneous Marvell board whose
+// second radio has no interface, that radio's Hardware is "" — the same §5ab
+// case HardwareIdentified exists for — and a plain per-radio filter would go
+// quiet on the reference device. Warning about the wrong chip is noise; going
+// silent about the right one is the cardinal error.
+func TestAnUnidentifiedRadioDoesNotSilenceADefect(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180, Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Band: "2g"}, // no interface, so no hardware
+	}
+	site := testSite()
+	site.WLANs[0].Bands = []model.Band{model.Band2G}
+	site.WLANs[0].Security = model.Security{
+		Mode: model.SecPSK2, Key: "s3cret", PMF: model.PMFOptional,
+	}
+
+	_, rep, err := Render(site, model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var warned bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "mwlwifi-80211w-unsupported" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("a radio that did not identify itself silenced a defect the " +
+			"device demonstrably has; unidentified is not 'a different chip'")
+	}
+}
+
+// A channel-keyed defect must judge the channel the radio is on NOW.
+//
+// capability.Radio.Channel is frozen at adoption, and the controller does not
+// manage channels — so the value can only change behind its back. It then fails
+// both ways: silent when an operator moves a radio onto a DFS channel after
+// adoption, and crying wolf forever after they move it off.
+func TestADFSWarningFollowsTheLiveChannelNotTheAdoptionSnapshot(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180, Channel: 36,
+			Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412, Channel: 6,
+			Hardware: "Marvell 88W8964"},
+	}
+
+	// Snapshot says 36. The device has since been moved to 100, which is DFS.
+	moved := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {
+			"radio0": {".type": "wifi-device", "channel": "100"},
+			"radio1": {".type": "wifi-device", "channel": "6"},
+		},
+	})
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, moved)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var fired bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "mwlwifi-dfs-channels" {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Error("the radio is on channel 100 now; the warning judged the " +
+			"adoption snapshot and stayed silent")
+	}
+
+	// And the other direction: snapshot 36, device still 36 — no warning.
+	stayed := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {"radio0": {".type": "wifi-device", "channel": "36"}},
+	})
+	_, rep2, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, stayed)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, w := range rep2.Warnings {
+		if w.DefectID == "mwlwifi-dfs-channels" {
+			t.Error("warned about DFS on a radio sitting on channel 36")
+		}
+	}
+}
+
+// `channel auto` has no number in UCI, and the snapshot's reading is then the
+// only evidence of what the radio actually picked. Dropping it would go silent
+// on an ACS-selected DFS channel, which is the case the warning is most for.
+func TestAutoChannelFallsBackToTheObservedChannel(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5500, Channel: 100,
+			Hardware: "Marvell 88W8964"},
+	}
+	auto := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {"radio0": {".type": "wifi-device", "channel": "auto"}},
+	})
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, auto)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var fired bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "mwlwifi-dfs-channels" {
+			fired = true
+		}
+	}
+	if !fired {
+		t.Error("channel is `auto` in UCI and the radio was observed on 100; " +
+			"the unparseable value overwrote the only evidence there was")
+	}
+}

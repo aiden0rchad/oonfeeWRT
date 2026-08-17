@@ -264,6 +264,28 @@ func DefectsFor(r *Registry) []Defect {
 	return out
 }
 
+// MayAffect reports whether a defect can apply to one radio.
+//
+// Three-state in effect, collapsed to the only safe boolean: a radio whose
+// hardware matches, and a radio that has not said what it is, both count. Only
+// a radio KNOWN to be something else is excluded.
+//
+// That asymmetry is deliberate and was checked before it was written. A plain
+// per-radio filter looks obviously right and is a trap: on a homogeneous
+// Marvell board whose second radio has no interface, that radio's Hardware is
+// "" — the §5ab case HardwareIdentified exists for — and filtering it out
+// silences a real warning on the reference device. Going quiet about a defect
+// because a radio did not identify itself is the cardinal error, reached by the
+// same road §5ab already documents. Warning about a radio that is genuinely a
+// different chip is merely noise, and only that case is removed here.
+func (d Defect) MayAffect(r Radio) bool {
+	hw := strings.ToLower(strings.TrimSpace(r.Hardware))
+	if hw == "" {
+		return true // unidentified: cannot be ruled out
+	}
+	return strings.Contains(hw, strings.ToLower(d.Hardware))
+}
+
 // TriggeredBy returns the defects a rendered wifi-iface's values would hit.
 //
 // Called at render time, so the operator is told before an apply lands rather
@@ -271,11 +293,26 @@ func DefectsFor(r *Registry) []Defect {
 // excluded here — they belong against the device, and repeating them on every
 // WLAN would bury the ones the operator can actually act on.
 func TriggeredBy(r *Registry, vals map[string]string) []Defect {
+	return TriggeredByOn(r, vals, nil)
+}
+
+// TriggeredByOn is TriggeredBy scoped to the radio the section is written to.
+//
+// A nil radio means "we do not know which radio this lands on", and then every
+// defect of the device is considered — the old behaviour, kept because silence
+// is the worse error. Passing the radio removes the false positive that
+// otherwise accuses a WLAN on an Atheros radio of a Marvell driver's defects,
+// which is exactly what a mixed-silicon device produced.
+func TriggeredByOn(r *Registry, vals map[string]string, radio *Radio) []Defect {
 	var out []Defect
 	for _, d := range DefectsFor(r) {
-		if d.Triggers != nil && d.Triggers(vals) {
-			out = append(out, d)
+		if d.Triggers == nil || !d.Triggers(vals) {
+			continue
 		}
+		if radio != nil && !d.MayAffect(*radio) {
+			continue
+		}
+		out = append(out, d)
 	}
 	return out
 }
@@ -293,6 +330,12 @@ func TriggeredByRadios(r *Registry) []Defect {
 			continue
 		}
 		for _, radio := range r.Radios {
+			// Only radios the defect can apply to. A 2.4 GHz Marvell radio
+			// cannot be on a DFS channel at any value, and the warning used to
+			// fire anyway — sourced from the 5 GHz Atheros radio beside it.
+			if !d.MayAffect(radio) {
+				continue
+			}
 			if !seen[d.ID] && d.TriggersRadio(radio) {
 				seen[d.ID] = true
 				out = append(out, d)
