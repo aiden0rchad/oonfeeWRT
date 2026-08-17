@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"github.com/aiden0rchad/oonfeewrt/internal/render"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
+	"strings"
 	"testing"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
@@ -192,5 +195,77 @@ func TestTraversalDetection(t *testing.T) {
 	if touchesTraversal(dhcp) {
 		t.Error("a dhcp-only change was flagged; the controller reaches devices " +
 			"by address, not by lease")
+	}
+}
+
+// The health gate must verify a removal, not just an addition.
+//
+// It confirmed only that the SSIDs it WROTE had appeared, so an apply that
+// deleted a WLAN passed on "the lan interface is up" and the controller
+// recorded the network as gone. STATUS §0 is fourteen hours of exactly that: a
+// device beaconing an SSID that was in no config anywhere, while uci, the
+// hostapd conf, iwinfo, ubus and `iw dev info` all agreed it was not.
+func TestStillOnCatchesAnSSIDThatDidNotStop(t *testing.T) {
+	onAir := map[string]bool{"kept": true, "removed-but-still-up": true}
+
+	if got := stillOn(onAir, map[string]bool{"removed-but-still-up": true}); len(got) != 1 {
+		t.Errorf("an SSID the change removed is still on the air and was not "+
+			"reported: %v", got)
+	}
+	// One that genuinely stopped is not reported.
+	if got := stillOn(onAir, map[string]bool{"actually-gone": true}); len(got) != 0 {
+		t.Errorf("reported an SSID that is not being broadcast: %v", got)
+	}
+	// And the two halves read the same snapshot, so a change that both adds and
+	// removes is judged on one view of the air.
+	if got := missingFrom(onAir, map[string]bool{"kept": true}); len(got) != 0 {
+		t.Errorf("an SSID that IS on the air was reported missing: %v", got)
+	}
+}
+
+// The gate must REJECT a removal the device did not honour, end to end.
+//
+// The unit test above covers stillOn in isolation, which would still pass if
+// healthCheck never called it — the trap that has produced six empty tests this
+// week. This builds a real plan with a delete op and runs the returned gate
+// against a device that is still broadcasting the SSID.
+func TestHealthCheckRejectsAnSSIDThatSurvivedItsDeletion(t *testing.T) {
+	ctx := context.Background()
+	addr := startMock(t)
+	c := ubus.New(ubus.Options{Host: addr})
+	if err := c.Login(ctx, "root", "good"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer c.Close()
+
+	// What the mock is actually broadcasting, so the test cannot drift from it.
+	onAir := readSSIDs(ctx, c)
+	var victim string
+	for s := range onAir {
+		victim = s
+		break
+	}
+	if victim == "" {
+		t.Skip("the mock is broadcasting nothing to remove")
+	}
+
+	// A plan that DELETES the section carrying it, and writes nothing.
+	plan := &reconcile.DevicePlan{
+		Existing: render.NewExisting(map[string]map[string]map[string]string{
+			"wireless": {"default_radio0": {".type": "wifi-iface", "ssid": victim}},
+		}),
+		Plan: applyengine.Plan{Ops: []applyengine.Op{
+			{Kind: applyengine.OpDelete, Config: "wireless", Section: "default_radio0"},
+		}},
+	}
+
+	err := healthCheck(plan)(ctx, c)
+	if err == nil {
+		t.Fatalf("the gate passed a change that removed %q while the device is "+
+			"still broadcasting it — the controller would record it as gone",
+			victim)
+	}
+	if !strings.Contains(err.Error(), "still being broadcast") {
+		t.Errorf("the failure does not say what is wrong: %v", err)
 	}
 }

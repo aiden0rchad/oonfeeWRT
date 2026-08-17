@@ -320,6 +320,34 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 			wantSSIDs[s.Values["ssid"]] = true
 		}
 	}
+	// The SSIDs this change REMOVES, so their disappearance is verified rather
+	// than assumed.
+	//
+	// The check used to confirm only that what it wrote had appeared. An apply
+	// that deleted a WLAN therefore passed on "the lan interface is up", and
+	// the controller recorded the network as gone. §0 is fourteen hours of
+	// exactly that: a device beaconing an SSID that was in no config anywhere,
+	// while uci, the hostapd conf, iwinfo, ubus and `iw dev info` all agreed it
+	// was not. Confirming a removal without looking at the air is how the
+	// controller came to believe it.
+	//
+	// Read from the section's PREVIOUS values — the plan carries what the
+	// device had — because a delete op names a section, not an SSID.
+	goneSSIDs := map[string]bool{}
+	for _, op := range plan.Plan.Ops {
+		if op.Kind != applyengine.OpDelete || op.Config != "wireless" || op.Option != "" {
+			continue
+		}
+		prev, ok := plan.Existing.In("wireless")[op.Section]
+		if !ok {
+			continue
+		}
+		if ssid := prev["ssid"]; ssid != "" && !wantSSIDs[ssid] {
+			// Not one we are also writing: an SSID moved between sections is
+			// still meant to be on the air.
+			goneSSIDs[ssid] = true
+		}
+	}
 	return func(ctx context.Context, verify *ubus.Client) error {
 		// Interfaces first: a change that took the network down is the failure
 		// this whole mechanism exists to catch, and it is cheap to see.
@@ -337,7 +365,7 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 				return fmt.Errorf("health: the lan interface is down after this change")
 			}
 		}
-		if len(wantSSIDs) == 0 {
+		if len(wantSSIDs) == 0 && len(goneSSIDs) == 0 {
 			return nil
 		}
 
@@ -353,7 +381,7 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 		deadline := time.Now().Add(ssidSettleTimeout)
 		for {
 			found = readSSIDs(ctx, verify)
-			if missingFrom(found, wantSSIDs) == nil {
+			if missingFrom(found, wantSSIDs) == nil && stillOn(found, goneSSIDs) == nil {
 				return nil
 			}
 			if time.Now().After(deadline) {
@@ -366,6 +394,13 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 			}
 		}
 
+		if lingering := stillOn(found, goneSSIDs); lingering != nil {
+			return fmt.Errorf("health: after %s, %d SSID(s) this change removed "+
+				"are still being broadcast: %v — the config no longer has them, "+
+				"so the device is transmitting something nothing describes; "+
+				"letting it revert rather than recording them as gone",
+				ssidSettleTimeout, len(lingering), lingering)
+		}
 		missing := missingFrom(found, wantSSIDs)
 		// The error names what WAS found, not only what was not. "expected
 		// Home, the radios are broadcasting [OtherNet]" points at the problem;
@@ -474,4 +509,19 @@ func deviceCaps(dev *store.Device) (*capability.Registry, error) {
 		return nil, fmt.Errorf("this device's capability record is unreadable: %w", err)
 	}
 	return &caps, nil
+}
+
+// stillOn reports the SSIDs that should have stopped and have not.
+//
+// The mirror of missingFrom, and the half that was absent. Both read the same
+// snapshot of what the radios are actually carrying.
+func stillOn(found, gone map[string]bool) []string {
+	var out []string
+	for ssid := range gone {
+		if found[ssid] {
+			out = append(out, ssid)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
