@@ -971,13 +971,21 @@ func TestKnownDriverDefectsAreWarnedBeforeTheyLand(t *testing.T) {
 	}
 
 	var pmf *Warning
+	pmfCount := 0
 	for i := range rep.Warnings {
 		if rep.Warnings[i].DefectID == "mwlwifi-80211w-unsupported" {
 			pmf = &rep.Warnings[i]
+			pmfCount++
 		}
 	}
 	if pmf == nil {
 		t.Fatalf("no warning for 802.11w on a Marvell radio; got %+v", rep.Warnings)
+	}
+	// Once per WLAN, not once per radio. A WLAN fans out to every band the
+	// device has, so an untreated defect match arrives twice for one SSID —
+	// which reads as two problems and teaches an operator to skim.
+	if pmfCount != 1 {
+		t.Errorf("the same defect on the same WLAN was reported %d times", pmfCount)
 	}
 	if pmf.WLAN != "Home" {
 		t.Errorf("the warning must name the WLAN that triggers it, got %q", pmf.WLAN)

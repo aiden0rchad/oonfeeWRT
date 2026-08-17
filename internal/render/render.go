@@ -122,6 +122,21 @@ type Report struct {
 	Warnings []Warning
 }
 
+// addWarning records a warning once per defect per WLAN.
+//
+// Deduplicated because a WLAN fans out to every band the device has, so a
+// defect triggered by one of its settings matches once per radio. Verified
+// against the reference WRT3200ACM: the 802.11w warning arrived twice for one
+// SSID, which reads as two problems and teaches an operator to skim.
+func (r *Report) addWarning(w Warning) {
+	for _, existing := range r.Warnings {
+		if existing.DefectID == w.DefectID && existing.WLAN == w.WLAN {
+			return
+		}
+	}
+	r.Warnings = append(r.Warnings, w)
+}
+
 // warn converts a matched defect into an operator-facing warning.
 func warn(ssid string, d capability.Defect) Warning {
 	return Warning{
@@ -301,7 +316,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			// the operator typed. WPA3 forcing PMF on is exactly such a case,
 			// and on this hardware it is the dangerous one.
 			for _, d := range capability.TriggeredBy(caps, sec.Values) {
-				rep.Warnings = append(rep.Warnings, warn(w.SSID, d))
+				rep.addWarning(warn(w.SSID, d))
 			}
 			doc.Sections = append(doc.Sections, sec)
 			rep.Omissions = append(rep.Omissions, omissions...)
@@ -378,14 +393,14 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// warnings they can actually act on.
 	for _, d := range capability.DefectsFor(caps) {
 		if !d.Configured() {
-			rep.Warnings = append(rep.Warnings, warn("", d))
+			rep.addWarning(warn("", d))
 		}
 	}
 	// Defects triggered by the radio's CURRENT state rather than by anything we
 	// write — a DFS channel, say. The controller does not manage channels, so
 	// these can only be found by looking at the device.
 	for _, d := range capability.TriggeredByRadios(caps) {
-		rep.Warnings = append(rep.Warnings, warn("", d))
+		rep.addWarning(warn("", d))
 	}
 	// And when nothing could be checked at all, say so. Silence here would be a
 	// clean bill of health from a check that never ran: the hardware name comes
@@ -394,7 +409,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// the case most likely to look defect-free and the case where the operator
 	// is choosing the settings this exists to warn about.
 	if caps != nil && len(caps.Radios) > 0 && !capability.HardwareIdentified(caps) {
-		rep.Warnings = append(rep.Warnings, Warning{
+		rep.addWarning(Warning{
 			DefectID: "hardware-unidentified",
 			Summary: "this device's radios could not be checked against the " +
 				"known-defect list",
