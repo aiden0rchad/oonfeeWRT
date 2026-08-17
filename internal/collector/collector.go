@@ -435,14 +435,6 @@ func (c *Collector) Broadcasting(deviceID int64) ([]AP, bool) {
 	return p.snapshotAPs()
 }
 
-// IfaceSections maps this device's wireless interfaces to the UCI wifi-iface
-// section that created each one, and reports whether the map is known at all.
-//
-// The bool is the three-state rule. A device whose ACL refuses
-// luci-rpc.getWirelessDevices, or one no poll has yet read the interface list
-// from, returns false — which must NOT be read as "no interface has a section".
-// Provenance is decided from this, and deciding it from silence would tell an
-// operator their own SSID is foreign.
 // recordAPsLocked stores what this poll saw broadcasting. Caller holds p.mu.
 //
 // Gated on having ASKED, not on having found something. snap.APs may be
@@ -481,6 +473,14 @@ func (p *poller) everListedIfaces() bool {
 	return !p.ifaceAt.IsZero()
 }
 
+// IfaceSections maps this device's wireless interfaces to the UCI wifi-iface
+// section that created each one, and reports whether the map is known at all.
+//
+// The bool is the three-state rule. A device whose ACL refuses
+// luci-rpc.getWirelessDevices, or one no poll has yet read the interface list
+// from, returns false — which must NOT be read as "no interface has a section".
+// Provenance is decided from this, and deciding it from silence would tell an
+// operator their own SSID is foreign.
 func (c *Collector) IfaceSections(deviceID int64) (map[string]string, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -854,11 +854,8 @@ func (p *poller) fail(ctx context.Context, snap Snapshot) {
 	// One failure is not enough: the client already replays a single expired
 	// session itself, and discarding it on every blip would turn a flaky link
 	// into a login storm.
-	if n >= 2 && p.client != nil {
-		p.requestsBase += p.client.Requests()
-		p.bytesBase += p.client.BytesOut()
-		p.client.Close()
-		p.client = nil
+	if n >= 2 {
+		p.dropClientLocked()
 	}
 	p.lastPoll = p.c.now()
 	p.mu.Unlock()
@@ -1016,10 +1013,29 @@ func (p *poller) stop() {
 func (p *poller) closeClient() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.client != nil {
-		p.client.Close()
-		p.client = nil
+	p.dropClientLocked()
+}
+
+// dropClientLocked discards the session, keeping what it cost.
+//
+// The counters live on the ubus client, so closing one without banking its
+// totals loses every request and byte that session made. That is not merely a
+// smaller number: Overhead derives NonPollRequests as Requests minus Polls, and
+// polls are counted on the poller and survive. Discarding the requests while
+// keeping the polls drives the difference negative, where it is clamped to
+// zero — so the readout whose whole purpose is to surface calls that escaped
+// the batch reports none, exactly when a session has just been thrown away.
+//
+// fail() has always banked them and closeClient() did not, which is the kind of
+// difference two call sites are for. One place knows the rule now.
+func (p *poller) dropClientLocked() {
+	if p.client == nil {
+		return
 	}
+	p.requestsBase += p.client.Requests()
+	p.bytesBase += p.client.BytesOut()
+	p.client.Close()
+	p.client = nil
 }
 
 func clamp(d, lo, hi time.Duration) time.Duration {
