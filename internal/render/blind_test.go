@@ -345,3 +345,31 @@ func TestReadablePortLayoutOnAPlainBridgeStillPrunes(t *testing.T) {
 			"sections should still be pruned, got %v", got)
 	}
 }
+
+// A render with no capability record at all must behave like a render that
+// knows nothing — not panic, and not delete.
+//
+// radiosByBand, radioBySection and withLiveChannels all check for nil;
+// renderNetwork and bridgeIsVLANAware did not, so the first VLAN network took
+// the whole render down. Not reachable from the daemon, which never hands over
+// a nil record without an error, but a contract that half the package honours
+// is not a contract — and the half that ignored it is the half that writes.
+func TestNilCapabilityRecordIsNothingKnown(t *testing.T) {
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {"oowrt_wlan1_radio0": {".type": "wifi-iface", OwnershipTag: "1"}},
+		"network":  {"oowrt_net_iot": {".type": "interface", OwnershipTag: "1"}},
+	})
+	site := gatewaySite()
+	site.Groups = []model.APGroup{{ID: 1, Name: "all", DeviceIDs: []int64{1}}}
+	site.WLANs = []model.WLAN{{ID: 1, SSID: "home", NetworkID: 1, GroupID: 1,
+		Bands: []model.Band{model.Band2G}, Enabled: true,
+		Security: model.Security{Mode: model.SecPSK2, Key: "not-a-real-key"}}}
+
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway}, nil, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := deleteOps(t, doc, existing); len(got) != 0 {
+		t.Errorf("deleted %v with no capability record to decide from", got)
+	}
+}

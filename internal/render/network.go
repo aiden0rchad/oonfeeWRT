@@ -69,6 +69,9 @@ import (
 // §5's worked example 2 shows the bridge-vlan being added with none of this
 // mentioned; rendering it as specified breaks the LAN.
 func bridgeIsVLANAware(caps *capability.Registry, existing Existing) bool {
+	if caps == nil {
+		return false
+	}
 	bridge := caps.Ports.Bridge
 	if bridge == "" {
 		return false
@@ -128,6 +131,23 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			Reason: "VLAN 1 and untagged traffic are the device's existing LAN, " +
 				"which oonfeeWRT does not own and will not rewrite. Wireless can " +
 				"attach to it; the wired VLAN is left as the device has it",
+		})
+		return nil, omissions, none
+	}
+
+	// A nil registry is "nothing is known about this device", which every other
+	// helper here already treats as such — radiosByBand, radioBySection and
+	// withLiveChannels all check it. These two did not, so a render with no
+	// capability record panicked on the first VLAN network instead. Not
+	// reachable from the daemon, which never produces a nil record without an
+	// error, but a contract half the package honours is not a contract.
+	if caps == nil {
+		omissions = append(omissions, Omission{
+			WLAN: n.Name,
+			Reason: "nothing is known about this device's hardware, so no wired " +
+				"configuration is rendered for it. This is not a statement that " +
+				"the device cannot carry a VLAN — it means there is no " +
+				"capability record to decide from",
 		})
 		return nil, omissions, none
 	}
