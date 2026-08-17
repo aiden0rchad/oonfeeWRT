@@ -131,11 +131,14 @@ function DeviceDetailPanel({
   const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
 
-  // SSIDs on this device that the site model does not put here. Derived from
-  // the detail response rather than guessed in the browser, because only the
-  // server knows which WLANs and meshes this device is assigned.
-  const unmanaged = new Set(
-    (detail?.broadcasting ?? []).filter((b) => !b.managed).map((b) => b.ssid),
+  // Provenance per INTERFACE, not per SSID.
+  //
+  // Keyed on the interface because two BSSes can carry the same SSID and have
+  // different owners — which is exactly the case an SSID-keyed lookup got
+  // wrong. Joining the live AP list to the detail response on the SSID string
+  // was the same mistake in the other direction.
+  const originOf = new Map(
+    (detail?.broadcasting ?? []).map((b) => [b.iface, b] as const),
   )
 
   // Hoisted out of the effect so a re-probe can refresh the pane: a probe
@@ -280,20 +283,13 @@ function DeviceDetailPanel({
                     <span style={{ color: 'var(--text-muted)' }}>
                       {ap.iface} · ch {ap.channel}
                     </span>
-                    {/* This list has always shown every BSS on the device,
-                        including ones oonfeeWRT did not put there — it just
-                        never said which was which, so an SSID left over from
-                        before adoption looked exactly like a managed one. The
-                        controller deliberately never touches config it did not
-                        write, which is precisely why the distinction has to be
-                        visible: nobody is administering these through here. */}
-                    {unmanaged.has(ap.ssid) && (
-                      <span
-                        style={{ color: 'var(--warning)', marginLeft: 6 }}
-                        title="Not managed by oonfeeWRT. It was on this device before it was adopted, or was made by hand. The controller leaves it alone — changing or removing it means editing the device directly."
-                      >
+                    {originOf.get(ap.iface)?.origin === 'foreign' && (
+                      <span style={{ color: 'var(--warning)', marginLeft: 6 }}>
                         unmanaged
                       </span>
+                    )}
+                    {originOf.get(ap.iface)?.origin === 'unknown' && (
+                      <Unknown why="this device did not report which config section created this interface, so who owns it could not be determined. That is not the same as it being unmanaged." />
                     )}
                   </span>
                   <span className="num">
@@ -307,6 +303,19 @@ function DeviceDetailPanel({
                 {ap.airtime_pct !== undefined && (
                   <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
                     channel {ap.channel} is {ap.airtime_pct.toFixed(1)}% busy
+                  </div>
+                )}
+                {/* Spelled out rather than hidden in a hover title. A tooltip
+                    is unreachable on a touch device and invisible to anyone
+                    not already suspicious, and this is the sentence that
+                    explains why a button to change it does not exist. */}
+                {originOf.get(ap.iface)?.origin === 'foreign' && (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+                    oonfeeWRT did not create this network — it is section{' '}
+                    <code>{originOf.get(ap.iface)?.section ?? 'unknown'}</code>{' '}
+                    on the device, from before adoption or made by hand. The
+                    controller leaves config it did not write alone, so changing
+                    or removing this means editing the device directly.
                   </div>
                 )}
               </div>

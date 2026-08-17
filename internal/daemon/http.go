@@ -69,6 +69,14 @@ func (f fleetAdapter) Broadcasting(deviceID int64) ([]collector.AP, bool) {
 	return c.Broadcasting(deviceID)
 }
 
+func (f fleetAdapter) IfaceSections(deviceID int64) (map[string]string, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return nil, false
+	}
+	return c.IfaceSections(deviceID)
+}
+
 func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
 	return f.d.liveClients(deviceID)
 }

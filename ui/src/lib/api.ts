@@ -110,9 +110,14 @@ export interface Broadcast {
   ssid: string
   iface: string
   bssid?: string
-  /** False means nobody is administering this SSID through oonfeeWRT — it
-   *  predates adoption, or someone made it by hand on the device. */
-  managed: boolean
+  /** The wifi-iface section that created it, when the device said. */
+  section?: string
+  /** Who wrote the section — decided from the SECTION, never the SSID.
+   *  "ours": in owned_sections, so un-adopt can put it back.
+   *  "foreign": a section this controller did not write.
+   *  "unknown": the device did not say, or no poll has read the list. Not
+   *  foreign — a check that could not run must not return a verdict. */
+  origin: 'ours' | 'foreign' | 'unknown'
 }
 
 export interface DeviceDetail extends Device {

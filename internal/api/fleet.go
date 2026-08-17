@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -128,15 +127,43 @@ type deviceDetail struct {
 	BroadcastKnown bool `json:"broadcast_known"`
 }
 
+// Provenance is who wrote the UCI section behind one BSS.
+//
+// Three states, because the second and third are different facts and only one
+// of them is a defect.
+type Provenance string
+
+const (
+	// ProvOurs means the interface came from a section in owned_sections: this
+	// controller wrote it, and un-adopt can put it back.
+	ProvOurs Provenance = "ours"
+	// ProvForeign means a section this controller did not write. Nobody is
+	// administering it from here.
+	ProvForeign Provenance = "foreign"
+	// ProvUnknown means the device did not say which section created this
+	// interface, or no poll has read the interface list. NOT foreign: a check
+	// that could not run must not return a verdict, and calling an operator's
+	// own SSID foreign because we failed to ask is the worse error.
+	ProvUnknown Provenance = "unknown"
+)
+
 // broadcastView is one BSS on the air.
 type broadcastView struct {
 	SSID  string `json:"ssid"`
 	Iface string `json:"iface"`
 	BSSID string `json:"bssid,omitempty"`
-	// Managed is whether this SSID is one the site model puts here. False means
-	// nobody is administering it through this controller — it predates
-	// adoption, or someone made it by hand.
-	Managed bool `json:"managed"`
+	// Section is the wifi-iface that created this interface, when the device
+	// said. Shown because it is what an operator needs to act on it.
+	Section string `json:"section,omitempty"`
+	// Origin is decided from the SECTION, not from the SSID.
+	//
+	// It was decided by SSID for exactly one hour, and that was wrong in a way
+	// worth recording: creating a site WLAN with the same name as a foreign
+	// SSID flipped the still-foreign, still-broadcasting BSS to "managed" and
+	// took its warning away — while the controller still did not own the
+	// section and still could not change or remove it. A correct value under
+	// the wrong question.
+	Origin Provenance `json:"origin"`
 }
 
 // degradation is one call the poll could not use, with the consequence spelled
@@ -213,21 +240,41 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	if s.Fleet != nil {
 		if aps, ok := s.Fleet.Broadcasting(id); ok {
 			detail.BroadcastKnown = true
-			// "Managed" is decided by SSID against the site model rather than by
-			// UCI section name, because the poll sees interfaces and SSIDs and
-			// never sees section names. It is the honest approximation: a
-			// foreign section carrying one of our SSIDs would read as managed,
-			// and that specific case is already caught, loudly, as a render
-			// conflict.
-			managed := s.managedSSIDs(ctx, id)
+			// Provenance comes from the UCI section, joined against what we
+			// recorded writing. sectionsKnown is the three-state: without it,
+			// a device whose ACL refuses getWirelessDevices would have every
+			// BSS called foreign, including ours.
+			sections, sectionsKnown := s.Fleet.IfaceSections(id)
+			ours := map[string]bool{}
+			if owned, err := s.Store.OwnedSections(ctx, id); err == nil {
+				for _, o := range owned {
+					if o.Config == "wireless" {
+						ours[o.Section] = true
+					}
+				}
+			} else {
+				// Could not read our own claims, so nothing can be called ours
+				// without guessing. Everything reports unknown.
+				sectionsKnown = false
+				s.Log.Debug("could not read ownership claims", "device", id, "err", err)
+			}
 			for _, ap := range aps {
 				if ap.SSID == "" {
 					continue
 				}
-				detail.Broadcasting = append(detail.Broadcasting, broadcastView{
-					SSID: ap.SSID, Iface: ap.Iface, BSSID: ap.BSSID,
-					Managed: managed[ap.SSID],
-				})
+				v := broadcastView{SSID: ap.SSID, Iface: ap.Iface, BSSID: ap.BSSID,
+					Origin: ProvUnknown}
+				if sectionsKnown {
+					if sec, ok := sections[ap.Iface]; ok {
+						v.Section = sec
+						if ours[sec] {
+							v.Origin = ProvOurs
+						} else {
+							v.Origin = ProvForeign
+						}
+					}
+				}
+				detail.Broadcasting = append(detail.Broadcasting, v)
 			}
 			sort.Slice(detail.Broadcasting, func(i, j int) bool {
 				if detail.Broadcasting[i].SSID != detail.Broadcasting[j].SSID {
@@ -597,29 +644,4 @@ func (s *Server) liveClientCount(deviceID int64) (int, bool) {
 		return 0, false
 	}
 	return s.Fleet.LiveClients(deviceID)
-}
-
-// managedSSIDs is the set of SSIDs the site model puts on one device.
-//
-// Includes mesh IDs: a mesh point is a BSS on the air like any other, and
-// reporting the backhaul as unmanaged would send an operator looking for a
-// rogue network they configured themselves.
-func (s *Server) managedSSIDs(ctx context.Context, deviceID int64) map[string]bool {
-	out := map[string]bool{}
-	site, err := s.Store.Site(ctx)
-	if err != nil {
-		// An unreadable site model means we cannot say what is ours. Everything
-		// then reports as unmanaged, which overstates the problem — but the
-		// opposite default would hide a genuinely foreign SSID, and only one of
-		// those two errors is dangerous.
-		s.Log.Debug("could not read the site model to mark managed SSIDs", "err", err)
-		return out
-	}
-	for _, w := range site.WLANsFor(deviceID) {
-		out[w.SSID] = true
-	}
-	for _, m := range site.MeshesFor(deviceID) {
-		out[m.MeshID] = true
-	}
-	return out
 }

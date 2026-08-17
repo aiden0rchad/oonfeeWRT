@@ -35,6 +35,16 @@ type stubFleet struct {
 	// aps is what each device is broadcasting. Nil for a device means no poll
 	// has looked, which the API must report differently from "no BSS".
 	aps map[int64][]collector.AP
+	// sections maps a device's interfaces to their UCI wifi-iface sections.
+	// Absent means no poll has read it, which must not read as "foreign".
+	sections map[int64]map[string]string
+}
+
+func (f *stubFleet) IfaceSections(id int64) (map[string]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.sections[id]
+	return v, ok
 }
 
 func (f *stubFleet) Broadcasting(id int64) ([]collector.AP, bool) {
@@ -1599,22 +1609,39 @@ func TestClientAPAttributionIgnoresWriteOrder(t *testing.T) {
 // nobody is administering.
 //
 // Reported from the lab: the Archer C6 was on the air with oonfee-c6-2g and
-// oonfee-c6-5g alongside the managed SSID, and the controller showed only the
-// managed one.
-func TestDeviceDetailShowsUnmanagedSSIDs(t *testing.T) {
+// oonfee-c6-5g alongside the managed SSID.
+//
+// Provenance is decided from the SECTION, never the SSID. This test carries a
+// foreign section whose SSID is IDENTICAL to a managed one, because that is the
+// case an SSID-keyed answer gets wrong: it reported the still-foreign,
+// still-broadcasting BSS as managed and withdrew its warning, while the
+// controller still did not own the section and could not touch it.
+func TestBroadcastProvenanceComesFromTheSectionNotTheSSID(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
 	ctx := context.Background()
 	dev := h.seedDevice("ap-c6", true, nil)
 
+	if err := h.db.RecordOwned(ctx, []store.OwnedSection{
+		{DeviceID: dev.ID, Config: "wireless", Section: "oowrt_wlan1_radio0",
+			RenderedHash: "h1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	h.fleet.mu.Lock()
 	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
-		{Iface: "phy0-ap0", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:01"},
-		{Iface: "phy0-ap1", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
-		{Iface: "phy1-ap1", SSID: "oonfee-c6-2g", BSSID: "aa:bb:cc:00:00:03"},
+		{Iface: "phy0-ap1", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:01"},
+		{Iface: "phy0-ap0", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
+		// Same SSID as the managed one, from a section we do not own.
+		{Iface: "phy1-ap0", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:03"},
+	}}
+	h.fleet.sections = map[int64]map[string]string{dev.ID: {
+		"phy0-ap1": "oowrt_wlan1_radio0",
+		"phy0-ap0": "default_radio0",
+		"phy1-ap0": "default_radio1",
 	}}
 	h.fleet.mu.Unlock()
-	_ = ctx
 
 	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
 	if w.Code != http.StatusOK {
@@ -1627,19 +1654,54 @@ func TestDeviceDetailShowsUnmanagedSSIDs(t *testing.T) {
 	if !detail.BroadcastKnown {
 		t.Fatal("a poll that saw BSSes reported the list as unknown")
 	}
-	if len(detail.Broadcasting) != 3 {
-		t.Fatalf("want all three SSIDs on the air, got %d: %+v",
-			len(detail.Broadcasting), detail.Broadcasting)
-	}
-	got := map[string]bool{}
+	byIface := map[string]broadcastView{}
 	for _, b := range detail.Broadcasting {
-		got[b.SSID] = b.Managed
+		byIface[b.Iface] = b
 	}
-	for _, ssid := range []string{"oonfee-c6-2g", "oonfee-c6-5g"} {
-		if _, listed := got[ssid]; !listed {
-			t.Errorf("%s is on the air and was not listed at all", ssid)
-		} else if got[ssid] {
-			t.Errorf("%s is not in the site model but was marked managed", ssid)
+	if got := byIface["phy0-ap1"].Origin; got != ProvOurs {
+		t.Errorf("a section in owned_sections reported %q, want ours", got)
+	}
+	if got := byIface["phy0-ap0"].Origin; got != ProvForeign {
+		t.Errorf("a section we never wrote reported %q, want foreign", got)
+	}
+	// The one that matters: identical SSID, foreign section.
+	if got := byIface["phy1-ap0"].Origin; got != ProvForeign {
+		t.Errorf("a FOREIGN section sharing a managed SSID reported %q; "+
+			"provenance was decided by the name on the air rather than by who "+
+			"wrote the config", got)
+	}
+	if byIface["phy0-ap0"].Section != "default_radio0" {
+		t.Error("the section is not reported, so an operator cannot act on it")
+	}
+}
+
+// A device whose interface list could not be read must report unknown, never
+// foreign. Calling an operator's own SSID foreign because we failed to ask is
+// the worse of the two errors.
+func TestUnreadableSectionsReportUnknownNotForeign(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-acl-denied", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "somebody-elses", BSSID: "aa:bb:cc:00:00:09"},
+	}}
+	h.fleet.sections = nil // getWirelessDevices refused
+	h.fleet.mu.Unlock()
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d", w.Code)
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range detail.Broadcasting {
+		if b.Origin != ProvUnknown {
+			t.Errorf("origin %q with no section data; a check that could not "+
+				"run must not return a verdict", b.Origin)
 		}
 	}
 }

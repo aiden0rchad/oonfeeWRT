@@ -440,6 +440,33 @@ func (c *Collector) Broadcasting(deviceID int64) ([]AP, bool) {
 	return out, true
 }
 
+// IfaceSections maps this device's wireless interfaces to the UCI wifi-iface
+// section that created each one, and reports whether the map is known at all.
+//
+// The bool is the three-state rule. A device whose ACL refuses
+// luci-rpc.getWirelessDevices, or one no poll has yet read the interface list
+// from, returns false — which must NOT be read as "no interface has a section".
+// Provenance is decided from this, and deciding it from silence would tell an
+// operator their own SSID is foreign.
+func (c *Collector) IfaceSections(deviceID int64) (map[string]string, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ifaceSections == nil {
+		return nil, false
+	}
+	out := make(map[string]string, len(p.ifaceSections))
+	for k, v := range p.ifaceSections {
+		out[k] = v
+	}
+	return out, true
+}
+
 func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -571,7 +598,12 @@ type poller struct {
 	// ifaceModes is each wireless interface's configured mode, cached beside
 	// the interface list and refreshed with it.
 	ifaceModes map[string]string
-	boardAt    time.Time
+	// ifaceSections is each wireless interface's UCI wifi-iface section, cached
+	// beside the modes and refreshed with them. It is what makes "did this
+	// controller write that BSS?" answerable at all: the poll sees interfaces
+	// and SSIDs, and only this says which section produced one.
+	ifaceSections map[string]string
+	boardAt       time.Time
 
 	// networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// stamped onto every poll in between. Without carrying them forward, only
@@ -708,6 +740,11 @@ func (p *poller) tick(ctx context.Context) {
 		// which servesClients reads as "assume AP", the prior behaviour.
 		if snap.IfaceModes != nil {
 			p.ifaceModes = snap.IfaceModes
+		}
+		// Same guard: a poll that did not read the interface list must not
+		// erase a determination an earlier one made.
+		if snap.IfaceSections != nil {
+			p.ifaceSections = snap.IfaceSections
 		}
 		p.mu.Unlock()
 	}

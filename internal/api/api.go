@@ -53,6 +53,10 @@ type Fleet interface {
 	// ones this controller does not manage.
 	Broadcasting(deviceID int64) ([]collector.AP, bool)
 
+	// IfaceSections maps a device's wireless interfaces to the UCI section that
+	// created each. False means no poll has read it — never "none have one".
+	IfaceSections(deviceID int64) (map[string]string, bool)
+
 	// LiveClients reports the most recent associated-station count for a
 	// device, and whether it is known at all.
 	//
