@@ -1428,6 +1428,10 @@ function Neighbours({ site }: { site: Site }) {
     at?: number
     error?: string
     devices_failed?: number
+    // The full result, so the card can SHOW why a device failed instead of
+    // guessing. api.lastNeighbours already returns it; the state type used to
+    // discard it, and the summary then asserted a cause it had no evidence for.
+    result?: NeighbourResult
   } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -1496,11 +1500,28 @@ function Neighbours({ site }: { site: Site }) {
             : last.error
               ? `Last automatic run failed: ${last.error}`
               : last.devices_failed
-                ? // Not "could not be reached": the commonest case is a push
-                  // that WAS delivered and refused per call, which leaves that
-                  // radio telling its clients about no neighbours at all.
-                  `Last automatic run ${ago(last.at ?? 0)}, but ${last.devices_failed} device${last.devices_failed === 1 ? '' : 's'} did not take the update.`
+                ? // Cause-neutral. The reasons are printed below, verbatim.
+                  // This line used to say "could not be reached", which sent an
+                  // operator to check cabling for a device that was powered,
+                  // on the network, answering, and refusing one ubus call —
+                  // where the actual remedy is to re-adopt so its ACL is
+                  // rewritten.
+                  `Last automatic run ${ago(last.at ?? 0)}, but ${last.devices_failed} device${last.devices_failed === 1 ? '' : 's'} reported an error.`
                 : `Last automatic run ${ago(last.at ?? 0)}, with no errors.`}
+        </div>
+      )}
+
+      {/* The reasons, verbatim, from the same row component the on-demand path
+          uses. A count with a guessed cause sends people to the wrong place:
+          an ACL narrowed by a sysupgrade and a device that is genuinely off
+          the network produce the same number and need opposite responses. */}
+      {!res && last?.ran && (last.devices_failed ?? 0) > 0 && last.result && (
+        <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
+          {last.result.devices
+            .filter((d) => d.error)
+            .map((d) => (
+              <NeighbourDeviceRow key={d.device_id} d={d} />
+            ))}
         </div>
       )}
 

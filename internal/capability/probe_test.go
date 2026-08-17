@@ -506,3 +506,60 @@ func TestRadiosAreFoundWhenNothingIsBroadcasting(t *testing.T) {
 			"run; an unrunnable check must not report a clean bill")
 	}
 }
+
+// A device whose radios nothing could enumerate must record NotObservable, not
+// Absent.
+//
+// The two sources are iwinfo.devices, which lists BROADCASTING interfaces, and
+// luci-rpc.getWirelessDevices, which is keyed by radio. On a stock router
+// nothing is broadcasting, so iwinfo legitimately returns an empty list — and
+// if getWirelessDevices is also refused (rpcd-mod-luci absent, which the probe
+// tolerates elsewhere), nothing has enumerated the radios at all.
+//
+// That used to resolve to Absent: the fallback merged "refused" with "there are
+// none", the survey verdict got no observations, and the device rendered a
+// clean preview with no hardware warnings while adoption told the operator to
+// re-adopt it as a switch.
+func TestRadiosNobodyCouldEnumerateAreNotObservable(t *testing.T) {
+	c := dial(t)
+	ctx := context.Background()
+
+	// Nothing broadcasting: iwinfo.devices answers with an empty list.
+	if err := c.Call(ctx, "__test", "disable_radios", nil, nil); err != nil {
+		t.Skipf("mock cannot empty the interface list: %v", err)
+	}
+	// And the radio-keyed source is refused.
+	setACLGap(t, c, [2]string{"luci-rpc", "getWirelessDevices"})
+	t.Cleanup(func() {
+		_ = c.Call(ctx, "__test", "add_wifi_iface", map[string]any{
+			"radio": "radio0", "ifname": "wlan0",
+			"section": "default_radio0", "mode": "ap"}, nil)
+		_ = c.Call(ctx, "__test", "add_wifi_iface", map[string]any{
+			"radio": "radio1", "ifname": "wlan1",
+			"section": "default_radio1", "mode": "ap"}, nil)
+	})
+
+	r, err := Probe(ctx, c)
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if got := r.State(FeatSurvey); got != NotObservable {
+		t.Errorf("FeatSurvey=%v; nothing enumerated the radios, so this is a "+
+			"gap in our reach and not a fact about the device", got)
+	}
+	for _, f := range []Feature{FeatHostapdControl, FeatNeighborReport} {
+		if got := r.State(f); got == Absent {
+			t.Errorf("%s recorded Absent on a device whose radios could not be "+
+				"listed at all", f)
+		}
+	}
+	var explained bool
+	for _, n := range r.Notes {
+		if strings.Contains(n, "radios undetermined") {
+			explained = true
+		}
+	}
+	if !explained {
+		t.Error("nothing in the notes says why the radios are unknown")
+	}
+}

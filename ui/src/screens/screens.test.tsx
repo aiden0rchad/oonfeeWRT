@@ -799,6 +799,40 @@ describe('Settings — wireless uplinks', () => {
     }
   })
 
+  // The 802.11k card must SHOW why a device failed, not guess.
+  //
+  // "could not be reached" was asserted for any failure, including an ACL
+  // narrowed by a sysupgrade — a device that is powered, on the network,
+  // answering, and refusing one ubus call. That sends an operator to check
+  // cabling when the remedy is to re-adopt so the ACL is rewritten. The global
+  // mock returns {ran:false}, so no test rendered this branch at all.
+  it('shows the reason a neighbour push failed, rather than guessing', async () => {
+    api.site.mockResolvedValue({ ...base, wlans: [wlan()] })
+    api.lastNeighbours.mockResolvedValue({
+      ran: true,
+      at: Math.floor(Date.now() / 1000) - 180,
+      devices_failed: 1,
+      result: {
+        updated: 1,
+        unchanged: 1,
+        devices: [
+          {
+            device_id: 1,
+            name: 'ap-192-168-1-1',
+            error:
+              'could not list wireless interfaces: ubus iwinfo.devices: access denied',
+          },
+        ],
+      },
+    })
+    render(<Settings devices={[]} />)
+
+    await waitFor(() => expect(screen.getByText(/reported an error/)).toBeTruthy())
+    expect(screen.getByText(/access denied/)).toBeTruthy()
+    // And it must not assert a cause it has no evidence for.
+    expect(screen.queryByText(/could not be reached/)).toBeNull()
+  })
+
   // A network that does not accept bridges must not be offered as somewhere to
   // join. Offering it would let someone build the one configuration whose
   // failure mode is indistinguishable from a driver refusing 4-address frames:

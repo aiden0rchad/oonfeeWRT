@@ -402,7 +402,26 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	// keyed by radio and answers even when nothing is broadcasting, and which
 	// the ACL already grants. iwinfo is still used for the per-interface
 	// detail, where an interface exists.
-	radioIfaces := radiosWithInterfaces(ctx, c, devs.Devices)
+	radioIfaces, listErr := radiosWithInterfaces(ctx, c, devs.Devices)
+	if listErr != nil && len(radioIfaces) == 0 {
+		// Nothing enumerated this device's radios: getWirelessDevices was
+		// refused AND iwinfo listed no broadcasting interface to fall back on.
+		//
+		// Treated exactly like the iwinfo.devices refusal above, because it is
+		// the same fact. An empty iwinfo list is not a statement about
+		// hardware — it means nothing is on the air, which is how every stock
+		// router ships — so combining it with a refused radio list leaves the
+		// radios genuinely undetermined. Recording Absent here is what let a
+		// device with unreadable radios render a clean preview.
+		r.Set(FeatSurvey, NotObservable)
+		r.Set(FeatAirtimeSplit, NotObservable)
+		r.Set(FeatHostapdControl, NotObservable)
+		r.Set(FeatNeighborReport, NotObservable)
+		r.Note("radios undetermined: luci-rpc.getWirelessDevices failed (%v) "+
+			"and iwinfo listed no broadcasting interface, so nothing "+
+			"enumerated this device's radios", listErr)
+		return
+	}
 
 	// One accumulator per feature. The first three previously defaulted to
 	// Absent and all three had a path that reached the end without
@@ -1153,7 +1172,16 @@ type radioEntry struct {
 // Falls back to the interface list when getWirelessDevices cannot be read: a
 // device whose ACL refuses it still gets whatever iwinfo can show, which is the
 // previous behaviour rather than a regression.
-func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) []radioEntry {
+// radiosWithInterfaces enumerates the device's radios, and reports whether the
+// enumeration could be done at all.
+//
+// The error is the point. The fallback used to merge `err != nil` with
+// `len(wl) == 0`, which makes "the call was refused" and "this device really
+// has no radios" the same outcome — and the function holds no *Registry, so it
+// could record neither. On a stock router with nothing broadcasting, a refused
+// getWirelessDevices then produced an empty radio list that the rest of the
+// probe read as a fact about the hardware.
+func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) ([]radioEntry, error) {
 	var wl map[string]struct {
 		Up     bool `json:"up"`
 		Config struct {
@@ -1164,12 +1192,16 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 			IfName string `json:"ifname"`
 		} `json:"interfaces"`
 	}
-	if err := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &wl); err != nil || len(wl) == 0 {
+	callErr := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &wl)
+	if callErr != nil || len(wl) == 0 {
+		// Fall back to whatever iwinfo listed, but carry the refusal up. An
+		// empty result here means "there are none" only when the call itself
+		// succeeded.
 		out := make([]radioEntry, 0, len(ifaces))
 		for _, i := range ifaces {
 			out = append(out, radioEntry{radio: i, iface: i})
 		}
-		return out
+		return out, callErr
 	}
 
 	known := map[string]bool{}
@@ -1202,7 +1234,7 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].radio < out[b].radio })
-	return out
+	return out, nil
 }
 
 // anyRadioHardwareKnown reports whether any radio's hardware name was readable.
