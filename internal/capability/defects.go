@@ -107,25 +107,32 @@ func (d Defect) Configured() bool { return d.Triggers != nil }
 // a Source that a sceptical reader can check.
 var knownDefects = []Defect{
 	{
-		ID:         "mwlwifi-80211w-unsupported",
-		Hardware:   "marvell",
-		Summary:    "802.11w (protected management frames) is not properly supported by this radio's driver",
+		ID:       "mwlwifi-80211w-unsupported",
+		Hardware: "marvell",
+		Summary:  "802.11w (protected management frames) is not properly supported by this radio's driver",
 		Detail: "The mwlwifi driver accepts ieee80211w and does not implement it " +
 			"correctly. OpenWrt's own page for this hardware says not to enable it, " +
 			"and it is off by default there for that reason.",
 		Source:     "https://openwrt.org/toh/linksys/wrt3200acm",
 		Confidence: ConfDeviceDoc,
 		Severity:   SevRadioDeath,
-		Mitigation: "Set PMF to disabled on any WLAN this radio carries. Note that " +
-			"WPA3/SAE requires PMF, so this hardware cannot run WPA3 either.",
+		Mitigation: "Either set PMF to disabled on this WLAN, or stop publishing " +
+			"it on this device (the per-device \"disabled\" override). PMF cannot " +
+			"be varied per device: APs in one mobility domain must agree on their " +
+			"RSN capabilities or 802.11r fast transition fails intermittently " +
+			"rather than cleanly, which is why security settings are deliberately " +
+			"not overridable. So turning it off here turns it off for every AP " +
+			"carrying this WLAN — if the others are healthy, not publishing it on " +
+			"this one keeps them protected. Note also that WPA3/SAE requires PMF, " +
+			"so this hardware cannot run WPA3 at all.",
 		Triggers: func(v map[string]string) bool {
 			return v["ieee80211w"] != "" && v["ieee80211w"] != "0"
 		},
 	},
 	{
-		ID:         "mwlwifi-wpa3-unsupported",
-		Hardware:   "marvell",
-		Summary:    "WPA3/SAE does not work reliably on this radio and can crash the router",
+		ID:       "mwlwifi-wpa3-unsupported",
+		Hardware: "marvell",
+		Summary:  "WPA3/SAE does not work reliably on this radio and can crash the router",
 		Detail: "OpenWrt's page for this hardware states WPA3 will not reliably work " +
 			"because of mwlwifi driver issues, that it can crash the router outright, " +
 			"and that the driver is unlikely ever to support it.",
@@ -138,9 +145,9 @@ var knownDefects = []Defect{
 		},
 	},
 	{
-		ID:         "mwlwifi-dfs-channels",
-		Hardware:   "marvell",
-		Summary:    "the 5 GHz radio can fail to start on DFS channels",
+		ID:       "mwlwifi-dfs-channels",
+		Hardware: "marvell",
+		Summary:  "the 5 GHz radio can fail to start on DFS channels",
 		Detail: "OpenWrt's page for this hardware strongly recommends channel 36 or " +
 			"auto on the 5 GHz radio to avoid crashing the wifi chipset.",
 		Source:     "https://openwrt.org/toh/linksys/wrt3200acm",
