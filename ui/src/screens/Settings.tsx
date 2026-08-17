@@ -405,6 +405,16 @@ function WLANEditor({
   onSaved: () => void
 }) {
   const [draft, setDraft] = useState<Partial<WLAN>>({ ...w, key: '' })
+  // The last PMF the OPERATOR chose, before any mode-driven coercion.
+  //
+  // Mode changes clamp from THIS rather than from the already-clamped draft.
+  // Clamping from the draft loses a deliberate choice on a round trip: a
+  // Required network detoured through Open comes back Disabled, and a Disabled
+  // one — the exact state the mwlwifi defect tells operators to use — detoured
+  // through WPA3 comes back Required. Neither touched the PMF control, and the
+  // apply preview names the section and a count of options, never the value, so
+  // the change appears nowhere.
+  const [chosenPMF, setChosenPMF] = useState<WLAN['pmf']>(w.pmf ?? '1')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
   const set = (patch: Partial<WLAN>) => setDraft((d) => ({ ...d, ...patch }))
@@ -475,7 +485,7 @@ function WLANEditor({
             // but a form should not produce a value it will not display.
             set({
               security_mode: m as WLAN['security_mode'],
-              pmf: clampPMF(m as WLAN['security_mode'], draft.pmf),
+              pmf: clampPMF(m as WLAN['security_mode'], chosenPMF),
             })
           }
         />
@@ -516,7 +526,12 @@ function WLANEditor({
                     ]
               }
               value={[draft.pmf ?? '1']}
-              onChange={([v]) => set({ pmf: v as WLAN['pmf'] })}
+              onChange={([v]) => {
+                // Remember what was actually picked, so a later mode detour
+                // can return to it rather than to whatever the clamp produced.
+                setChosenPMF(v as WLAN['pmf'])
+                set({ pmf: v as WLAN['pmf'] })
+              }}
             />
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -6 }}>
               Protects deauthentication and disassociation frames. Leave it on
@@ -1471,7 +1486,10 @@ function Neighbours({ site }: { site: Site }) {
             : last.error
               ? `Last automatic run failed: ${last.error}`
               : last.devices_failed
-                ? `Last automatic run ${ago(last.at ?? 0)}, but ${last.devices_failed} device${last.devices_failed === 1 ? '' : 's'} could not be reached.`
+                ? // Not "could not be reached": the commonest case is a push
+                  // that WAS delivered and refused per call, which leaves that
+                  // radio telling its clients about no neighbours at all.
+                  `Last automatic run ${ago(last.at ?? 0)}, but ${last.devices_failed} device${last.devices_failed === 1 ? '' : 's'} did not take the update.`
                 : `Last automatic run ${ago(last.at ?? 0)}, with no errors.`}
         </div>
       )}

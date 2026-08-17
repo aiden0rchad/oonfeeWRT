@@ -103,13 +103,31 @@ func (s *Server) handleLastNeighbours(w http.ResponseWriter, r *http.Request) {
 		// individual devices failed — their reasons land in res.Devices[].Failed
 		// — so a screen reading only the top-level error would report "no
 		// errors" for a run in which half the fleet was unreachable.
-		// Error, not Skipped. A device that took no part for a standing reason
-		// — an ACL predating the feature, no managed WLAN — is not a failure,
-		// and counting it as one teaches people to ignore the number.
+		// A device counts as failed on a device-level error OR on any BSS whose
+		// push failed.
+		//
+		// Counting only the device level reported "no errors" for a cycle in
+		// which an AP was left holding an empty neighbour list: a batch that is
+		// DELIVERED and refused per call comes back with a nil batch error, so
+		// pushNeighbours records the reason on the BSS and never touches
+		// row.Error. The failure is real and complete — that radio tells its
+		// clients about no neighbours at all — and it was invisible.
+		//
+		// Skipped is still not counted. A device that took no part for a
+		// standing reason — an ACL predating the feature, no managed WLAN — is
+		// not a failure, and counting it as one teaches people to ignore the
+		// number.
 		var failed int
 		for _, d := range res.Devices {
 			if d.Error != "" {
 				failed++
+				continue
+			}
+			for _, b := range d.BSSes {
+				if b.Failed != "" {
+					failed++
+					break
+				}
 			}
 		}
 		out["devices_failed"] = failed

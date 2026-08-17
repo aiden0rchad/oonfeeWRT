@@ -1971,6 +1971,13 @@ func TestTheLastNeighbourRunCountsPerDeviceFailures(t *testing.T) {
 			{DeviceID: 2, Name: "dead-ap", Error: "could not reach this device"},
 			// A standing reason is NOT a failure and must not be counted.
 			{DeviceID: 3, Name: "old-acl", Skipped: "its ACL predates neighbour reports"},
+			// Delivered and refused per call: the batch error is nil, so the
+			// reason lands on the BSS and row.Error stays empty. That radio is
+			// telling its clients about no neighbours at all, and counting only
+			// the device level reported the whole cycle as clean.
+			{DeviceID: 4, Name: "refused-ap", BSSes: []NeighbourBSS{
+				{Iface: "phy0-ap0", Failed: "ubus status 4: object not registered"},
+			}},
 		},
 	}
 	h.srv.LastNeighbours = func() (*NeighbourResult, string, time.Time, bool) {
@@ -1991,10 +1998,10 @@ func TestTheLastNeighbourRunCountsPerDeviceFailures(t *testing.T) {
 	if !got.Ran {
 		t.Fatal("a completed cycle reported as not run")
 	}
-	if got.DevicesFailed != 1 {
-		t.Errorf("devices_failed=%d, want 1: one device errored and one was "+
-			"skipped for a standing reason, which is not a failure",
-			got.DevicesFailed)
+	if got.DevicesFailed != 2 {
+		t.Errorf("devices_failed=%d, want 2: one device errored, one had every "+
+			"BSS push refused, and one was skipped for a standing reason — "+
+			"which is not a failure", got.DevicesFailed)
 	}
 }
 

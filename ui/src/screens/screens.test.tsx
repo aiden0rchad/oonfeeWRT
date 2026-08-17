@@ -726,6 +726,39 @@ describe('Settings — wireless uplinks', () => {
     }
   })
 
+  // A detour through a mode that hides PMF must not silently rewrite a
+  // deliberate choice. Required -> Open -> WPA2 used to come back Disabled:
+  // the clamp read the already-clamped draft rather than what was picked, and
+  // the apply preview names a section and an option count, never a value, so
+  // the downgrade appeared nowhere.
+  it('keeps a deliberate PMF choice across a mode detour', async () => {
+    api.site.mockResolvedValue({ ...base, wlans: [wlan({ security_mode: 'psk2' })] })
+    api.saveWLAN.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByText('Edit')[0])
+    await waitFor(() =>
+      expect(screen.getByText('Protected management frames')).toBeTruthy(),
+    )
+
+    fireEvent.click(screen.getByText('Required'))
+    fireEvent.click(screen.getByText('Open'))
+    await waitFor(() =>
+      expect(screen.queryByText('Protected management frames')).toBeNull(),
+    )
+    fireEvent.click(screen.getByText('WPA2 only'))
+    await waitFor(() => expect(screen.getByText('Disabled')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(api.saveWLAN).toHaveBeenCalled())
+    const saved = api.saveWLAN.mock.calls.at(-1)?.[0] as { pmf?: string }
+    if (saved.pmf !== '2') {
+      throw new Error(
+        `a detour through Open turned a deliberate "Required" into pmf="${saved.pmf}"`,
+      )
+    }
+  })
+
   // A network that does not accept bridges must not be offered as somewhere to
   // join. Offering it would let someone build the one configuration whose
   // failure mode is indistinguishable from a driver refusing 4-address frames:
