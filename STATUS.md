@@ -3524,9 +3524,28 @@ pins the confidence so a rewording cannot quietly demote it to hearsay again.
 
 **Left safe.** The WRT's stored config was set back to `ieee80211w=0` over SSH —
 a file write, no phy0 contact — so its next boot comes up clean; the C6 was
-returned to PMF off and reloaded; the site model is back to Disabled. **The WRT
-itself is still wedged and needs a physical power cycle**, which is the
-documented and only recovery.
+returned to PMF off and reloaded; the site model is back to Disabled.
+
+#### Recovery confirmed
+
+Power-cycled 2026-08-17 10:01. The device came back exactly as the pre-staged
+config intended: `ieee80211w=0` both live and committed, **zero**
+`MEMAddrAccess`, both radios `status: ENABLED` and carrying `oonfee-roam` —
+phy0-ap0 on channel 36 at 80 MHz, phy1-ap0 on channel 1. So the recovery
+procedure is confirmed end to end: **write the safe config while wedged, then
+pull the power.** Nothing has to be repaired afterwards.
+
+**A tooling trap worth keeping.** The first health check ran
+`timeout 5 ubus call …` on the device and printed nothing for both radios, which
+reads exactly like "the radios are not answering" — a false alarm on a device
+that had just come back clean. The real cause was `ash: timeout: not found`:
+**busybox on this build has no `timeout`**. Any bound on a device-side call has
+to come from the CLIENT — `ssh -o ConnectTimeout` and a local watchdog — because
+the remote binary you are relying on to enforce it may simply not exist, and its
+absence is indistinguishable from the hang you were guarding against. This is
+§6's "a refused check is not a negative answer" wearing yet another hat, and it
+nearly cost a wrong conclusion about the hardware in the same minute the real
+one was confirmed.
 
 ---
 
@@ -3586,6 +3605,12 @@ written and believed.
   it, no test — and each one reads as a harmless omission unless you already
   know about the other four. Reading a file at a time cannot find this; tracing
   one value from where it is produced to where it is checked can.
+- **Bound a remote call from the client, never with a binary on the device.**
+  `timeout 5 ubus call …` printed nothing for both radios and read exactly like
+  "the radios are dead" — on a device that had just come back healthy. Busybox
+  on that build has no `timeout`, and a missing guard is indistinguishable from
+  the hang it was supposed to catch. Use `ssh -o ConnectTimeout` and a local
+  watchdog.
 - **A current reading is not a history.** "The WRT has carried zero clients"
   came from a live `get_clients` returning an empty list — true at that instant,
   false about the run, and it had held an experiment open as inconclusive for a
