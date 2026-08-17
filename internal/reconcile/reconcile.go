@@ -180,7 +180,19 @@ func (r *Reconciler) PlanDevice(ctx context.Context, c *ubus.Client, site model.
 	}
 
 	p := &DevicePlan{Device: dev, Doc: doc, Report: report, Existing: existing}
-	p.Drift = detectDrift(doc, existing)
+	// What we actually applied last time, so drift can be told apart from a
+	// pending edit of our own. A failure here is not fatal: an empty map makes
+	// every difference look like drift, which is the old behaviour, so the
+	// worst case is the noise rather than a wrong apply.
+	applied := map[string]string{}
+	if r.Store != nil {
+		if owned, err := r.Store.OwnedSections(ctx, dev.ID); err == nil {
+			for _, o := range owned {
+				applied[o.Config+"."+o.Section] = o.RenderedHash
+			}
+		}
+	}
+	p.Drift = detectDrift(doc, existing, applied)
 
 	// A conflict means a human owns something we would have to touch. Produce
 	// no operations at all — a partial apply around a conflict is how you end
@@ -195,18 +207,41 @@ func (r *Reconciler) PlanDevice(ctx context.Context, c *ubus.Client, site model.
 	return p, nil
 }
 
-// detectDrift compares what we last rendered against what the device holds, for
+// detectDrift compares what we last APPLIED against what the device holds, for
 // the keys we manage.
 //
 // Only our keys: the device adds defaults of its own, and hostapd writes state
 // back into some sections. Comparing whole sections would report drift
 // constantly and train the operator to ignore it.
-func detectDrift(doc render.Doc, existing render.Existing) []Drift {
+//
+// appliedHash maps "config.section" to the hash recorded at the last confirmed
+// apply, and it is what makes this drift rather than arithmetic.
+//
+// Without it, this compared the FRESHLY RENDERED desired state against the
+// device — which differs for two completely different reasons, and reported
+// both as the same thing. Editing a WLAN in the UI and pressing Preview made
+// every device announce "Someone edited config we own on this device", naming a
+// culprit for a change the reader had made in that screen five seconds earlier,
+// and adding "we applied 1" for a value that had never been applied to
+// anything. Observed while turning PMF back on: two devices, four accusations,
+// all false.
+//
+// A section whose rendered hash still matches what was applied is unchanged by
+// us, so a difference there really is someone editing the device. A section
+// whose hash has moved is our own pending edit, and the plan already reports it
+// as a change to make.
+func detectDrift(doc render.Doc, existing render.Existing, appliedHash map[string]string) []Drift {
 	var out []Drift
 	for _, s := range doc.Sections {
 		current, present := existing.In(s.Config)[s.Name]
 		if !present || current[render.OwnershipTag] != "1" {
 			continue // not ours yet, or not ours at all: not drift
+		}
+		// Our own edit, not the device's. Skipped rather than relabelled: the
+		// plan lists it as a pending change already, and saying it twice under
+		// two names is how one edit looks like two problems.
+		if h, ok := appliedHash[s.Config+"."+s.Name]; ok && h != s.Hash() {
+			continue
 		}
 		keys := make([]string, 0, len(s.Values))
 		for k := range s.Values {

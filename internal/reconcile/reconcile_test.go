@@ -775,3 +775,109 @@ func TestAPrunedSectionLosesItsOwnershipClaim(t *testing.T) {
 			"survived: %v", len(after), names)
 	}
 }
+
+// Drift means the DEVICE changed, and must not be reported for our own edit.
+//
+// detectDrift compared the freshly rendered desired state against the device,
+// which differs for two entirely different reasons and reported both the same
+// way. So editing a WLAN and pressing Preview made every device announce
+// "Someone edited config we own on this device" — naming a culprit for a change
+// the reader had made in that screen seconds earlier — and adding "we applied
+// X" for a value never applied to anything. Observed for real while turning PMF
+// back on: two devices, four accusations, all false.
+//
+// The recorded hash is what tells the two apart, and it was already being
+// stored at every confirmed apply.
+func TestDriftIsNotReportedForOurOwnPendingEdit(t *testing.T) {
+	sec := render.Section{
+		Config: "wireless", Type: "wifi-iface", Name: "oowrt_wlan1_radio0",
+		Values: map[string]string{
+			render.OwnershipTag: "1",
+			"ssid":              "oonfee-roam",
+			"ieee80211w":        "1", // what the operator has just asked for
+		},
+	}
+	doc := render.Doc{Sections: []render.Section{sec}}
+	existing := render.Existing{Configs: map[string]map[string]map[string]string{
+		"wireless": {"oowrt_wlan1_radio0": {
+			render.OwnershipTag: "1",
+			"ssid":              "oonfee-roam",
+			"ieee80211w":        "0", // what is actually on the device
+		}},
+	}}
+
+	// The model has moved since the last apply: the stored hash is not this
+	// section's hash. That difference is ours, and the plan reports it as a
+	// change to make — saying it again as drift is one edit wearing two names.
+	ourEdit := map[string]string{"wireless.oowrt_wlan1_radio0": "a-hash-from-before-the-edit"}
+	if d := detectDrift(doc, existing, ourEdit); len(d) != 0 {
+		t.Errorf("our own pending edit was reported as someone editing the device: %v", d)
+	}
+
+	// The model is exactly what we applied, so the same difference now really
+	// is the device having been changed under us. That must still be reported.
+	unchanged := map[string]string{"wireless.oowrt_wlan1_radio0": sec.Hash()}
+	d := detectDrift(doc, existing, unchanged)
+	if len(d) != 1 {
+		t.Fatalf("a device edited behind our back must still be reported: %v", d)
+	}
+	if d[0].Option != "ieee80211w" || d[0].Ours != "1" || d[0].Theirs != "0" {
+		t.Errorf("drift does not name the option and both values: %+v", d[0])
+	}
+
+	// A section with no record at all — never applied — keeps the old
+	// behaviour rather than silently vanishing from the report.
+	if d := detectDrift(doc, existing, map[string]string{}); len(d) != 1 {
+		t.Errorf("an unrecorded section should still be compared: %v", d)
+	}
+}
+
+// The wiring: PlanDevice has to actually consult the recorded hashes.
+//
+// detectDrift's own test covers the rule, and a mutation that stopped
+// PlanDevice loading the hashes at all broke nothing — the same shape of gap
+// this repository keeps finding, where a correct function is wired to nothing.
+// This drives the real path: apply, then change the SITE MODEL rather than the
+// device, and require that the operator's own pending edit is not reported back
+// to them as somebody having edited the router.
+func TestPlanDeviceDoesNotCallOurOwnEditDrift(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+	s := siteWLAN(dev.ID, 21)
+
+	p, err := r.PlanDevice(ctx, c, s, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, p, nil); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// The operator changes the WLAN in the controller. Nothing touches the
+	// device — this is exactly pressing Save and then Preview.
+	//
+	// The SSID rather than PMF, deliberately. A disabled PMF renders no
+	// ieee80211w key at all, so the device has none after the apply and the
+	// comparison skips the option on both sides — which made the first version
+	// of this test pass whether or not the wiring existed. The SSID is written
+	// on every apply, so it is present on the device and genuinely differs.
+	edited := s
+	edited.WLANs = append([]model.WLAN(nil), s.WLANs...)
+	edited.WLANs[0].SSID = "Home21-renamed-in-the-controller"
+
+	p2, err := r.PlanDevice(ctx, c, edited, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice after the edit: %v", err)
+	}
+	if len(p2.Drift) != 0 {
+		t.Errorf("the operator's own unapplied edit was reported as somebody "+
+			"editing the device: %v", p2.Drift)
+	}
+	// And it must still be reported as work to do, or suppressing the drift
+	// would have hidden the change instead of relabelling it.
+	if p2.Empty() {
+		t.Error("the edit produced no plan, so nothing would ever apply it")
+	}
+}
