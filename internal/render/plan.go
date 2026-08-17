@@ -80,6 +80,13 @@ func matches(s Section, current map[string]string) bool {
 //
 // Only ever sections carrying our marker. A section without it was written by a
 // human and is not ours to delete, however much it looks like ours.
+//
+// And only ever sections the render actually DECIDED about. A document that
+// could not read the device's radios produces no wireless sections, which
+// reaches here indistinguishable from a device the operator emptied — so the
+// document carries the distinction itself, in Retain and Blind, and this
+// honours it. Without that, a refused capability call deleted every interface
+// we own on the device and the apply reported success.
 func (d Doc) Prune(existing Existing) []applyengine.Op {
 	// Keyed by config as well as name: two configs can hold sections with the
 	// same name, and pruning "everything called oowrt_net_iot" would reach
@@ -91,8 +98,16 @@ func (d Doc) Prune(existing Existing) []applyengine.Op {
 	}
 	var stale []ref
 	for config, sections := range existing.Configs {
+		// A config this render could not see into is not a config it decided
+		// anything about. See Doc.Retain.
+		if d.blind(config) {
+			continue
+		}
 		for name := range sections {
 			if wanted[ref{config, name}] || !existing.OwnedIn(config, name) {
+				continue
+			}
+			if d.retained(config, name) {
 				continue
 			}
 			stale = append(stale, ref{config, name})

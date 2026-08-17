@@ -53,10 +53,61 @@ type Section struct {
 	Lists map[string][]string
 }
 
+// SectionRef identifies one UCI section: a config and a section name.
+type SectionRef struct{ Config, Name string }
+
 // Doc is everything we intend to exist on one device.
 type Doc struct {
 	DeviceID int64
 	Sections []Section
+
+	// Retain and Blind are how this document says "I did not decide about
+	// that", and they exist because Prune cannot tell the difference on its
+	// own.
+	//
+	// Prune deletes every section we own that the render did not produce. That
+	// is right when the absence is a DECISION — the WLAN was deleted, the
+	// device left the AP group, the role changed to one that does not
+	// broadcast. It is catastrophic when the absence is IGNORANCE: a device
+	// whose radio list could not be read renders no wireless at all, and a bare
+	// Prune then deletes every interface we own on it, including the wireless
+	// uplink that is its only path to the network. The apply reports success.
+	//
+	// That is this project's cardinal error — NotObservable collapsed into
+	// Absent — committed at the point of deletion rather than at the point of
+	// probing, which is why the capability package's care about it was not
+	// enough on its own. Render already knew: it emits the
+	// "hardware-unidentified" warning saying in as many words that the check
+	// did not run, and then produced a plan to delete on the strength of it.
+	// Worse, that warning's advice is "apply a WLAN and re-probe" — and the
+	// apply was the thing doing the deleting, so the stated remedy could never
+	// work.
+	//
+	// Retain names exact sections to leave alone; Blind names whole configs the
+	// render could not see into, for when we cannot even name the sections
+	// because naming them needs the radio we could not read.
+	Retain []SectionRef
+	Blind  []string
+}
+
+// retained reports a section this render could not decide about.
+func (d Doc) retained(config, name string) bool {
+	for _, r := range d.Retain {
+		if r.Config == config && r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// blind reports a config this render could not see into at all.
+func (d Doc) blind(config string) bool {
+	for _, c := range d.Blind {
+		if c == config {
+			return true
+		}
+	}
+	return false
 }
 
 // Configs lists the distinct UCI configs the document touches.
@@ -227,6 +278,20 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	}
 	doc := Doc{DeviceID: dev.ID}
 
+	// What this render could not see, recorded before anything is decided on
+	// the strength of it. See Doc.Retain.
+	//
+	// The port layout is the wired half. A device that did not report it
+	// renders no VLAN, no addressing, no DHCP and no firewall zone — which is
+	// indistinguishable, to Prune, from an operator having deleted all of them.
+	// Only counts while the site actually asks for a wired VLAN: with no such
+	// network the render's silence is a decision about the model, not
+	// ignorance about the device.
+	if wantsVLAN(site) && (caps == nil || caps.Ports.Bridge == "" ||
+		len(caps.Ports.LAN) == 0) {
+		doc.Blind = append(doc.Blind, "network", "dhcp", "firewall")
+	}
+
 	// Networks first: a WLAN attaches to one, and a config file that declares
 	// the interface before the wireless section referencing it reads the way a
 	// human would write it.
@@ -295,6 +360,28 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	}
 
 	radios := radiosByBand(caps)
+	// The wireless half. An empty radio map has two causes that look identical
+	// from here and could not be further apart: a device with no radios, and a
+	// device whose radio list the ACL refused. capability records the second as
+	// FeatSurvey NotObservable with no radios, which is exactly the pair to
+	// test for — Absent with no radios really is a device without wireless.
+	radiosUnknown := caps == nil || (len(caps.Radios) == 0 &&
+		caps.State(capability.FeatSurvey) == capability.NotObservable)
+	if radiosUnknown {
+		doc.Blind = append(doc.Blind, "wireless")
+	}
+	// Said once, in the words that are true. "device has no 2.4 GHz radio" is
+	// a claim about hardware, and making it from a refused call is the same
+	// mistake tools/probe.py made about DSA.
+	noRadio := func(band model.Band) string {
+		if radiosUnknown {
+			return fmt.Sprintf("this device's radio list could not be read, so "+
+				"whether it has a %s radio is unknown and nothing is rendered "+
+				"for that band. This is not a statement that the radio is "+
+				"absent — it means the check did not run", band)
+		}
+		return fmt.Sprintf("device has no %s radio", band)
+	}
 	for _, base := range site.WLANsFor(dev.ID) {
 		// Per-device overrides are folded in here, on a copy. Mutating the site
 		// model would leak one device's overrides into the next device rendered.
@@ -312,8 +399,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			radio, ok := radios[band]
 			if !ok {
 				rep.Omissions = append(rep.Omissions, Omission{
-					WLAN:   w.SSID,
-					Reason: fmt.Sprintf("device has no %s radio", band),
+					WLAN: w.SSID, Reason: noRadio(band),
 				})
 				continue
 			}
@@ -403,8 +489,22 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			default:
 				sec, oms := renderUplink(u, w, net, radio, caps)
 				rep.Omissions = append(rep.Omissions, oms...)
-				if sec.Name != "" {
+				switch {
+				case sec.Name != "":
 					doc.Sections = append(doc.Sections, sec)
+				case undetermined(caps, capability.FeatWirelessUplink):
+					// The gate could not read the package list, so it does not
+					// know whether this device can join a network over the air.
+					// Deleting the station interface on the strength of that
+					// would cut off a device whose only path to the network is
+					// the very link we could not verify.
+					doc.retain(&rep, existing, uplinkIfaceName(u.ID, radio),
+						fmt.Sprintf("the existing wireless uplink section for %s "+
+							"is left exactly as it is: this render could not "+
+							"establish whether the device supports one, and "+
+							"removing the link the controller reaches it through "+
+							"on the strength of a check that did not run is not "+
+							"something oonfeeWRT will do", w.SSID))
 				}
 			}
 		}
@@ -435,8 +535,15 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		}
 		sec, omissions := renderMesh(m, net, radio, caps)
 		rep.Omissions = append(rep.Omissions, omissions...)
-		if sec.Name != "" {
+		switch {
+		case sec.Name != "":
 			doc.Sections = append(doc.Sections, sec)
+		case undetermined(caps, capability.FeatMesh):
+			doc.retain(&rep, existing, name,
+				fmt.Sprintf("the existing mesh section for %s is left exactly as "+
+					"it is: this render could not establish whether the device "+
+					"supports 802.11s, and a backhaul that is carrying traffic "+
+					"must not be deleted because a check did not run", m.MeshID))
 		}
 	}
 
@@ -474,6 +581,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	unreadable := caps != nil &&
 		((len(caps.Radios) > 0 && !capability.HardwareIdentified(caps)) ||
 			(len(caps.Radios) == 0 && caps.State(capability.FeatSurvey) == capability.NotObservable))
+	reportBlind(&doc, &rep, existing)
 	if unreadable {
 		rep.addWarning(Warning{
 			DefectID: "hardware-unidentified",
@@ -760,4 +868,73 @@ func withLiveChannels(caps *capability.Registry, existing Existing) *capability.
 		}
 	}
 	return &out
+}
+
+// undetermined reports a feature whose state could not be established.
+//
+// The whole reason Retain exists: Absent and NotObservable both render
+// nothing, and only one of them is a decision.
+func undetermined(caps *capability.Registry, f capability.Feature) bool {
+	return caps != nil && caps.State(f) == capability.NotObservable
+}
+
+// retain marks a section Prune must not delete, and tells the operator when
+// that actually protected something.
+//
+// The message is emitted only when the section is really there and really
+// ours. A note saying "the existing X was left alone" about a device that has
+// no X is the kind of reassurance that teaches people to stop reading these.
+func (d *Doc) retain(rep *Report, existing Existing, name, reason string) {
+	d.Retain = append(d.Retain, SectionRef{Config: "wireless", Name: name})
+	if existing.OwnedIn("wireless", name) {
+		rep.Omissions = append(rep.Omissions, Omission{WLAN: "(kept)", Reason: reason})
+	}
+}
+
+// reportBlind says which of our sections survive only because this render
+// could not see well enough to decide about them.
+//
+// Without it the preview reads "no changes" for a device whose config we can no
+// longer account for, which is a clean bill of health from a check that did not
+// run — the same silence the hardware-unidentified warning exists to break.
+func reportBlind(doc *Doc, rep *Report, existing Existing) {
+	wanted := map[SectionRef]bool{}
+	for _, s := range doc.Sections {
+		wanted[SectionRef{s.Config, s.Name}] = true
+	}
+	for _, config := range doc.Blind {
+		var kept []string
+		for name := range existing.In(config) {
+			if !wanted[SectionRef{config, name}] && existing.OwnedIn(config, name) {
+				kept = append(kept, name)
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		sort.Strings(kept)
+		rep.Omissions = append(rep.Omissions, Omission{
+			WLAN: "(kept)",
+			Reason: fmt.Sprintf("%s configuration on this device could not be "+
+				"determined, so these sections we own are left exactly as they "+
+				"are rather than removed: %s. Nothing here is a statement that "+
+				"they are unwanted — it means the check that would have decided "+
+				"never ran", config, strings.Join(kept, ", ")),
+		})
+	}
+}
+
+// wantsVLAN reports whether the site asks for any wired VLAN at all.
+//
+// Blindness about the port layout only matters when something needed it. With
+// no VLAN network in the model, rendering nothing into network/dhcp/firewall
+// is a decision about the model rather than ignorance about the device, and
+// pruning our stale sections there stays correct.
+func wantsVLAN(site model.Site) bool {
+	for _, n := range site.Networks {
+		if n.Enabled && n.VLAN > 1 {
+			return true
+		}
+	}
+	return false
 }
