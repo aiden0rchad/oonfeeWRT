@@ -398,6 +398,17 @@ func (d *Daemon) deleteDevice(ctx context.Context, id int64) error {
 	if _, err := d.Store.SQL().ExecContext(ctx, `DELETE FROM devices WHERE id=?`, id); err != nil {
 		return fmt.Errorf("daemon: delete device %d: %w", id, err)
 	}
+	// Drop the ownership claims with the device. ForgetOwned exists for exactly
+	// this and was never called from anywhere, so every un-adopted device left
+	// its claims behind forever.
+	//
+	// Not merely untidy: sqlite reuses a freed INTEGER PRIMARY KEY, so the next
+	// device adopted takes the id of one that was removed and inherits its
+	// claims. A later un-adopt would then try to revert sections that device
+	// never had, and report a footprint from another router's config.
+	if err := d.Store.ForgetOwned(ctx, id); err != nil {
+		return fmt.Errorf("daemon: forget ownership claims for device %d: %w", id, err)
+	}
 	if err := d.Store.SweepOrphans(ctx); err != nil {
 		d.Log.Error("could not sweep telemetry of the removed device", "err", err)
 	}

@@ -252,6 +252,16 @@ DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
                      AND id NOT IN (SELECT series_id FROM rollup_1h)`); err != nil {
 		return fmt.Errorf("store: sweep empty series: %w", err)
 	}
+	// Ownership claims whose device is gone. Un-adopt drops them itself now,
+	// but this catches the rows left by every un-adopt before it did, and any
+	// path that removes a device without going through it. Left alone they are
+	// not merely stale: sqlite reuses a freed row id, so the next device adopted
+	// would inherit them.
+	if _, err := db.sql.ExecContext(ctx,
+		`DELETE FROM owned_sections
+		  WHERE device_id NOT IN (SELECT id FROM devices)`); err != nil {
+		return fmt.Errorf("store: sweep orphaned ownership claims: %w", err)
+	}
 	return nil
 }
 

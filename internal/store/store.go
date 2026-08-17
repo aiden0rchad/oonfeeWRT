@@ -132,7 +132,11 @@ type DB struct {
 // "sqlite" (modernc.org/sqlite — pure Go, per decision D3, which is what lets
 // the container be FROM scratch with CGO_ENABLED=0).
 func Open(ctx context.Context, driverName, path string) (*DB, error) {
-	sqldb, err := sql.Open(driverName, path)
+	dsn := path
+	if driverName == "sqlite" {
+		dsn = dsnWithPragmas(path)
+	}
+	sqldb, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
@@ -152,20 +156,59 @@ func Open(ctx context.Context, driverName, path string) (*DB, error) {
 	return db, nil
 }
 
-// pragmas applies the settings IMPLEMENTATION §3 specifies. wal_autocheckpoint
-// is deliberately large: the controller writes one transaction per 5-minute
-// maintenance tick, and checkpointing more eagerly buys nothing.
+// dsnWithPragmas puts the CONNECTION-scoped settings in the DSN, so every
+// connection gets them.
+//
+// They used to be applied with ExecContext after opening, which is a trap.
+// foreign_keys, busy_timeout, synchronous and wal_autocheckpoint are per
+// CONNECTION in SQLite, and an Exec through database/sql runs on whichever
+// pooled connection serves it. SetMaxOpenConns(1) keeps that to one connection
+// in the ordinary case — but database/sql discards a connection on a driver
+// error and silently opens a fresh one, and that replacement gets the SQLite
+// defaults: foreign_keys OFF and busy_timeout 0.
+//
+// The consequences are quiet and bad. Every ON DELETE CASCADE in the schema
+// stops firing, so removing a device leaves its rows behind — which is how
+// owned_sections came to hold claims for devices that no longer exist. And a
+// busy_timeout of 0 turns a moment's write contention into an immediate
+// SQLITE_BUSY instead of a short wait.
+//
+// Measured with modernc.org/sqlite: a plain path reports foreign_keys=0
+// busy_timeout=0, and the same file opened with these parameters reports 1 and
+// 5000. The "file:" prefix is required for the query string to be parsed.
+//
+// journal_mode is deliberately NOT here: WAL is a property of the database
+// file, not of a connection, so it is set once and persists.
+func dsnWithPragmas(path string) string {
+	if strings.Contains(path, "_pragma=") {
+		return path // caller has already said what it wants
+	}
+	dsn := path
+	if !strings.HasPrefix(dsn, "file:") {
+		dsn = "file:" + dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	// wal_autocheckpoint is deliberately large: the controller writes one
+	// transaction per 5-minute maintenance tick, and checkpointing more eagerly
+	// buys nothing.
+	return dsn + sep + strings.Join([]string{
+		"_pragma=foreign_keys(1)",
+		"_pragma=busy_timeout(5000)",
+		"_pragma=synchronous(1)",
+		"_pragma=wal_autocheckpoint(200)",
+	}, "&")
+}
+
+// pragmas applies the settings that belong to the DATABASE rather than to a
+// connection. Only journal_mode qualifies: WAL is recorded in the file itself
+// and survives every later connection. Everything else moved to the DSN — see
+// dsnWithPragmas for why applying them here was wrong.
 func (db *DB) pragmas(ctx context.Context) error {
-	for _, p := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA wal_autocheckpoint=200",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := db.sql.ExecContext(ctx, p); err != nil {
-			return fmt.Errorf("store: %s: %w", p, err)
-		}
+	if _, err := db.sql.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("store: PRAGMA journal_mode=WAL: %w", err)
 	}
 	return nil
 }

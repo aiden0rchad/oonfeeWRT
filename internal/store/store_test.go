@@ -880,3 +880,99 @@ func clientByMAC(t *testing.T, db *DB, mac string) Client {
 	t.Fatalf("client %s not found", mac)
 	return Client{}
 }
+
+// Un-adopting a device must take its ownership claims with it.
+//
+// ForgetOwned existed for this and was called from nowhere, so every removed
+// device left its claims behind. Not merely untidy: sqlite reuses a freed
+// INTEGER PRIMARY KEY, so the next device adopted takes the id of one that was
+// removed and inherits what it claimed to own — and a later un-adopt would try
+// to revert sections that device never had.
+func TestOrphanedOwnershipClaimsAreSwept(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	dev := &Device{
+		MAC: "aa:bb:cc:dd:ee:01", Host: "192.168.9.1", Name: "doomed", Role: "ap",
+	}
+	if err := db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordOwned(ctx, []OwnedSection{
+		{DeviceID: dev.ID, Config: "wireless", Section: "oowrt_wlan1_radio0",
+			RenderedHash: "h1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The device goes away by a path that does not call ForgetOwned.
+	if _, err := db.SQL().ExecContext(ctx, `DELETE FROM devices WHERE id=?`, dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SweepOrphans(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var n int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM owned_sections WHERE device_id=?`, dev.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d ownership claim(s) outlived their device; the next device "+
+			"to reuse this row id would inherit them", n)
+	}
+}
+
+// Every connection must have foreign keys on, not just the first one.
+//
+// These settings are per CONNECTION in SQLite, and they used to be applied with
+// an Exec after opening — which runs on whichever pooled connection serves it.
+// database/sql discards a connection on a driver error and opens a fresh one
+// with the SQLite defaults, and from that moment every ON DELETE CASCADE in the
+// schema silently stops firing.
+func TestForeignKeysAreOnForEveryConnection(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	var fk, busy int
+	if err := db.SQL().QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatal(err)
+	}
+	if fk != 1 {
+		t.Errorf("foreign_keys=%d; every ON DELETE CASCADE in the schema is "+
+			"inert without it", fk)
+	}
+	if err := db.SQL().QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busy); err != nil {
+		t.Fatal(err)
+	}
+	if busy == 0 {
+		t.Error("busy_timeout=0 turns a moment's write contention into an " +
+			"immediate SQLITE_BUSY instead of a short wait")
+	}
+
+	// And the cascade actually fires: the whole point of the setting.
+	dev := &Device{MAC: "aa:bb:cc:dd:ee:02", Host: "192.168.9.2",
+		Name: "cascade", Role: "ap"}
+	if err := db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RecordOwned(ctx, []OwnedSection{
+		{DeviceID: dev.ID, Config: "wireless", Section: "oowrt_wlan1_radio0",
+			RenderedHash: "h1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `DELETE FROM devices WHERE id=?`, dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM owned_sections WHERE device_id=?`, dev.ID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d ownership claim(s) survived their device: the cascade did "+
+			"not fire", n)
+	}
+}
