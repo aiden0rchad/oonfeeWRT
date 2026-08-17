@@ -430,14 +430,9 @@ func (c *Collector) Broadcasting(deviceID int64) ([]AP, bool) {
 	if p == nil {
 		return nil, false
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if !p.apsKnown {
-		return nil, false
-	}
-	out := make([]AP, len(p.aps))
-	copy(out, p.aps)
-	return out, true
+	// One definition of "known", shared with the write side. Two copies of this
+	// rule is how they drift apart.
+	return p.snapshotAPs()
 }
 
 // IfaceSections maps this device's wireless interfaces to the UCI wifi-iface
@@ -448,6 +443,44 @@ func (c *Collector) Broadcasting(deviceID int64) ([]AP, bool) {
 // from, returns false — which must NOT be read as "no interface has a section".
 // Provenance is decided from this, and deciding it from silence would tell an
 // operator their own SSID is foreign.
+// recordAPsLocked stores what this poll saw broadcasting. Caller holds p.mu.
+//
+// Gated on having ASKED, not on having found something. snap.APs may be
+// legitimately empty — a device with its radios off broadcasts nothing — and
+// that is an observation, not a reason to keep yesterday's list.
+func (p *poller) recordAPsLocked(snap Snapshot) {
+	if snap.APsFresh {
+		p.aps, p.apsKnown = snap.APs, true
+	}
+}
+
+// recordAPs is the locking wrapper, used by tests.
+func (p *poller) recordAPs(snap Snapshot) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recordAPsLocked(snap)
+}
+
+// snapshotAPs returns what is known, for tests and for Broadcasting.
+func (p *poller) snapshotAPs() ([]AP, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.apsKnown {
+		return nil, false
+	}
+	out := make([]AP, len(p.aps))
+	copy(out, p.aps)
+	return out, true
+}
+
+// everListedIfaces reports that some poll has successfully read this device's
+// wireless interface list. Until one has, an empty AP set means "not asked".
+func (p *poller) everListedIfaces() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.ifaceAt.IsZero()
+}
+
 func (c *Collector) IfaceSections(deviceID int64) (map[string]string, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -742,9 +775,7 @@ func (p *poller) tick(ctx context.Context) {
 	// "did not ask" are different, and only the first should update the cache.
 	p.mu.Lock()
 	p.degraded, p.degradedKnown = snap.Degraded, true
-	if len(snap.APs) > 0 {
-		p.aps, p.apsKnown = snap.APs, true
-	}
+	p.recordAPsLocked(snap)
 	p.mu.Unlock()
 
 	if snap.IfacesFresh {

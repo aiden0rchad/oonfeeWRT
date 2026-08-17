@@ -976,3 +976,45 @@ func TestForeignKeysAreOnForEveryConnection(t *testing.T) {
 			"not fire", n)
 	}
 }
+
+// A data directory whose name contains "#" or "%" must open the database it
+// was asked for.
+//
+// dsnWithPragmas briefly prefixed the path with "file:", which makes SQLite
+// parse it as a URI rather than as a filename. URI parsing truncates at "#"
+// and percent-decodes "%HH", so the controller would silently come up on a
+// different file — migrating a whole schema into a fresh empty database and
+// reporting zero devices while the real one sat untouched beside it. The "%"
+// case at least failed loudly; the "#" case did not fail at all.
+func TestAwkwardDataDirectoryNamesOpenTheRightFile(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"plain", "has#hash", "pct%20name", "with space"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(dir, "oonfeewrt.db")
+
+			db, err := Open(ctx, "sqlite", want)
+			if err != nil {
+				t.Fatalf("Open(%q): %v", want, err)
+			}
+			defer db.Close()
+
+			// It must be usable, and the settings must have survived.
+			var fk int
+			if err := db.SQL().QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&fk); err != nil {
+				t.Fatal(err)
+			}
+			if fk != 1 {
+				t.Errorf("foreign_keys=%d in a directory named %q", fk, name)
+			}
+
+			// And the file must be the one asked for, not a neighbour.
+			if _, err := os.Stat(want); err != nil {
+				t.Errorf("no database at the requested path %q: %v", want, err)
+			}
+		})
+	}
+}

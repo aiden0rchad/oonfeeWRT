@@ -173,9 +173,9 @@ func Open(ctx context.Context, driverName, path string) (*DB, error) {
 // busy_timeout of 0 turns a moment's write contention into an immediate
 // SQLITE_BUSY instead of a short wait.
 //
-// Measured with modernc.org/sqlite: a plain path reports foreign_keys=0
-// busy_timeout=0, and the same file opened with these parameters reports 1 and
-// 5000. The "file:" prefix is required for the query string to be parsed.
+// Measured with modernc.org/sqlite: a bare path reports foreign_keys=0
+// busy_timeout=0, and the same path with these parameters appended reports 1
+// and 5000.
 //
 // journal_mode is deliberately NOT here: WAL is a property of the database
 // file, not of a connection, so it is set once and persists.
@@ -183,10 +183,25 @@ func dsnWithPragmas(path string) string {
 	if strings.Contains(path, "_pragma=") {
 		return path // caller has already said what it wants
 	}
+	// NOT prefixed with "file:".
+	//
+	// The prefix was added on a premise the driver does not hold. It parses the
+	// query string from any DSN whose first "?" is not at index 0, prefix or
+	// not — what "file:" changes is that SQLite then treats the rest as a URI
+	// rather than as a filename, and URI parsing truncates at "#" and
+	// percent-decodes "%HH".
+	//
+	// Measured against the pinned driver, one directory per case:
+	//   path            plain            file:
+	//   /tmp/x          opens x          opens x
+	//   /tmp/has#hash   opens it         opens a DIFFERENT file, no error
+	//   /tmp/pct%20name opens it         "unable to open database file (14)"
+	//
+	// The "#" row is the dangerous one: silent, so a data directory containing
+	// a "#" would bring the controller up on a fresh empty database, migrate a
+	// whole schema into it, and report zero devices while the real database sat
+	// untouched beside it.
 	dsn := path
-	if !strings.HasPrefix(dsn, "file:") {
-		dsn = "file:" + dsn
-	}
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"

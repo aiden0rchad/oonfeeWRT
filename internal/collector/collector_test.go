@@ -1194,3 +1194,46 @@ func TestIfaceModesAreActuallyExercised(t *testing.T) {
 		t.Errorf("a wireless passphrase reached the snapshot: %s", blob)
 	}
 }
+
+// "The last poll saw no BSS" and "no poll has looked" are different answers,
+// and the cache could only ever give the second.
+//
+// It was written only when the AP list was non-empty, which is a proxy for
+// "asked" and wrong in both directions: a device broadcasting nothing could
+// never record that it had been looked at, and a BSS that went away was never
+// cleared — so a removed SSID stayed reported as on the air indefinitely,
+// including one an operator had just been told to remove.
+func TestBroadcastingReportsAnEmptyAnswerAndForgetsARemovedBSS(t *testing.T) {
+	p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+	p.ifaceAt = time.Now() // some poll has read the interface list
+
+	// Nothing has been observed yet.
+	if _, ok := p.snapshotAPs(); ok {
+		t.Fatal("reported a known BSS list before any poll")
+	}
+
+	// A poll that asked and found one.
+	p.recordAPs(Snapshot{APsFresh: true, APs: []AP{{Iface: "phy0-ap0", SSID: "guest"}}})
+	got, ok := p.snapshotAPs()
+	if !ok || len(got) != 1 {
+		t.Fatalf("after a poll that saw one BSS: known=%v n=%d", ok, len(got))
+	}
+
+	// The WLAN is removed. The next poll asks and legitimately finds nothing.
+	p.recordAPs(Snapshot{APsFresh: true, APs: nil})
+	got, ok = p.snapshotAPs()
+	if !ok {
+		t.Error("a poll that looked and found nothing reported as 'not looked'")
+	}
+	if len(got) != 0 {
+		t.Errorf("a removed BSS is still reported as on the air: %+v", got)
+	}
+
+	// A poll that could NOT ask must not erase what is known.
+	p.recordAPs(Snapshot{APsFresh: true, APs: []AP{{Iface: "phy0-ap0", SSID: "back"}}})
+	p.recordAPs(Snapshot{APsFresh: false, APs: nil})
+	got, ok = p.snapshotAPs()
+	if !ok || len(got) != 1 || got[0].SSID != "back" {
+		t.Errorf("a poll that did not ask overwrote a known list: known=%v %+v", ok, got)
+	}
+}

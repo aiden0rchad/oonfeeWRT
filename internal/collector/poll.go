@@ -45,6 +45,14 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 		Tier:     tier,
 		At:       p.c.now(),
 	}
+	// Whether this poll is in a position to answer "what is broadcasting?".
+	//
+	// A poll with a current interface list has asked, even when that list holds
+	// nothing that serves clients — "asked, and there are none" is a real
+	// answer and the one this used to be unable to give. A poll with no list
+	// yet (the first of any poller) has not asked, and its empty AP set must
+	// not be read as an observation.
+	snap.APsFresh = len(ifaces) > 0 || p.everListedIfaces()
 	calls := p.buildCalls(tier, ifaces, modes)
 	invs := make([]ubus.Invocation, len(calls))
 	for i, c := range calls {

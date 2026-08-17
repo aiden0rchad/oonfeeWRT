@@ -118,8 +118,22 @@ type Snapshot struct {
 	// the second turns silence into a claim about the kernel.
 	NetDevsFresh bool
 	APs          []AP
-	Stations     []Station // focused only
-	Surveys      []Survey  // focused only
+
+	// APsFresh records that this poll ASKED what is broadcasting — it had a
+	// current interface list, whether or not anything in it serves clients.
+	//
+	// Needed for the same reason as IfacesFresh, and missing for the reason
+	// that keeps catching this package out: the cache was written only when APs
+	// was non-empty, which is a proxy for "asked" and wrong in both directions.
+	// A device broadcasting nothing could never record that it had been looked
+	// at, so the API answered "no poll has looked" about a device polled
+	// hundreds of times. And a BSS that went away was never cleared, so a
+	// removed SSID stayed reported as on the air forever — including one an
+	// operator had just been told to remove by the takeover brief.
+	APsFresh bool
+
+	Stations []Station // focused only
+	Surveys  []Survey  // focused only
 }
 
 // OK reports a poll that reached the device.
