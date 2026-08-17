@@ -861,6 +861,71 @@ describe('Devices — BSS provenance', () => {
   })
 })
 
+describe('Unadopt', () => {
+  const dev = {
+    id: 4, mac: 'aa:bb:cc:dd:ee:04', name: 'ap-c6', host: '192.168.1.2',
+    role: 'ap', adopted: true, online: true,
+  }
+
+  // Un-adopt is the most destructive thing the controller does and the one
+  // operation with NO rollback armed — yet it reported a count, after the
+  // fact, while the safer apply path got a full preview and a confirmation.
+  it('names the sections it will revert, before anything is done', async () => {
+    api.device.mockResolvedValue({
+      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: false,
+      owned_sections: ['wireless.oowrt_wlan1_radio0', 'wireless.oowrt_wlan1_radio1'],
+    })
+    const { Unadopt } = await import('./Unadopt')
+    render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
+    )
+    expect(screen.getByText('wireless.oowrt_wlan1_radio1')).toBeTruthy()
+  })
+
+  // A list that could not be read must not render as an empty one — that would
+  // say "this controller wrote nothing here" about a device it may own plenty
+  // of, immediately before an irreversible step.
+  it('says when the section list could not be read', async () => {
+    api.device.mockRejectedValue(new Error('nope'))
+    const { Unadopt } = await import('./Unadopt')
+    render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/could not be read/)).toBeTruthy(),
+    )
+    expect(screen.getByText(/not the same as owning none/)).toBeTruthy()
+  })
+
+  // The same speed bump the apply path has, on the operation that needs it
+  // more. Both destructive buttons stay disabled until it is ticked.
+  it('will not remove anything until the operator confirms', async () => {
+    api.device.mockResolvedValue({
+      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: false, owned_sections: ['wireless.oowrt_wlan1_radio0'],
+    })
+    const { Unadopt } = await import('./Unadopt')
+    render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
+    await waitFor(() =>
+      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
+    )
+
+    const remove = screen.getByText('Remove completely').closest('button')!
+    const revert = screen.getByText('Revert config only').closest('button')!
+    if (!remove.disabled || !revert.disabled) {
+      throw new Error('a destructive button was enabled before any confirmation')
+    }
+
+    fireEvent.click(screen.getByText(/I understand/))
+    await waitFor(() => {
+      const r = screen.getByText('Remove completely').closest('button')!
+      if (r.disabled) throw new Error('still disabled after confirming')
+    })
+  })
+})
+
 describe('Logs', () => {
   const ev = (over: Record<string, unknown> = {}) => ({
     TS: 1755400000, DeviceID: null, Category: 'device', Severity: 'info',

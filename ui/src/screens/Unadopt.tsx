@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { UnadoptResult } from '../lib/api'
-import { Button, Field, Banner, Card } from '../components/ui'
+import { Button, Field, Banner, Card, Toggle } from '../components/ui'
 
 /**
  * Remove the controller from a device.
@@ -28,7 +28,22 @@ export function Unadopt({
   onDone: () => void
   onCancel: () => void
 }) {
+  const [confirmed, setConfirmed] = useState(false)
+  // null means the list could not be read, which is NOT the same as owning no
+  // sections — the panel says so rather than showing an empty list.
+  const [sections, setSections] = useState<string[] | null>([])
   const [username, setUsername] = useState('root')
+
+  useEffect(() => {
+    // Read the sections this controller wrote, so the operator sees WHAT is
+    // about to be reverted rather than a count afterwards. A failed read sets
+    // null, which the panel renders as "could not be read" — never as an empty
+    // list, which would read as "this controller wrote nothing here".
+    api
+      .device(deviceID)
+      .then((d) => setSections(d.owned_sections ?? []))
+      .catch(() => setSections(null))
+  }, [deviceID])
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -134,6 +149,34 @@ export function Unadopt({
         are deleted. Its own settings are not touched.
       </Banner>
 
+      {/* Named, not counted, and BEFORE the button rather than after it.
+          Un-adopt is the most destructive thing this controller does and it is
+          the one operation with no rollback armed — yet it used to report a
+          number, once it was already done, while the safer apply path got a
+          full preview and a confirmation. */}
+      <Card title="What will be reverted on the device">
+        {sections === null ? (
+          <div style={{ fontSize: 12, color: 'var(--warning)' }}>
+            The list of sections this controller owns could not be read. That is
+            not the same as owning none — check before continuing.
+          </div>
+        ) : sections.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            This controller has no recorded sections on {deviceName}, so nothing
+            of its configuration will be changed. Its login and ACL file are
+            still removed.
+          </div>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+            {sections.map((sec) => (
+              <li key={sec}>
+                <code>{sec}</code>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       {err && <Banner tone="critical">{err}</Banner>}
 
       <Card title="Device administrator credential">
@@ -159,11 +202,22 @@ export function Unadopt({
         </div>
       </Card>
 
+      {/* The same speed bump the apply path has, on the operation that needs
+          it more: an apply comes back by itself if the device is unhealthy,
+          and this does not. */}
+      <Toggle
+        label="I understand — this reverts the sections above and removes the controller's access"
+        on={confirmed}
+        onChange={setConfirmed}
+      />
+
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button kind="primary" disabled={busy || !username} onClick={() => run(true)}>
+        {/* Not the primary button. The visually dominant action should not be
+            the irreversible one. */}
+        <Button disabled={busy || !username || !confirmed} onClick={() => run(true)}>
           {busy ? 'Removing…' : 'Remove completely'}
         </Button>
-        <Button disabled={busy} onClick={() => run(false)}>
+        <Button disabled={busy || !confirmed} onClick={() => run(false)}>
           Revert config only
         </Button>
         <Button disabled={busy} onClick={onCancel}>

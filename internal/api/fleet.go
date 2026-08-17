@@ -126,6 +126,15 @@ type deviceDetail struct {
 	// BroadcastKnown separates "the last poll saw no BSS" from "no poll has
 	// looked". Without it an empty list would claim the radios are silent.
 	BroadcastKnown bool `json:"broadcast_known"`
+
+	// OwnedSections are the UCI sections this controller wrote and would revert
+	// on un-adopt, named rather than counted.
+	//
+	// Un-adopt is the most destructive thing the controller does — it is not
+	// rollback-armed, unlike an apply — and it told the operator a NUMBER, and
+	// only afterwards. The safer operation had a full preview and a
+	// confirmation; this one had neither.
+	OwnedSections []string `json:"owned_sections,omitempty"`
 }
 
 // Provenance is who wrote the UCI section behind one BSS.
@@ -243,6 +252,18 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
+	if owned, err := s.Store.OwnedSections(ctx, id); err == nil {
+		for _, o := range owned {
+			detail.OwnedSections = append(detail.OwnedSections, o.Config+"."+o.Section)
+		}
+		sort.Strings(detail.OwnedSections)
+	} else {
+		// Left empty and logged. The un-adopt panel says outright when the list
+		// could not be read rather than showing an empty one, which would read
+		// as "this controller wrote nothing here".
+		s.Log.Warn("could not list owned sections for the device detail",
+			"device", id, "err", err)
+	}
 	if s.Fleet != nil {
 		if aps, ok := s.Fleet.Broadcasting(id); ok {
 			detail.BroadcastKnown = true

@@ -158,6 +158,9 @@ export interface DeviceDetail extends Device {
   /** Distinguishes "the last poll saw no BSS" from "no poll has looked". An
    *  empty list with this false is not a claim that the radios are silent. */
   broadcast_known: boolean
+  /** The UCI sections this controller wrote, which un-adopt would revert.
+   *  Named rather than counted, because un-adopt is not rollback-armed. */
+  owned_sections?: string[]
 }
 
 export interface Registry {

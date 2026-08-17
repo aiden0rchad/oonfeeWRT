@@ -14,7 +14,7 @@ import type {
   Site,
   WLAN,
 } from '../lib/api'
-import { Banner, Button, Card, Field, Prop } from '../components/ui'
+import { Banner, Button, Card, Field, Prop, Toggle } from '../components/ui'
 import { ago } from '../components/Chart'
 
 /**
@@ -1184,32 +1184,6 @@ function Choice({
         })}
       </div>
     </div>
-  )
-}
-
-function Toggle({
-  label,
-  on,
-  onChange,
-}: {
-  label: string
-  on: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 12,
-        cursor: 'pointer',
-        marginTop: 3,
-      }}
-    >
-      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
-      {label}
-    </label>
   )
 }
 

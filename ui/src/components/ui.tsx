@@ -1030,3 +1030,37 @@ export function Pager({
     </div>
   )
 }
+
+
+/**
+ * A labelled checkbox.
+ *
+ * Shared rather than local because two screens now gate an irreversible action
+ * behind one: applying a site model, and un-adopting a device. The second is
+ * the one with no rollback armed.
+ */
+export function Toggle({
+  label,
+  on,
+  onChange,
+}: {
+  label: string
+  on: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        cursor: 'pointer',
+        marginTop: 3,
+      }}
+    >
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      {label}
+    </label>
+  )
+}
