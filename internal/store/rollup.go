@@ -257,10 +257,17 @@ DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
 	// path that removes a device without going through it. Left alone they are
 	// not merely stale: sqlite reuses a freed row id, so the next device adopted
 	// would inherit them.
-	if _, err := db.sql.ExecContext(ctx,
-		`DELETE FROM owned_sections
-		  WHERE device_id NOT IN (SELECT id FROM devices)`); err != nil {
-		return fmt.Errorf("store: sweep orphaned ownership claims: %w", err)
+	// Rows keyed on a device_id that no longer exists. Both tables carry
+	// ON DELETE CASCADE, so this is a backstop for rows written before the
+	// constraint took effect — and for the window when the connection pragmas
+	// were applied per-connection rather than in the DSN, which is exactly how
+	// the lab database came to hold claims for devices 1 and 2.
+	for _, table := range []string{"owned_sections", "foreign_ssid_notes"} {
+		if _, err := db.sql.ExecContext(ctx,
+			`DELETE FROM `+table+
+				` WHERE device_id NOT IN (SELECT id FROM devices)`); err != nil {
+			return fmt.Errorf("store: sweep orphaned %s: %w", table, err)
+		}
 	}
 	return nil
 }

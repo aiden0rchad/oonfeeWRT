@@ -1997,3 +1997,51 @@ func TestTheLastNeighbourRunCountsPerDeviceFailures(t *testing.T) {
 			got.DevicesFailed)
 	}
 }
+
+// An unreadable site model must not render as "no other AP is affected".
+//
+// The fan-out line is the last thing read before someone runs the recipe on
+// their own device. Silence there is a reassurance nothing measured.
+func TestTheFanOutCostSaysWhenItCouldNotBeDetermined(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap-c6", true, nil)
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
+		{Iface: "phy0-ap0", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
+	}}
+	h.fleet.sections = map[int64]map[string]string{dev.ID: {"phy0-ap0": "default_radio0"}}
+	h.fleet.modes = map[int64]map[string]string{dev.ID: {"phy0-ap0": "ap"}}
+	h.fleet.mu.Unlock()
+
+	// Break the site read the way an unreadable model would.
+	if _, err := h.db.SQL().ExecContext(context.Background(),
+		`DROP TABLE IF EXISTS ap_group_members`); err != nil {
+		t.Skipf("cannot simulate an unreadable site: %v", err)
+	}
+
+	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d", w.Code)
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range detail.Broadcasting {
+		if b.Brief == nil || !b.Brief.SafeToDisable {
+			continue
+		}
+		var admits bool
+		for _, c := range b.Brief.Cost {
+			if strings.Contains(c, "could not be determined") {
+				admits = true
+			}
+		}
+		if !admits {
+			t.Errorf("the site model was unreadable and the cost list did not "+
+				"say so; it reads as 'no other AP is affected': %v", b.Brief.Cost)
+		}
+	}
+}

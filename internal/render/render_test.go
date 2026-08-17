@@ -1350,3 +1350,49 @@ func TestPMFIsConstrainedByTheSecurityMode(t *testing.T) {
 		})
 	}
 }
+
+// The "could not be checked" warning must fire when the RADIO LIST itself is
+// missing, not only when radios exist and cannot be named.
+//
+// probeRadios returns early with no radios and the wireless features
+// NotObservable when iwinfo.devices is refused. Gating the warning on there
+// being radios made it silent in the case where the least is known — the same
+// collapse of "could not ask" into "nothing there" the warning exists for.
+func TestAnUnreadableRadioListAlsoSaysTheCheckDidNotRun(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.NotObservable) // iwinfo refused
+	// No radios at all: the list itself could not be read.
+
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var said bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "hardware-unidentified" {
+			said = true
+		}
+	}
+	if !said {
+		t.Error("a device whose radio list could not be read got no warning; " +
+			"that is a clean bill of health from a check that never ran")
+	}
+}
+
+// But a device that genuinely HAS no radios — asked, and there are none — must
+// not be warned about. That is a real answer, and roleFit already reports it.
+func TestADeviceWithNoRadiosIsNotWarnedAboutUnreadableHardware(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.Absent) // asked; there are none
+
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, w := range rep.Warnings {
+		if w.DefectID == "hardware-unidentified" {
+			t.Error("a device that answered 'no radios' was told the check " +
+				"could not run; asked-and-none is an answer")
+		}
+	}
+}

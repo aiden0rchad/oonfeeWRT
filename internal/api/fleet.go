@@ -265,8 +265,15 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 				s.Log.Debug("could not read ownership claims", "device", id, "err", err)
 			}
 			modes, modesKnown := s.Fleet.IfaceModes(id)
-			notes, _ := s.Store.ForeignNotes(ctx, id)
-			elsewhere := s.wouldAlsoBroadcast(ctx, id)
+			notes, notesErr := s.Store.ForeignNotes(ctx, id)
+			if notesErr != nil {
+				// An unreadable ledger is not an empty one. Rendering it as
+				// "nobody has decided about this" invites a second decision
+				// about a section somebody already settled.
+				s.Log.Warn("could not read recorded decisions about foreign SSIDs",
+					"device", id, "err", notesErr)
+			}
+			elsewhere, elsewhereKnown := s.wouldAlsoBroadcast(ctx, id)
 			for _, ap := range aps {
 				if ap.SSID == "" {
 					continue
@@ -284,7 +291,8 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if v.Origin == ProvForeign {
-					brief := buildBrief(v, modes[ap.Iface], modesKnown, elsewhere)
+					brief := buildBrief(v, modes[ap.Iface], modesKnown,
+						elsewhere, elsewhereKnown)
 					if n, ok := notes[v.Section]; ok {
 						brief.Note, brief.DecidedBy, brief.DecidedAt = n.Note, n.DecidedBy, n.DecidedAt
 					}
@@ -671,14 +679,19 @@ func (s *Server) liveClientCount(deviceID int64) (int, bool) {
 // in the group. Named as devices rather than as a group, because "all-aps"
 // reads as a label and "wrt3200acm would start broadcasting it" reads as a
 // consequence.
-func (s *Server) wouldAlsoBroadcast(ctx context.Context, deviceID int64) []string {
+func (s *Server) wouldAlsoBroadcast(ctx context.Context, deviceID int64) ([]string, bool) {
 	site, err := s.Store.Site(ctx)
 	if err != nil {
-		return nil
+		// NOT "no other AP is affected". The brief is about to tell somebody
+		// what it costs to recreate a network, and a silent nil there is the
+		// most expensive kind of reassurance.
+		s.Log.Debug("could not read the site model for the fan-out warning", "err", err)
+		return nil, false
 	}
 	devs, err := s.Store.Devices(ctx)
 	if err != nil {
-		return nil
+		s.Log.Debug("could not read the device list for the fan-out warning", "err", err)
+		return nil, false
 	}
 	nameOf := map[int64]string{}
 	for _, d := range devs {
@@ -706,5 +719,5 @@ func (s *Server) wouldAlsoBroadcast(ctx context.Context, deviceID int64) []strin
 			}
 		}
 	}
-	return sortedNames(out)
+	return sortedNames(out), true
 }

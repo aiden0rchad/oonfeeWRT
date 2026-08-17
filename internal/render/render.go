@@ -437,15 +437,28 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// router is broadcasting. A freshly adopted router is therefore
 	// the case most likely to look defect-free and the case where the operator
 	// is choosing the settings this exists to warn about.
-	if caps != nil && len(caps.Radios) > 0 && !capability.HardwareIdentified(caps) {
+	// Fires when the radio list is EMPTY too, not only when radios exist and
+	// cannot be named.
+	//
+	// probeRadios returns early with no radios and the wireless features
+	// NotObservable when iwinfo.devices is refused, so gating this on there
+	// being radios made it silent in the case where the least is known — the
+	// same collapse of "could not ask" into "nothing there" that this warning
+	// exists to prevent. FeatSurvey separates the two, which is how roleFit
+	// already tells them apart.
+	unreadable := caps != nil &&
+		((len(caps.Radios) > 0 && !capability.HardwareIdentified(caps)) ||
+			(len(caps.Radios) == 0 && caps.State(capability.FeatSurvey) == capability.NotObservable))
+	if unreadable {
 		rep.addWarning(Warning{
 			DefectID: "hardware-unidentified",
 			Summary: "this device's radios could not be checked against the " +
 				"known-defect list",
-			Detail: "No radio reported a hardware name. That comes from iwinfo, " +
-				"which only answers for a radio that has an interface, so a device " +
-				"whose radios are still disabled cannot be identified. This is not " +
-				"a clean bill of health — it means the check did not run.",
+			Detail: "Either no radio reported a hardware name, or the radio list " +
+				"itself could not be read. The name comes from iwinfo, which only " +
+				"answers for a radio that has an interface, and the list itself is " +
+				"refused outright by some access-control files. This is not a clean " +
+				"bill of health — it means the check did not run.",
 			Confidence: string(capability.ConfMeasuredHere),
 			Severity:   string(capability.SevSilentlyIgnored),
 			Mitigation: "Apply a WLAN and re-probe; once a radio is broadcasting it " +

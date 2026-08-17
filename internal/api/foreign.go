@@ -79,7 +79,7 @@ type foreignSection struct {
 
 // buildBrief assembles the brief for one foreign BSS.
 func buildBrief(b broadcastView, mode string, modesKnown bool,
-	wouldBroadcast []string) foreignSection {
+	wouldBroadcast []string, fanoutKnown bool) foreignSection {
 
 	f := foreignSection{
 		Section: b.Section, SSID: b.SSID, Iface: b.Iface,
@@ -123,7 +123,16 @@ func buildBrief(b broadcastView, mode string, modesKnown bool,
 			"Recreating it here makes it a site-wide network, not a per-device " +
 				"one. oonfeeWRT has no per-device WLANs.",
 		}
-		if len(wouldBroadcast) > 0 {
+		switch {
+		case !fanoutKnown:
+			// Silence here would read as "no other AP is affected", which is a
+			// reassurance nothing measured. The cost list is the last thing
+			// read before someone runs the recipe.
+			f.Cost = append(f.Cost, "Which other access points would start "+
+				"broadcasting it could not be determined — the site model or "+
+				"device list could not be read. Check the AP group before you "+
+				"recreate this network.")
+		case len(wouldBroadcast) > 0:
 			f.Cost = append(f.Cost, fmt.Sprintf(
 				"So %s would start broadcasting it too. If that is not what you "+
 					"want, leave this alone and record why.",
