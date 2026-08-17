@@ -107,6 +107,7 @@ CREATE TABLE devices (
   port         INTEGER NOT NULL DEFAULT 80,
   scheme       TEXT NOT NULL DEFAULT 'http',   -- 'http'|'https'
   cert_fp      TEXT,                     -- sha256 of DER, TOFU-pinned
+  host_key_fp  TEXT,                     -- SSH host key, TOFU-pinned (v9)
   name         TEXT NOT NULL,
   role         TEXT NOT NULL DEFAULT 'ap',     -- 'gateway'|'ap'|'switch'
   adopted_at   INTEGER,                  -- unix; NULL = pending

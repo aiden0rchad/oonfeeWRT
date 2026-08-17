@@ -495,11 +495,9 @@ most-worth-doing first.
    Both halves pinned and mutation-verified, and the fixture gained the two
    things whose absence had made the bug untestable.
 
-6. **Persist the SSH host-key pin.** The one confirmed review finding still
-   open — §5ag has the four-step fix. The guard that refuses a changed host key
-   cannot fire today, and un-adopt is the dial that carries the operator's
-   password. Self-contained: a column, a migration, a first-use setter, and the
-   test for a branch that has never run.
+6. ~~**Persist the SSH host-key pin.**~~ **Done 2026-08-17** — §5ah. The last
+   open review finding. **No numbered item is left**; what follows is a
+   practice, not a list.
 
 7. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
 
@@ -511,7 +509,8 @@ most of the decisions in the code.
 
 Then, in order of value:
 
-- **§5ag item 6** — the host-key pin. The only open finding, fully specified.
+- **There is no open finding and no numbered item left.** Everything below is a
+  way of working rather than a task, and the yield from each has been measured.
 - **Look at a screen in a browser.** 25 defects have been found this way and
   none of them was reachable by any test in the repo. Everything has been looked
   at once now, so the yield is in what CHANGES.
@@ -2943,7 +2942,7 @@ the rendered set.
 That one is worth remembering as a method: **a count could not have surfaced it.**
 Showing the individual items is what made the data wrong in a visible way.
 
-### 5ag. The core-package review — and the one finding still open
+### 5ag. The core-package review
 
 **Done 2026-08-17.** `applyengine`, `adoption`, `ubus`, `secrets` and `store`
 had never had a review pass; the two earlier rounds covered recent diffs only.
@@ -2996,28 +2995,71 @@ the reply, and the original results were returned: **the writes landed while
 every call was reported denied**, with `Retried` false, which makes
 `IsPermanent` report a permanent ACL gap as transient.
 
-#### STILL OPEN — the SSH host-key pin
+#### The SSH host-key pin — fixed in §5ah
 
-**The one confirmed finding not yet fixed.** `internal/adoption/ssh.go` captures
-the host key fingerprint at adoption and throws it away: both `DialSSH` call
-sites leave `SSHOptions.HostKeyFP` empty, `adoption.Result.HostKeyFP` is dropped
-when `store.Device` is built, there is no column for it in the schema, and no
-test exercises the mismatch branch. **So the host-key-change refusal at
-`ssh.go:76` can never fire.**
+The sixth finding: `internal/adoption/ssh.go` captured the fingerprint at
+adoption and threw it away, so the host-key-change refusal could not fire on
+any device. Closed 2026-08-17; the write-up moved to §5ah.
 
-It matters at **un-adopt**, not adoption — adoption is genuinely first-use and
-correctly unpinned, but un-adopt SSHes to the stored address carrying the
-operator's freshly typed administrator password.
+---
 
-The fix, mirroring the TLS pin exactly:
-1. `schema.sql`: add `host_key_fp TEXT` to `devices`, plus an `ALTER TABLE`
-   migration beside the `poll_interval_s` one.
-2. `store.Device`: add the field to `deviceCols`, the scan and `UpsertDevice`,
-   and a first-use-only `SetHostKeyFP` mirroring `SetCertFP` — the
-   `WHERE ... AND (host_key_fp IS NULL OR host_key_fp='')` clause is the
-   load-bearing part, since a silently re-pinned key is the same non-guard.
-3. `daemon/adopt.go`: store the fingerprint at adoption, pass it at un-adopt.
-4. A test for the mismatch branch, which has never run.
+### 5ah. A guard that was written, reviewed, shipped — and unreachable
+
+**Done 2026-08-17.** The last open finding from §5ag, and the most instructive
+one in the set, because nothing about it looked wrong.
+
+`DialSSH` refuses a device whose SSH host key has changed. The refusal is
+correct, its error text is good, and it **could not run**. Both call sites left
+`SSHOptions.HostKeyFP` empty, `adoption.Result.HostKeyFP` was dropped when the
+`store.Device` was built, there was no column to hold it, and no test touched
+the branch. Five separate places, each of which reads as an omission only once
+you know about the other four — which is why a review that reads a file at a
+time will not find this class at all. **It took following one value end to end.**
+
+It matters at **un-adopt** rather than adoption. Adoption is genuinely first
+use: there is nothing to check against, and refusing to adopt until an operator
+has collected fingerprints by hand is a worse answer. Un-adopt dials the
+**stored** address carrying the administrator password the operator has just
+typed into the panel.
+
+What landed:
+
+- **Migration 9** adds `devices.host_key_fp`, NULL for everything adopted
+  before it. That is the honest value — nobody recorded a key for those devices,
+  and back-filling one would pin whatever answers next, which is precisely what
+  a pin exists to catch. Un-adopt learns the key on its first dial, so the
+  second attempt is checked even though the first could not be.
+- **`UpsertDevice` COALESCEs on the stored value**, not the incoming one, so
+  neither a caller that omits the field nor one carrying a different key can
+  blank or quietly re-pin it. `cert_fp` deliberately keeps the older
+  take-the-new-value rule: a certificate is re-derived on every https connection
+  and rotates legitimately, whereas a host key changing means the box was
+  reflashed.
+- **`SetHostKeyFP` is first-use-only and refuses an empty fingerprint.** The
+  caller reads it from a `Bootstrap`, and a fake — or a bootstrap that never
+  handshook — returns `""`. Storing that would leave the column looking
+  unpinned while having been "set", so the first-use branch would never run
+  again: a non-guard that reports itself as configured.
+- **Force survives a refused dial.** This is created by the fix rather than
+  found by it. Reflashing is the commonest reason a host key changes, and a
+  reflash also wipes the footprint un-adopt came to remove — so without an
+  escape, adding the pin would make a reflashed device permanently un-removable
+  from the inventory, failing at the dial before Force was ever consulted. The
+  residue is still reported honestly: with no SSH session, phase 2 never runs
+  and the report says the login and ACL remain.
+- **`AdoptResult.HostKeyFP` is filled in.** Declared since adoption was written,
+  never set. A fingerprint nobody is shown is one nobody can compare against
+  `ssh-keygen -lf`, and adoption is the single moment both ends are known to be
+  the same box.
+
+**The tests use a real in-process SSH server**, generated key and all, because
+the guard lives inside the handshake and no fake reaches it. Two servers in one
+test is what lets "a different box is answering at this address" be expressed at
+all. Five mutations, five failures: unwiring the pin, taking the new value in
+the upsert, dropping the TOFU clause, dropping the empty-key guard, and removing
+the Force escape. The migration was run against a copy of the live database —
+both devices read back unpinned, which is the documented legacy state rather
+than a bug.
 
 ---
 
@@ -3067,6 +3109,16 @@ written and believed.
   nothing. The commonest causes: a fixture value already satisfying the
   assertion, a mock returning undefined so the path never runs, and asserting
   the absence of something never present in that fixture.
+- **Follow the value, not the file.** A security guard can be correct, well
+  worded and completely unreachable. The SSH host-key refusal was dead in five
+  places at once — no column, no field on the result, neither call site passing
+  it, no test — and each one reads as a harmless omission unless you already
+  know about the other four. Reading a file at a time cannot find this; tracing
+  one value from where it is produced to where it is checked can.
+- **A guard that reports itself as configured is worse than an absent one.**
+  The empty-fingerprint case is the whole pattern in miniature: store `""` and
+  the column says "pinned", the first-use branch never runs again, and nothing
+  anywhere is checking anything. Refuse the empty value at the setter.
 - **Review the fixes, not just the code.** A fix written quickly to close a
   finding is where the next bug is. The second review round found MORE than the
   first, including a fix that committed the exact error it was fixing.
