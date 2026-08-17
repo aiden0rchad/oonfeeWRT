@@ -470,6 +470,37 @@ function WLANEditor({
           onChange={([m]) => set({ security_mode: m as WLAN['security_mode'] })}
         />
 
+        {/* Protected management frames.
+            Absent from this form until now, while the renderer wrote
+            ieee80211w on every WLAN from a value hardcoded at creation. That
+            made the driver-defect warning unactionable: it told an operator to
+            turn PMF off on hardware that cannot do it, and there was nowhere to
+            do that. WPA3 mandates it, so the control is hidden rather than
+            shown-and-ignored when SAE is selected — the renderer forces it back
+            on there regardless, and offering a choice the renderer overrides is
+            worse than offering none. */}
+        {draft.security_mode !== 'sae' && draft.security_mode !== 'none' && (
+          <>
+            <Choice
+              label="Protected management frames"
+              options={[
+                { v: '1', l: 'Optional' },
+                { v: '2', l: 'Required' },
+                { v: '0', l: 'Disabled' },
+              ]}
+              value={[draft.pmf ?? '1']}
+              onChange={([v]) => set({ pmf: v as WLAN['pmf'] })}
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -6 }}>
+              Protects deauthentication and disassociation frames. Leave it on
+              unless a radio cannot do it — some drivers accept the setting and
+              do not implement it, and the apply preview names the ones known to.
+              It cannot be varied per device: APs in one mobility domain must
+              agree, or 802.11r roaming fails intermittently rather than cleanly.
+            </div>
+          </>
+        )}
+
         {needsKey && (
           <>
             <Field

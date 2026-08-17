@@ -635,6 +635,33 @@ describe('Settings — wireless uplinks', () => {
     ...over,
   })
 
+  // PMF was carried by the model, written by the renderer onto every WLAN, and
+  // exposed nowhere — hardcoded to "1" at creation. That made the driver-defect
+  // warning unactionable: it told an operator to turn PMF off on hardware that
+  // cannot do it, with nowhere to do so.
+  it('lets PMF be changed, and hides it where WPA3 mandates it', async () => {
+    api.site.mockResolvedValue({ ...base, wlans: [wlan({ security_mode: 'psk2' })] })
+    api.saveWLAN = vi.fn().mockResolvedValue({})
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+
+    // The row's own Edit button; the SSID text is not the control.
+    fireEvent.click(screen.getAllByText('Edit')[0])
+    await waitFor(() =>
+      expect(screen.getByText('Protected management frames')).toBeTruthy(),
+    )
+    // All three states reachable — "Disabled" is the one the warning asks for.
+    expect(screen.getByText('Disabled')).toBeTruthy()
+    expect(screen.getByText('Required')).toBeTruthy()
+
+    // WPA3 mandates PMF and the renderer forces it back on regardless, so
+    // offering a choice it would override is worse than offering none.
+    fireEvent.click(screen.getByText('WPA3 only'))
+    await waitFor(() =>
+      expect(screen.queryByText('Protected management frames')).toBeNull(),
+    )
+  })
+
   // A network that does not accept bridges must not be offered as somewhere to
   // join. Offering it would let someone build the one configuration whose
   // failure mode is indistinguishable from a driver refusing 4-address frames:
