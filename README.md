@@ -101,15 +101,18 @@ and this project's whole position is that those two must not be blurred.
 | **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
 | **Class B / C device budget** | the CPU and RAM figures in [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
 | **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
+| **Un-adopt giving a device's config *back*** | that a device we made changes to, un-adopted, diffs clean against a pre-adoption snapshot — [ROADMAP](docs/ROADMAP.md) Phase 0's second proof | nothing but running it: the test exists (`TestIntegrationAdoptUnadoptLeavesNothing`) and needs a device it can adopt and release. Footprint *removal* is verified; reverting owned sections is not |
 
 The budget row is the one worth not lumping in with the others: an ath79 or
 ipq40xx box closes the first three and leaves it exactly where it is, because
 **class C sets the budget** and every measured figure in `DEVICE-BUDGET.md` comes
 from the roomiest class.
 
-**What HAS been verified on real hardware** — adoption and clean un-adoption,
-apply with armed rollback, 802.11r/k roaming across two APs, capability probing
-and the driver-defect warnings, telemetry and the whole UI. Plus one thing
+**What HAS been verified on real hardware** — adoption; removal of the
+controller's own footprint (login and ACL file) from a device, checked by
+reading both back; apply with an armed rollback, watched changing on air and
+reverting on air; 802.11r/k roaming across two APs; capability probing and the
+driver-defect warnings; telemetry and the whole UI. Plus one thing
 learned the hard way: on Marvell hardware, PMF (`ieee80211w`) kills the 5 GHz
 radio within ~90 seconds of a fast-transition roam and needs a physical power
 cycle. The controller warns before it lets you do that, with the measurement
