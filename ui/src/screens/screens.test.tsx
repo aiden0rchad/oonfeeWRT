@@ -1455,3 +1455,53 @@ describe('Logs', () => {
     expect(screen.queryByText(/will not rewrite/)).toBeNull()
   })
 })
+
+describe('Dashboard', () => {
+  const data = {
+    devices: { total: 2, online: 2, offline: 0, pending: 0, unknown: 0 },
+    wireless_clients: 0,
+    wireless_clients_unknown_on: null,
+    known_devices: 5,
+    active_devices: 5,
+    upstream_devices: 4,
+    unscoped_devices: 3,
+    focused_devices: 0,
+    quiesced_devices: 0,
+    series_count: 70,
+    recent_events: [],
+  }
+
+  // A number under another number's label. This screen's own sibling code
+  // states the rule — showing one thing labelled as another is how a dashboard
+  // gets quietly distrusted — and this stat broke it: focused_devices, a count
+  // of DEVICES, sat under "Focused polls".
+  it('labels the focus stat for what it counts', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    expect(screen.getByText('Devices in focus')).toBeTruthy()
+    expect(screen.queryByText('Focused polls')).toBeNull()
+  })
+
+  // Zero here is the normal, correct reading — focus is held by an open device
+  // panel, and nobody reading the dashboard has one open. Without saying so, a
+  // permanently-zero counter reads as broken.
+  it('explains why the focus count is normally zero', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    expect(screen.getByText(/no panel is open/)).toBeTruthy()
+    expect(screen.getByText(/normally zero, and that is the honest answer/)).toBeTruthy()
+  })
+
+  // And it must still show a real count when there is one. 7 rather than 2:
+  // the fleet counts on this screen are 2s and 5s, and an assertion that passes
+  // by matching another stat's number is not an assertion about this one.
+  it('shows the count when devices are in focus', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{ ...data, focused_devices: 7 } as never} />)
+
+    expect(screen.getByText('7')).toBeTruthy()
+    expect(screen.queryByText(/no panel is open/)).toBeNull()
+  })
+})

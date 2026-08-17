@@ -52,7 +52,21 @@ export function Dashboard({ data }: { data: DashboardData }) {
           />
         </Card>
         <Card>
-          <Stat label="Focused polls" value={data.focused_devices} />
+          {/* Labelled for what it counts. It said "Focused polls" over
+              focused_devices — a count of DEVICES under a label promising a
+              count of polls, on a dashboard whose own code comment two files
+              away says that showing one number under another's label is how a
+              dashboard gets quietly distrusted.
+
+              It also reads 0 almost always, and that is correct rather than
+              broken: focus is held by an open device panel, and anyone reading
+              this screen does not have one open. Said in the note below, so a
+              permanent zero is not mistaken for a stuck counter. */}
+          <Stat
+            label="Devices in focus"
+            value={data.focused_devices}
+            sub={data.focused_devices === 0 ? 'no panel is open' : undefined}
+          />
         </Card>
         <Card>
           <Stat label="Series collected" value={data.series_count} />
@@ -75,7 +89,10 @@ export function Dashboard({ data }: { data: DashboardData }) {
         a gateway are excluded, and “unplaced” means no address has been
         observed to place them either way. They are different questions and will
         not match. The client list uses the same scoping, so the two screens
-        agree.
+        agree. “Devices in focus” counts the ones being polled every few seconds
+        instead of every minute, which happens only while somebody has a device
+        panel open — so from this screen it is normally zero, and that is the
+        honest answer rather than a stuck counter.
       </div>
 
       {d.pending > 0 && (
