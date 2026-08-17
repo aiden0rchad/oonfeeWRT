@@ -515,7 +515,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty-six** defects have been found
+- **Look at a screen in a browser.** **Thirty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3316,6 +3316,30 @@ out as `axisLabels()` and tested directly. What is STILL uncovered is written in
 the comment rather than implied: the one call site inside the uPlot options
 needs a real canvas to reach, so inlining the map there again would restore the
 bug silently.
+
+---
+
+### 5al. "Focused polls" was a count of devices
+
+**Done 2026-08-17.** Noticed in passing: the dashboard stat read **0** while a
+device panel two clicks away reported `focused`, a 10s interval, and a poll
+count climbing.
+
+**The zero was right; the label was not.** `focused_devices` counts DEVICES in
+the focused tier, and it sat under a label promising a count of polls — on the
+one screen whose own sibling comment states the rule, that showing one number
+under another's label is how a dashboard gets quietly distrusted.
+
+Zero is also the *normal* reading rather than a broken one: focus is held by an
+open device panel, so anybody looking at the dashboard has released it. The
+stat says so now, under the number and in the note below, because a
+permanently-zero counter with no explanation reads as a stuck one.
+
+The Dashboard **had no tests at all**; it has three. The count assertion uses 7
+rather than 2 — the fleet numbers on that screen are 2s and 5s, and an assertion
+that passes by matching a different stat's value is not an assertion about this
+one. That was caught by the test failing on a collision, which is the cheap
+version of the same lesson §6 keeps recording.
 
 ---
 
