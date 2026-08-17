@@ -740,7 +740,7 @@ function ChartBlock({
   deviceID: number
   kind: string
   seriesKey: string
-  format: (v: number) => string
+  format: (v: number, step?: number) => string
   colour: string
   /** What this series actually measures, when the title alone would let two
    *  charts of the same quantity be mistaken for each other. */

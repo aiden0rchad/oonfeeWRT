@@ -33,7 +33,7 @@ export function TimeChart({
 }: {
   points: Point[]
   label: string
-  format: (v: number) => string
+  format: (v: number, step?: number) => string
   height?: number
   colour?: string
   resolution?: string
@@ -100,7 +100,7 @@ export function TimeChart({
           ticks: { stroke: grid },
           font: '11px ui-sans-serif, system-ui, sans-serif',
           size: 58,
-          values: (_u, vals) => vals.map((v) => format(v)),
+          values: (_u, vals) => axisLabels(vals, format),
         },
       ],
       series: [
@@ -186,7 +186,42 @@ function hexWithAlpha(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
 }
 
+/**
+ * Label a y-axis's ticks, telling the formatter how far apart they are.
+ *
+ * Precision has to come from the SPACING between ticks, not from how big the
+ * numbers are. Exported and named rather than left inline in the uPlot options,
+ * because the property worth testing is this composition — that neighbouring
+ * ticks come out as different strings — and a closure inside a chart config
+ * cannot be reached by a test. The formatter alone passing its own tests proved
+ * nothing about whether the axis ever handed it a step; it did not, and no test
+ * noticed.
+ *
+ * What is still NOT covered, stated rather than implied: the single call site
+ * in the uPlot options. Inlining `vals.map(v => format(v))` there again would
+ * restore the bug and break no test, because that options object needs a real
+ * canvas to reach. One line, and it is this one — treat it as load-bearing.
+ */
+export function axisLabels(
+  vals: number[],
+  format: (v: number, step?: number) => string,
+): string[] {
+  const step = vals.length > 1 ? Math.abs(vals[1] - vals[0]) : 0
+  return vals.map((v) => format(v, step))
+}
+
 // ---- value formatters ----
+
+/**
+ * Decimals needed for two ticks `step` apart to render differently.
+ *
+ * Capped at three: past that the labels are wider than the information in them,
+ * and an axis that needs four decimals to separate its ticks is telling you the
+ * series is flat, which is better said by a flat line than by a precise one.
+ */
+function decimalsFor(step: number): number {
+  return Math.min(3, Math.max(0, Math.ceil(-Math.log10(step))))
+}
 
 export const fmt = {
   bytesPerSec(v: number): string {
@@ -198,7 +233,18 @@ export const fmt = {
     }
     return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`
   },
-  percent: (v: number) => `${v.toFixed(v < 10 ? 1 : 0)}%`,
+  /**
+   * A percentage, with enough decimals that neighbouring ticks differ.
+   *
+   * `step` is the spacing between axis ticks when the caller knows it. Without
+   * it the decimals were chosen from the VALUE's magnitude, which is the wrong
+   * input: an axis spanning 0.6 points around 63 wants a decimal just as much
+   * as one spanning 0.6 around 6, and rendered every tick as "63%" instead.
+   * The magnitude rule stays as the fallback for callers with no axis — a
+   * tooltip or a table cell, where one reading stands alone.
+   */
+  percent: (v: number, step?: number) =>
+    `${v.toFixed(step === undefined || step <= 0 ? (v < 10 ? 1 : 0) : decimalsFor(step))}%`,
   dbm: (v: number) => `${v.toFixed(0)} dBm`,
   plain: (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2)),
   count: (v: number) => v.toFixed(0),

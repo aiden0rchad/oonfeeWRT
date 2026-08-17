@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { DataGrid, FilterRail, Pager, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
+import { axisLabels, fmt } from './Chart'
 
 /**
  * Component tests for the shared grid.
@@ -368,3 +369,58 @@ function Grid({ prefs }: { prefs: boolean }) {
     />
   )
 }
+
+describe('axisLabels', () => {
+  // The user-visible property, and the one a formatter test cannot reach: the
+  // AXIS has to tell the formatter how far apart its ticks are. fmt.percent
+  // passed its own tests the whole time while the chart called it with no step,
+  // so every tick still collapsed to the same string on screen.
+  it('gives the formatter the tick spacing, so labels stay distinct', () => {
+    const labels = axisLabels([62.8, 63.0, 63.2], fmt.percent)
+    expect(new Set(labels).size).toBe(3)
+    expect(labels[0]).toBe('62.8%')
+  })
+
+  it('does not add precision when the ticks are far apart', () => {
+    expect(axisLabels([20, 40, 60], fmt.percent)).toEqual(['20%', '40%', '60%'])
+  })
+
+  // A single tick has no spacing to derive anything from, and must not divide
+  // by a gap that does not exist.
+  it('survives an axis with one tick', () => {
+    expect(axisLabels([63.2], fmt.percent)).toEqual(['63%'])
+  })
+})
+
+describe('fmt.percent', () => {
+  // The property that matters: two neighbouring ticks must not render the same
+  // string. Decimals used to be chosen from the VALUE's magnitude — one below
+  // 10, none above — so an axis spanning 0.6 points around 63 labelled every
+  // tick "63%". Seen on a survey chart holding two samples: two labels reading
+  // 63% at different heights with a line sloping between them, which a reader
+  // cannot tell from a broken axis.
+  it('keeps neighbouring ticks distinguishable', () => {
+    const step = 0.2
+    const ticks = [62.8, 63.0, 63.2].map((v) => fmt.percent(v, step))
+    expect(new Set(ticks).size).toBe(ticks.length)
+  })
+
+  // And does not spend decimals it does not need.
+  it('drops decimals when the ticks are far apart', () => {
+    expect(fmt.percent(63.2, 20)).toBe('63%')
+    expect(fmt.percent(63.2, 5)).toBe('63%')
+  })
+
+  // With no axis to consult — a tooltip, a table cell — one reading stands
+  // alone and the magnitude rule is the sensible fallback.
+  it('falls back to the magnitude rule with no step', () => {
+    expect(fmt.percent(63.2)).toBe('63%')
+    expect(fmt.percent(6.32)).toBe('6.3%')
+  })
+
+  // A degenerate axis must not ask for endless precision: a series that flat is
+  // better described by a flat line than by six decimals.
+  it('caps the decimals it will ask for', () => {
+    expect(fmt.percent(63.20000001, 0.0000001).length).toBeLessThanOrEqual(8)
+  })
+})
