@@ -2778,6 +2778,80 @@ The wireless-uplink card, the per-device override card and the adopt form all
 read correctly. The discovery card's "2 things not scanned" disclosure — tunnel
 interfaces and IPv6 — is exactly the kind of honesty this project is for.
 
+### 5ae. The adversarial review of a day's work
+
+**Done 2026-08-17.** A day that produced ~4,700 lines had been reviewed only by
+the person who wrote it. Four dimensions reviewed the diff independently, then
+every non-anecdotal finding faced a refuter told to default to "refuted".
+
+**30 candidates, 6 survived.** A 20% survival rate is roughly what a review that
+is not merely agreeing with itself should produce. **Four of the six were bugs
+introduced that same day.**
+
+#### The one that mattered most was not a bug
+
+`TestTheTakeoverBriefNeverCarriesThePassphrase` hardcoded the lab C6's **actual
+pre-shared key**, read off the device with `uci get`, with a comment saying so.
+It went into a **public** repository — in the test whose entire subject is that
+passphrases do not leak, and against a rule this project had already written
+down. Removing it from the tree does not unpublish it; the key has to be rotated
+on the device. Nothing about the test needed a real secret.
+
+#### The two high-severity findings
+
+**A URI-parsed database path.** The pragma fix earlier that day prefixed the path
+with `file:`, which makes SQLite parse it as a URI rather than a filename.
+Measured, one directory per case:
+
+| path | plain | with `file:` |
+|---|---|---|
+| `/tmp/x` | opens x | opens x |
+| `/tmp/has#hash` | opens it | **opens a different file, no error** |
+| `/tmp/pct%20name` | opens it | `unable to open database file (14)` |
+
+The `#` row is silent: a data directory containing one would bring the controller
+up on a fresh empty database, migrate the whole schema into it, and report zero
+devices while the real database sat beside it untouched.
+
+**A BSS cache that could never go empty.** It was written only when the AP list
+was non-empty — a proxy for "this poll asked", and wrong in both directions. A
+device broadcasting nothing could never record having been looked at, so the API
+answered "no poll has looked" about a device polled hundreds of times; and a
+removed SSID stayed reported as on the air indefinitely, including the one the
+takeover brief had just told an operator to remove. `Snapshot.APsFresh` follows
+`IfacesFresh` and `NetDevsFresh` — the same rule this package had already written
+down twice.
+
+#### The trap in an obvious fix
+
+A driver defect matched on one radio was applied to every radio: on mixed silicon
+a WLAN on an Atheros radio was accused of Marvell defects, and the DFS warning
+fired for a 2.4 GHz Marvell radio that cannot be on a DFS channel at any value.
+
+**The obvious per-radio filter silences a real warning.** A homogeneous Marvell
+board whose second radio has no interface reports `Hardware ""` — the §5ab case —
+and filtering it out is the cardinal error by the same road. `MayAffect` excludes
+only a radio *known* to be a different chip. Warning about the wrong chip is
+noise; going silent about the right one is not.
+
+Also fixed: a BSS the detail response did not mention rendered identically to one
+we manage, and a channel-keyed defect judging a snapshot frozen at adoption while
+the check beside it read live config.
+
+#### The PMF experiment, five hours in
+
+`ieee80211w=0` on both radios since 2026-08-16 21:00. The WRT has now run
+**5h23m** against previous runs of **17, 28 and 50 minutes** — with **zero**
+firmware heartbeat timeouts, where it previously accumulated hundreds within the
+hour.
+
+Stated as what it is: suggestive, not proven. The interval was never fixed, and
+this run also began with a power cycle rather than a sysrq reset, so the
+configuration is not the only thing that changed. What it does refute is my own
+early-warning claim — **three key-install failures have now occurred with no
+wedge following**, so that signature is a frequent event that sometimes precedes
+a wedge, not a predictor.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -2811,6 +2885,19 @@ written and believed.
   monitor reported a FAULT for a normal 802.11r roam, and separately reported the
   router UNREACHABLE while it was answering — a false "down" and a false alarm
   are the same failure.
+- **Never put a real credential in a test, least of all in the test about
+  credentials.** The lab AP's live passphrase went into a public repository
+  inside `TestTheTakeoverBriefNeverCarriesThePassphrase`. A sentinel does
+  identical work, and the load-bearing assertion was never the constant anyway —
+  it was that the response has no field a secret could live in.
+- **A guard written from one radio must not be applied to the device.** And the
+  obvious per-radio fix is a trap: excluding a radio that has not identified
+  itself turns a real warning into silence, which is the cardinal error wearing
+  a different hat. Exclude only what is KNOWN to be different.
+- **A test that passes while asserting nothing is worse than no test.** The
+  first version of the provenance test opened a panel whose live channel was
+  mocked to a no-op, so it rendered zero rows and passed. Mutation testing is
+  what catches this: revert the fix, and a real test fails.
 - **Mock-green is not hardware-green.** The mock passed throughout while real
   hardware exposed the shared-session bug that reverted healthy changes.
 - **A fix for one defect is not a fix for the next one in the same field.**
