@@ -87,7 +87,9 @@ section elsewhere on those devices is untouched.
 
 > **Status: met for TWO APs, not three.** Everything in the proof has been run
 > on real hardware across two devices and four radios — including the untouched
-> hand-edited section. The "three" is unmet purely for want of a third device;
+> hand-edited section, and including the full adopt → change → un-adopt → diff
+> round trip, which comes back byte-for-byte identical (2026-08-17). The "three"
+> is unmet purely for want of a third device;
 > see the not-tested table in the README. Nothing in the pipeline is per-device
 > — the render is driven by group membership and the mobility domain is derived
 > rather than coordinated, precisely so that adding an AP needs no new mechanism

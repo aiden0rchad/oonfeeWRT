@@ -5,14 +5,19 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** design phase — no product code yet. These documents are the plan.
+**Status:** working, on two devices. Not released.
 
-What does exist: [`tools/probe.py`](tools/probe.py), which validates the design's
-assumptions against a real device, and [`deploy/acl/oonfeewrt.json`](deploy/acl/oonfeewrt.json),
-the rpcd ACL that is the project's entire device-side footprint. The design has
-been validated against a WRT3200ACM on OpenWrt 25.12.5 — including the
-apply/confirm/rollback safety mechanism everything else depends on. See
-[`docs/IMPLEMENTATION.md`](docs/IMPLEMENTATION.md) §14 for what that run settled.
+There is a controller you can run: a Go daemon and an embedded React UI that
+adopt an OpenWrt device, reconcile a site model onto it, and take themselves
+back off leaving the device byte-for-byte as it was — there is a test that
+asserts exactly that against real hardware. Devices are adopted, polled, charted
+and applied to today, on a Linksys WRT3200ACM and a TP-Link Archer C6 running
+OpenWrt 25.12.5.
+
+What that does **not** mean: it has never run on more than two devices, several
+features have never met the hardware they are for, and nothing here has been
+packaged or released. The section below says exactly which parts are unverified,
+and it is worth reading before the install instructions rather than after.
 
 ---
 
@@ -101,17 +106,18 @@ and this project's whole position is that those two must not be blurred.
 | **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
 | **Class B / C device budget** | the CPU and RAM figures in [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
 | **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
-| **Un-adopt giving a device's config *back*** | that a device we made changes to, un-adopted, diffs clean against a pre-adoption snapshot — [ROADMAP](docs/ROADMAP.md) Phase 0's second proof | a device the test can adopt, apply a WLAN to, and release. Footprint *removal* is verified on hardware; reverting owned sections is not. `TestIntegrationAdoptUnadoptLeavesNothing` covers it and has not been run |
 
 The budget row is the one worth not lumping in with the others: an ath79 or
 ipq40xx box closes the first three and leaves it exactly where it is, because
 **class C sets the budget** and every measured figure in `DEVICE-BUDGET.md` comes
 from the roomiest class.
 
-**What HAS been verified on real hardware** — adoption; removal of the
-controller's own footprint (login and ACL file) from a device, checked by
-reading both back; apply with an armed rollback, watched changing on air and
-reverting on air; 802.11r/k roaming across two APs; capability probing and the
+**What HAS been verified on real hardware** — adoption, and un-adoption that
+leaves the device **byte-for-byte as it was**: adopt, apply a WLAN, un-adopt,
+and every UCI config and the ACL directory diff clean against a pre-adoption
+snapshot, with the two owned sections handed back and the login and ACL file
+gone (ROADMAP Phase 0's second proof, run 2026-08-17). Apply with an armed
+rollback, watched changing on air and reverting on air; 802.11r/k roaming across two APs; capability probing and the
 driver-defect warnings; telemetry and the whole UI. Plus one thing
 learned the hard way: on Marvell hardware, PMF (`ieee80211w`) kills the 5 GHz
 radio within ~90 seconds of a fast-transition roam and needs a physical power

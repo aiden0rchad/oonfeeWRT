@@ -37,7 +37,15 @@ func TestIntegrationAdoptARealDevice(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	cfg := testConfig(t, "operator passphrase")
+	// testConfig ships a 2-second ApplyDrain, which is right for the unit tests
+	// that exercise shutdown and wrong for anything that actually applies:
+	// TrackApply gives EVERY apply a context with that deadline, so a real
+	// apply — stage, arm a 90s rollback, health-check, confirm — was cancelled
+	// mid-flight and reported "unknown" with the change sitting on the device.
+	// The production default is 3 minutes for exactly this reason.
+	cfg.ApplyDrain = 3 * time.Minute
+	d, err := Open(ctx, cfg, quietLogger())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -156,7 +164,15 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 	namedBefore := sshRun(t, host,
 		`{ uci show 2>/dev/null; ls -1 /usr/share/rpcd/acl.d/; } | grep -i oonfee || true`)
 
-	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	cfg := testConfig(t, "operator passphrase")
+	// testConfig ships a 2-second ApplyDrain, which is right for the unit tests
+	// that exercise shutdown and wrong for anything that actually applies:
+	// TrackApply gives EVERY apply a context with that deadline, so a real
+	// apply — stage, arm a 90s rollback, health-check, confirm — was cancelled
+	// mid-flight and reported "unknown" with the change sitting on the device.
+	// The production default is 3 minutes for exactly this reason.
+	cfg.ApplyDrain = 3 * time.Minute
+	d, err := Open(ctx, cfg, quietLogger())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -175,6 +191,26 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 		t.Fatalf("Adopt: %v", err)
 	}
 	t.Logf("adopted %s as device %d", res.MAC, res.DeviceID)
+
+	// Take the footprint off even if an assertion below fails.
+	//
+	// Without this, a failing run leaves its login and ACL on the device, and
+	// the NEXT run reports "adoption installed no ACL file" — because the file
+	// was already there — which points at adoption rather than at the previous
+	// failure. Two runs were lost to exactly that. Best-effort and logged, not
+	// asserted: the un-adopt on the happy path below is the one under test, and
+	// a second one failing here would be noise attached to the wrong line.
+	cleaned := false
+	t.Cleanup(func() {
+		if cleaned {
+			return
+		}
+		out, err := d.Unadopt(context.Background(), api.UnadoptRequest{
+			DeviceID: res.DeviceID, Username: user, Password: pass, Force: true,
+		})
+		t.Logf("cleanup un-adopt after a failed run: removed=%v remains=%v err=%v",
+			out != nil && out.Removed, out != nil && out.FootprintRemains, err)
+	})
 
 	// It must genuinely be managed before removal proves anything.
 	duringConfigs, duringACLs := snapshot("while adopted")
@@ -235,7 +271,10 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 		t.Fatalf("ApplySite: %v", err)
 	}
 	for _, dev := range ares.Devices {
-		t.Logf("applied to %s: %s", dev.Name, dev.Outcome)
+		// The reason, not just the outcome. "unknown" on its own says a human is
+		// needed and nothing about what to look at; the engine writes a specific
+		// sentence for every branch that produces it.
+		t.Logf("applied to %s: %s — %s", dev.Name, dev.Outcome, dev.Reason)
 	}
 	// Owned sections must exist now, or the un-adopt below reverts nothing and
 	// the proof is back to the version that could not fail.
@@ -261,6 +300,7 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unadopt: %v (%v)", err, out)
 	}
+	cleaned = true // the real removal ran; the safety net above must not repeat it
 	t.Logf("un-adopted: reverted=%d login_removed=%v acl_removed=%v remains=%v",
 		out.RevertedSections, out.LoginRemoved, out.ACLRemoved, out.FootprintRemains)
 	// Phase 1 actually ran. Asserted rather than merely logged, because a zero

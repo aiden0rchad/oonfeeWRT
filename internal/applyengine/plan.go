@@ -18,6 +18,21 @@ import (
 // enough that a stranded operator is not waiting long.
 const DefaultTimeout = 90 * time.Second
 
+// DefaultRevertGrace is how long past the rollback window to wait before
+// checking whether the device actually reverted.
+//
+// Exported so that callers who bound an apply with their own deadline can
+// derive a floor instead of guessing one. A budget shorter than
+// DefaultTimeout+DefaultRevertGrace cannot see an apply through: the context
+// expires while the device's own timer is still running, and every apply that
+// needs the full window ends Unknown and Stranded — the engine's one alarming
+// outcome — with the change still on the device.
+const DefaultRevertGrace = 15 * time.Second
+
+// MinApplyBudget is the shortest deadline an apply can be given and still reach
+// a definite answer.
+func MinApplyBudget() time.Duration { return DefaultTimeout + DefaultRevertGrace }
+
 // Op is a staged UCI operation. Nothing here commits: staging is what makes
 // uci.apply able to snapshot a pre-change state, and a manual commit first
 // silently disarms the rollback.

@@ -22,6 +22,7 @@ import (
 	_ "modernc.org/sqlite" // the pure-Go driver, per decision D3
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
+	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -93,6 +94,17 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 	}
 	if log == nil {
 		log = slog.Default()
+	}
+	// A drain shorter than an apply can possibly take is a config that turns
+	// every full-window apply into the engine's one alarming outcome. Warned
+	// rather than refused: a deliberately tiny drain is how the shutdown path
+	// itself gets tested, and refusing it would break testing the thing this
+	// warning is about.
+	if min := applyengine.MinApplyBudget(); cfg.ApplyDrain < min {
+		log.Warn("apply drain is shorter than an apply can take; applies that "+
+			"need the full rollback window will report \"unknown\" with the "+
+			"change still on the device",
+			"apply_drain", cfg.ApplyDrain, "minimum", min)
 	}
 	// 0700: the directory holds the database and the keyring, and nothing else
 	// on the host has any business reading either.

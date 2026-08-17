@@ -46,7 +46,7 @@ type Engine struct {
 func New() *Engine {
 	return &Engine{
 		ConfirmInterval: 3 * time.Second,
-		RevertGrace:     15 * time.Second,
+		RevertGrace:     DefaultRevertGrace,
 		Now:             time.Now,
 	}
 }

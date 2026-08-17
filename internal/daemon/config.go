@@ -48,13 +48,27 @@ type Config struct {
 	// get their own, longer budget — see ApplyDrain.
 	ShutdownGrace time.Duration
 
-	// ApplyDrain bounds the wait for in-flight applies at shutdown.
+	// ApplyDrain is the budget for an apply — EVERY apply, not only at shutdown.
 	//
-	// This is the one shutdown timer that must not be short. An apply past the
-	// APPLY step has a rollback armed on the device, and that timer keeps running
-	// whether this process exists or not; exiting early leaves a device that
-	// reverts a good change some seconds later, with nobody left to confirm it.
-	// So the default is the rollback window plus room for the confirm poll.
+	// The name says shutdown and the truth is wider, which cost an afternoon to
+	// find, so it is spelled out here: TrackApply gives every apply a context
+	// with this deadline, always. Tuning it down to make SIGTERM snappier
+	// silently caps every write to every device.
+	//
+	// It must not be short, for two reasons that point the same way. At
+	// shutdown, an apply past the APPLY step has a rollback armed on the device
+	// and that timer keeps running whether this process exists or not; exiting
+	// early leaves a device that reverts a good change seconds later with
+	// nobody left to confirm it. And in normal operation, a budget below
+	// applyengine.MinApplyBudget() — the rollback window plus the grace period
+	// after it — expires while the device's own timer is still running, so an
+	// apply that needed the full window ends Unknown and Stranded with the
+	// change still applied. That is the engine's one alarming outcome, produced
+	// by a config knob rather than by anything the device did.
+	//
+	// Validate refuses zero; a positive value below the floor is allowed but
+	// warned about at startup, because a short drain is legitimate in tests
+	// that exercise shutdown itself.
 	ApplyDrain time.Duration
 }
 
