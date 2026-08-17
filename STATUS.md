@@ -586,16 +586,13 @@ disagreed.
   package-installation flow ARCHITECTURE §6 step 3 describes and nothing has
   built. Writing config for an absent package would be untestable, so it was not
   written.
-- **The WRT3200ACM under a client.** Not a hardware purchase — a client that
-  prefers it. It has now run **13h51m with zero `MEMAddrAccess` timeouts**
-  (measured 2026-08-17 08:30 — `logread | grep -c` returns 0), through polling,
-  applies, a mesh and an 802.11k reconciler. Against 17, 28 and 50 minutes
-  before, that is the strongest signal yet that `ieee80211w=0` is the
-  difference — **and it still cannot be called one**, because the device has
-  carried **zero clients** the entire time: the one client on this network
-  associates to the C6 and stays. A client was the single condition every
-  pre-reset failure shared, so this run cannot distinguish "PMF off fixed it"
-  from "nothing has asked it to do the thing that breaks it". See §0.
+- ~~**The WRT3200ACM under a client.**~~ **It has now had one** — see §5am. The
+  entry here previously said the device "has carried zero clients the entire
+  time"; that was read off a live `get_clients` showing an empty list and was
+  **wrong about the run as a whole**. Station telemetry and the device's own log
+  both show a client associated to **phy0** — the 5 GHz radio whose firmware is
+  the one that hangs — from 21 minutes after boot for 2h42m. What remains is
+  breadth: one client, one run, and two variables changed at once.
 
 ### Before starting anything, read these
 
@@ -2633,6 +2630,13 @@ That does not make the config the cause. It does mean the obvious experiment has
 never been run: **turn PMF off on this device and see whether it survives longer
 than 50 minutes.** Nothing else about the deployment needs to change.
 
+**It was run, and it survived — §5am.** 14h25m with zero timeouts, including
+2h42m carrying a client on phy0 doing exactly the 802.11r fast transitions this
+paragraph names as the failing path, with three key-install failures and no
+wedge. The hypothesis is now supported rather than merely testable. What has
+*not* been separated is PMF from the power cycle that accompanied it: the
+experiment that would is **PMF back on, with a client present**.
+
 #### Verified in passing: the neighbour reconciler self-heals a rebooted AP
 
 A reboot clears runtime `rrm_nr` state, and **a device reboot is not one of the
@@ -2894,6 +2898,12 @@ configuration is not the only thing that changed. What it does refute is my own
 early-warning claim — **three key-install failures have now occurred with no
 wedge following**, so that signature is a frequent event that sometimes precedes
 a wedge, not a predictor.
+
+**Superseded by §5am.** The same run reached 14h25m, and the "no client, so
+inconclusive" caveat recorded here and below turned out to be false: a client
+was on **phy0** from 21 minutes after boot for 2h42m, doing 802.11r fast
+transitions, producing three more key-install failures — six now, still no
+wedge.
 
 ### 5af. Reviewing the fixes, and what un-adopt was missing
 
@@ -3343,6 +3353,47 @@ version of the same lesson §6 keeps recording.
 
 ---
 
+### 5am. The WRT has carried a client, and did not wedge
+
+**Measured 2026-08-17 09:20.** The PMF-off experiment was recorded as
+inconclusive on the grounds that the device "has carried zero clients the entire
+time". **That was wrong**, and the way it was wrong is worth more than the
+result: it came from reading a live `get_clients`, which showed an empty list
+*at that moment*, and treating it as a statement about the whole run. **A
+current reading is not a history.** The history was in the station telemetry the
+controller had been writing all along, and in the device's own log.
+
+What the two sources actually say, in the device's own clock (UTC, seven hours
+ahead of the controller's — an easy way to mis-align these):
+
+| | |
+|---|---|
+| uptime at check | **14h25m** (booted 01:52 UTC / 18:52 PDT) |
+| `MEMAddrAccess timed out` | **0** |
+| `nl_recvmsgs failed` (the downstream marker) | **0** |
+| client associated | **+21 min after boot**, for **2h42m** |
+| which radio | **phy0** — the 5 GHz one whose firmware hangs |
+| associations / disconnects | 3 / 3, all `auth_alg=ft` (802.11r fast transition) |
+| **key-install failures** | **3** |
+| `ieee80211w` in the live hostapd conf | **0**, both radios |
+
+So the precursor fired. **Three key-install failures, on a real client, doing
+fast transitions, on the exact radio that fails — and no wedge followed.** The
+three earlier wedges came at 17, 28 and 50 minutes after boot; this run had a
+client on phy0 from minute 21 and has now run more than fourteen hours.
+
+That also settles the early-warning question the memory had already doubted:
+`key addition failed` is a **frequent event that sometimes precedes a wedge**,
+not a predictor. Six occurrences without one now.
+
+**Still not proof, and the reasons are specific rather than ritual.** One client
+and one run. The run began with a power cycle *and* `ieee80211w=0` together, so
+the two variables have never been separated — the honest next experiment is to
+put PMF back on with a client present and see whether it returns. And three
+associations is little churn; the earlier failures may have needed more.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3399,6 +3450,11 @@ written and believed.
   it, no test — and each one reads as a harmless omission unless you already
   know about the other four. Reading a file at a time cannot find this; tracing
   one value from where it is produced to where it is checked can.
+- **A current reading is not a history.** "The WRT has carried zero clients"
+  came from a live `get_clients` returning an empty list — true at that instant,
+  false about the run, and it had held an experiment open as inconclusive for a
+  day. The controller's own station telemetry answered it in one query. Before
+  claiming something never happened, ask the series that would have recorded it.
 - **Two things on one screen that disagree are a finding, not a rendering
   quirk.** A live "74.1% busy" above a chart saying "No data yet", same radio,
   same second, turned out to be two different sources with the panel charting
