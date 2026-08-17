@@ -110,11 +110,31 @@ func DialSSH(ctx context.Context, opt SSHOptions) (*SSHBootstrap, error) {
 	if err != nil {
 		return nil, fmt.Errorf("adoption: cannot reach %s over SSH: %w", host, err)
 	}
+	// Bound the HANDSHAKE. ClientConfig.Timeout is read only by ssh.Dial;
+	// NewClientConn hands the connection to clientHandshake unbounded, and it
+	// does not observe ctx either. So an address that accepts TCP and never
+	// completes the version exchange — a stalled proxy, a port-forward to
+	// nothing, a non-SSH service that never writes — hung adoption forever,
+	// past the 90s adopt timeout and past the cancelled request, on a server
+	// with no WriteTimeout.
+	hs := time.Now().Add(opt.Timeout)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(hs) {
+		hs = dl
+	}
+	_ = conn.SetDeadline(hs)
+
 	c, chans, reqs, err := ssh.NewClientConn(conn, host, cfg)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("adoption: SSH to %s: %w", host, err)
 	}
+	// Cleared, and this half is load-bearing. The same connection carries every
+	// InstallACL and CreateLogin session afterwards, and adoption's full flow —
+	// a capability probe plus the writes plus a verification login — routinely
+	// outlives the 30s both callers pass. A deadline left in place would kill
+	// adoption mid-write, which is the one moment a device is half-configured.
+	_ = conn.SetDeadline(time.Time{})
+
 	return &SSHBootstrap{client: ssh.NewClient(c, chans, reqs), hostFP: seen}, nil
 }
 
@@ -247,9 +267,42 @@ func (b *SSHBootstrap) RemoveFootprint(ctx context.Context, aclPath, user string
 	if !safePath(aclPath) {
 		return fmt.Errorf("adoption: refusing to remove an unsafe path %q", aclPath)
 	}
-	_, err := b.run(ctx, nil, fmt.Sprintf(
-		"uci -q delete rpcd.%s; uci commit rpcd; rm -f %s", user, shellQuote(aclPath)))
-	return err
+	// Report from what the device ANSWERS, not from the exit status of the last
+	// command in the line.
+	//
+	// It used to be `uci -q delete …; uci commit rpcd; rm -f …` — three
+	// statements joined by `;`, so the result was `rm -f`'s, and `rm -f`
+	// succeeds on a file that was never there. Anything that made uci fail
+	// while unlink still worked therefore reported a clean un-adopt: a full
+	// /overlay (commit must write a new file, rm need not), a held uci lock, an
+	// unparsable /etc/config/rpcd, a missing uci binary.
+	//
+	// The delete is staged in /tmp/.uci until committed, so an uncommitted
+	// removal leaves `config login 'oonfeewrt'` in /etc/config/rpcd and it
+	// comes back in full at the next reboot — while the ACL file is gone. The
+	// login grants nothing without its ACL group, so this is a dead credential
+	// rather than a live one; what it costs is the report. Un-adopt says the
+	// device is clean, the controller deletes its inventory row, and the
+	// residue nobody was told about is now recorded nowhere at all.
+	out, err := b.run(ctx, nil, fmt.Sprintf(
+		"uci -q delete rpcd.%s; uci commit rpcd; rm -f %s; "+
+			"printf 'login=%%s acl=%%s\n' "+
+			"\"$(uci -q get rpcd.%s >/dev/null 2>&1 && echo present || echo gone)\" "+
+			"\"$([ -e %s ] && echo present || echo gone)\"",
+		user, shellQuote(aclPath), user, shellQuote(aclPath)))
+	if err != nil {
+		return err
+	}
+	if strings.Contains(out, "login=present") {
+		return fmt.Errorf("adoption: the controller's login %q is still in "+
+			"/etc/config/rpcd after removal — the delete was staged but not "+
+			"committed, so it returns at the next reboot", user)
+	}
+	if strings.Contains(out, "acl=present") {
+		return fmt.Errorf("adoption: the ACL file %s is still on the device "+
+			"after removal", aclPath)
+	}
+	return nil
 }
 
 // safePath bounds what the bootstrap will touch to the one directory it has any

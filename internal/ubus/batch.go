@@ -116,8 +116,19 @@ func (c *Client) sendChunk(ctx context.Context, calls []Invocation, payload []by
 		c.mu.Unlock()
 		if !inWindow && user != "" {
 			if err := c.Login(ctx, user, pass); err == nil {
-				_, fresh, err := c.buildChunk(calls, 0)
-				if err != nil {
+				end, fresh, err := c.buildChunk(calls, 0)
+				// The end index is the point. buildChunk packs to a byte
+				// budget, and the fresh session's ids can be WIDER than the
+				// ones this chunk was packed with — when they straddle a
+				// power-of-ten boundary, the rebuild holds one call fewer.
+				//
+				// Discarding `end` posted that short payload anyway. The
+				// device then RAN N-1 calls, the length check rejected the
+				// reply, and the original results were returned — so the
+				// writes landed while the caller was told every one was
+				// denied, and Retried stayed false, which makes IsPermanent
+				// report a permanent ACL gap as transient.
+				if err != nil || end != len(calls) {
 					return results, nil
 				}
 				retry, err := c.resendChunk(ctx, calls, fresh)
