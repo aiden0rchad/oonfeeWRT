@@ -33,6 +33,7 @@ const api = {
   meshHealth: vi.fn(),
   saveUplink: vi.fn(),
   deleteUplink: vi.fn(),
+  unadopt: vi.fn(),
 }
 
 vi.mock('../lib/api', () => ({
@@ -1030,6 +1031,96 @@ describe('Unadopt', () => {
       const r = screen.getByText('Remove completely').closest('button')!
       if (r.disabled) throw new Error('still disabled after confirming')
     })
+  })
+
+  // Reaches the form, confirms, and presses the destructive button.
+  async function attemptRemoval() {
+    api.device.mockResolvedValue({
+      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
+      broadcast_known: false, owned_sections: ['wireless.oowrt_wlan1_radio0'],
+    })
+    const { Unadopt } = await import('./Unadopt')
+    const onDone = vi.fn()
+    render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />)
+    await waitFor(() =>
+      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
+    )
+    fireEvent.click(screen.getByText(/reverts the sections above/))
+    await waitFor(() => {
+      const r = screen.getByText('Remove completely').closest('button')!
+      if (r.disabled) throw new Error('still disabled after confirming')
+    })
+    fireEvent.click(screen.getByText('Remove completely'))
+    return onDone
+  }
+
+  // The API has taken `force` since un-adopt was written, and no screen ever
+  // sent it. So a device that cannot be reached — dead hardware, a reflash, a
+  // lost administrator password, and now a refused host key — could never leave
+  // the inventory: it stayed listed, polled and counted forever, and the only
+  // way out was a hand-written API call.
+  it('offers a way out when the device cannot be reached at all', async () => {
+    api.unadopt.mockRejectedValueOnce(
+      new Error("the device's SSH host key changed"),
+    )
+    await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText(/SSH host key changed/)).toBeTruthy(),
+    )
+    const forceBtn = screen
+      .getByText('Remove from the inventory anyway')
+      .closest('button')!
+    if (!forceBtn.disabled) {
+      throw new Error('forced removal was available without its own confirmation')
+    }
+
+    api.unadopt.mockResolvedValueOnce({
+      removed_from_inventory: true, footprint_remains: true,
+      reverted_sections: 0, login_removed: false, acl_removed: false,
+      residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
+      errors: ['removal was forced, so the footprint was NOT removed'],
+    })
+    fireEvent.click(screen.getByText(/footprint stays on the device/))
+    await waitFor(() => {
+      const b = screen.getByText('Remove from the inventory anyway').closest('button')!
+      if (b.disabled) throw new Error('still disabled after confirming')
+    })
+    fireEvent.click(screen.getByText('Remove from the inventory anyway'))
+
+    await waitFor(() => expect(api.unadopt).toHaveBeenCalledTimes(2))
+    const [id, req] = api.unadopt.mock.calls[1]
+    expect(id).toBe(4)
+    expect(req.force).toBe(true)
+    // The credential goes with it. The daemon still TRIES phase 2 and only
+    // skips it when the connection fails, so a device that turns out to be
+    // reachable is cleaned properly rather than abandoned on our say-so.
+    expect(req.username).toBe('root')
+  })
+
+  // The report is the LAST copy of what is still installed on a device whose
+  // row has just been deleted. It was rendered and discarded in the same tick:
+  // onDone ran the moment the request returned, and it unmounts the panel.
+  it('keeps the report on screen after the row is gone', async () => {
+    api.unadopt.mockResolvedValueOnce({
+      removed_from_inventory: true, footprint_remains: true,
+      reverted_sections: 2, login_removed: false, acl_removed: false,
+      residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
+      errors: [],
+    })
+    const onDone = await attemptRemoval()
+
+    await waitFor(() =>
+      expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy(),
+    )
+    expect(onDone).not.toHaveBeenCalled()
+
+    // Forcing is not offered once the row is actually gone — there is nothing
+    // left to force.
+    expect(screen.queryByText('Remove from the inventory anyway')).toBeNull()
+
+    fireEvent.click(screen.getByText('Close'))
+    expect(onDone).toHaveBeenCalled()
   })
 })
 

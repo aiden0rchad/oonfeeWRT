@@ -16,6 +16,13 @@ import { Button, Field, Banner, Card, Toggle } from '../components/ui'
  * Skipping the credential is a supported outcome, not an error. The device
  * keeps a listed, visible residue instead of a silently half-removed one, and
  * the list is exactly what someone has to delete by hand.
+ *
+ * And there is a third outcome, which this screen used not to offer at all:
+ * the device cannot be reached AT ALL. Dead hardware, a reflash, a lost
+ * administrator password. The API has always taken `force` for exactly that
+ * case and no screen ever sent it, so a router that no longer exists could
+ * never leave the inventory — it stayed listed, polled and counted forever,
+ * and the only way out was a hand-written API call.
  */
 export function Unadopt({
   deviceID,
@@ -48,18 +55,31 @@ export function Unadopt({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<UnadoptResult | null>(null)
+  // Its own confirmation, separate from the one above, because it is its own
+  // decision: the first says "revert this device", this one says "give up on
+  // reaching it and lose the record of what is still installed".
+  const [forceOK, setForceOK] = useState(false)
+  // Whether the attempt that failed carried a credential. A forced retry sends
+  // the same thing: the daemon still TRIES phase 2 and only skips it when the
+  // connection fails, so carrying the credential means a device that turns out
+  // to be reachable is cleaned properly rather than abandoned on our say-so.
+  const [triedWithCredential, setTriedWithCredential] = useState(false)
 
-  async function run(withCredential: boolean) {
+  async function run(withCredential: boolean, force = false) {
     setErr('')
     setBusy(true)
+    setTriedWithCredential(withCredential)
     try {
-      const res = await api.unadopt(
-        deviceID,
-        withCredential ? { username, password } : {},
-      )
+      const res = await api.unadopt(deviceID, {
+        ...(withCredential ? { username, password } : {}),
+        ...(force ? { force: true } : {}),
+      })
       setResult(res)
       setPassword('')
-      if (res.removed_from_inventory) onDone()
+      // NOT onDone() here. That unmounted the whole panel the instant a removal
+      // succeeded, so the report underneath — including the residue, which is
+      // the last copy of what is still on the device once the row is gone —
+      // was rendered and discarded in the same tick. Close does it instead.
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.body) {
         // Not a failure. Phase 1 ran; phase 2 needs a credential the controller
@@ -73,6 +93,35 @@ export function Unadopt({
       setBusy(false)
     }
   }
+
+  // Offered only after something has actually failed. Before that it is a
+  // shortcut past the part that gives the device its configuration back, and
+  // the ordinary path is the one that should be easy to take.
+  const forceBlock = (
+    <Card title="If the device cannot be reached at all">
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
+        Remove <strong>{deviceName}</strong> from the inventory anyway. This
+        does <strong>not</strong> touch the device: the controller's login and
+        its ACL file stay on it, and once this row is gone the controller no
+        longer holds a record of what to delete. The response will list it — it
+        is the last copy, so keep it. Use this for hardware that is gone for
+        good, that was reflashed, or whose administrator password is lost.
+      </p>
+      <Toggle
+        label="I understand — the controller's footprint stays on the device"
+        on={forceOK}
+        onChange={setForceOK}
+      />
+      <div style={{ marginTop: 10 }}>
+        <Button
+          disabled={busy || !forceOK}
+          onClick={() => run(triedWithCredential, true)}
+        >
+          {busy ? 'Removing…' : 'Remove from the inventory anyway'}
+        </Button>
+      </div>
+    </Card>
+  )
 
   if (result) {
     return (
@@ -129,13 +178,21 @@ export function Unadopt({
           )}
         </Card>
 
+        {!result.removed_from_inventory && forceBlock}
+
         <div style={{ display: 'flex', gap: 8 }}>
           {result.needs_operator_credential && (
             <Button kind="primary" onClick={() => setResult(null)}>
               Supply the credential
             </Button>
           )}
-          <Button onClick={onCancel}>Close</Button>
+          {/* onDone refreshes the fleet and closes the panel; onCancel only
+              closes this form. Which one is correct depends on whether the row
+              is actually gone, and calling onDone the moment the request
+              returned is what threw the report away. */}
+          <Button onClick={result.removed_from_inventory ? onDone : onCancel}>
+            Close
+          </Button>
         </div>
       </div>
     )
@@ -178,6 +235,10 @@ export function Unadopt({
       </Card>
 
       {err && <Banner tone="critical">{err}</Banner>}
+      {/* A hard failure never produces a result, so without this the only way
+          past a refused SSH connection — a changed host key, a dead address, a
+          wrong password — is to give up. */}
+      {err && forceBlock}
 
       <Card title="Device administrator credential">
         <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
