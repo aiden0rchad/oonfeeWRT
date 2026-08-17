@@ -3192,6 +3192,22 @@ the speed bump exists for. Every attempt re-earns it now. The ordinary
 confirmation deliberately does **not** reset: that one is consent to un-adopt
 this device, which retrying the same operation does not withdraw.
 
+#### Verified against a device that answers and can do nothing
+
+`tools/hostilessh` was written for this and kept: it accepts any password and
+fails every command with the stderr uci gives on a read-only overlay. Pointing a
+throwaway inventory row at it produces the half-succeeded state — phase 2 runs,
+nothing can be removed, `Unadopt` returns a result *and* an error — which is the
+hardest case to reach and the one that was silently discarding its own report.
+
+Driven in the browser, it now renders: the new banner (still in the inventory,
+**not** claiming a missing credential, since one was supplied), the residue list
+on an error path, and the device's own `uci: Cannot write to file: Read-only file
+system`. It also exercised **§5ag's `RemoveFootprint` verification against a
+hostile device for the first time** — it refused to report a clean un-adopt when
+`rm -f` would have succeeded and uci did not, which is precisely what it was
+written for and had only ever been checked by a unit test.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -3257,11 +3273,15 @@ written and believed.
   fail, and the panel over it turned out to have no way to recover from any of
   them, including the ones that had always existed.
 - **Then DRIVE it, on a throwaway.** Reading the un-adopt panel found two
-  defects; running it found two more. A screen can be right in every state you
-  imagined and wrong in the one the flow reaches. Manufacture the failure on a
-  disposable row pointing at a closed port — never by feeding a real device a
-  wrong password, because the reference hardware accepts any password when root
-  has none, so the "failure" would succeed and un-adopt a working AP.
+  defects; running it found two more, and driving the *error* path found the
+  three in §5aj. A screen can be right in every state you imagined and wrong in
+  the one the flow reaches. Manufacture the failure on a disposable inventory
+  row: a closed port for "cannot connect", and `tools/hostilessh` — which
+  accepts any password then fails every command — for "connects and can do
+  nothing", the half-succeeded case that is hardest to reach and worst to get
+  wrong. **Never by feeding a real device a wrong password**, because the
+  reference hardware accepts any password when root has none, so the "failure"
+  would succeed and un-adopt a working AP.
 - **A guard that reports itself as configured is worse than an absent one.**
   The empty-fingerprint case is the whole pattern in miniature: store `""` and
   the column says "pinned", the first-use branch never runs again, and nothing
