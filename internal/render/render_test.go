@@ -1254,17 +1254,32 @@ func TestADFSWarningFollowsTheLiveChannelNotTheAdoptionSnapshot(t *testing.T) {
 			"adoption snapshot and stayed silent")
 	}
 
-	// And the other direction: snapshot 36, device still 36 — no warning.
+	// The other direction, and it needs its own registry: adopted ON a DFS
+	// channel and moved off it since. Reusing the snapshot-36 caps above would
+	// assert something true under every possible implementation, including one
+	// that ignores the live channel entirely — which is what the first version
+	// of this half did.
+	adoptedOnDFS := capability.NewRegistry()
+	adoptedOnDFS.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5500, Channel: 100,
+			Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412, Channel: 6,
+			Hardware: "Marvell 88W8964"},
+	}
 	stayed := NewExisting(map[string]map[string]map[string]string{
-		"wireless": {"radio0": {".type": "wifi-device", "channel": "36"}},
+		"wireless": {
+			"radio0": {".type": "wifi-device", "channel": "36"},
+			"radio1": {".type": "wifi-device", "channel": "6"},
+		},
 	})
-	_, rep2, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, stayed)
+	_, rep2, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, adoptedOnDFS, stayed)
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	for _, w := range rep2.Warnings {
 		if w.DefectID == "mwlwifi-dfs-channels" {
-			t.Error("warned about DFS on a radio sitting on channel 36")
+			t.Error("the radio was adopted on channel 100 and is on 36 now; the " +
+				"warning is crying wolf from the adoption snapshot")
 		}
 	}
 }
@@ -1394,5 +1409,42 @@ func TestADeviceWithNoRadiosIsNotWarnedAboutUnreadableHardware(t *testing.T) {
 			t.Error("a device that answered 'no radios' was told the check " +
 				"could not run; asked-and-none is an answer")
 		}
+	}
+}
+
+// iwinfo answers with a placeholder when it cannot name a part, and a
+// placeholder is not an identification.
+//
+// "Generic MAC80211" is what the lab's own Archer C6 reports for one of its two
+// radios. Treating it as "a different chip" dropped every Marvell defect for
+// that radio on a device the probe had already established was Marvell —
+// silence about a radio-death defect, from a name that means "I do not know".
+func TestAPlaceholderHardwareNameDoesNotSilenceADefect(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180, Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412, Hardware: "Generic MAC80211"},
+	}
+	site := testSite()
+	site.WLANs[0].Bands = []model.Band{model.Band2G} // lands on the placeholder radio
+	site.WLANs[0].Security = model.Security{
+		Mode: model.SecPSK2, Key: "s3cret", PMF: model.PMFOptional,
+	}
+
+	_, rep, err := Render(site, model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var warned bool
+	for _, w := range rep.Warnings {
+		if w.DefectID == "mwlwifi-80211w-unsupported" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("a radio named \"Generic MAC80211\" silenced a defect on a " +
+			"device already established as Marvell; a placeholder is not an " +
+			"identification")
 	}
 }

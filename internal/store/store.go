@@ -140,7 +140,10 @@ func Open(ctx context.Context, driverName, path string) (*DB, error) {
 	// driver under another name would run with foreign keys OFF and every
 	// ON DELETE CASCADE in the schema inert. The parameters are inert
 	// themselves on a driver that does not understand them.
-	dsn := dsnWithPragmas(path)
+	dsn, err := dsnWithPragmas(path)
+	if err != nil {
+		return nil, err
+	}
 	sqldb, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
@@ -184,42 +187,36 @@ func Open(ctx context.Context, driverName, path string) (*DB, error) {
 //
 // journal_mode is deliberately NOT here: WAL is a property of the database
 // file, not of a connection, so it is set once and persists.
-func dsnWithPragmas(path string) string {
-	if strings.Contains(path, "_pragma=") {
-		return path // caller has already said what it wants
+func dsnWithPragmas(path string) (string, error) {
+	// A "?" in the path cannot be expressed at all.
+	//
+	// Without a "file:" prefix the driver splits the DSN at the first "?"
+	// before decoding anything, so a data directory containing one opens a
+	// DIFFERENT file — silently, with the schema migrated into it and the
+	// controller reporting zero devices while the real database sits beside it.
+	// Percent-escaping does not help: there is no decoding step to undo it.
+	//
+	// And "file:" is not the answer either — that turns the whole path into a
+	// URI, which truncates at "#" and percent-decodes "%HH". So the honest
+	// answer is to refuse a path this cannot represent rather than open
+	// something else and say nothing.
+	if strings.Contains(path, "?") {
+		return "", fmt.Errorf("store: the database path %q contains a %q, "+
+			"which cannot be passed to the driver without opening a different "+
+			"file; rename the data directory", path, "?")
 	}
-	// NOT prefixed with "file:".
-	//
-	// The prefix was added on a premise the driver does not hold. It parses the
-	// query string from any DSN whose first "?" is not at index 0, prefix or
-	// not — what "file:" changes is that SQLite then treats the rest as a URI
-	// rather than as a filename, and URI parsing truncates at "#" and
-	// percent-decodes "%HH".
-	//
-	// Measured against the pinned driver, one directory per case:
-	//   path            plain            file:
-	//   /tmp/x          opens x          opens x
-	//   /tmp/has#hash   opens it         opens a DIFFERENT file, no error
-	//   /tmp/pct%20name opens it         "unable to open database file (14)"
-	//
-	// The "#" row is the dangerous one: silent, so a data directory containing
-	// a "#" would bring the controller up on a fresh empty database, migrate a
-	// whole schema into it, and report zero devices while the real database sat
-	// untouched beside it.
-	dsn := path
-	sep := "?"
-	if strings.Contains(dsn, "?") {
-		sep = "&"
+	if strings.Contains(path, "_pragma=") {
+		return path, nil // caller has already said what it wants
 	}
 	// wal_autocheckpoint is deliberately large: the controller writes one
 	// transaction per 5-minute maintenance tick, and checkpointing more eagerly
 	// buys nothing.
-	return dsn + sep + strings.Join([]string{
+	return path + "?" + strings.Join([]string{
 		"_pragma=foreign_keys(1)",
 		"_pragma=busy_timeout(5000)",
 		"_pragma=synchronous(1)",
 		"_pragma=wal_autocheckpoint(200)",
-	}, "&")
+	}, "&"), nil
 }
 
 // pragmas applies the settings that belong to the DATABASE rather than to a

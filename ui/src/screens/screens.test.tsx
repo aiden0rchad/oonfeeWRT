@@ -689,6 +689,14 @@ describe('Settings — wireless uplinks', () => {
       expect(screen.queryByText('Protected management frames')).toBeNull(),
     )
 
+    // Enhanced open mandates PMF exactly as WPA3 does, so the control is
+    // hidden for the same reason. Untested, this guard could be reverted
+    // silently and an "owe" WLAN would store pmf="0" while the device got 2.
+    fireEvent.click(screen.getByText('Enhanced open'))
+    await waitFor(() =>
+      expect(screen.queryByText('Protected management frames')).toBeNull(),
+    )
+
     // Open has no RSN at all, so there is nothing to protect. This is the case
     // that used to leave a WLAN carrying the pmf="1" every draft is created
     // with, rendered onto the device where nobody could see or clear it.
@@ -755,6 +763,38 @@ describe('Settings — wireless uplinks', () => {
     if (saved.pmf !== '2') {
       throw new Error(
         `a detour through Open turned a deliberate "Required" into pmf="${saved.pmf}"`,
+      )
+    }
+  })
+
+  // A WLAN already persisted with a PMF its mode does not offer must be
+  // normalised on the way IN, not just on a mode change.
+  //
+  // sae-mixed + pmf="0" is writable by an earlier build, by the mode-switch
+  // hole, or by a plain POST to the API. It opened with two buttons and
+  // neither selected, then re-saved the value it had never shown. Guarding one
+  // door and not the other is not guarding.
+  it('normalises a stored PMF the picker cannot show', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ security_mode: 'sae-mixed', pmf: '0' })],
+    })
+    api.saveWLAN.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+    fireEvent.click(screen.getAllByText('Edit')[0])
+    await waitFor(() =>
+      expect(screen.getByText('Protected management frames')).toBeTruthy(),
+    )
+
+    // Saving without touching PMF must not write back the unshowable value.
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => expect(api.saveWLAN).toHaveBeenCalled())
+    const saved = api.saveWLAN.mock.calls.at(-1)?.[0] as { pmf?: string }
+    if (saved.pmf === '0') {
+      throw new Error(
+        'the editor re-saved pmf="0" for a sae-mixed WLAN — a value its own ' +
+          'picker does not offer and never displayed',
       )
     }
   })

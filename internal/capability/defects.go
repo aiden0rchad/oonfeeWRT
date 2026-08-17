@@ -280,7 +280,12 @@ func DefectsFor(r *Registry) []Defect {
 // different chip is merely noise, and only that case is removed here.
 func (d Defect) MayAffect(r Radio) bool {
 	hw := strings.ToLower(strings.TrimSpace(r.Hardware))
-	if hw == "" {
+	// iwinfo answers with a placeholder when it cannot name the part, and a
+	// placeholder is not an identification. "Generic MAC80211" is what the
+	// lab's own Archer C6 reports for one of its two radios — so treating it
+	// as "a different chip" dropped every Marvell defect for that radio on a
+	// device the probe had already established was Marvell.
+	if hw == "" || strings.HasPrefix(hw, "generic") || hw == "unknown" {
 		return true // unidentified: cannot be ruled out
 	}
 	return strings.Contains(hw, strings.ToLower(d.Hardware))

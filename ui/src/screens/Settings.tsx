@@ -404,7 +404,17 @@ function WLANEditor({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [draft, setDraft] = useState<Partial<WLAN>>({ ...w, key: '' })
+  // Seeded through the same clamp that guards the mode change.
+  //
+  // A WLAN persisted as sae-mixed with pmf="0" — writable by an earlier build,
+  // by the mode-switch hole fixed in 08ed4a5, or by a plain POST to the API —
+  // opened with two buttons and neither selected, then re-saved the value it
+  // had never shown. Guarding one door and not the other is not guarding.
+  const [draft, setDraft] = useState<Partial<WLAN>>({
+    ...w,
+    key: '',
+    pmf: clampPMF((w.security_mode ?? 'sae-mixed') as WLAN['security_mode'], w.pmf),
+  })
   // The last PMF the OPERATOR chose, before any mode-driven coercion.
   //
   // Mode changes clamp from THIS rather than from the already-clamped draft.

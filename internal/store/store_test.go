@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1016,5 +1017,41 @@ func TestAwkwardDataDirectoryNamesOpenTheRightFile(t *testing.T) {
 				t.Errorf("no database at the requested path %q: %v", want, err)
 			}
 		})
+	}
+}
+
+// A path the DSN cannot express must be refused, not silently redirected.
+//
+// Without a "file:" prefix the driver splits at the first "?" before decoding
+// anything, so a data directory containing one opens a DIFFERENT file — with
+// the schema migrated into it and the controller reporting zero devices while
+// the real database sits beside it untouched. Escaping cannot help: there is no
+// decoding step to undo it. "file:" is not the answer either, since that
+// truncates at "#" and percent-decodes "%HH".
+func TestAPathTheDSNCannotExpressIsRefused(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "oonfee?wrt")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "oonfeewrt.db")
+
+	db, err := Open(ctx, "sqlite", want)
+	if err == nil {
+		db.Close()
+		t.Fatalf("a path containing %q opened without complaint; it would have "+
+			"opened a different file", "?")
+	}
+	if !strings.Contains(err.Error(), "?") {
+		t.Errorf("the error does not say what is wrong with the path: %v", err)
+	}
+	// And it must not have created anything at the truncated location.
+	if _, statErr := os.Stat(filepath.Dir(dir)); statErr == nil {
+		entries, _ := os.ReadDir(filepath.Dir(dir))
+		for _, e := range entries {
+			if e.Name() == "oonfee" {
+				t.Error("a database was created at the truncated path")
+			}
+		}
 	}
 }

@@ -148,6 +148,12 @@ function DeviceDetailPanel({
   const load = useCallback(async () => {
     try {
       const [d, s] = await Promise.all([api.device(id), api.deviceSeries(id)])
+      // Cleared on success. Without this one dropped request replaced the whole
+      // panel with a critical banner forever: the 30s refresh kept succeeding
+      // and setting detail, but `err` was checked first and nothing ever reset
+      // it, so the panel went on reporting a failure from minutes ago about a
+      // controller that was answering fine.
+      setErr('')
       setDetail(d)
       setSeries(s.series)
       // Not fatal: a device in the inventory but not yet polled has no
@@ -185,7 +191,11 @@ function DeviceDetailPanel({
     }
   }, [id, load])
 
-  if (err) {
+  // Only when there is nothing to show. A panel that has loaded keeps its
+  // content and carries the error above it — the rule App, Logs and Clients all
+  // state: keep the last good data on screen, because blanking it on one
+  // dropped request is its own kind of lie.
+  if (err && !detail) {
     return (
       <SlideOver title="Device" onClose={onClose}>
         <Banner tone="critical">{err}</Banner>
@@ -221,6 +231,14 @@ function DeviceDetailPanel({
 
   return (
     <SlideOver title={detail.name || detail.mac} onClose={onClose}>
+      {/* Above the content, not instead of it. What is on screen is the last
+          reading that succeeded; this says the newest attempt did not. */}
+      {err && (
+        <Banner tone="warning">
+          The last refresh failed ({err}). The readings below are from the last
+          one that worked.
+        </Banner>
+      )}
       <div style={{ display: 'grid', gap: 6 }}>
         <Prop label="Status">
           <Status value={detail.status} />
