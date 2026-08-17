@@ -20,10 +20,24 @@ S() { ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 -o BatchMode=yes root@
 echo "started $(date +%H:%M:%S)  watching for nl_recvmsgs -5 / hostapd D-state" > "$LOG"
 while true; do
   OUT=$(S 'UP=$(cut -d. -f1 /proc/uptime)
-    # The firmware timeout is the CAUSE and fires ~40s before the netlink
-    # error, so it is the earlier warning; both are counted.
+    # MEMAddrAccess is NOT the cause. mwl_heartbeat_handle() calls
+    # mwl_fwcmd_get_addr_value(), which issues HOSTCMD_CMD_MEM_ADDR_ACCESS
+    # (0x001d), and the wait is on the response 0x8000|cmd = 0x801d. So a
+    # repeating 0x801d is the heartbeat probe of the driver ITSELF failing — the
+    # watchdog confirming the firmware is already dead, not the thing that
+    # killed it. It is still the most reliable confirmation, so it is counted.
+    #
+    # Note the heartbeat is optional (priv->heartbeat must be non-zero), so an
+    # ABSENCE of 0x801d does not prove the firmware is alive.
     WEDGE=$(logread | grep -c "nl80211_recv_beacons->nl_recvmsgs failed: -5")
     FW=$(logread | grep -c "MEMAddrAccess timed out")
+    # The genuine EARLY warning: a key-install or station-add command failing.
+    # Measured on this box, twice — a "key addition failed" preceded the
+    # firmware flood by 85 seconds in one wedge and by 10.5 minutes in the
+    # other, both on the same client during an 802.11r association. Four
+    # independent bug reports show the same ordering. This is the only signal
+    # that arrives while the radio is still working.
+    EARLY=$(logread | grep -cE "key addition failed|failed to (remove|set) key|0x9122=UpdateEncryption|0x9111=SetNewStation")
     # Field 4, not 3. busybox `ps w` is PID USER VSZ STAT COMMAND, so matching
     # on $3 tested the VSZ column and reported hostapd_D=0 while hostapd sat in
     # uninterruptible sleep. A watchdog reading the wrong column is a watchdog
@@ -40,13 +54,17 @@ while true; do
       sleep 1
     done
     ALIVE=$(pgrep hostapd >/dev/null && echo yes || echo no)
-    echo "$UP|$WEDGE|$DSTATE|$ALIVE|$FW"' 2>/dev/null)
+    echo "$UP|$WEDGE|$DSTATE|$ALIVE|$FW|$EARLY"' 2>/dev/null)
   if [ -z "$OUT" ]; then
     echo "$(date +%H:%M:%S) UNREACHABLE" >> "$LOG"
   else
     UP=${OUT%%|*}; R=${OUT#*|}; W=${R%%|*}; R=${R#*|}; D=${R%%|*}; R=${R#*|}
-    A=${R%%|*}; F=${R#*|}
-    echo "$(date +%H:%M:%S) up=${UP}s fw_timeout=$F netlink_err=$W hostapd_D=$D alive=$A" >> "$LOG"
+    A=${R%%|*}; R=${R#*|}; F=${R%%|*}; E=${R#*|}
+    echo "$(date +%H:%M:%S) up=${UP}s EARLY_key_fail=$E fw_heartbeat=$F netlink_err=$W hostapd_D=$D alive=$A" >> "$LOG"
+    # The early signal is reported loudly but does NOT stop the watch: it
+    # arrives while the radio still works, and the interesting question is how
+    # long it has left.
+    [ "$E" != "0" ] && echo "  ^ EARLY WARNING: key/station command failure — a wedge has followed this twice" >> "$LOG"
     if [ "$W" != "0" ] || [ "$D" != "0" ] || [ "$F" != "0" ]; then
       { echo "--- WEDGE $(date +%H:%M:%S) ---"
         S 'echo "== D-state =="; ps w | awk "\$3 ~ /D/"; echo "== last 40 wireless =="; logread | grep -iE "hostapd|mwlwifi|nl80211" | tail -40'

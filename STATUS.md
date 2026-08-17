@@ -2536,6 +2536,58 @@ Two things the second capture corrected:
   useful signal is a *rate*, not a first occurrence — worth knowing for anything
   that tries to detect this generally.
 
+#### Corrected by the driver source: MEMAddrAccess is the detector, not the cause
+
+A research pass over the mwlwifi source (not the bug tracker — the code) makes
+one thing in this section wrong.
+
+`cmd 0x801d=MEMAddrAccess timed out` **is the driver's own heartbeat probe
+failing.** `mwl_heartbeat_handle()` calls `mwl_fwcmd_get_addr_value()`, which
+issues `HOSTCMD_CMD_MEM_ADDR_ACCESS` (`0x001d`), and the wait is on the response
+`0x8000|cmd` = `0x801d`. So a repeating `0x801d` at a fixed interval is the
+watchdog **confirming the firmware is already dead**, not the thing that killed
+it. Two consequences: it is still the most reliable confirmation, and its
+*absence proves nothing*, because the heartbeat only runs when `priv->heartbeat`
+is non-zero.
+
+#### And a correction to §5z: the key error was not noise
+
+§5z recorded the two errors mwlwifi logs during an FT association as benign,
+because the client went on to move 539 KB in 93 seconds. The traffic
+measurement was right. **The conclusion drawn from it was wrong.**
+
+Both wedges were preceded by a key-install failure, on the same client, at an
+802.11r association:
+
+| | key-install failure | first heartbeat timeout | gap |
+|---|---|---|---|
+| wedge 1 | 21:57:48 | 22:08:21 | 10.5 min |
+| wedge 2 | 01:04:41 | 01:06:06 | **85 s** |
+
+Then, once the radio was already gone, the encryption command itself started
+timing out — `cmd 0x9122=UpdateEncryption timed out`, `failed to remove key (0,
+36:e0:c7:4f:d0:fb) from hardware (-5)`, `cmd 0x9111=SetNewStation timed out`.
+Four independent bug reports on the mwlwifi and OpenWrt trackers describe the
+same ordering.
+
+Two for two, on the same client, in the same code path, is correlation and not
+proof. But it is the **only signal that arrives while the radio still works**,
+and it is now what the watchdog leads with.
+
+It also settles §0's original trigger claim in the other direction. The
+`deauthenticated due to inactivity` line does appear in wedge 2 — at 01:11:13,
+**five minutes after the radio was already dead**. It was a consequence the
+whole time.
+
+#### A hypothesis this makes testable, and worth testing
+
+The failing path is key installation during an 802.11r association, and
+oonfeeWRT enabled **both** 802.11r and PMF on this hardware — with `ieee80211w=1`
+rendered onto a board whose own OpenWrt page says not to enable 802.11w at all.
+That does not make the config the cause. It does mean the obvious experiment has
+never been run: **turn PMF off on this device and see whether it survives longer
+than 50 minutes.** Nothing else about the deployment needs to change.
+
 #### Verified in passing: the neighbour reconciler self-heals a rebooted AP
 
 A reboot clears runtime `rrm_nr` state, and **a device reboot is not one of the

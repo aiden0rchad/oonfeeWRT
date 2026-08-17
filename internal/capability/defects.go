@@ -163,7 +163,9 @@ var knownDefects = []Defect{
 		Hardware: "marvell",
 		Summary:  "this radio's firmware can stop responding, taking every radio on the device with it",
 		Detail: "Measured on the reference WRT3200ACM: the 5 GHz firmware stops " +
-			"answering (\"cmd 0x801d=MEMAddrAccess timed out\"), hostapd blocks in " +
+			"answering (the repeating \"cmd 0x801d=MEMAddrAccess timed out\" is the " +
+			"driver's own heartbeat probe failing, so it confirms the firmware is " +
+			"already dead rather than causing it), hostapd blocks in " +
 			"uninterruptible sleep, and because nl80211 operations serialise, every " +
 			"other radio on the device stops answering too — including a healthy one. " +
 			"Recovery needs a power cycle. Seen at 17, 28 and 50 minutes after boot on " +
@@ -171,9 +173,11 @@ var knownDefects = []Defect{
 		Source:     "STATUS.md §5aa",
 		Confidence: ConfMeasuredHere,
 		Severity:   SevRadioDeath,
-		Mitigation: "None known. The controller cannot prevent or recover this; it is " +
-			"below the level any management protocol reaches. Treat the device as " +
-			"unreliable for anything that matters.",
+		Mitigation: "None proven. The controller cannot recover it — that is below " +
+			"the level any management protocol reaches. Both observed wedges were " +
+			"preceded by a key-install failure on a client during an 802.11r " +
+			"association, so disabling PMF and fast transition on this hardware is " +
+			"worth trying, but it is untested and the correlation is two samples.",
 		// No Triggers: nothing in the configuration causes it, so it is reported
 		// against the device rather than against a WLAN.
 	},
