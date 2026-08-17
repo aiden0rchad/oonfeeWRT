@@ -587,12 +587,15 @@ disagreed.
   built. Writing config for an absent package would be untestable, so it was not
   written.
 - **The WRT3200ACM under a client.** Not a hardware purchase — a client that
-  prefers it. It has now run 13 hours since the factory reset with no wedge,
-  through polling, applies, a mesh and an 802.11k reconciler, and has carried
-  **zero clients** the entire time, because the one client on this network
+  prefers it. It has now run **13h51m with zero `MEMAddrAccess` timeouts**
+  (measured 2026-08-17 08:30 — `logread | grep -c` returns 0), through polling,
+  applies, a mesh and an 802.11k reconciler. Against 17, 28 and 50 minutes
+  before, that is the strongest signal yet that `ieee80211w=0` is the
+  difference — **and it still cannot be called one**, because the device has
+  carried **zero clients** the entire time: the one client on this network
   associates to the C6 and stays. A client was the single condition every
-  pre-reset failure shared, so the reset cannot be called a fix until one is on
-  it. See §0.
+  pre-reset failure shared, so this run cannot distinguish "PMF off fixed it"
+  from "nothing has asked it to do the thing that breaks it". See §0.
 
 ### Before starting anything, read these
 
