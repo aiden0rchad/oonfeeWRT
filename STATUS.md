@@ -488,8 +488,10 @@ most-worth-doing first.
    grid with a real client, the Logs screen and the adopt/discovery screen. Four
    more defects, **count now twenty-three**, still none reachable by any test.
 
-   **Still unlooked-at:** the unadopt flow, and any screen under a fleet larger
-   than two devices.
+   **The unadopt flow is now looked at too** (2026-08-17, §5ai): two more
+   defects, **count twenty-five**, and one of them made a device that cannot be
+   reached permanently un-removable. **Still unlooked-at:** any screen under a
+   fleet larger than two devices.
 
 5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
    Both halves pinned and mutation-verified, and the fixture gained the two
@@ -511,9 +513,12 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** 25 defects have been found this way and
-  none of them was reachable by any test in the repo. Everything has been looked
-  at once now, so the yield is in what CHANGES.
+- **Look at a screen in a browser.** **Twenty-five** defects have been found
+  this way and not one was reachable by any test in the repo. Everything has
+  been looked at once now, so the yield is in what CHANGES — and in the screen
+  ABOVE whatever was just changed, which is where the last two came from
+  (§5ai): the daemon's un-adopt path grew a new way to fail, and reading the
+  panel over it found that the panel had no way to recover from ANY of them.
 - **Review whatever was written last, not just the code.** Three review rounds
   ran on 2026-08-16/17. The second found more than the first *because* it
   reviewed the first's fixes, including one that committed the exact error it
@@ -3063,6 +3068,50 @@ than a bug.
 
 ---
 
+### 5ai. The screen above the change — un-adopt had no way out
+
+**Done 2026-08-17.** §5ah gave un-adopt a new way to fail, so the next thing to
+read was the panel sitting on top of it. Two defects, neither reachable by any
+test that existed, and the first is the worst thing found in a screen so far.
+
+#### A device that cannot be reached could never leave the inventory
+
+`force` has been on `UnadoptRequest` since un-adopt was written. `api.unadopt`
+in the client has always accepted it. **No screen ever sent it.** So dead
+hardware, a reflashed box, a lost administrator password — and, as of §5ah, a
+refused host key — left a row that could not be removed at all: listed, polled,
+counted, forever, with a hand-written API call as the only escape.
+
+This is §5ah's shape one layer up, and worth noticing as a pattern rather than
+an incident: **a capability declared at every layer but the last one is
+indistinguishable from a capability that was never built**, and it reads as
+complete from every angle except actually using it. The Go side had a field, a
+JSON tag, a documented meaning and a comment explaining the ordering that made
+it work. The TypeScript side had it in the request type. Nothing called it.
+
+The recovery is offered only *after* something fails, from both places a
+failure can land — the result view when the row survives, and the form when the
+request threw — and behind its own confirmation, because it is its own
+decision. The one above says "revert this device"; this one says "give up on
+reaching it, and lose the record of what is still installed". It carries the
+credential when the failed attempt had one, since the daemon still tries phase 2
+and only skips it when the connection fails.
+
+#### And the report was rendered and discarded in the same tick
+
+`onDone()` ran the moment the request returned, and it unmounts the whole
+slide-over. So the residue list — the last copy of what is still installed on a
+device whose inventory row has just been deleted — was painted and thrown away
+before anything could read it. `Close` does it now, and only when the row is
+really gone.
+
+Harmless until today, which is why it survived: a removal could only happen when
+it was *clean*, so the discarded list was always empty. Making forced removal
+reachable is what turns that list into the only copy. **A latent defect and its
+activating change arrived in the same afternoon, from opposite ends.**
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3115,6 +3164,16 @@ written and believed.
   it, no test — and each one reads as a harmless omission unless you already
   know about the other four. Reading a file at a time cannot find this; tracing
   one value from where it is produced to where it is checked can.
+- **A capability declared at every layer but the last one is the same as one
+  that was never built.** `force` had a field, a JSON tag, a documented meaning,
+  a comment explaining the ordering that made it work, and a slot in the
+  TypeScript request type. No screen sent it, so a device that could not be
+  reached could never be removed. It reads as finished from every angle except
+  using it — which is the only angle that settles it.
+- **Read the screen above whatever you just changed.** Not the code you wrote:
+  the surface a person touches to reach it. §5ah added a new way for un-adopt to
+  fail, and the panel over it turned out to have no way to recover from any of
+  them, including the ones that had always existed.
 - **A guard that reports itself as configured is worse than an absent one.**
   The empty-fingerprint case is the whole pattern in miniature: store `""` and
   the column says "pinned", the first-use branch never runs again, and nothing
