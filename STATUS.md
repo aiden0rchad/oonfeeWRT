@@ -3394,6 +3394,72 @@ associations is little churn; the earlier failures may have needed more.
 
 ---
 
+### 5an. The PMF-ON experiment — the one that separates the variables
+
+**Run 2026-08-17 09:30.** §5am left one thing unseparated: the clean 14-hour run
+began with a power cycle **and** `ieee80211w=0` together, so neither had been
+ruled out. This is the experiment that distinguishes them — put PMF back on,
+with a client, on the same boot, and see whether the wedge returns. **No power
+cycle**, so the boot is held constant and PMF is the only thing that moves.
+
+Set through the controller rather than by hand, which also exercised the apply
+path: PMF → **Optional** (`ieee80211w=1`, the exact value present during both
+original wedges), applied to both APs, verified in the **running**
+`/var/run/hostapd-phy*.conf` and in uci. The defect registry did its job on the
+way through, warning that mwlwifi accepts `ieee80211w` and does not implement it
+— which is the whole reason this is worth measuring.
+
+Conditions, all confirmed rather than assumed:
+
+- client `36:e0:…:fb` on **phy0-ap0, 5180 MHz** — the radio whose firmware hangs
+- **`"mfp": true`** in `get_clients` — PMF *negotiated*, not merely configured
+- 802.11r still on (`FT-PSK`, `ft_over_ds=1`), unchanged from the wedging config
+- boot held constant: the same uptime that reached 14h45m clean under PMF-off
+
+#### Deauthing does not reproduce it. Steering does.
+
+Worth recording because it cost a first attempt. Both original wedges followed a
+key-install failure during an **802.11r** association, so the obvious way to
+force the path is to knock the client off and let it come back —
+`del_client` with `deauth`, repeatedly.
+
+**That produces the wrong kind of association.** A deauthed client does a full
+reauthentication and reconnects with `auth_alg=open`; it has no cached keys to
+fast-transition with. Every historical `key addition failed` line in this
+device's log sits immediately before an `auth_alg=**ft**` connect, and never
+before an `open` one. Eight forced deauths produced eight `open` associations
+and not one key failure.
+
+FT happens when a client **roams between APs** in one mobility domain. So the
+lever is 802.11v BSS transition management — `bss_transition_request` on the AP
+the client is currently on, naming the other AP's neighbour report — which asks
+it to move, and it moves using FT because that is what FT is for.
+
+One steer reproduced it immediately:
+
+```
+16:41:11 nl80211: kernel reports: key addition failed
+16:41:11 AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=ft
+```
+
+That is the precondition, on phy0, with `mfp` negotiated. The run then
+ping-pongs both clients between the two APs — 15 cycles, ~50s each — so every
+cycle lands at least one FT association on the failing radio.
+
+**A convenient accident made this possible at all:** the earlier deauth pushed
+one client onto the C6 while a second joined the WRT, leaving one client on each
+AP. Two clients in one mobility domain is what makes steering a roam rather than
+a disconnection.
+
+A watchdog polls the device every 60s for `MEMAddrAccess`, `nl_recvmsgs failed`,
+key-install failures, associations and disconnects, and reports only changes.
+
+**Result: recorded below as it lands.** Both outcomes are worth having — a wedge
+names PMF as the cause and closes §0's oldest open question; no wedge under
+this much forced churn exonerates it and points at the power cycle instead.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
