@@ -488,10 +488,10 @@ most-worth-doing first.
    grid with a real client, the Logs screen and the adopt/discovery screen. Four
    more defects, **count now twenty-three**, still none reachable by any test.
 
-   **The unadopt flow is now looked at too** (2026-08-17, §5ai): four more
-   defects, **count twenty-seven**, and one of them made a device that cannot
-   be reached permanently un-removable. Two came from reading the panel and two
-   from driving it. **Still unlooked-at:** any screen under a
+   **The unadopt flow is now looked at too** (2026-08-17, §5ai and §5aj): seven
+   more defects, **count thirty**, and one of them made a device that cannot be
+   reached permanently un-removable. Two came from reading the panel, two from
+   driving it, and three from reviewing the first four. **Still unlooked-at:** any screen under a
    fleet larger than two devices.
 
 5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
@@ -514,7 +514,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Twenty-seven** defects have been found
+- **Look at a screen in a browser.** **Thirty** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3058,6 +3058,15 @@ What landed:
   `ssh-keygen -lf`, and adoption is the single moment both ends are known to be
   the same box.
 
+**The two lab APs are still unpinned, and will be until they are re-adopted.**
+Worth saying plainly rather than leaving implied by the migration note: they
+were adopted before the column existed, `host_key_fp` is NULL for both, and the
+only code path that can learn a key is un-adopt — which is too late to protect
+that same dial. There is no other SSH path (re-probe is ubus), so nothing pins
+them in the background. A deliberate hold, not an oversight: the alternative is
+a separate "pin now" action that asks for an SSH credential, which is a feature
+for a fleet, not for two devices that can be re-adopted in a minute.
+
 **The tests use a real in-process SSH server**, generated key and all, because
 the guard lives inside the handshake and no fake reaches it. Two servers in one
 test is what lets "a different box is answering at this address" be expressed at
@@ -3140,6 +3149,51 @@ refreshing only on Close.
 
 ---
 
+### 5aj. Reviewing the afternoon's own fixes — three more, one self-inflicted
+
+**Done 2026-08-17.** §5af's rule again, and it held again: the round that
+reviews the fixes found more than the round that found the bugs.
+
+#### A failed un-adopt threw away the report that failure produced
+
+`writeErr` sends `{"error": "..."}` and nothing else, and the handler used it for
+every error. But `Unadopt` returns a result **and** an error together in two real
+cases: a phase-2 failure with the credential supplied, and a **forced** removal
+whose phase 2 connected and then could not commit — a full `/overlay`, a held
+uci lock, exactly the states §5ag's `RemoveFootprint` verification exists to
+catch.
+
+In that second case **the inventory row is already gone** and `Residue` is the
+only surviving record of what is installed on that device. The bare error string
+destroyed the one thing nobody could recover, and there was no row left to ask
+about. This is the §5ai defect again, by a different route — and reaching it
+required making forced removal reachable, which was mine, three commits earlier.
+**A fix that opens a path is responsible for what is already on it.**
+
+- `UnadoptResult` gained `error`, named to match what every other endpoint puts
+  in an error body, so a generic client still finds a message where it looks for
+  one. The report now travels with the 502; with no report, a plain error still
+  goes, because an empty report renders as "nothing removed, nothing remains".
+- The panel accepted a body only on 409. It takes any report-shaped body now,
+  keyed on `removed_from_inventory` — the one field the Go type always emits.
+  **Keying it on an omittable field passed the first two tests**; a third case (a
+  report with no residue: phase 1 failed on one section, phase 2 cleaned up, row
+  removed) is what distinguishes them, and it exists because the mutation found
+  the gap rather than the reading.
+- **"Still in the inventory" and "needs the administrator credential" were one
+  banner.** A phase-2 failure with a credential supplied was described as
+  needing one, sending the operator to re-type a password already correct.
+
+#### And the forced-removal confirmation was sticky
+
+Tick it, think better of it, retry with a corrected password, fail again — and
+the destructive action is one click away, un-reconfirmed, at exactly the point
+the speed bump exists for. Every attempt re-earns it now. The ordinary
+confirmation deliberately does **not** reset: that one is consent to un-adopt
+this device, which retrying the same operation does not withdraw.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3212,6 +3266,16 @@ written and believed.
   The empty-fingerprint case is the whole pattern in miniature: store `""` and
   the column says "pinned", the first-use branch never runs again, and nothing
   anywhere is checking anything. Refuse the empty value at the setter.
+- **A fix that opens a path owns what is already on it.** Making forced removal
+  reachable from the UI turned a latent handler bug — a failed un-adopt
+  discarding the very report the failure produced — into a route an operator can
+  walk, and the payload it destroys is irrecoverable because the row it
+  described is gone. Ask what a new path leads to, not only whether the path
+  itself is right.
+- **An error response is not always only an error.** Two endpoints here return a
+  result and an error together, and the generic "send the error string" helper
+  silently drops the half that matters. Whenever a call can half-succeed, the
+  body is part of the answer on the failure path too.
 - **Review the fixes, not just the code.** A fix written quickly to close a
   finding is where the next bug is. The second review round found MORE than the
   first, including a fix that committed the exact error it was fixing.
