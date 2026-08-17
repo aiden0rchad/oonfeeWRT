@@ -252,9 +252,22 @@ func (s *Store) rate(k SeriesKey, ts int64, counter uint64, rebooted, recreated 
 // happened.
 func (s *Store) expireStale(now, before int64) {
 	for k, st := range s.counters {
-		// iface_up carries no timestamp; it is refreshed on every poll of a
-		// live interface, so age it from the device's other counters instead of
-		// keeping it forever.
+		// The zero check is belt and braces, not a case that occurs.
+		//
+		// It used to be documented as being for the `iface_up` pseudo-key,
+		// "which carries no timestamp". That is not true and has not been:
+		// ifaceCameBack sets lastTS on every observation, exactly so the entry
+		// ages with the device that owns it — verified, it survives an expiry
+		// whose cutoff is in the past and is dropped by one that is not.
+		//
+		// The description mattered more than the clause. Someone making the
+		// code match it — dropping the lastTS assignment from ifaceCameBack,
+		// since the design supposedly expects none — would leave every
+		// interface's up/down state with a zero timestamp and have it deleted
+		// on every single flush. That state is the recreation detector: it is
+		// what turns an interface being rebuilt into a rebase instead of a
+		// fabricated delta, which is the failure this file's rate() has just
+		// been corrected for.
 		if st.lastTS == 0 || st.lastTS < before {
 			delete(s.counters, k)
 		}

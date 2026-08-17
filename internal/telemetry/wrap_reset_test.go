@@ -63,3 +63,43 @@ func TestARealWrapOnABusyLinkIsStillRecovered(t *testing.T) {
 		t.Errorf("rate = %v B/s, want ~201667", v)
 	}
 }
+
+// The interface up/down state must age with its device, not vanish every flush.
+//
+// It is the recreation detector: `recreated` is what turns an interface being
+// rebuilt into a rebase instead of a reconstructed delta, which is the failure
+// rate() was corrected for. expireStale carried a comment saying the iface_up
+// pseudo-key "carries no timestamp", which was never true — ifaceCameBack sets
+// one on every observation. Anyone making the code match that description would
+// have had every interface's state deleted on every flush and the detector
+// silently disabled.
+func TestInterfaceUpStateAgesWithItsDeviceNotEveryFlush(t *testing.T) {
+	s := New(Options{})
+	k := SeriesKey{DeviceID: 1, Kind: "iface_up", Key: "phy0-ap0"}
+
+	s.ifaceCameBack(1, 1000, "phy0-ap0", true)
+	if st := s.counters[k]; st == nil || st.lastTS != 1000 {
+		t.Fatalf("no timestamp recorded for the up/down state: %+v", st)
+	}
+
+	// A live entry survives an expiry whose cutoff is behind it.
+	s.expireStale(2000, 500)
+	if s.counters[k] == nil {
+		t.Error("the recreation detector was dropped while still current")
+	}
+	// And it still detects the transition it exists for.
+	if !s.ifaceCameBack(1, 2000, "phy0-ap0", true) == false {
+		// up -> up is not a recreation
+		t.Error("an interface that stayed up was reported as recreated")
+	}
+	s.ifaceCameBack(1, 2060, "phy0-ap0", false)
+	if !s.ifaceCameBack(1, 2120, "phy0-ap0", true) {
+		t.Error("an interface that went down and came back was not detected")
+	}
+
+	// A device that stopped being polled ages out normally.
+	s.expireStale(9000, 8000)
+	if s.counters[k] != nil {
+		t.Error("a stale entry was kept forever")
+	}
+}

@@ -524,7 +524,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Forty-five** defects have been found
+- **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3780,6 +3780,67 @@ Worth recording, so the next reader does not re-derive them as findings:
 
 ---
 
+### 5ar. Telemetry's first review — a documented residue that was reachable
+
+**Done 2026-08-17.** `telemetry` turns polls into every number behind every
+chart, and had never had a review pass.
+
+#### A reset reconstructed as a wrap, inventing 559 Mbit/s
+
+A decreasing counter has two causes needing opposite handling — a 32-bit wrap or
+a reset — and `rate()` separated them with a physical bound: accept the wrap
+only if that traffic could have crossed a gigabit link in the elapsed time. The
+file already documented the residue this leaves, **"one interval wide"**, and
+treated it as acceptable.
+
+It is not. At the 60 s baseline a gigabit link carries 7.5 GB, comfortably more
+than the 4.29 GB a full wrap implies — so the bound passes **every** wrap and
+rejects **no** reset. Measured on the real code: a counter falling from 100 MB
+to 100 kB over 60 s emitted **69,917,788 B/s, or 559 Mbit/s of traffic that
+never happened**, on a link that had never exceeded a few hundred bytes a
+second.
+
+And the resets are ours. An apply reloads wifi, which destroys and recreates the
+AP interfaces and zeroes their counters; `recreated` catches it only when a poll
+happened to see the interface down. **Both reference devices sit in the tens of
+megabytes**, far below 2^32, so `wide` is false for both and each was one apply
+away from a fabricated spike on its throughput chart.
+
+**The first fix was wrong and the existing tests said so.** Removing the wrap
+branch outright broke two of them, correctly — a wrap on a busy link is real.
+They also supplied the discriminator the arithmetic lacked: a genuine wrap
+starts from a counter near 2^32 and yields a *small* delta at an ordinary rate,
+while a reset from far below yields a delta near the whole 32-bit range. So the
+interface's own history separates them when no physical bound can.
+`counterState` now remembers the largest rate it has produced, and a
+reconstructed wrap implying a hundred times that is a reset instead — consulted
+only once a rate exists, so the two original tests still pass and a mutation
+removing that condition breaks both.
+
+#### A comment that would have broken the guard if believed
+
+`expireStale` said the `iface_up` pseudo-key "carries no timestamp". It never
+has: `ifaceCameBack` sets `lastTS` on every observation, precisely so the entry
+ages with the device that owns it.
+
+Harmless as written, dangerous as read. That state **is** the recreation
+detector — the thing that turns an interface being rebuilt into a rebase rather
+than a fabricated delta, which is the failure the section above exists to fix.
+Anyone tidying the code to match its comment would drop the timestamp, have
+every entry deleted on every flush, and silently disable it. Corrected, and
+pinned by a test that fails on exactly that edit.
+
+#### Checked and left alone
+
+- **`ratio()` handles the apply-reset case correctly**, and does it by accident
+  of a better guard: `den <= prevDen` fires because `active_time` resets
+  alongside `busy_time`. This is what `rate()` was missing.
+- **`Flush` retires a series and its counter baseline together**, and `ratios`
+  are reaped by `expireStale` and `forgetCounters`, so neither leaks on the
+  churning key — client MAC.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3842,6 +3903,16 @@ written and believed.
   one plan silently enabled a different one. If a screen is careful that stale
   DATA never sits beside an enabled button, it has to be equally careful about
   stale CONSENT.
+- **A residue you documented is still a bug.** `rate()` named its own gap —
+  "that is the residue, and it is one interval wide" — and the honesty made it
+  feel handled. It was reachable at the ordinary poll interval, on both
+  reference devices, triggered by the controller's own applies. Writing a
+  limitation down is not the same as bounding it; go and check whether the case
+  can actually occur.
+- **A comment can be dangerous while the code is right.** `expireStale`
+  described a design the code does not have. Nothing was broken — until someone
+  tidied the code to match, which would have deleted the interface-recreation
+  state on every flush. A wrong comment is a trap armed for the next reader.
 - **A missing item leaves no gap.** The client total summed the radios that
   answered and called it known, because a refused `get_status` creates no entry
   — the absent radio is invisible and the remainder looks complete. Wherever a
