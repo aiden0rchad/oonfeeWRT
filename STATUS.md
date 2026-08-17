@@ -515,7 +515,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty-four** defects have been found
+- **Look at a screen in a browser.** **Thirty-six** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3238,7 +3238,7 @@ written for and had only ever been checked by a unit test.
 
 ---
 
-### 5ak. The panel charted the one series that is usually empty
+### 5ak. The panel charted the one series that is usually empty — and three chart defects behind it
 
 **Done 2026-08-17.** Started from a contradiction visible on one screen: the
 Broadcasting card read **"channel 1 is 74.1% busy"**, live, directly above a
@@ -3281,6 +3281,38 @@ What landed:
 The source note went in the title row first and **wrapped mid-phrase into the
 1h/1D/1W buttons** — a flex row with `space-between`, which a sentence squeezes.
 A screenshot showed that; the tests could not, and would not have.
+
+#### Then the newly-visible chart showed two more
+
+Making the survey series render is what exposed them. Both are chart defects
+that had always been there and had nothing to look at.
+
+**An axis whose every tick read "63%".** `fmt.percent` chose decimals from the
+VALUE's magnitude — one below 10, none above — which is the wrong input. An
+axis spanning 0.6 points wants a decimal whether it sits at 63 or at 6, so a
+sparse survey chart rendered two labels reading `63%` at different heights with
+a line sloping between them. A reader cannot tell that from a broken axis.
+Precision now comes from the spacing between ticks; the magnitude rule stays as
+the fallback for a tooltip or a table cell, where one reading stands alone.
+
+**And then a flat series drawn as a dramatic climb.** Fixing the labels revealed
+why they needed fixing: the axis then read `i3.030%` / `i3.020%` — three-decimal
+labels clipped by a 58px gutter. uPlot fits the axis to the data, so a series
+that barely moves is magnified until its rounding noise fills the chart. Channel
+occupancy between **63.020% and 63.030%** — flat by any measure — was drawn as a
+confident climb across the panel. **This is the noise-floor rule again**, which
+this same file already states: a smooth, stable, meaningless line is the most
+convincing kind of wrong. Percent charts now take a one-point floor on the
+y-range, centred on the data and clamped at zero.
+
+The testing lesson is sharper than either fix. `fmt.percent` passed its own
+tests the whole time **while the chart called it with no step at all** — a
+correct function, wired to nothing. The mutation that swapped the axis callback
+back to `vals.map(v => format(v))` broke no test, so the composition was pulled
+out as `axisLabels()` and tested directly. What is STILL uncovered is written in
+the comment rather than implied: the one call site inside the uPlot options
+needs a real canvas to reach, so inlining the map there again would restore the
+bug silently.
 
 ---
 
@@ -3345,6 +3377,16 @@ written and believed.
   same second, turned out to be two different sources with the panel charting
   the wrong one (§5ak). Whenever the same quantity appears twice, find out
   whether it came from the same place.
+- **A correct function wired to nothing passes all its own tests.**
+  `fmt.percent` handled tick spacing properly while the chart called it without
+  any, so every label still collapsed on screen. Unit-testing the piece proves
+  the piece; the bug lives in the composition. Pull the composition out into
+  something a test can call, and when a call site genuinely cannot be reached,
+  say so in the comment instead of letting green tests imply it is covered.
+- **Making something visible is how you find out it was never right.** Three of
+  §5ak's defects were in charts that had always been broken and had nothing to
+  draw, so nobody could see it. Fixing what data reaches a screen tends to
+  produce a second round of findings on the screen itself.
 - **An empty state has to name ITS OWN reason.** A shared "no data yet, check
   back in five minutes" is right for a series recorded every poll and actively
   harmful for one recorded only while a panel is open — it sends the reader off
