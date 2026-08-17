@@ -88,10 +88,47 @@ type Conflict struct {
 	Reason  string
 }
 
+// Warning is a setting this device WILL accept and will not honour, or will
+// break on — a known defect in its wireless driver.
+//
+// Distinct from Omission, and the distinction is the point. An Omission is the
+// controller declining to do something, so the operator knows it did not
+// happen. A Warning is the controller doing exactly what was asked on hardware
+// documented not to survive it. The config is rendered either way: this
+// project does not silently rewrite a user's security settings, and a warning
+// the operator can act on is more honest than a quiet downgrade.
+type Warning struct {
+	// WLAN is the SSID this applies to, or "" for a defect of the hardware
+	// itself that no configuration triggers.
+	WLAN     string
+	DefectID string
+	Summary  string
+	Detail   string
+	// Confidence is how well the defect is established — device documentation,
+	// measured here, a filed bug, or forum anecdote. Carried through to the UI
+	// so folklore is never shown with the authority of a maintainer statement.
+	Confidence string
+	Severity   string
+	Mitigation string
+	Source     string
+}
+
 // Report accompanies every render.
 type Report struct {
 	Omissions []Omission
 	Conflicts []Conflict
+	// Warnings are known driver defects this render would hit. They do NOT
+	// block an apply — see Warning.
+	Warnings []Warning
+}
+
+// warn converts a matched defect into an operator-facing warning.
+func warn(ssid string, d capability.Defect) Warning {
+	return Warning{
+		WLAN: ssid, DefectID: d.ID, Summary: d.Summary, Detail: d.Detail,
+		Confidence: string(d.Confidence), Severity: string(d.Severity),
+		Mitigation: d.Mitigation, Source: d.Source,
+	}
 }
 
 // HasConflicts reports whether the render must not proceed.
@@ -259,6 +296,13 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 				continue
 			}
 			sec, omissions := renderWifiIface(site, w, net, radio, caps)
+			// Checked on the RENDERED values rather than on the model, so it
+			// catches settings the renderer derives rather than only the ones
+			// the operator typed. WPA3 forcing PMF on is exactly such a case,
+			// and on this hardware it is the dangerous one.
+			for _, d := range capability.TriggeredBy(caps, sec.Values) {
+				rep.Warnings = append(rep.Warnings, warn(w.SSID, d))
+			}
 			doc.Sections = append(doc.Sections, sec)
 			rep.Omissions = append(rep.Omissions, omissions...)
 			rendered++
@@ -325,6 +369,16 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		rep.Omissions = append(rep.Omissions, omissions...)
 		if sec.Name != "" {
 			doc.Sections = append(doc.Sections, sec)
+		}
+	}
+
+	// Defects of the hardware itself, reported once against the device. Kept
+	// separate from the per-WLAN ones because nothing the operator changes will
+	// make them go away, and repeating them on every SSID would bury the
+	// warnings they can actually act on.
+	for _, d := range capability.DefectsFor(caps) {
+		if !d.Configured() {
+			rep.Warnings = append(rep.Warnings, warn("", d))
 		}
 	}
 	return doc, rep, nil

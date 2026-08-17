@@ -536,6 +536,23 @@ export interface Change {
   touches_key?: boolean
 }
 
+/** A known flaw in a device's wireless driver that the pending config hits. */
+export interface DriverDefect {
+  /** The SSID that triggers it, or absent for a defect of the hardware itself
+   *  that no configuration causes and none can avoid. */
+  wlan?: string
+  defect_id: string
+  summary: string
+  detail: string
+  /** How well it is established. Wireless folklore is repeated far more often
+   *  than it is verified, so "anecdotal" must never be shown with the same
+   *  authority as "documented". */
+  confidence: 'documented' | 'measured' | 'reported' | 'anecdotal'
+  severity: 'radio-death' | 'silently-ignored' | 'degraded'
+  mitigation?: string
+  source?: string
+}
+
 export interface DevicePreview {
   device_id: number
   name: string
@@ -547,6 +564,11 @@ export interface DevicePreview {
   conflicts?: string[]
   /** Options this hardware cannot take. Absent, not failed. */
   omitted?: string[]
+  /** Settings this device WILL accept and will not honour, or will break on,
+   *  because its wireless driver is known to be broken in that specific way.
+   *  Unlike `omitted`, these ARE applied — the controller does not silently
+   *  rewrite a user's security settings — so this is the only warning. */
+  driver_defects?: DriverDefect[]
   /** A section we own whose value on the device no longer matches what we
    *  applied. Surfaced, never silently corrected. */
   drift?: string[]

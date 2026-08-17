@@ -105,6 +105,13 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 	for _, om := range plan.Report.Omissions {
 		p.Omitted = append(p.Omitted, fmt.Sprintf("%s: %s", om.WLAN, om.Reason))
 	}
+	for _, w := range plan.Report.Warnings {
+		p.DriverDefects = append(p.DriverDefects, api.DriverDefect{
+			WLAN: w.WLAN, DefectID: w.DefectID, Summary: w.Summary,
+			Detail: w.Detail, Confidence: w.Confidence, Severity: w.Severity,
+			Mitigation: w.Mitigation, Source: w.Source,
+		})
+	}
 	for _, dr := range plan.Drift {
 		p.Drift = append(p.Drift, dr.String())
 	}

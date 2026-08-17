@@ -956,6 +956,57 @@ function Preview({ p }: { p: PreviewResult }) {
             </ul>
           )}
 
+          {/* Driver defects sit ABOVE the omissions and are styled as a
+              warning rather than a footnote, because the difference matters:
+              an omission is something the controller declined to do, and this
+              is something it is about to do to hardware documented not to
+              survive it. Each carries its confidence and a link, so the
+              operator can weigh a maintainer's statement differently from a
+              forum post — and so a warning that turns out to be stale folklore
+              can be traced and removed rather than repeated forever. */}
+          {d.driver_defects && d.driver_defects.length > 0 && (
+            <div style={{ fontSize: 11, marginTop: 6 }}>
+              {d.driver_defects.map((f) => (
+                <div
+                  key={`${f.defect_id}.${f.wlan ?? ''}`}
+                  style={{
+                    borderLeft: '2px solid var(--warn, #d08b28)',
+                    paddingLeft: 8,
+                    marginBottom: 6,
+                  }}
+                >
+                  <div style={{ color: 'var(--warn, #d08b28)' }}>
+                    {f.wlan ? `${f.wlan}: ` : 'This hardware: '}
+                    {f.summary}
+                    <span
+                      style={{ color: 'var(--text-muted)', marginLeft: 6 }}
+                      title={
+                        f.confidence === 'documented'
+                          ? "From the device's own OpenWrt page, its driver documentation, or a maintainer"
+                          : f.confidence === 'measured'
+                            ? 'Reproduced on hardware by this project'
+                            : f.confidence === 'reported'
+                              ? 'A filed, accepted bug report'
+                              : 'Repeated in forums with no primary source found — treat as a lead, not a fact'
+                      }
+                    >
+                      [{f.confidence}]
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--text-muted)' }}>{f.detail}</div>
+                  {f.mitigation && (
+                    <div style={{ color: 'var(--text-muted)' }}>
+                      What to do instead: {f.mitigation}
+                    </div>
+                  )}
+                  {f.source && (
+                    <div style={{ color: 'var(--text-muted)' }}>Source: {f.source}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {d.omitted && d.omitted.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
               Left out on this device (not an error — the hardware or firmware

@@ -35,7 +35,7 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 	if caps == nil {
 		return nil
 	}
-	var out []string
+	out := hardwareDefectWarnings(caps)
 	radios := len(caps.Radios)
 	// FeatSurvey is the tell. probeRadios sets it NotObservable on the
 	// early-return path and resolves it from evidence otherwise, so it
@@ -76,6 +76,34 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 				"network and wrong for one meant to route to an uplink — worth "+
 				"checking which this is before applying a firewall zone to it")
 		}
+	}
+	return out
+}
+
+// hardwareDefectWarnings names the known defects of this device's radios, at
+// adoption rather than at apply.
+//
+// Adoption is the right moment for it. Someone repurposing an old router is
+// deciding whether to build a network on it, and "this radio's driver does not
+// support 802.11w, so this board cannot run WPA3" is a fact worth having before
+// that decision rather than three screens later when a preview warns. It also
+// reaches the case a preview never does: a device adopted and left alone still
+// has the defect, and reprobe surfaces it again.
+//
+// Only defects no configuration triggers are listed here. A defect that fires
+// on a specific setting belongs against that setting, in the preview, where the
+// operator is choosing it — saying "802.11w is broken" to someone who has not
+// enabled it is noise, and noise is how real warnings get ignored.
+func hardwareDefectWarnings(caps *capability.Registry) []string {
+	var out []string
+	for _, d := range capability.DefectsFor(caps) {
+		if d.Configured() {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"this device's wireless hardware has a known defect (%s): %s. %s "+
+				"Mitigation: %s Source: %s",
+			d.Confidence, d.Summary, d.Detail, d.Mitigation, d.Source))
 	}
 	return out
 }

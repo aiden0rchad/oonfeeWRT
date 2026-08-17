@@ -939,3 +939,110 @@ func TestRadiosWithNoFrequencyStillGetWLANs(t *testing.T) {
 		}
 	}
 }
+
+// marvellCaps is the reference WRT3200ACM: two radios whose driver has
+// documented defects.
+func marvellCaps() *capability.Registry {
+	r := capability.NewRegistry()
+	r.Class = capability.ClassA
+	r.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 5180, Hardware: "Marvell 88W8964"},
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 2412, Hardware: "Marvell 88W8964"},
+	}
+	return r
+}
+
+// The defect this whole registry exists for. OpenWrt's own page for this board
+// says not to enable 802.11w because mwlwifi does not support it properly —
+// and oonfeeWRT rendered ieee80211w=1 onto that board for weeks, because
+// nothing in the controller knew. The device accepted it without complaint.
+func TestKnownDriverDefectsAreWarnedBeforeTheyLand(t *testing.T) {
+	site := testSite()
+	// PSK2 with PMF optional: precisely what was on the reference device.
+	site.WLANs[0].Security = model.Security{
+		Mode: model.SecPSK2, Key: "s3cret", PMF: model.PMFOptional,
+	}
+
+	doc, rep, err := Render(site, model.Device{ID: 7, Role: "ap"}, marvellCaps(), Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var pmf *Warning
+	for i := range rep.Warnings {
+		if rep.Warnings[i].DefectID == "mwlwifi-80211w-unsupported" {
+			pmf = &rep.Warnings[i]
+		}
+	}
+	if pmf == nil {
+		t.Fatalf("no warning for 802.11w on a Marvell radio; got %+v", rep.Warnings)
+	}
+	if pmf.WLAN != "Home" {
+		t.Errorf("the warning must name the WLAN that triggers it, got %q", pmf.WLAN)
+	}
+	if pmf.Confidence != string(capability.ConfDeviceDoc) {
+		t.Errorf("confidence %q; this one comes from the device's own OpenWrt page",
+			pmf.Confidence)
+	}
+	if pmf.Source == "" || pmf.Mitigation == "" {
+		t.Error("a warning without a source or a mitigation is folklore")
+	}
+
+	// Crucially: the config is still rendered. The controller does not silently
+	// downgrade what the operator asked for — it says so and applies it.
+	if len(doc.Sections) == 0 {
+		t.Fatal("the render was suppressed; warnings must not drop config")
+	}
+	for _, s := range doc.Sections {
+		if s.Type == "wifi-iface" && s.Values["ieee80211w"] != "1" {
+			t.Errorf("the operator's PMF setting was rewritten to %q; warn, "+
+				"never rewrite", s.Values["ieee80211w"])
+		}
+	}
+	// And it must not block the apply — a warning is not a conflict.
+	if rep.HasConflicts() {
+		t.Error("a driver defect must not abort the render")
+	}
+
+	// The unconditional hardware defect is reported against the DEVICE, not
+	// against a WLAN, and exactly once however many SSIDs there are.
+	hangs := 0
+	for _, w := range rep.Warnings {
+		if w.DefectID == "mwlwifi-firmware-hang" {
+			hangs++
+			if w.WLAN != "" {
+				t.Errorf("a defect no configuration triggers must not be "+
+					"attributed to WLAN %q", w.WLAN)
+			}
+		}
+	}
+	if hangs != 1 {
+		t.Errorf("the firmware-hang defect should appear exactly once, got %d", hangs)
+	}
+}
+
+// Hardware with no known defects must produce no warnings at all. A registry
+// that warns about everything is a registry nobody reads.
+func TestCleanHardwareGetsNoWarnings(t *testing.T) {
+	caps := dualBandCaps()
+	for i := range caps.Radios {
+		caps.Radios[i].Hardware = "Qualcomm Atheros QCA9880"
+	}
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(rep.Warnings) != 0 {
+		t.Errorf("warned about hardware with no registry entry: %+v", rep.Warnings)
+	}
+}
+
+// A radio whose hardware string is unknown must not be assumed clean. This is
+// the package's cardinal rule reaching the defect registry: not matching is
+// "nothing was written down", never "this hardware is fine".
+func TestUnknownHardwareMatchesNothingAndClaimsNothing(t *testing.T) {
+	caps := dualBandCaps() // Hardware is "" on these
+	if got := capability.DefectsFor(caps); len(got) != 0 {
+		t.Errorf("matched %d defects against radios with no hardware string", len(got))
+	}
+}

@@ -96,3 +96,59 @@ func TestRoleFitToleratesAMissingRegistry(t *testing.T) {
 		t.Errorf("got %v for a nil registry", got)
 	}
 }
+
+// Someone repurposing an old router should learn its radio has a known defect
+// at ADOPTION, while they are deciding whether to build on it — not three
+// screens later when a preview warns, and not never.
+func TestAdoptionWarnsAboutKnownHardwareDefects(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Hardware: "Marvell 88W8964", Frequency: 5180},
+	}
+
+	got := roleFit(model.RoleAP, caps)
+	var found string
+	for _, w := range got {
+		if strings.Contains(w, "known defect") {
+			found = w
+		}
+	}
+	if found == "" {
+		t.Fatalf("adopting hardware with a registry entry produced no defect "+
+			"warning; got %v", got)
+	}
+	// The confidence and the source must travel with it, or the operator
+	// cannot tell a maintainer's statement from a forum post.
+	if !strings.Contains(found, "measured") && !strings.Contains(found, "documented") {
+		t.Errorf("warning carries no confidence: %q", found)
+	}
+	if !strings.Contains(found, "Source:") {
+		t.Errorf("warning carries no source: %q", found)
+	}
+
+	// A defect that only fires on a specific setting must NOT appear here.
+	// Telling someone 802.11w is broken when they have not enabled it is noise,
+	// and noise is how real warnings get ignored.
+	for _, w := range got {
+		if strings.Contains(w, "802.11w") {
+			t.Errorf("a config-triggered defect leaked into the adoption "+
+				"warnings, where there is no config yet: %q", w)
+		}
+	}
+}
+
+// Hardware nobody has catalogued must adopt silently. A registry that warns
+// about every device is one nobody reads.
+func TestAdoptionIsSilentForUncataloguedHardware(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Hardware: "Qualcomm Atheros QCA9880", Frequency: 5180},
+	}
+	for _, w := range roleFit(model.RoleAP, caps) {
+		if strings.Contains(w, "known defect") {
+			t.Errorf("warned about hardware with no registry entry: %q", w)
+		}
+	}
+}

@@ -38,6 +38,24 @@ type Change struct {
 	TouchesKey bool `json:"touches_key,omitempty"`
 }
 
+// DriverDefect is a known flaw in a device's wireless driver that this
+// configuration would hit.
+type DriverDefect struct {
+	// WLAN is the SSID that triggers it, or "" for a defect of the hardware
+	// itself that no configuration causes and none can avoid.
+	WLAN     string `json:"wlan,omitempty"`
+	DefectID string `json:"defect_id"`
+	Summary  string `json:"summary"`
+	Detail   string `json:"detail"`
+	// Confidence: "documented" (the device's own OpenWrt page or a maintainer),
+	// "measured" (reproduced by this project), "reported" (a filed bug), or
+	// "anecdotal". Never render the last one with the authority of the first.
+	Confidence string `json:"confidence"`
+	Severity   string `json:"severity"`
+	Mitigation string `json:"mitigation,omitempty"`
+	Source     string `json:"source,omitempty"`
+}
+
 // DevicePreview is what one device would do.
 type DevicePreview struct {
 	DeviceID int64    `json:"device_id"`
@@ -53,6 +71,16 @@ type DevicePreview struct {
 	// Absent, not failed: a WLAN asking for 6 GHz on a device with no 6 GHz
 	// radio renders nothing there and says so.
 	Omitted []string `json:"omitted,omitempty"`
+	// DriverDefects are settings this device WILL accept and will not honour,
+	// or will break on, because its wireless driver is known to be broken in
+	// that specific way.
+	//
+	// Distinct from Omitted, which is the controller declining to do something.
+	// These ARE applied — the controller does not silently rewrite a user's
+	// security settings — so this is the operator's only chance to know. Each
+	// carries the confidence it is known with and a source, because wireless
+	// folklore is repeated far more than it is verified.
+	DriverDefects []DriverDefect `json:"driver_defects,omitempty"`
 	// Drift is a section we own whose value on the device no longer matches
 	// what we applied — surfaced, never silently corrected.
 	Drift []string `json:"drift,omitempty"`
