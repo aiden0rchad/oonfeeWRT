@@ -101,7 +101,7 @@ and this project's whole position is that those two must not be blurred.
 | **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
 | **Class B / C device budget** | the CPU and RAM figures in [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
 | **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
-| **Un-adopt giving a device's config *back*** | that a device we made changes to, un-adopted, diffs clean against a pre-adoption snapshot — [ROADMAP](docs/ROADMAP.md) Phase 0's second proof | nothing but running it: the test exists (`TestIntegrationAdoptUnadoptLeavesNothing`) and needs a device it can adopt and release. Footprint *removal* is verified; reverting owned sections is not |
+| **Un-adopt giving a device's config *back*** | that a device we made changes to, un-adopted, diffs clean against a pre-adoption snapshot — [ROADMAP](docs/ROADMAP.md) Phase 0's second proof | a device the test can adopt, apply a WLAN to, and release. Footprint *removal* is verified on hardware; reverting owned sections is not. `TestIntegrationAdoptUnadoptLeavesNothing` covers it and has not been run |
 
 The budget row is the one worth not lumping in with the others: an ath79 or
 ipq40xx box closes the first three and leaves it exactly where it is, because

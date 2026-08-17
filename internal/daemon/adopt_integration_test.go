@@ -11,6 +11,7 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
 
 // Adoption against a real device. This one WRITES — it installs the ACL file
@@ -183,6 +184,72 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 	if duringACLs == beforeACLs {
 		t.Fatal("adoption installed no ACL file; there is nothing to remove")
 	}
+	// ---- make changes ----
+	//
+	// The middle step of the proof, and it was missing.
+	//
+	// ROADMAP Phase 0 asks to "adopt a device, MAKE CHANGES, un-adopt it, and
+	// diff its config against a pre-adoption snapshot". This test quoted that
+	// line and then went straight from adopt to un-adopt, so nothing was ever
+	// owned: `RevertedSections` was necessarily 0 and phase 1 — handing the
+	// device's own configuration back — was never exercised at all, here or
+	// anywhere on hardware. What the test actually proved was the narrower
+	// claim that ADOPTION leaves nothing behind, which is worth having and is
+	// not the same thing.
+	//
+	// A WLAN is the right change to make: it is what the controller is for, it
+	// renders onto every radio the device has, and it is the section class
+	// un-adopt has to revert.
+	// The network and group are created rather than assumed. A fresh data
+	// directory seeds only the site row — `networks` and `ap_groups` start
+	// empty — so hardcoding ids 1 and 1 would fail a foreign key rather than
+	// prove anything.
+	//
+	// VLAN 1 deliberately: that is the device's existing untagged LAN, which
+	// the renderer explicitly does NOT own and will not rewrite, so this adds a
+	// WLAN without touching the wired configuration of a live router.
+	net := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24",
+		Zone: "lan", Enabled: true}
+	if err := d.Store.SaveNetwork(ctx, net); err != nil {
+		t.Fatalf("SaveNetwork: %v", err)
+	}
+	grp := &model.APGroup{Name: "roundtrip", DeviceIDs: []int64{res.DeviceID}}
+	if err := d.Store.SaveGroup(ctx, grp); err != nil {
+		t.Fatalf("SaveGroup: %v", err)
+	}
+	if err := d.Store.SaveWLAN(ctx, &model.WLAN{
+		SSID:      "oonfee-roundtrip",
+		NetworkID: net.ID,
+		GroupID:   grp.ID,
+		Bands:     []model.Band{model.Band2G, model.Band5G},
+		// A sentinel, never a real key: this repository is public, and the one
+		// time a live passphrase went into a test it went into the test about
+		// passphrases not leaking.
+		Security: model.Security{Mode: model.SecPSK2, Key: "not-a-real-key-2f8Qv1xLpZ"},
+		Enabled:  true,
+	}); err != nil {
+		t.Fatalf("save the WLAN this test exists to revert: %v", err)
+	}
+	ares, err := d.ApplySite(ctx, api.ApplyRequest{})
+	if err != nil {
+		t.Fatalf("ApplySite: %v", err)
+	}
+	for _, dev := range ares.Devices {
+		t.Logf("applied to %s: %s", dev.Name, dev.Outcome)
+	}
+	// Owned sections must exist now, or the un-adopt below reverts nothing and
+	// the proof is back to the version that could not fail.
+	var owned int
+	if err := d.Store.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM owned_sections WHERE device_id=?`, res.DeviceID).Scan(&owned); err != nil {
+		t.Fatal(err)
+	}
+	if owned == 0 {
+		t.Fatal("the apply recorded no owned sections, so un-adopt has nothing " +
+			"to hand back and this test cannot prove what it claims")
+	}
+	t.Logf("owns %d section(s) on the device", owned)
+
 	// Let it poll, so the removal happens against a live, working install
 	// rather than a freshly-written one.
 	time.Sleep(6 * time.Second)
@@ -196,6 +263,13 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 	}
 	t.Logf("un-adopted: reverted=%d login_removed=%v acl_removed=%v remains=%v",
 		out.RevertedSections, out.LoginRemoved, out.ACLRemoved, out.FootprintRemains)
+	// Phase 1 actually ran. Asserted rather than merely logged, because a zero
+	// here with a clean diff below would look like a pass while proving only
+	// that adoption tidies up after itself.
+	if out.RevertedSections == 0 {
+		t.Errorf("no sections were reverted, but %d were owned — phase 1 did "+
+			"not hand the device's configuration back", owned)
+	}
 	for _, e := range out.Errors {
 		t.Errorf("un-adopt reported: %s", e)
 	}
