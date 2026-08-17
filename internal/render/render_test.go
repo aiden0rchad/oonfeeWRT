@@ -655,25 +655,44 @@ func TestNewZoneDefaultsToClosed(t *testing.T) {
 }
 
 // A section name a human typed must not become a config file the device
-// rejects, and two zones must not collide past fw4's 11-character cap.
+// rejects.
+//
+// It must also not become a DIFFERENT operator's section. safe() used to cap
+// everything at 11 characters, which is fw4's limit on a zone NAME and not a
+// limit on UCI section names at all — so "Guest Network A" and "Guest Network
+// B" produced one set of sections between them. The cap existed to stop two
+// zones colliding past it and, applied here, caused exactly that.
+//
+// The old test asserted `got != want && len(got) > 11`, which fails only when
+// a value is BOTH wrong and too long: every wrong-but-short answer passed. The
+// mapping is checked outright now.
 func TestNamesAreMadeSafeForUCI(t *testing.T) {
 	for in, want := range map[string]string{
-		"Guest WiFi (2.4)":      "guest_wifi",
+		"Guest WiFi (2.4)":      "guest_wifi_24",
 		"iot":                   "iot",
 		"  Spaced  Out  ":       "spaced__out",
 		"!!!":                   "net",
-		"averyveryverylongzone": "averyverery"[:11],
+		"averyveryverylongzone": "averyveryverylongzone",
 	} {
-		if got := safe(in); got != want && len(got) > 11 {
-			t.Errorf("safe(%q) = %q, longer than fw4's 11-character cap", in, got)
+		if got := safe(in); got != want {
+			t.Errorf("safe(%q) = %q, want %q", in, got, want)
 		}
 	}
-	if len(safe("averyveryverylongzonename")) > 11 {
-		t.Error("a long zone name was not capped; two zones differing past the " +
-			"cap would collide silently on the device")
+	// Distinct names stay distinct, which is the whole job.
+	if safe("Guest Network A") == safe("Guest Network B") {
+		t.Error("two distinct network names produced one section name; their " +
+			"interface, DHCP and firewall sections would all collide and the " +
+			"device would keep whichever came last")
 	}
-	if safe("Guest WiFi (2.4)") == "" {
-		t.Error("a name with punctuation reduced to nothing")
+}
+
+// The cap is real, and it belongs to the zone name fw4 reads.
+func TestFirewallZoneNamesAreCappedWhereFw4CapsThem(t *testing.T) {
+	if got := fwZoneName("averyveryverylongzone"); len(got) > maxZoneName {
+		t.Errorf("fwZoneName = %q, longer than fw4's %d-character cap", got, maxZoneName)
+	}
+	if got := fwZoneName("iot"); got != "iot" {
+		t.Errorf("fwZoneName(iot) = %q", got)
 	}
 }
 

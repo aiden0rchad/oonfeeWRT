@@ -295,22 +295,24 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// Networks first: a WLAN attaches to one, and a config file that declares
 	// the interface before the wireless section referencing it reads the way a
 	// human would write it.
+	var members []zoneMember
 	for _, n := range site.Networks {
-		secs, oms := renderNetwork(n, dev, caps, existing)
+		secs, oms, m := renderNetwork(n, dev, caps, existing)
 		for _, sec := range secs {
-			// Same ownership rule as wireless: a section with our name that is
-			// not ours aborts rather than being overwritten.
-			if vals, exists := existing.In(sec.Config)[sec.Name]; exists && vals[OwnershipTag] != "1" {
-				rep.Conflicts = append(rep.Conflicts, Conflict{
-					Config: sec.Config, Section: sec.Name,
-					Reason: "a section with our name exists but is not ours; " +
-						"refusing to overwrite config we did not write",
-				})
-				continue
-			}
-			doc.Sections = append(doc.Sections, sec)
+			addOwned(&doc, &rep, existing, sec)
 		}
 		rep.Omissions = append(rep.Omissions, oms...)
+		if m.iface != "" {
+			members = append(members, m)
+		}
+	}
+	// Firewall zones last, and once per zone rather than once per network. See
+	// renderZones: a zone is identified by its name, so two networks sharing
+	// one are two sections with the same name of which the device keeps one.
+	zoneSecs, zoneConflicts := renderZones(members, existing)
+	rep.Conflicts = append(rep.Conflicts, zoneConflicts...)
+	for _, sec := range zoneSecs {
+		addOwned(&doc, &rep, existing, sec)
 	}
 
 	// A role that does not publish WLANs gets none, even where the hardware
@@ -937,4 +939,21 @@ func wantsVLAN(site model.Site) bool {
 		}
 	}
 	return false
+}
+
+// addOwned appends a section unless the device already has one with that name
+// that we did not write.
+//
+// The ownership rule, in the one place all the wired sections pass through: a
+// section with our name that is not ours aborts rather than being overwritten.
+func addOwned(doc *Doc, rep *Report, existing Existing, sec Section) {
+	if vals, exists := existing.In(sec.Config)[sec.Name]; exists && vals[OwnershipTag] != "1" {
+		rep.Conflicts = append(rep.Conflicts, Conflict{
+			Config: sec.Config, Section: sec.Name,
+			Reason: "a section with our name exists but is not ours; " +
+				"refusing to overwrite config we did not write",
+		})
+		return
+	}
+	doc.Sections = append(doc.Sections, sec)
 }

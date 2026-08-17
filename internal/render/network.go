@@ -2,6 +2,7 @@ package render
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -92,15 +93,32 @@ func vlanPrerequisite(bridge string) string {
 		bridge, bridge, bridge, bridge)
 }
 
+// zoneMember is one network's claim on a firewall zone: the zone name the
+// operator asked for, and the interface section that has to end up inside it.
+//
+// Returned rather than rendered on the spot because a zone is not a per-network
+// thing. Two networks may share one, and fw4 identifies zones by name — so
+// rendering one zone section per network produced two sections with the same
+// name, of which the device keeps the last. The first network then belonged to
+// no zone at all, which in fw4 means every packet on it is dropped, with
+// nothing said anywhere.
+type zoneMember struct {
+	zone  string // as the operator typed it
+	iface string // our interface section name
+}
+
 // renderNetwork produces the sections for one network on one device.
+//
+// Zones are not among them — see zoneMember and renderZones.
 func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
-	existing Existing) ([]Section, []Omission) {
+	existing Existing) ([]Section, []Omission, zoneMember) {
 	var (
 		out       []Section
 		omissions []Omission
+		none      zoneMember
 	)
 	if !n.Enabled {
-		return nil, nil
+		return nil, nil, none
 	}
 	// VLAN 0 and 1 are the untagged/default LAN. We do not render those: VLAN 1
 	// is the device's existing lan, which we do not own.
@@ -111,7 +129,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 				"which oonfeeWRT does not own and will not rewrite. Wireless can " +
 				"attach to it; the wired VLAN is left as the device has it",
 		})
-		return nil, omissions
+		return nil, omissions, none
 	}
 
 	ports := caps.Ports
@@ -121,14 +139,14 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			Reason: "this device did not report its wired port layout, so a VLAN " +
 				"cannot be tagged onto physical ports here",
 		})
-		return nil, omissions
+		return nil, omissions, none
 	}
 
 	if !bridgeIsVLANAware(caps, existing) {
 		omissions = append(omissions, Omission{
 			WLAN: n.Name, Reason: vlanPrerequisite(ports.Bridge),
 		})
-		return nil, omissions
+		return nil, omissions, none
 	}
 
 	// The bridge-VLAN. Every LAN port carries it tagged: an untagged member
@@ -154,7 +172,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		// An AP stops here. The VLAN exists on its bridge so tagged frames pass
 		// through to the gateway; addressing, DHCP and firewalling are the
 		// gateway's job and doing them twice is worse than not doing them.
-		return out, omissions
+		return out, omissions, none
 	}
 
 	// The addressed interface.
@@ -166,7 +184,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			Reason: fmt.Sprintf("no usable address: %q is not an IPv4 network in "+
 				"CIDR form, so this network gets a VLAN but no addressing", n.CIDR),
 		})
-		return out, omissions
+		return out, omissions, none
 	}
 	out = append(out, Section{
 		Config: "network", Type: "interface", Name: ifaceName,
@@ -193,36 +211,159 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		},
 	})
 
-	// The firewall zone, and the forwarding that makes the network usable.
 	zone := n.Zone
 	if zone == "" {
 		zone = n.Name
 	}
-	out = append(out, Section{
-		Config: "firewall", Type: "zone", Name: fmt.Sprintf("%s_zone_%s", NamePrefix, safe(zone)),
-		Values: map[string]string{
-			"name":    safe(zone),
-			"network": ifaceName,
-			// A new network defaults to "can reach out, cannot reach in". That
-			// is the safe direction to be wrong in: an operator who wanted a
-			// guest network and got an isolated one notices immediately, and one
-			// who wanted isolation and got an open zone may never notice.
-			"input":      "REJECT",
-			"output":     "ACCEPT",
-			"forward":    "REJECT",
-			OwnershipTag: "1",
-		},
-	})
-	out = append(out, Section{
-		Config: "firewall", Type: "forwarding",
-		Name: fmt.Sprintf("%s_fwd_%s_wan", NamePrefix, safe(zone)),
-		Values: map[string]string{
-			"src":        safe(zone),
-			"dest":       "wan",
-			OwnershipTag: "1",
-		},
-	})
-	return out, omissions
+	return out, omissions, zoneMember{zone: zone, iface: ifaceName}
+}
+
+// renderZones turns every network's zone claim into firewall sections.
+//
+// One section per zone rather than per network, because that is what a zone
+// is. The networks in it are a UCI *list* — see Section.Lists — which is also
+// the only way two networks can share one.
+func renderZones(members []zoneMember, existing Existing) ([]Section, []Conflict) {
+	var order []string
+	byName := map[string][]zoneMember{}
+	for _, m := range members {
+		// Keyed by the name the FIREWALL will see, not the one the operator
+		// typed. Those differ past fw4's cap, and two zones the firewall
+		// cannot tell apart are one zone whichever way we name the section.
+		k := fwZoneName(m.zone)
+		if _, seen := byName[k]; !seen {
+			order = append(order, k)
+		}
+		byName[k] = append(byName[k], m)
+	}
+
+	var (
+		out       []Section
+		conflicts []Conflict
+	)
+	for _, fw := range order {
+		group := byName[fw]
+
+		// Two DIFFERENT zone names that collapse to the same one. Silently
+		// merging two networks the operator deliberately separated is a
+		// firewall policy nobody chose, so it is refused and named.
+		var distinct []string
+		for _, m := range group {
+			if !hasString(distinct, m.zone) {
+				distinct = append(distinct, m.zone)
+			}
+		}
+		if len(distinct) > 1 {
+			sort.Strings(distinct)
+			conflicts = append(conflicts, Conflict{
+				Config: "firewall", Section: fw,
+				Reason: fmt.Sprintf("the firewall zones %s are different names "+
+					"that both become %q once fw4's %d-character limit is "+
+					"applied, so the device cannot tell them apart and one "+
+					"network's rules would silently become the other's. Give "+
+					"them names that differ within the first %d characters",
+					strings.Join(quoteAll(distinct), " and "), fw,
+					maxZoneName, maxZoneName),
+			})
+			continue
+		}
+
+		// A zone the device already has and we did not write. Same ownership
+		// rule as everywhere else, applied to the namespace fw4 actually keys
+		// on: our section name would not collide, and the ZONE would.
+		//
+		// This is the default path, not a corner: store.SaveNetwork used to
+		// stamp every network with zone "lan", so every VLAN rendered a second
+		// zone named lan beside the device's own, carrying input REJECT and
+		// forward REJECT.
+		if other, clash := foreignZone(existing, fw); clash {
+			conflicts = append(conflicts, Conflict{
+				Config: "firewall", Section: other,
+				Reason: fmt.Sprintf("this device already has a firewall zone "+
+					"named %q that oonfeeWRT did not write. Adding a network to "+
+					"it means editing that zone, which is the operator's "+
+					"configuration and not ours to change — and writing a "+
+					"second zone with the same name gives the device two, which "+
+					"is not what anyone means. Give this network a zone name of "+
+					"its own", fw),
+			})
+			continue
+		}
+
+		ifaces := make([]string, 0, len(group))
+		for _, m := range group {
+			ifaces = append(ifaces, m.iface)
+		}
+		sort.Strings(ifaces) // deterministic diffs
+
+		section := safe(distinct[0])
+		out = append(out, Section{
+			Config: "firewall", Type: "zone",
+			Name: fmt.Sprintf("%s_zone_%s", NamePrefix, section),
+			Values: map[string]string{
+				"name": fw,
+				// A new network defaults to "can reach out, cannot reach in".
+				// That is the safe direction to be wrong in: an operator who
+				// wanted a guest network and got an isolated one notices
+				// immediately, and one who wanted isolation and got an open
+				// zone may never notice.
+				"input":      "REJECT",
+				"output":     "ACCEPT",
+				"forward":    "REJECT",
+				OwnershipTag: "1",
+			},
+			// A list, not a joined string — see Section.Lists. It is also what
+			// lets one zone hold more than one network.
+			Lists: map[string][]string{"network": ifaces},
+		})
+		out = append(out, Section{
+			Config: "firewall", Type: "forwarding",
+			Name: fmt.Sprintf("%s_fwd_%s_wan", NamePrefix, section),
+			Values: map[string]string{
+				"src":        fw,
+				"dest":       "wan",
+				OwnershipTag: "1",
+			},
+		})
+	}
+	return out, conflicts
+}
+
+// foreignZone finds a firewall zone with this name that we do not own.
+func foreignZone(e Existing, name string) (string, bool) {
+	sections := e.In("firewall")
+	names := make([]string, 0, len(sections))
+	for n := range sections {
+		names = append(names, n)
+	}
+	sort.Strings(names) // deterministic conflict reporting
+	for _, n := range names {
+		vals := sections[n]
+		if vals[OwnershipTag] == "1" || vals[".type"] != "zone" {
+			continue
+		}
+		if vals["name"] == name {
+			return n, true
+		}
+	}
+	return "", false
+}
+
+func hasString(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func quoteAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		out = append(out, fmt.Sprintf("%q", s))
+	}
+	return out
 }
 
 // netIfaceName is the UCI interface name for a network. Deterministic, so a
@@ -231,12 +372,30 @@ func netIfaceName(name string) string {
 	return fmt.Sprintf("%s_net_%s", NamePrefix, safe(name))
 }
 
-// safe reduces a human's name to something UCI accepts as a section name and
-// firewall zone: letters, digits and underscores.
+// maxZoneName is fw4's limit on a firewall zone name. It applies to the zone's
+// NAME, which is what fw4 reads — not to UCI section names, which have no such
+// limit.
+//
+// Conflating the two is what made this worth separating. safe() capped every
+// name it produced at 11 characters, so two networks called "Guest Network A"
+// and "Guest Network B" both rendered oowrt_net_guest_netwo,
+// oowrt_dhcp_guest_netwo and oowrt_zone_guest_netwo. Four sections, each
+// rendered twice, and UCI keeps the last: one network got its VLAN tagged onto
+// the bridge and nothing else — no address, no DHCP, no firewall — while the
+// preview reported no omission and no conflict. The cap was there to STOP two
+// zones colliding past it, and applied to section names it produced exactly
+// the collision it was guarding against.
+const maxZoneName = 11
+
+// safe reduces a human's name to something UCI accepts as a section name:
+// letters, digits and underscores.
 //
 // UCI section names are not free text. A network called "Guest WiFi (2.4)"
 // would produce a config file the device rejects, and the failure arrives as an
 // opaque parse error at apply time rather than as a message about the name.
+//
+// Not truncated. A section name has no length limit, and shortening one can
+// only ever merge two things the operator kept apart.
 func safe(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
@@ -251,11 +410,18 @@ func safe(s string) string {
 	if out == "" {
 		return "net"
 	}
-	// Firewall zone names are capped at 11 characters by fw4; a longer one is
-	// silently truncated on the device, and two zones that differ only past the
-	// cap would then collide.
-	if len(out) > 11 {
-		out = out[:11]
+	return out
+}
+
+// fwZoneName is the name fw4 will actually see: safe(), capped.
+//
+// A longer one is silently truncated on the device, so the cap is applied here
+// rather than discovered there — and because it can make two distinct names
+// one, renderZones checks for that and refuses rather than merging.
+func fwZoneName(s string) string {
+	out := safe(s)
+	if len(out) > maxZoneName {
+		out = out[:maxZoneName]
 	}
 	return out
 }

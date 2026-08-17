@@ -439,3 +439,23 @@ func TestOneUplinkPerDeviceAndTheErrorSaysWhy(t *testing.T) {
 		t.Errorf("delete left %d uplinks", len(site.Uplinks))
 	}
 }
+
+// A network created without a zone gets one of its own, not the device's.
+//
+// The default was "lan", and no screen ever set it, so every VLAN network the
+// product could create asked for a second firewall zone named lan beside the
+// device's own — which the renderer now refuses as config it does not own. The
+// default path must not be the blocked one.
+func TestNewNetworkGetsItsOwnFirewallZone(t *testing.T) {
+	db := open(t)
+	n := &model.Network{Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24", Enabled: true}
+	if err := db.SaveNetwork(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	if n.Zone == "lan" {
+		t.Fatal("a new network defaulted into the device's own lan zone")
+	}
+	if n.Zone != "iot" {
+		t.Errorf("zone = %q, want the network's own name", n.Zone)
+	}
+}

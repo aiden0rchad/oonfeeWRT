@@ -184,8 +184,21 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 	if strings.TrimSpace(n.Name) == "" {
 		return fmt.Errorf("store: a network needs a name")
 	}
+	// A new network gets a firewall zone of its own, named after itself.
+	//
+	// It used to default to "lan", and nothing in the UI ever set it — so every
+	// VLAN network the product could create asked the renderer for a second
+	// firewall zone named lan, beside the one the device already has, carrying
+	// input REJECT and forward REJECT. render.renderZones refuses that now
+	// (it is the operator's zone, not ours to edit), which would have made the
+	// default path a blocked apply.
+	//
+	// Naming it after the network is also what the renderer already assumed in
+	// its own fallback, and it matches the zone's stated intent: a new network
+	// is isolated — it can reach out and cannot reach in — until an operator
+	// says otherwise.
 	if n.Zone == "" {
-		n.Zone = "lan"
+		n.Zone = n.Name
 	}
 	if n.ID == 0 {
 		res, err := db.sql.ExecContext(ctx,
