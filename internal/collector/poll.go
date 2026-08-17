@@ -578,14 +578,39 @@ func (s *Snapshot) ap(iface string) *AP {
 // answered would draw a dip in the client-count graph that means "one radio did
 // not reply", which is precisely the reading nobody would interpret correctly.
 func (s *Snapshot) ClientCount() (int, bool) {
+	// Gated on APsFresh, which is the only thing that knows whether the AP list
+	// is an answer. `len(s.APs) > 0` was standing in for it and got the two
+	// interesting cases backwards, in opposite directions.
+	//
+	// A device with NO AP interfaces — radios off, a switch, an AP whose WLAN
+	// has not been applied yet — has zero wireless clients, and that is a fact.
+	// Reported as unknown, it suppressed the dashboard's whole fleet total and
+	// named the device as one that "did not report a client count", which it
+	// had: it reported that it has none.
+	//
+	// Worse in the other direction: a device where SOME hostapd get_status
+	// calls failed has entries for only the radios that answered. Summing those
+	// and calling the result known is precisely the dip the dashboard's own
+	// message says it refuses to draw — "adding up the rest would show a dip
+	// that looks like clients leaving" — arrived at inside the function that
+	// message trusts.
+	//
+	// APsFresh is true only when every AP interface we know about answered, and
+	// true with an empty list when there was nothing to ask. Both cases right,
+	// from the flag built for the question.
+	if !s.APsFresh {
+		return 0, false
+	}
 	total := 0
 	for _, ap := range s.APs {
+		// get_status answered and get_clients did not: the radio is there and
+		// its population is not known. Still unknown, and not zero.
 		if ap.Clients == nil {
 			return 0, false
 		}
 		total += *ap.Clients
 	}
-	return total, len(s.APs) > 0
+	return total, true
 }
 
 // decodeIfaces records the wireless interface list a poll discovered, for the
