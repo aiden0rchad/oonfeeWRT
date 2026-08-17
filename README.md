@@ -324,6 +324,30 @@ this project may borrow from:
 | **LuCI** — drives the same rpcd/ubus API we do | Apache-2.0 | ✅ Compatible. Attribute in `NOTICE` |
 | `rpcd`, `uhttpd` interfaces | ISC | ✅ Permissive |
 | **GL.iNet firmware and packages** | GPL-2.0 | ❌ Incompatible with Apache-2.0 |
+| **[OpenSOHO](https://github.com/rubenbe/opensoho)** — nearest neighbour in intent | AGPL-3.0 | ❌ Read it, don't copy it |
+| **[OpenWISP](https://openwisp.org/)** — the incumbent, fleet/WISP scale | GPL-3.0 | ❌ Read it, don't copy it |
+| **[obsy/apcontroller](https://github.com/obsy/apcontroller)** — agentless, SSH push | GPL-3.0 | ❌ Read it, don't copy it |
+
+**On borrowing from the adjacent projects.** The question comes up, so: the
+copyleft ones are a **one-way door**. Apache-2.0 code can go *into* a GPL-3.0
+project; GPL-3.0 or AGPL-3.0 code cannot come *here* without relicensing all of
+oonfeeWRT. That is a licence fact, not a judgement about their quality — they
+are good projects, and the interfaces they drive (`ubus`, `uci`, `rpcd`) belong
+to OpenWrt and are free for anyone to read.
+
+It is also worth knowing how little overlap there would be. Each takes a
+device-side dependency this project's hard rule forbids: OpenSOHO needs
+`openwisp-config`, `openwisp-monitoring` and `luci-app-openwisp` installed;
+OpenWISP ships agent packages; apcontroller `scp`s a script and runs it over
+SSH. And the mechanism that costs the most effort here — `uci apply` with a
+rollback timer, health-gated before confirm — has no counterpart in any of
+them, because an agent-based design does not need one: a broken push just means
+the agent stops checking in. There is no code to lift for the hardest part.
+
+Worth reading for **design**, particularly OpenSOHO on per-device versus
+fleet-wide wifi modelling, and it does read state back off the device rather
+than only templating at it — the closest anyone comes to this project's
+position.
 
 This lands the right way round. LuCI is both the legally compatible option and
 the technically relevant one — it is the only widely-deployed client that talks
