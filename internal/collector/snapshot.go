@@ -132,6 +132,10 @@ type Snapshot struct {
 	// operator had just been told to remove by the takeover brief.
 	APsFresh bool
 
+	// apStatusOK counts the hostapd get_status calls that ANSWERED on this
+	// poll. APsFresh is computed from it rather than from intent — see poll().
+	apStatusOK int
+
 	Stations []Station // focused only
 	Surveys  []Survey  // focused only
 }

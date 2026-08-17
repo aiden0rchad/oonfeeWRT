@@ -45,14 +45,15 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 		Tier:     tier,
 		At:       p.c.now(),
 	}
-	// Whether this poll is in a position to answer "what is broadcasting?".
-	//
-	// A poll with a current interface list has asked, even when that list holds
-	// nothing that serves clients — "asked, and there are none" is a real
-	// answer and the one this used to be unable to give. A poll with no list
-	// yet (the first of any poller) has not asked, and its empty AP set must
-	// not be read as an observation.
-	snap.APsFresh = len(ifaces) > 0 || p.everListedIfaces()
+	// What this poll is about to ask about broadcasting interfaces. The flag
+	// itself is set at the END, from what came BACK — see below.
+	listed := len(ifaces) > 0 || p.everListedIfaces()
+	askedAPs := 0
+	for _, iface := range ifaces {
+		if servesClients(modes, iface) {
+			askedAPs++
+		}
+	}
 	calls := p.buildCalls(tier, ifaces, modes)
 	invs := make([]ubus.Invocation, len(calls))
 	for i, c := range calls {
@@ -112,6 +113,21 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 			}
 		}
 	}
+	// Decided by the ANSWERS, not by the intent.
+	//
+	// Having a current interface list is necessary and not sufficient. The
+	// first version of this set the flag from `len(ifaces) > 0` before the
+	// batch ran, so a device whose hostapd calls were all REFUSED reported
+	// broadcast_known:true with an empty list — a positive claim that nothing
+	// is on the air, produced by a check that never answered. That is the
+	// cardinal error, introduced by the fix for the cardinal error.
+	//
+	// askedAPs == 0 still counts as fresh: a device whose radios are off, or
+	// whose only interfaces are mesh, legitimately has nothing to ask about,
+	// and "asked, and there are none" is the answer this flag exists to make
+	// recordable. Every early return above leaves it false, which is correct —
+	// none of them reached the device in a useful sense.
+	snap.APsFresh = listed && snap.apStatusOK == askedAPs
 	return snap
 }
 
@@ -375,6 +391,9 @@ func decodeAPStatus(iface string) func(json.RawMessage, *Snapshot) error {
 		ap := s.ap(iface)
 		ap.SSID, ap.BSSID, ap.Channel, ap.Freq = v.SSID, v.BSSID, v.Channel, v.Freq
 		ap.Airtime = v.Airtime
+		// Counted here, where an answer actually arrived. APsFresh is decided
+		// from these rather than from having intended to ask.
+		s.apStatusOK++
 		return nil
 	}
 }

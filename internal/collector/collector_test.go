@@ -1237,3 +1237,70 @@ func TestBroadcastingReportsAnEmptyAnswerAndForgetsARemovedBSS(t *testing.T) {
 		t.Errorf("a poll that did not ask overwrote a known list: known=%v %+v", ok, got)
 	}
 }
+
+// APsFresh must come from what ANSWERED, not from what we intended to ask.
+//
+// The producer had no test at all: hardcoding poll.go's freshness line to
+// either constant left the whole suite green. And its first version set the
+// flag from `len(ifaces) > 0` before the batch ran, so a device whose hostapd
+// calls were all refused reported "known, and nothing is broadcasting" — a
+// positive claim produced by a check that never answered. That is the cardinal
+// error, introduced by the fix for the cardinal error.
+func TestAPsFreshComesFromTheAnswerNotTheIntent(t *testing.T) {
+	ctx := context.Background()
+	c := New(newRecorder(), fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa", Name: "d", Connect: mockConnect(t)})
+	p := c.pollers[1]
+	client, err := p.dial(ctx, p.target)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	modes := map[string]string{"wlan0": "ap", "wlan1": "ap"}
+
+	// 1. Nothing has been asked yet: no interface list, and none ever read.
+	if snap := p.poll(ctx, client, Baseline, nil, nil); snap.APsFresh {
+		t.Error("a poll with no interface list reported that it had asked")
+	}
+
+	// 2. A real list, and the hostapd calls answer.
+	snap := p.poll(ctx, client, Baseline, []string{"wlan0", "wlan1"}, modes)
+	if !snap.APsFresh {
+		t.Fatalf("a poll whose hostapd calls answered was not marked fresh "+
+			"(degraded: %v)", snap.Degraded)
+	}
+
+	// 3. "Asked, and there are none": a device that has been listed before but
+	// has no client-serving interface now. This is the answer the flag exists
+	// to make recordable, and what everListedIfaces is for.
+	p.mu.Lock()
+	p.ifaceAt = time.Now()
+	p.mu.Unlock()
+	if snap := p.poll(ctx, client, Baseline, nil, nil); !snap.APsFresh {
+		t.Error("a device with nothing serving clients could not record that " +
+			"it had been looked at")
+	}
+
+	// 4. The one that matters: the calls are REFUSED. An empty AP list is then
+	// not an observation, and must not be published as one.
+	admin := ubus.New(ubus.Options{Host: mockAddr})
+	if err := admin.Login(ctx, "root", "good"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer admin.Close()
+	if err := admin.Call(ctx, "__test", "set_acl_gap", map[string]any{
+		"pairs": []map[string]string{
+			{"object": "hostapd.wlan0", "method": "get_status"},
+			{"object": "hostapd.wlan1", "method": "get_status"},
+		},
+	}, nil); err != nil {
+		t.Skipf("mock does not support ACL-gap simulation: %v", err)
+	}
+	defer admin.Call(ctx, "__test", "set_acl_gap", map[string]any{"pairs": []any{}}, nil)
+
+	denied := p.poll(ctx, client, Baseline, []string{"wlan0", "wlan1"}, modes)
+	if denied.APsFresh {
+		t.Errorf("every hostapd call was refused and the poll still claimed to "+
+			"know what is broadcasting (degraded: %v)", denied.Degraded)
+	}
+}
