@@ -990,9 +990,16 @@ func TestKnownDriverDefectsAreWarnedBeforeTheyLand(t *testing.T) {
 	if pmf.WLAN != "Home" {
 		t.Errorf("the warning must name the WLAN that triggers it, got %q", pmf.WLAN)
 	}
-	if pmf.Confidence != string(capability.ConfDeviceDoc) {
-		t.Errorf("confidence %q; this one comes from the device's own OpenWrt page",
-			pmf.Confidence)
+	// Measured, not documented — and the change of value is the point.
+	//
+	// It came from the device's OpenWrt page until 2026-08-17, when the defect
+	// was reproduced on the reference hardware: PMF on, one forced 802.11r roam,
+	// key installation failed, and 85 seconds later the firmware stopped
+	// answering and took every radio with it (STATUS §5an). The warning an
+	// operator sees has to carry that, because "we measured this" and "a wiki
+	// says so" are not the same claim about their hardware.
+	if pmf.Confidence != string(capability.ConfMeasuredHere) {
+		t.Errorf("confidence %q; this one was reproduced on hardware", pmf.Confidence)
 	}
 	if pmf.Source == "" || pmf.Mitigation == "" {
 		t.Error("a warning without a source or a mitigation is folklore")

@@ -1,0 +1,70 @@
+# WRT3200ACM (88W8964) — PMF wedge, reproduced 2026-08-17
+#
+# Device clock is UTC. Same boot throughout: no power cycle, no reboot.
+# Immediately before this window the device had run 14h50m carrying
+# clients on phy0 with ieee80211w=0 and zero firmware timeouts.
+# ieee80211w was then set to 1 through the controller, and one 802.11r
+# roam onto phy0 was forced with a BSS transition request.
+#
+# Filtered to wifi and firmware lines; ssh/dropbear noise removed.
+
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: associated (aid 1)
+Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=open
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb RADIUS: starting accounting session A92673AED91FCC88
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 36:e0:c7:4f:d0:fb
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: authenticated
+Mon Aug 17 16:38:52 2026 daemon.notice hostapd: phy0-ap0: BSS-TM-QUERY 36:e0:c7:4f:d0:fb reason=32 neighbor=000000000300f41b02000000260c69bde01ef532a4
+Mon Aug 17 16:39:31 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 36:e0:c7:4f:d0:fb
+Mon Aug 17 16:39:33 2026 kern.debug kernel: [53244.375152] ieee80211 phy0: staid 1 deleted
+Mon Aug 17 16:39:36 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: deauthenticated due to local deauth request
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: associated (aid 1)
+Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED f6:97:77:eb:8e:c9 auth_alg=open
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 RADIUS: starting accounting session 2CCA971E26568E76
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED f6:97:77:eb:8e:c9
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: authenticated
+Mon Aug 17 16:41:11 2026 daemon.err hostapd: phy0-ap0: nl80211: kernel reports: key addition failed
+Mon Aug 17 16:41:11 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: associated (aid 2)
+Mon Aug 17 16:41:11 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=ft
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 36:e0:c7:4f:d0:fb
+Mon Aug 17 16:41:48 2026 kern.debug kernel: [53378.672076] ieee80211 phy0: staid 2 deleted
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d IEEE 802.11: associated (aid 2)
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 04:2e:c1:6d:f4:0d auth_alg=open
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d RADIUS: starting accounting session 07DFC813CE07FF75
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 04:2e:c1:6d:f4:0d
+Mon Aug 17 16:41:49 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d IEEE 802.11: authenticated
+Mon Aug 17 16:41:55 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED f6:97:77:eb:8e:c9
+Mon Aug 17 16:41:55 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: disassociated due to inactivity
+Mon Aug 17 16:41:56 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: deauthenticated due to inactivity (timer DEAUTH/REMOVE)
+Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.033636] ieee80211 phy0: cmd 0x9111=SetNewStation timed out
+Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.039527] ieee80211 phy0: return code: 0x1111
+Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.044104] ieee80211 phy0: timeout: 0x1111
+Mon Aug 17 16:42:16 2026 kern.debug kernel: [53407.048793] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:42:36 2026 kern.err kernel: [53427.060485] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:42:36 2026 kern.err kernel: [53427.066375] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:42:36 2026 kern.err kernel: [53427.070985] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:42:36 2026 kern.debug kernel: [53427.075205] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:42:56 2026 kern.err kernel: [53447.091342] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:42:56 2026 kern.err kernel: [53447.097230] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:42:56 2026 kern.err kernel: [53447.101782] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:42:56 2026 kern.debug kernel: [53447.105997] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:43:16 2026 kern.err kernel: [53467.124191] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:43:16 2026 kern.err kernel: [53467.130064] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:43:16 2026 kern.err kernel: [53467.134632] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:43:16 2026 daemon.notice hostapd: nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
+Mon Aug 17 16:43:22 2026 kern.debug kernel: [53473.141190] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:43:42 2026 kern.err kernel: [53493.169120] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:43:42 2026 kern.err kernel: [53493.175036] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:43:42 2026 kern.err kernel: [53493.179588] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:43:42 2026 kern.debug kernel: [53493.183956] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:44:02 2026 kern.err kernel: [53513.177946] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:44:02 2026 kern.err kernel: [53513.183821] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:44:02 2026 kern.err kernel: [53513.188385] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:44:02 2026 kern.debug kernel: [53513.192590] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000
+Mon Aug 17 16:44:22 2026 kern.err kernel: [53533.200806] ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out
+Mon Aug 17 16:44:22 2026 kern.err kernel: [53533.206726] ieee80211 phy0: return code: 0x001d
+Mon Aug 17 16:44:22 2026 kern.err kernel: [53533.211309] ieee80211 phy0: timeout: 0x001d
+Mon Aug 17 16:44:22 2026 daemon.notice hostapd: nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
+Mon Aug 17 16:44:28 2026 kern.debug kernel: [53539.218020] ieee80211 phy0: MACREG_REG_INT_CODE: 0x0000

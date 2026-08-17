@@ -121,9 +121,18 @@ var knownDefects = []Defect{
 		Summary:  "802.11w (protected management frames) is not properly supported by this radio's driver",
 		Detail: "The mwlwifi driver accepts ieee80211w and does not implement it " +
 			"correctly. OpenWrt's own page for this hardware says not to enable it, " +
-			"and it is off by default there for that reason.",
-		Source:     "https://openwrt.org/toh/linksys/wrt3200acm",
-		Confidence: ConfDeviceDoc,
+			"and it is off by default there for that reason. Measured here rather " +
+			"than merely repeated: with PMF on, the FIRST 802.11r fast-transition " +
+			"roam onto the 5 GHz radio logged \"kernel reports: key addition " +
+			"failed\", and 85 seconds later the radio's firmware stopped answering " +
+			"— \"cmd 0x801d=MEMAddrAccess timed out\", every 20 seconds thereafter, " +
+			"then hostapd blocked and every other radio on the device went with it. " +
+			"Recovery needed a power cycle. The same device, same boot, had run " +
+			"14h50m carrying clients on that radio with PMF off. Turning PMF back " +
+			"on and forcing one roam was enough.",
+		Source: "measured on a WRT3200ACM (88W8964), 2026-08-17; " +
+			"https://openwrt.org/toh/linksys/wrt3200acm",
+		Confidence: ConfMeasuredHere,
 		Severity:   SevRadioDeath,
 		Mitigation: "Either set PMF to disabled on this WLAN, or stop publishing " +
 			"it on this device (the per-device \"disabled\" override). PMF cannot " +

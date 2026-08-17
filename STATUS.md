@@ -57,7 +57,16 @@ OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   g
 | airtime-split | absent (dead counters) | **Present** — only device with it |
 | neighbour reports | **Present**, re-adopted after the reset | **Present** |
 | wired layout | `br-lan`, DSA | `eth0.1` / `eth0.2`, swconfig, no DSA |
-| health | **reset 2026-08-16 after four wedges; 28 min clean since, unproven** | stable, 3h+ uptime unattended |
+| health | **wedge CAUSE FOUND 2026-08-17 — §5an. It is PMF.** Currently wedged on purpose by the experiment that proved it; needs a power cycle | stable, days of uptime unattended |
+
+**The oldest open question in this file is closed.** The WRT3200ACM's wedge is
+triggered by **PMF (`ieee80211w`) on the mwlwifi driver**: key installation
+fails during an 802.11r fast-transition roam, and 85 seconds later the 5 GHz
+firmware stops answering and takes every radio on the box with it. Proved by
+running it both ways on **one boot** — 14h50m clean with clients and PMF off,
+then the wedge back inside two minutes of a single forced roam with PMF on. The
+shipped defect warning now carries that measurement instead of a wiki citation.
+**Keep PMF off on Marvell hardware.**
 
 **The wired topology, corrected 2026-08-16 by looking rather than by trusting
 this file.** It was wrong in two ways that both cost time:
@@ -586,7 +595,7 @@ disagreed.
   package-installation flow ARCHITECTURE §6 step 3 describes and nothing has
   built. Writing config for an absent package would be untestable, so it was not
   written.
-- ~~**The WRT3200ACM under a client.**~~ **It has now had one** — see §5am. The
+- ~~**The WRT3200ACM under a client.**~~ **It has now had one, both ways** — §5am and §5an. The
   entry here previously said the device "has carried zero clients the entire
   time"; that was read off a live `get_clients` showing an empty list and was
   **wrong about the run as a whole**. Station telemetry and the device's own log
@@ -2630,12 +2639,12 @@ That does not make the config the cause. It does mean the obvious experiment has
 never been run: **turn PMF off on this device and see whether it survives longer
 than 50 minutes.** Nothing else about the deployment needs to change.
 
-**It was run, and it survived — §5am.** 14h25m with zero timeouts, including
-2h42m carrying a client on phy0 doing exactly the 802.11r fast transitions this
-paragraph names as the failing path, with three key-install failures and no
-wedge. The hypothesis is now supported rather than merely testable. What has
-*not* been separated is PMF from the power cycle that accompanied it: the
-experiment that would is **PMF back on, with a client present**.
+**It was run, both ways, and the hypothesis is CONFIRMED — §5am and §5an.**
+PMF off: 14h50m with zero timeouts, including hours carrying a client on phy0
+doing exactly the fast transitions this paragraph names as the failing path.
+PMF back on, same boot, no power cycle: **the wedge returned 85 seconds after
+the first forced FT roam.** The variable is isolated and the chain is observed
+end to end.
 
 #### Verified in passing: the neighbour reconciler self-heals a rebooted AP
 
@@ -3377,14 +3386,30 @@ ahead of the controller's — an easy way to mis-align these):
 | **key-install failures** | **3** |
 | `ieee80211w` in the live hostapd conf | **0**, both radios |
 
-So the precursor fired. **Three key-install failures, on a real client, doing
-fast transitions, on the exact radio that fails — and no wedge followed.** The
-three earlier wedges came at 17, 28 and 50 minutes after boot; this run had a
-client on phy0 from minute 21 and has now run more than fourteen hours.
+So the precursor fired. **Key-install failures, on a real client, doing fast
+transitions, on the exact radio that fails — and no wedge followed.** The three
+earlier wedges came at 17, 28 and 50 minutes after boot; this run had a client
+on phy0 from minute 21 and has now run more than fourteen hours.
 
 That also settles the early-warning question the memory had already doubted:
 `key addition failed` is a **frequent event that sometimes precedes a wedge**,
-not a predictor. Six occurrences without one now.
+not a predictor.
+
+**Correction — `logread` counts are windowed, not cumulative.** The table above
+first carried exact tallies (3 key failures, 3 associations, 6 across runs).
+They are not sound: `logread` reads a **128 KB ring buffer that rotates**, and
+on this device its oldest surviving line was already 22 minutes *after* boot.
+The counts drop as the window slides, which is how it was noticed at all — a
+watchdog reported `key` going from 4 to 3, and a cumulative counter cannot go
+down. Treat every number derived from `grep -c` on `logread` as "in the last so
+many lines".
+
+**The conclusion survives, on better evidence than the counts.** The wedge is
+*persistent* — recovery needs a power cycle (§5aa) — so a device that is
+answering ubus, carrying clients and completing associations **is not wedged and
+has not been at any point in this boot**, whatever the log retains. That
+argument covers the 22-minute blind spot the buffer does not, and the blind spot
+matters, because the earliest recorded wedge was at 17 minutes.
 
 **Still not proof, and the reasons are specific rather than ritual.** One client
 and one run. The run began with a power cycle *and* `ieee80211w=0` together, so
@@ -3454,9 +3479,54 @@ a disconnection.
 A watchdog polls the device every 60s for `MEMAddrAccess`, `nl_recvmsgs failed`,
 key-install failures, associations and disconnects, and reports only changes.
 
-**Result: recorded below as it lands.** Both outcomes are worth having — a wedge
-names PMF as the cause and closes §0's oldest open question; no wedge under
-this much forced churn exonerates it and points at the power cycle instead.
+#### Result: PMF is the trigger. The wedge returned in 85 seconds.
+
+**One forced roam was enough.** Not the fifteen cycles planned — the first.
+
+```
+16:41:11  nl80211: kernel reports: key addition failed
+16:41:11  AP-STA-CONNECTED 36:e0:…:fb auth_alg=ft      ← the roam I steered
+16:42:36  ieee80211 phy0: cmd 0x801d=MEMAddrAccess timed out    ← +85s
+16:42:56  …timed out
+16:43:16  …timed out            ← and now the downstream failure, +40s exactly
+16:43:16  nl80211: nl80211_recv_beacons->nl_recvmsgs failed: -5
+16:44:48  …timed out, every ~20s thereafter
+```
+
+**The controls are what make this conclusive.** Same device, same boot, no power
+cycle — the variable §5am could not separate is held fixed here. That same boot
+had already run **14h50m carrying clients on the same radio with PMF off**. The
+only thing that changed was `ieee80211w`, and the failure came back inside two
+minutes of the first fast transition.
+
+It also **confirms §5aa's causal ordering to the second**: the first
+`MEMAddrAccess` at 16:42:36 leads the first `nl_recvmsgs failed: -5` at 16:43:16
+by exactly the 40 seconds §5aa measured. The firmware dies first; netlink EIO is
+the consequence. (A first look at the data suggested the reverse — an artifact
+of reading `tail -1` of each pattern rather than the first of each.)
+
+So the chain is now end to end, every link observed rather than inferred:
+
+**PMF on → key installation fails during an 802.11r FT association → the
+88W8964's firmware stops answering 85 seconds later → nl80211 serialisation
+takes every radio on the box with it → power cycle.**
+
+`key addition failed` is therefore not a *predictor* — six-ish occurrences
+passed harmlessly with PMF off — but it **is** the failing step when PMF is on.
+Both readings of the earlier evidence were half right.
+
+**What shipped as a result.** The registry entry for
+`mwlwifi-80211w-unsupported` moves from `ConfDeviceDoc` to **`ConfMeasuredHere`**
+and carries the reproduction and the 85-second figure. Every oonfeeWRT user with
+Marvell hardware now gets a warning backed by a measurement instead of a
+repeated wiki line — which is what that whole registry was built for. A test
+pins the confidence so a rewording cannot quietly demote it to hearsay again.
+
+**Left safe.** The WRT's stored config was set back to `ieee80211w=0` over SSH —
+a file write, no phy0 contact — so its next boot comes up clean; the C6 was
+returned to PMF off and reloaded; the site model is back to Disabled. **The WRT
+itself is still wedged and needs a physical power cycle**, which is the
+documented and only recovery.
 
 ---
 
