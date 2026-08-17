@@ -1115,6 +1115,12 @@ describe('Unadopt', () => {
     )
     expect(onDone).not.toHaveBeenCalled()
 
+    // "Supply the credential and try again" is advice only while there is
+    // still a row to try against. There is not, and sending someone back to a
+    // device the controller has forgotten is how a footprint stays behind.
+    expect(screen.getByText(/last time the controller can tell you/)).toBeTruthy()
+    expect(screen.queryByText(/try again/)).toBeNull()
+
     // Forcing is not offered once the row is actually gone — there is nothing
     // left to force.
     expect(screen.queryByText('Remove from the inventory anyway')).toBeNull()

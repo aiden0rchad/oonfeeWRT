@@ -162,8 +162,17 @@ export function Unadopt({
                   </li>
                 ))}
               </ul>
+              {/* "Try again" is advice only while there is still a row to try
+                  against. After a forced removal there is not, and this list is
+                  the only remaining record of what is on that device — telling
+                  someone to come back to a device the controller has forgotten
+                  is how a footprint gets left behind for good. */}
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                Delete these over SSH, or supply the credential and try again.
+                {result.removed_from_inventory
+                  ? 'Copy these before closing. The device is no longer in the ' +
+                    'inventory, so this is the last time the controller can tell ' +
+                    'you what it left behind — delete them over SSH.'
+                  : 'Delete these over SSH, or supply the credential and try again.'}
               </div>
             </div>
           )}
@@ -281,6 +290,13 @@ export function Unadopt({
           Cancel
         </Button>
       </div>
+      {/* Stays with the buttons it explains. */}
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        “Revert config only” hands the settings back and leaves the login and
+        ACL file in place, listed so you can delete them by hand. Use it when
+        the device's password is lost.
+      </div>
+
       {/* Last, deliberately. A hard failure never produces a result, so without
           this the only way past a refused SSH connection — a changed host key,
           a dead address, a wrong password — is to give up. But it sits BELOW
@@ -289,12 +305,6 @@ export function Unadopt({
           offered above the retry is an invitation to abandon a device that was
           one keystroke from being cleaned properly. */}
       {err && forceBlock}
-
-      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-        “Revert config only” hands the settings back and leaves the login and
-        ACL file in place, listed so you can delete them by hand. Use it when
-        the device's password is lost.
-      </div>
     </div>
   )
 }
