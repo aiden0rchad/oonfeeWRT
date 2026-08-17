@@ -325,11 +325,25 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 	//
 	// The check used to confirm only that what it wrote had appeared. An apply
 	// that deleted a WLAN therefore passed on "the lan interface is up", and
-	// the controller recorded the network as gone. §0 is fourteen hours of
-	// exactly that: a device beaconing an SSID that was in no config anywhere,
-	// while uci, the hostapd conf, iwinfo, ubus and `iw dev info` all agreed it
-	// was not. Confirming a removal without looking at the air is how the
-	// controller came to believe it.
+	// the controller recorded the network as gone without ever asking.
+	//
+	// What this DOES catch: hostapd still holding a BSS it was told to drop —
+	// a reload that did not happen, a section deleted from uci while the
+	// running config kept it, an apply that reported success and changed
+	// nothing.
+	//
+	// What it does NOT catch, and the comment here said otherwise until it was
+	// checked: §0's actual failure. readSSIDs reads iwinfo and hostapd, which
+	// is the CONTROL PLANE — the very source that lied for fourteen hours while
+	// the radio beaconed wrt-cleanroom. If the firmware keeps transmitting an
+	// SSID hostapd has dropped, this gate is told it is gone and agrees.
+	//
+	// Only a scan answers that, which is what internal/onair is for. It is
+	// deliberately not wired in here: a scan takes a radio off-channel for
+	// seconds inside a 90-second rollback window, and onair's own rule is that
+	// Unheard is not proof of absence — so it would buy an expensive maybe.
+	// The honest summary is that this closes the config-plane half of §0 and
+	// leaves the firmware half to a check an operator runs.
 	//
 	// Read from the section's PREVIOUS values — the plan carries what the
 	// device had — because a delete op names a section, not an SSID.
@@ -409,10 +423,12 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 		}
 
 		if lingering := stillOn(found, goneSSIDs); lingering != nil {
-			return fmt.Errorf("health: after %s, %d SSID(s) this change removed "+
-				"are still being broadcast: %v — the config no longer has them, "+
-				"so the device is transmitting something nothing describes; "+
-				"letting it revert rather than recording them as gone",
+			return fmt.Errorf("health: after %s, hostapd is still carrying %d "+
+				"SSID(s) this change removed: %v — the config no longer has "+
+				"them, so letting the device revert rather than recording them "+
+				"as gone (note this reads hostapd, not the air: a radio can "+
+				"keep transmitting an SSID hostapd has dropped, which the "+
+				"on-air check finds and this cannot)",
 				ssidSettleTimeout, len(lingering), lingering)
 		}
 		missing := missingFrom(found, wantSSIDs)

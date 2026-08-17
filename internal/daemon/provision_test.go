@@ -265,8 +265,13 @@ func TestHealthCheckRejectsAnSSIDThatSurvivedItsDeletion(t *testing.T) {
 			"still broadcasting it — the controller would record it as gone",
 			victim)
 	}
-	if !strings.Contains(err.Error(), "still being broadcast") {
+	if !strings.Contains(err.Error(), "this change removed") {
 		t.Errorf("the failure does not say what is wrong: %v", err)
+	}
+	// And it must not overstate what it checked: this reads hostapd, not the
+	// air, and §0 is fourteen hours of those two disagreeing.
+	if !strings.Contains(err.Error(), "not the air") {
+		t.Errorf("the failure claims more than it verified: %v", err)
 	}
 }
 
@@ -312,7 +317,7 @@ func TestHealthCheckVerifiesARenamedSSIDStopped(t *testing.T) {
 	if err == nil {
 		t.Fatalf("the gate passed a rename while %q is still being broadcast", old)
 	}
-	if !strings.Contains(err.Error(), "still being broadcast") {
+	if !strings.Contains(err.Error(), "this change removed") {
 		t.Errorf("the failure blames the wrong thing: %v", err)
 	}
 }
