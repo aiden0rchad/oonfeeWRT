@@ -495,7 +495,41 @@ most-worth-doing first.
    Both halves pinned and mutation-verified, and the fixture gained the two
    things whose absence had made the bug untestable.
 
-6. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+6. **Persist the SSH host-key pin.** The one confirmed review finding still
+   open — §5ag has the four-step fix. The guard that refuses a changed host key
+   cannot fire today, and un-adopt is the dial that carries the operator's
+   password. Self-contained: a column, a migration, a first-use setter, and the
+   test for a branch that has never run.
+
+7. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+
+### If you are picking this up cold
+
+Read **§0** first (the reference hardware lies, and why), then **§6** (the
+mistakes already made and the rules that came out of them). Those two explain
+most of the decisions in the code.
+
+Then, in order of value:
+
+- **§5ag item 6** — the host-key pin. The only open finding, fully specified.
+- **Look at a screen in a browser.** 25 defects have been found this way and
+  none of them was reachable by any test in the repo. Everything has been looked
+  at once now, so the yield is in what CHANGES.
+- **Review whatever was written last, not just the code.** Three review rounds
+  ran on 2026-08-16/17. The second found more than the first *because* it
+  reviewed the first's fixes, including one that committed the exact error it
+  was fixing. The third found four highs in code nobody had reviewed at all.
+- **Mutation-test every new test.** Revert the fix; if the test still passes it
+  asserts nothing. Six were caught that way in two days, none by reading.
+
+**Two things need the operator, not the next session:**
+
+1. **Rotate the Archer C6's WPA passphrase.** It was committed to this public
+   repository on 2026-08-16 (`02e99d0`, removed in `5982cec`) and must be
+   treated as compromised. `tools/secret-scan.sh` confirms nothing else leaked.
+2. **A third router** unblocks the whole remaining backlog at once — mesh
+   `peered`, the wireless uplink, three-AP fan-out, and the first class B/C
+   budget measurement. Any cheap MT7621 or ath79 box does all four.
 
 ### Where I would start, if picking this up cold
 
@@ -2908,6 +2942,82 @@ the rendered set.
 
 That one is worth remembering as a method: **a count could not have surfaced it.**
 Showing the individual items is what made the data wrong in a visible way.
+
+### 5ag. The core-package review — and the one finding still open
+
+**Done 2026-08-17.** `applyengine`, `adoption`, `ubus`, `secrets` and `store`
+had never had a review pass; the two earlier rounds covered recent diffs only.
+**22 candidates, all 22 verified, 6 confirmed** — four of them high, in the code
+that writes to live routers.
+
+#### The apply engine reported clean reverts as stranded, two different ways
+
+Both spend the engine's one alarming signal on a non-event, which is worse than
+noise: a genuinely stranded change then looks like all the others.
+
+1. **`planStillApplied` matched on a key that could never differ.** It returned
+   "still applied" on the first planned option that read back equal, and render
+   emits an `OpSet` carrying the WHOLE section — including the ownership tag,
+   which a section we already own necessarily still has after a perfect revert.
+   So **every apply after the first to an owned section** that reverted cleanly
+   was reported `Unknown` + `Stranded`, with an error-severity audit event
+   telling the operator to hand-reverse correct config. Only options that can
+   *distinguish* the two states are consulted now, snapshotted before staging.
+2. **The confirm-failure path never reached verification.** Both waits were
+   anchored at "now" rather than at the moment `uci.apply` armed the device's
+   timer — 90s + 105s against a 180s deadline — so the context expired inside
+   the wait. Anchored at the arm time, waiting only what remains.
+
+The existing tests could not catch the first: their plans carry one key, so
+nothing was ever unchanged. The new one uses the shape render actually produces.
+
+#### `internal/adoption/ssh.go` had no tests at all
+
+The code that writes the ACL, creates the controller's login and removes them
+was exercised only through a fake. Two real bugs in it:
+
+- **`DialSSH`'s handshake had no deadline and ignored ctx.**
+  `ClientConfig.Timeout` is read only by `ssh.Dial`. A host that accepts TCP and
+  never speaks SSH held adoption open forever, past the adopt timeout and past
+  the cancelled request. Bounded now — and *cleared* afterwards, which is the
+  load-bearing half: the same connection carries every later write.
+- **`RemoveFootprint` reported success from `rm -f`.** Three statements joined
+  by `;`, so the verdict was the last one's, and `rm -f` succeeds on a file that
+  was never there. Anything that made uci fail while unlink worked reported a
+  clean un-adopt, leaving the login to return at the next reboot. It reads both
+  halves back now.
+
+#### And a batch that ran on the device with its answers discarded
+
+`ubus`'s re-login retry discarded `buildChunk`'s end index. A fresh session's ids
+can be wider, so across a power-of-ten boundary the rebuild holds one call fewer
+— and it was posted anyway. The device ran N-1 calls, the length check rejected
+the reply, and the original results were returned: **the writes landed while
+every call was reported denied**, with `Retried` false, which makes
+`IsPermanent` report a permanent ACL gap as transient.
+
+#### STILL OPEN — the SSH host-key pin
+
+**The one confirmed finding not yet fixed.** `internal/adoption/ssh.go` captures
+the host key fingerprint at adoption and throws it away: both `DialSSH` call
+sites leave `SSHOptions.HostKeyFP` empty, `adoption.Result.HostKeyFP` is dropped
+when `store.Device` is built, there is no column for it in the schema, and no
+test exercises the mismatch branch. **So the host-key-change refusal at
+`ssh.go:76` can never fire.**
+
+It matters at **un-adopt**, not adoption — adoption is genuinely first-use and
+correctly unpinned, but un-adopt SSHes to the stored address carrying the
+operator's freshly typed administrator password.
+
+The fix, mirroring the TLS pin exactly:
+1. `schema.sql`: add `host_key_fp TEXT` to `devices`, plus an `ALTER TABLE`
+   migration beside the `poll_interval_s` one.
+2. `store.Device`: add the field to `deviceCols`, the scan and `UpsertDevice`,
+   and a first-use-only `SetHostKeyFP` mirroring `SetCertFP` — the
+   `WHERE ... AND (host_key_fp IS NULL OR host_key_fp='')` clause is the
+   load-bearing part, since a silently re-pinned key is the same non-guard.
+3. `daemon/adopt.go`: store the fingerprint at adoption, pass it at un-adopt.
+4. A test for the mismatch branch, which has never run.
 
 ---
 
