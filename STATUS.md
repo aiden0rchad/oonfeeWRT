@@ -515,7 +515,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Thirty-one** defects have been found
+- **Look at a screen in a browser.** **Thirty-four** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3238,6 +3238,52 @@ written for and had only ever been checked by a unit test.
 
 ---
 
+### 5ak. The panel charted the one series that is usually empty
+
+**Done 2026-08-17.** Started from a contradiction visible on one screen: the
+Broadcasting card read **"channel 1 is 74.1% busy"**, live, directly above a
+**"Channel utilization"** chart reading **"No data yet"**. Same radio, same
+panel, same second.
+
+They are two different sources, and the panel had charted the wrong one.
+
+| | source | tier | rollup buckets |
+|---|---|---|---|
+| the live card | `ap_airtime_pct` — hostapd BSS load | **baseline, every poll** | 189 |
+| the chart | `chan_busy_pct` — `iwinfo.survey` | **focused only** | 31, newest an hour old |
+
+`Surveys []Survey // focused only`. So channel utilization was recorded while
+somebody had the panel open and not otherwise — and **the chart's empty message
+told the operator to wait**, which means closing the panel, which is the one
+thing that guarantees it stays empty.
+
+**Confirmed rather than reasoned.** Opening the panel and watching produced a new
+`chan_busy` bucket at 07:45 after an hour of nothing. One observation, whole
+diagnosis.
+
+What landed:
+
+- **Both are charted**, because they are two measurements and neither
+  substitutes for the other. Measured over paired buckets on both devices: the
+  means agree to within **1.6 points**, single buckets diverge by up to **16** on
+  a busy 2.4 GHz radio. BSS load leads — it has the continuous line, and it is
+  what hostapd advertises in its beacons, so it is the number clients act on when
+  deciding whether to roam. Recording the comparison here so nobody later
+  "simplifies" by deleting one on the assumption they are the same.
+- **The survey chart says why it is empty**, in its own words rather than the
+  shared ones.
+- **One chart per RADIO, not per BSS.** Both quantities belong to the radio and
+  both sources report them per interface, so a radio carrying two SSIDs produced
+  two identical series — the Archer C6 drew **four** utilization charts, two
+  pairs of duplicates agreeing to the decimal, all four empty. Two populated and
+  two explained now.
+
+The source note went in the title row first and **wrapped mid-phrase into the
+1h/1D/1W buttons** — a flex row with `space-between`, which a sentence squeezes.
+A screenshot showed that; the tests could not, and would not have.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3294,6 +3340,15 @@ written and believed.
   it, no test — and each one reads as a harmless omission unless you already
   know about the other four. Reading a file at a time cannot find this; tracing
   one value from where it is produced to where it is checked can.
+- **Two things on one screen that disagree are a finding, not a rendering
+  quirk.** A live "74.1% busy" above a chart saying "No data yet", same radio,
+  same second, turned out to be two different sources with the panel charting
+  the wrong one (§5ak). Whenever the same quantity appears twice, find out
+  whether it came from the same place.
+- **An empty state has to name ITS OWN reason.** A shared "no data yet, check
+  back in five minutes" is right for a series recorded every poll and actively
+  harmful for one recorded only while a panel is open — it sends the reader off
+  to do the exact thing that stops the collection.
 - **A capability declared at every layer but the last one is the same as one
   that was never built.** `force` had a field, a JSON tag, a documented meaning,
   a comment explaining the ordering that made it work, and a slot in the
