@@ -488,9 +488,10 @@ most-worth-doing first.
    grid with a real client, the Logs screen and the adopt/discovery screen. Four
    more defects, **count now twenty-three**, still none reachable by any test.
 
-   **The unadopt flow is now looked at too** (2026-08-17, §5ai): two more
-   defects, **count twenty-five**, and one of them made a device that cannot be
-   reached permanently un-removable. **Still unlooked-at:** any screen under a
+   **The unadopt flow is now looked at too** (2026-08-17, §5ai): four more
+   defects, **count twenty-seven**, and one of them made a device that cannot
+   be reached permanently un-removable. Two came from reading the panel and two
+   from driving it. **Still unlooked-at:** any screen under a
    fleet larger than two devices.
 
 5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
@@ -513,7 +514,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Twenty-five** defects have been found
+- **Look at a screen in a browser.** **Twenty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3110,6 +3111,33 @@ it was *clean*, so the discarded list was always empty. Making forced removal
 reachable is what turns that list into the only copy. **A latent defect and its
 activating change arrived in the same afternoon, from opposite ends.**
 
+#### Then driving it found two more
+
+Reading the panel found the first two. **Running** it found two more, which is
+the distinction worth keeping: a screen can be correct in every state you
+imagined and wrong in the state the flow actually reaches.
+
+The flow was exercised against a **throwaway inventory row pointing at a closed
+port** — not the lab APs. A wrong password against a real device is not a safe
+way to produce this failure: the reference hardware accepts *any* password when
+root has none (§0), so the "failed" attempt would have succeeded and genuinely
+un-adopted a working AP. A dead address fails at `DialSSH`, which happens
+*before* `Adopter.Unadopt`, so phase 1 never runs and nothing is written
+anywhere.
+
+- **The residue hint said "supply the credential and try again."** True while a
+  row survives; nonsense after a forced removal, which is the case where that
+  list is the *only* record of what is still installed. It now says to copy the
+  list before closing, and offers the retry only while there is something to
+  retry against.
+- **The "Revert config only" note had drifted two cards away** from the button
+  it explains, below the forced-removal card.
+
+End to end against the running daemon: row removed, report still on screen with
+both residue entries, audit event recording `forced=true
+footprint_remains=true`, no orphaned `owned_sections`, and the fleet count
+refreshing only on Close.
+
 ---
 
 ## 6. Working practices that earned their place
@@ -3174,6 +3202,12 @@ written and believed.
   the surface a person touches to reach it. §5ah added a new way for un-adopt to
   fail, and the panel over it turned out to have no way to recover from any of
   them, including the ones that had always existed.
+- **Then DRIVE it, on a throwaway.** Reading the un-adopt panel found two
+  defects; running it found two more. A screen can be right in every state you
+  imagined and wrong in the one the flow reaches. Manufacture the failure on a
+  disposable row pointing at a closed port — never by feeding a real device a
+  wrong password, because the reference hardware accepts any password when root
+  has none, so the "failure" would succeed and un-adopt a working AP.
 - **A guard that reports itself as configured is worse than an absent one.**
   The empty-fingerprint case is the whole pattern in miniature: store `""` and
   the column says "pinned", the first-use branch never runs again, and nothing
