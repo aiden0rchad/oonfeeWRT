@@ -574,9 +574,18 @@ func (s *Snapshot) ap(iface string) *AP {
 // ClientCount totals associated clients across APs, reporting whether the total
 // is trustworthy.
 //
-// It is not trustworthy if any AP's count is missing: summing the ones that
+// Two ways it is not, and they need saying together because standing on either
+// one alone gets the other backwards.
+//
+// It is untrustworthy if any AP's count is missing: summing the ones that
 // answered would draw a dip in the client-count graph that means "one radio did
 // not reply", which is precisely the reading nobody would interpret correctly.
+//
+// It is equally untrustworthy if the AP LIST itself is incomplete, which is a
+// different failure and invisible from the entries — a refused get_status
+// leaves no entry at all, so the radio that did not answer is simply absent and
+// what remains looks whole. APsFresh is the flag that knows, and it also says
+// yes for a device with no AP interfaces at all: zero clients, known.
 func (s *Snapshot) ClientCount() (int, bool) {
 	// Gated on APsFresh, which is the only thing that knows whether the AP list
 	// is an answer. `len(s.APs) > 0` was standing in for it and got the two

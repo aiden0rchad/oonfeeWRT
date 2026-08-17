@@ -524,7 +524,7 @@ Then, in order of value:
 
 - **There is no open finding and no numbered item left.** Everything below is a
   way of working rather than a task, and the yield from each has been measured.
-- **Look at a screen in a browser.** **Forty-three** defects have been found
+- **Look at a screen in a browser.** **Forty-five** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
@@ -3715,6 +3715,71 @@ request did not have.
 
 ---
 
+### 5aq. The collector's first review — two numbers that were quietly wrong
+
+**Done 2026-08-17.** §5ag's core review covered `applyengine`, `adoption`,
+`ubus`, `secrets` and `store`. It never touched **`collector`**, which runs
+continuously against every device and produces the numbers on every screen. Both
+findings sit in the same seam — the gap between *what was asked* and *what came
+back* — which is this repository's signature failure and the reason that seam is
+worth checking first in any package.
+
+#### The fleet client total was wrong in both directions at once
+
+`Snapshot.ClientCount` gated on `len(s.APs) > 0` where it meant `APsFresh`.
+
+**Under-claiming.** A device with no AP interfaces — radios off, a switch, an AP
+whose WLAN has not been applied yet — has zero wireless clients, and that is a
+fact. Reported as unknown, it suppressed the dashboard's **entire fleet total**
+and named the device as one that "did not report a client count", which it had:
+it reported that it has none. Reachable on any adopted device between un-adopt
+and the next apply, a state this session spent an hour in.
+
+**Over-claiming, which is the dangerous half.** `decodeAPStatus` *creates* the
+AP entry, so a refused call leaves no entry at all — the radio that did not
+answer is simply absent, and what remains looks whole. Summing it and calling
+the result known draws exactly the dip the dashboard's own message says it
+refuses to draw: *"adding up the rest would show a dip that looks like clients
+leaving, so no total is shown at all."* Arrived at inside the function that
+message trusts.
+
+`APsFresh` answers precisely this question and is built a few lines above. One
+mutation catches both directions.
+
+#### Closing a session threw away what it cost
+
+The request and byte counters live on the ubus client. `fail()` banks them
+before discarding a session; `closeClient()` did not — and `closeClient` is what
+runs when a device's address changes under one device id, because a session
+token is not portable between hosts.
+
+Worse than a smaller number: `Overhead` derives `NonPollRequests` as
+`Requests - Polls`, and polls are counted on the poller, which survives. Drop
+the requests, keep the polls, and the difference goes negative and clamps to
+zero — so the readout whose stated purpose is surfacing calls that escaped the
+batch reports none, precisely when a session has just been thrown away. The
+mutation measured it: 3 requests and 1995 bytes lost, `requests(0) < polls(2)`.
+One `dropClientLocked` now knows the rule, because a *difference* between two
+teardown paths is what produced it.
+
+#### Checked and deliberately left alone
+
+Worth recording, so the next reader does not re-derive them as findings:
+
+- **`netAt` stamps on the attempt; `boardAt` distinguishes permanent denial.**
+  An asymmetry, and the blunter one is documented with its reason — a device
+  whose ACL refuses `network.interface` would otherwise re-ask forever. Closing
+  that by reasoning is the thing this file forbids.
+- **`baselineLocked` ignores an override shorter than the default**, which is
+  the documented promise that a per-device knob cannot raise the rate.
+- **`s.ap()` and `s.host()` return pointers into a growing slice.** Safe as
+  used: every one is consumed inside the decoder call that took it, before any
+  later append can reallocate.
+- **`servesClients` treats an unknown mode as "yes"**, so a refused mode read
+  cannot quietly stop counting real clients.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -3777,6 +3842,12 @@ written and believed.
   one plan silently enabled a different one. If a screen is careful that stale
   DATA never sits beside an enabled button, it has to be equally careful about
   stale CONSENT.
+- **A missing item leaves no gap.** The client total summed the radios that
+  answered and called it known, because a refused `get_status` creates no entry
+  — the absent radio is invisible and the remainder looks complete. Wherever a
+  collection is built by appending on success, its length cannot tell you
+  whether it is whole; something has to record that separately, and here it
+  already did.
 - **Validate what the caller sent, not what you substituted for it.** The
   rename length check ran after the fallbacks, so an empty request came back
   refused for being 120 characters too long. A limit exists to constrain input;
