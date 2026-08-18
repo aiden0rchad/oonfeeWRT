@@ -56,12 +56,32 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 		// Staged before the set: applyengine preserves op order through
 		// ubus.Batch, and nothing commits until uci.apply.
 		for _, k := range sortedKeys(s.Lists) {
+			// Only when the option is actually THERE. Deleting an option the
+			// device does not have is a call that can fail, and stage() aborts
+			// the whole batch on any failed op — so an unnecessary delete would
+			// turn a good apply into no apply at all.
+			if _, onDevice := current[k]; !onDevice {
+				continue
+			}
 			if isList, known := StoredAsList(current, k); known && !isList {
 				ops = append(ops, applyengine.Op{
 					Kind: applyengine.OpDelete, Config: s.Config,
 					Section: s.Name, Option: k,
 				})
 			}
+		}
+		// Options this section manages, that the device still holds, and that
+		// this render did not produce.
+		//
+		// Without this an option written under a condition and then no longer
+		// written is never compared by matches and never cleared: the operator
+		// turns it off, the preview reports no changes, and the device keeps
+		// it. See Section.Manages — measured, on both reference devices.
+		for _, k := range managedButUnwritten(s, current) {
+			ops = append(ops, applyengine.Op{
+				Kind: applyengine.OpDelete, Config: s.Config,
+				Section: s.Name, Option: k,
+			})
 		}
 		// Present and ours but different: set rather than add, so options a
 		// previous version of us wrote and this one no longer manages are left
@@ -85,6 +105,12 @@ func matches(s Section, current map[string]string) bool {
 		if current[k] != v {
 			return false
 		}
+	}
+	// An option we manage, are not writing, and the device still has, is a
+	// difference — otherwise "already matches" is reported for a section that
+	// still carries the setting the operator just turned off.
+	if len(managedButUnwritten(s, current)) > 0 {
+		return false
 	}
 	// Lists come back from the device space-joined (see reconcile.flatten), so
 	// compare in that form rather than round-tripping through a parser.
@@ -231,6 +257,26 @@ func (d Doc) Preserved(existing Existing, config, name string) bool {
 func sortedKeys(m map[string][]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// managedButUnwritten lists the options this section owns that the device still
+// holds and this render did not produce, in a stable order.
+func managedButUnwritten(s Section, current map[string]string) []string {
+	var out []string
+	for _, k := range s.Manages {
+		if _, writing := s.Values[k]; writing {
+			continue
+		}
+		if _, writingList := s.Lists[k]; writingList {
+			continue
+		}
+		if _, onDevice := current[k]; !onDevice {
+			continue
+		}
 		out = append(out, k)
 	}
 	sort.Strings(out)

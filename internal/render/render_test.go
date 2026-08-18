@@ -230,9 +230,15 @@ func TestFastTransitionOnPSK2RequiresExplicitOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
+	// Not ENABLED — which is not the same as "the key is missing", and the
+	// difference is the whole of §5aw. An omitted option is not "off" on the
+	// device, it is whatever the last apply left there, so the renderer now
+	// writes the disabled state explicitly and this asserts the state rather
+	// than the absence.
 	for _, s := range doc.Sections {
-		if s.Values["ieee80211r"] != "" {
-			t.Errorf("802.11r must not render on WPA2-PSK without the opt-in: %v", s.Values)
+		if s.Values["ieee80211r"] != "0" {
+			t.Errorf("802.11r must not be enabled on WPA2-PSK without the opt-in, "+
+				"and must be explicitly disabled rather than omitted: %v", s.Values)
 		}
 	}
 	if len(rep.Omissions) == 0 {
@@ -1349,11 +1355,16 @@ func TestPMFIsConstrainedByTheSecurityMode(t *testing.T) {
 	cases := []struct {
 		mode model.SecurityMode
 		pmf  model.PMF
-		want string // "" means the option must not be written at all
+		want string
 		why  string
 	}{
-		{model.SecNone, model.PMFOptional, "",
-			"an open network has no RSN, so PMF is meaningless there"},
+		// An open network has no RSN, so PMF is meaningless there — but the
+		// option is written as an explicit 0 rather than omitted, because a
+		// WLAN switched from WPA2 to Open would otherwise keep whatever
+		// ieee80211w the last apply left on the device. Zero does not trip the
+		// mwlwifi trigger, which fires on != "" && != "0".
+		{model.SecNone, model.PMFOptional, "0",
+			"an open network has no RSN, so PMF must be off — and said to be off"},
 		{model.SecSAE, model.PMFDisabled, "2",
 			"WPA3 mandates PMF; disabled produces an AP clients reject"},
 		{model.SecOWE, model.PMFDisabled, "2",
@@ -1378,11 +1389,10 @@ func TestPMFIsConstrainedByTheSecurityMode(t *testing.T) {
 				t.Fatal("nothing rendered")
 			}
 			got, present := doc.Sections[0].Values["ieee80211w"]
-			if c.want == "" {
-				if present {
-					t.Errorf("ieee80211w=%q written for %s — %s", got, c.mode, c.why)
-				}
-				return
+			if !present {
+				t.Fatalf("ieee80211w not written at all for %s/%s — an omitted "+
+					"option leaves whatever the last apply put on the device",
+					c.mode, c.pmf)
 			}
 			if got != c.want {
 				t.Errorf("ieee80211w=%q, want %q for %s/%s — %s",

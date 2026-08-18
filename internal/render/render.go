@@ -92,6 +92,25 @@ type Section struct {
 	// There is no error anywhere in that chain — which is exactly why the
 	// distinction is a separate field rather than a convention.
 	Lists map[string][]string
+
+	// Manages names every option this section controls, including the ones it
+	// is NOT writing this time. Plan deletes any of them the device still holds
+	// but this render did not produce.
+	//
+	// Needed because plan.matches compares only the keys we write, so an option
+	// written under a condition and then no longer written is never compared
+	// and never cleared. Measured on both reference devices: turning 802.11r
+	// off produced ZERO operations — the preview said "already matches", and
+	// `ieee80211r=1` and its mobility domain stayed on the device. On the
+	// WRT3200ACM that is the setting §5an identified as wedging the radio 85
+	// seconds after a roam, so the one remedy an operator would reach for could
+	// not be applied and reported success.
+	//
+	// Most options avoid needing this by being written in BOTH directions —
+	// see boolOpt. Manages covers the ones with no safe "off" value: maxassoc
+	// is the reason it exists, because `maxassoc 0` is not "unlimited" to
+	// hostapd and writing it would be a cap of zero clients.
+	Manages []string
 }
 
 // SectionRef identifies one UCI section: a config and a section name.
@@ -708,7 +727,10 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	// warning the operator had no control to act on.
 	switch w.Security.Mode {
 	case model.SecNone:
-		// No RSN, so no protected management frames. Nothing to write.
+		// No RSN, so no protected management frames. Written as an explicit
+		// zero rather than omitted: a WLAN switched from WPA2 to Open would
+		// otherwise keep whatever ieee80211w the last apply left on the device.
+		v["ieee80211w"] = "0"
 	case model.SecSAE, model.SecOWE:
 		// Both mandate PMF. Rendering either without it produces an AP that
 		// clients reject for reasons nobody enjoys debugging.
@@ -724,43 +746,46 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	default:
 		if w.Security.PMF != "" {
 			v["ieee80211w"] = string(w.Security.PMF)
+		} else {
+			v["ieee80211w"] = "0"
 		}
 	}
 
 	// Roaming. The mobility domain is derived, not configured — that is the
 	// whole point: every AP in the group computes the same value from the site
 	// UUID and WLAN id, with no coordination between them.
-	if w.Roaming.FT {
-		if w.Security.Mode == model.SecPSK2 && !w.Roaming.FTWithPSK2 {
-			omissions = append(omissions, Omission{WLAN: w.SSID,
-				Reason: "802.11r not rendered: it breaks some older clients on " +
-					"WPA2-PSK and the compatibility warning was not accepted"})
-		} else {
-			v["ieee80211r"] = "1"
-			v["mobility_domain"] = MobilityDomain(site.UUID, w.ID)
-			v["reassociation_deadline"] = "20000"
-			if w.Roaming.FTOverDS {
-				v["ft_over_ds"] = "1"
-			} else {
-				v["ft_over_ds"] = "0"
-			}
-		}
+	ft := w.Roaming.FT
+	if ft && w.Security.Mode == model.SecPSK2 && !w.Roaming.FTWithPSK2 {
+		omissions = append(omissions, Omission{WLAN: w.SSID,
+			Reason: "802.11r not rendered: it breaks some older clients on " +
+				"WPA2-PSK and the compatibility warning was not accepted"})
+		ft = false
 	}
-	if w.Roaming.KV {
-		v["ieee80211k"] = "1"
-		v["rrm_neighbor_report"] = "1"
-		v["rrm_beacon_report"] = "1"
-		v["bss_transition"] = "1"
-		v["wnm_sleep_mode"] = "1"
-	}
+	// Written whether it is on or off, like wds below and for the same reason,
+	// which turned out to matter far more here. Rendering nothing when the flag
+	// is off left `ieee80211r=1` on the device with the UI showing it disabled
+	// and the preview reporting no changes at all — measured on both reference
+	// devices. On Marvell that is the setting that wedges the radio after a
+	// roam (§5an), so the remedy could be chosen, applied, confirmed, and have
+	// no effect.
+	v["ieee80211r"] = boolOpt(ft)
+	v["ft_over_ds"] = boolOpt(w.Roaming.FTOverDS)
+	v["mobility_domain"] = MobilityDomain(site.UUID, w.ID)
+	v["reassociation_deadline"] = "20000"
 
-	// Options
-	if w.Options.Hidden {
-		v["hidden"] = "1"
-	}
-	if w.Options.Isolate {
-		v["isolate"] = "1"
-	}
+	kv := boolOpt(w.Roaming.KV)
+	v["ieee80211k"] = kv
+	v["rrm_neighbor_report"] = kv
+	v["rrm_beacon_report"] = kv
+	v["bss_transition"] = kv
+	v["wnm_sleep_mode"] = kv
+
+	// Options, both directions again.
+	v["hidden"] = boolOpt(w.Options.Hidden)
+	v["isolate"] = boolOpt(w.Options.Isolate)
+	// maxassoc is the exception, and the reason Section.Manages exists.
+	// `maxassoc 0` is not "no limit" to hostapd, so there is no safe value to
+	// write for "unset" — the option has to go away instead.
 	if w.Options.MaxAssoc > 0 {
 		v["maxassoc"] = strconv.Itoa(w.Options.MaxAssoc)
 	}
@@ -786,7 +811,31 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	return Section{
 		Config: "wireless", Type: "wifi-iface",
 		Name: ifaceName(w.ID, radio), Values: v,
+		Manages: wifiIfaceOptions,
 	}, omissions
+}
+
+// wifiIfaceOptions is every option renderWifiIface may write.
+//
+// Kept beside it so the two are read together: an option added above and not
+// added here is one the controller can turn on and cannot turn off.
+var wifiIfaceOptions = []string{
+	"device", "mode", "ssid", "network", "encryption", "key", "ieee80211w",
+	"ieee80211r", "ft_over_ds", "mobility_domain", "reassociation_deadline",
+	"ieee80211k", "rrm_neighbor_report", "rrm_beacon_report", "bss_transition",
+	"wnm_sleep_mode", "hidden", "isolate", "maxassoc", "wds",
+}
+
+// boolOpt renders a flag as UCI sees it, in both directions.
+//
+// The whole point is that there IS a false rendering. An option omitted when
+// its flag is off is not "off" on the device — it is whatever the last apply
+// left there, and nothing afterwards compares it.
+func boolOpt(on bool) string {
+	if on {
+		return "1"
+	}
+	return "0"
 }
 
 // ifaceName is deterministic so a re-render targets the same section rather
