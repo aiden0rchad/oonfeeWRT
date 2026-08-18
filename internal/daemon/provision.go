@@ -149,7 +149,7 @@ func needsExplanation(p api.DevicePreview) bool {
 func summarise(p *reconcile.DevicePlan) []api.Change {
 	out := make([]api.Change, 0, len(p.Plan.Ops))
 	for _, op := range p.Plan.Ops {
-		c := api.Change{Config: op.Config, Section: op.Section}
+		c := api.Change{Config: op.Config, Section: op.Section, Option: op.Option}
 		switch op.Kind {
 		case applyengine.OpAdd:
 			c.Action = "create"

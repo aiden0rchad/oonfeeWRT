@@ -586,6 +586,8 @@ export interface Change {
   config: string
   section: string
   options?: string[]
+  /** Set when only this one option is removed, not the whole section. */
+  option?: string
   /** The change writes a passphrase. The value is deliberately not here. */
   touches_key?: boolean
 }

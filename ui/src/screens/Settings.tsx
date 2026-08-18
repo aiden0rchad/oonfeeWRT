@@ -1086,21 +1086,31 @@ function Preview({ p }: { p: PreviewResult }) {
 
           {d.changes.length > 0 && (
             <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11 }}>
-              {d.changes.map((c) => (
-                <li key={`${c.config}.${c.section}`}>
+              {/* Keyed by index. Two changes can now name the SAME section —
+                  an option-to-list repair clears the option and then writes the
+                  section — so config.section is no longer unique and React was
+                  being handed duplicate keys. */}
+              {d.changes.map((c, i) => (
+                <li key={`${i}-${c.config}.${c.section}`}>
                   <span
                     style={{
                       color:
-                        c.action === 'remove'
+                        c.action === 'remove' && !c.option
                           ? 'var(--critical)'
                           : c.action === 'create'
                             ? 'var(--good)'
                             : 'var(--text-primary)',
                     }}
                   >
-                    {c.action}
+                    {/* Removing ONE option is not removing the section, and
+                        must not be painted as though it were: it is half of a
+                        repair whose other half writes the same section back. */}
+                    {c.action === 'remove' && c.option ? 'clear' : c.action}
                   </span>{' '}
-                  <code>{c.config}.{c.section}</code>
+                  <code>
+                    {c.config}.{c.section}
+                    {c.option ? `.${c.option}` : ''}
+                  </code>
                   {c.options && c.options.length > 0 && (
                     <span style={{ color: 'var(--text-muted)' }}>
                       {' '}

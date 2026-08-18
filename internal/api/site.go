@@ -33,6 +33,15 @@ type Change struct {
 	Section string `json:"section"`
 	// Options names the keys that would be written, without their values.
 	Options []string `json:"options,omitempty"`
+	// Option is set when the change removes ONE option rather than the whole
+	// section, which is what an option-to-list repair and a cleared flag both
+	// produce.
+	//
+	// Without it the preview rendered a bare "remove wireless.oowrt_bv20" in
+	// the colour it uses for destruction, for a change that deletes a single
+	// key and is immediately followed by a write to the same section. An
+	// operator reading that sees their bridge-VLAN being deleted.
+	Option string `json:"option,omitempty"`
 	// TouchesKey marks a change that writes a passphrase, so the UI can say so
 	// without the preview carrying the secret.
 	TouchesKey bool `json:"touches_key,omitempty"`

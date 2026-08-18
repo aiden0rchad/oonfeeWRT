@@ -2114,3 +2114,73 @@ func TestANoteForAMissingDeviceIsRejected(t *testing.T) {
 		t.Errorf("an unshaped section name returned %d, want 400", bad.Code)
 	}
 }
+
+// The empty radio columns must be explained by the reason they are empty.
+//
+// The note used to be one fixed sentence blaming the focused poll tier, with
+// the UI appending "Open a device to populate them." Reported by the operator
+// against a fleet where every managed radio had ZERO associated stations: the
+// clients in the grid were on other access points entirely, arriving through
+// ARP and DHCP rather than through any radio we poll. Opening a device would
+// have run a focused poll, read an empty assoclist, and changed nothing.
+//
+// The distinction is free: hostapd's get_clients runs at the BASELINE rate, so
+// the associated-station count is already known for every device on every poll.
+func TestClientsNoteNamesTheActualReasonTheRadioColumnsAreEmpty(t *testing.T) {
+	note := func(setup func(h *harness, id int64)) string {
+		t.Helper()
+		h := newHarness(t)
+		h.setup()
+		now := time.Now()
+		h.srv.Now = func() time.Time { return now }
+		dev := h.seedDevice("ap-c", true, nil)
+		if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
+			{MAC: "aa:bb:cc:11:22:33", Name: "phone", IPv4: "192.168.1.130"},
+		}, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+		setup(h, dev.ID)
+		w := h.do(http.MethodGet, "/api/v1/clients", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Note string `json:"note"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.Note
+	}
+
+	// Nobody on our radios: the honest answer, and it must NOT send the
+	// operator to open a device.
+	none := note(func(h *harness, id int64) {
+		zero := 0
+		h.fleet.clients = map[int64]*int{id: &zero}
+	})
+	if !strings.Contains(none, "no client is associated") {
+		t.Errorf("with zero associated stations the note was %q", none)
+	}
+	if strings.Contains(none, "Open a device to populate") {
+		t.Errorf("advised opening a device, which runs a focused poll against "+
+			"an empty assoclist and changes nothing: %q", none)
+	}
+
+	// Clients ARE on our radios, so the focused tier really is the reason.
+	some := note(func(h *harness, id int64) {
+		four := 4
+		h.fleet.clients = map[int64]*int{id: &four}
+	})
+	if !strings.Contains(some, "focused poll tier") {
+		t.Errorf("with associated stations the note should name the poll tier: %q", some)
+	}
+
+	// And no poll has said, which is neither of the above.
+	unknown := note(func(h *harness, id int64) {
+		h.fleet.clients = map[int64]*int{}
+	})
+	if !strings.Contains(unknown, "no poll has reported") {
+		t.Errorf("with no poll data the note was %q", unknown)
+	}
+}

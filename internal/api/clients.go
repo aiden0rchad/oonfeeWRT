@@ -115,9 +115,7 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		// the access-point column was added and not added here, and an empty
 		// column beside an explanation that does not mention it reads as a
 		// column that is broken — which is how it was first reported.
-		"note": "which access point a client is on, along with its signal and " +
-			"retry rate, comes from the focused poll tier, so all three are " +
-			"present only for devices a screen is currently watching",
+		"note": s.rfNote(ctx),
 		// The scoping caveat, in the response rather than only in the UI, so an
 		// API consumer gets it too.
 		"scope_note": "clients are scoped by which of the device's own IPv4 " +
@@ -125,6 +123,65 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 			"carrying the default route, i.e. a neighbour on the uplink rather " +
 			"than a client of this network",
 	})
+}
+
+// rfNote explains why the radio columns are empty, from the reason they
+// actually are.
+//
+// It used to be one fixed sentence — "comes from the focused poll tier, so all
+// three are present only for devices a screen is currently watching" — with
+// the UI appending "Open a device to populate them."
+//
+// That is one of three possible causes, stated as though it were the only one.
+// Reported by the operator against a fleet where every managed radio had ZERO
+// associated stations: the clients in the grid were on other access points
+// entirely, arriving through ARP and DHCP rather than through any radio we
+// poll. Opening a device would have run a focused poll, read an empty
+// assoclist, and changed nothing — advice that cannot work, for a cause that
+// was not the cause.
+//
+// The distinction costs nothing to make. hostapd's get_clients runs at the
+// BASELINE rate, so the associated-station count is already known for every
+// device on every poll; only the per-station RSSI needs the focused tier.
+//
+// Three-state, like everything else here: clients present, none present, and
+// no poll has said.
+func (s *Server) rfNote(ctx context.Context) string {
+	const focused = "which access point a client is on, along with its signal " +
+		"and retry rate, comes from the focused poll tier, so all three are " +
+		"present only for devices a screen is currently watching. Open a " +
+		"device to populate them"
+
+	if s.Fleet == nil {
+		return focused
+	}
+	devs, err := s.Store.Devices(ctx)
+	if err != nil {
+		return focused
+	}
+	var associated, known int
+	for _, d := range devs {
+		if !d.Adopted() {
+			continue
+		}
+		if n, ok := s.Fleet.LiveClients(d.ID); ok {
+			known++
+			associated += n
+		}
+	}
+	switch {
+	case known == 0:
+		return "no poll has reported how many clients are associated to this " +
+			"controller's access points yet, so whether any of these are on " +
+			"them is unknown"
+	case associated == 0:
+		return "no client is associated to any access point this controller " +
+			"manages. The rows below are hosts seen on the network through ARP " +
+			"and DHCP, and their signal, access point and retry rate belong to " +
+			"whatever is actually serving them — opening a device will not fill " +
+			"these in"
+	}
+	return focused
 }
 
 type stationRF struct {

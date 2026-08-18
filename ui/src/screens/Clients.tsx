@@ -196,8 +196,13 @@ export function Clients() {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
+      {/* The server decides what this says: the remedy differs by cause, and
+          "Open a device to populate them" used to be appended to all of them.
+          On a fleet whose radios have no associated stations at all, opening a
+          device runs a focused poll against an empty assoclist and changes
+          nothing. */}
       {withRF === 0 && rows.length > 0 && page && (
-        <Banner tone="accent">{page.note}. Open a device to populate them.</Banner>
+        <Banner tone="accent">{page.note}.</Banner>
       )}
       <div
         style={{

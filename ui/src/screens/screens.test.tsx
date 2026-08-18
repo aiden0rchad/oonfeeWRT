@@ -1603,6 +1603,63 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     expect(screen.getByText(/no 6g radio/)).toBeTruthy()
   })
 
+  // Two changes can name the SAME section: an option-to-list repair clears the
+  // option and then writes the section back. The list was keyed by
+  // `config.section`, so React got duplicate keys — and worse, the clear
+  // rendered as a bare "remove wireless.oowrt_bv20" in the colour used for
+  // destruction, which reads as the bridge-VLAN being deleted.
+  //
+  // Found by a pre-flight audit agent that crashed before reporting, and left
+  // the probe behind in a scratch file.
+  it('does not paint clearing one option as removing the section', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    api.preview.mockResolvedValue({
+      devices: [
+        {
+          device_id: 1, name: 'ap-wrt', role: 'ap', blocked: false,
+          touches_traversal: false, driver_defects: [],
+          changes: [
+            { config: 'network', section: 'oowrt_bv20', action: 'remove', option: 'ports' },
+            { config: 'network', section: 'oowrt_bv20', action: 'update', options: ['device', 'vlan'] },
+          ],
+        },
+      ],
+      site_errors: [],
+    })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalled())
+
+    // The option is named, and the word is not "remove".
+    await waitFor(() => expect(screen.getByText(/oowrt_bv20\.ports/)).toBeTruthy())
+    expect(screen.getByText('clear')).toBeTruthy()
+
+    // And React was not handed two identical keys.
+    const dupes = err.mock.calls.filter((c) => String(c[0]).includes('same key'))
+    expect(dupes.length).toBe(0)
+    err.mockRestore()
+  })
+
+  // A whole-section removal still reads as one.
+  it('still calls a whole-section removal a removal', async () => {
+    api.preview.mockResolvedValue({
+      devices: [
+        {
+          device_id: 1, name: 'ap-wrt', role: 'ap', blocked: false,
+          touches_traversal: false, driver_defects: [],
+          changes: [{ config: 'wireless', section: 'oowrt_wlan9_radio0', action: 'remove' }],
+        },
+      ],
+      site_errors: [],
+    })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('remove')).toBeTruthy())
+  })
+
   const applyBtn = () =>
     screen.getAllByText(/^Apply/).map((n) => n.closest('button')!).find(Boolean)!
 
