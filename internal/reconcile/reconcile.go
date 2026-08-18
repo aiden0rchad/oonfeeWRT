@@ -297,8 +297,37 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 			RenderedHash: s.Hash(), AppliedAt: now,
 		})
 	}
+	// Claims for sections this render deliberately did NOT decide about.
+	//
+	// ReplaceOwned replaces rather than merges, on the premise that an apply
+	// prunes every owned section absent from the document. render's Retain and
+	// Blind made that premise false on purpose: a device whose radios or ports
+	// could not be read keeps its sections rather than having them deleted.
+	// Those are still on the device and still carry our marker, so the record
+	// has to keep saying so.
+	//
+	// Dropping them is not a bookkeeping detail. daemon.ownedSections reads
+	// exactly this table to decide what un-adopt reverts, so a forgotten claim
+	// leaves oonfeeWRT's own config on a device the operator was told had been
+	// cleaned — and the fleet detail joins against it to tell our BSSes from a
+	// stranger's, so our own SSID starts reporting as foreign.
+	//
+	// Carried forward unchanged, hash and timestamp included: we did not
+	// re-apply them, so claiming we did would date a change that never
+	// happened and hand detectDrift a hash nothing ever wrote.
+	prev, err := r.Store.OwnedSections(ctx, deviceID)
+	if err != nil {
+		return res, fmt.Errorf("reconcile: applied, but could not read the "+
+			"existing ownership claims to carry forward: %w", err)
+	}
+	for _, o := range prev {
+		if p.Doc.Preserved(p.Existing, o.Config, o.Section) {
+			owned = append(owned, o)
+		}
+	}
+
 	// Replace, not merge. The apply just pruned every owned section the render
-	// no longer produces, so the device holds exactly this set — and merging
+	// decided against, so the device holds exactly this set — and merging
 	// left a claim behind for everything ever pruned.
 	if err := r.Store.ReplaceOwned(ctx, deviceID, owned); err != nil {
 		return res, fmt.Errorf("reconcile: applied but could not record ownership: %w", err)

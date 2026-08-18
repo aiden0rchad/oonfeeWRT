@@ -881,3 +881,207 @@ func TestPlanDeviceDoesNotCallOurOwnEditDrift(t *testing.T) {
 		t.Error("the edit produced no plan, so nothing would ever apply it")
 	}
 }
+
+// forceOp guarantees the plan is non-empty, and says so if it cannot.
+//
+// The mock ubus server is shared across this package and keeps what earlier
+// applies wrote, so a device may already match the site model. Apply returns
+// early on an empty plan without touching the ownership record — which would
+// let an ownership test report success having exercised none of it.
+func forceOp(t *testing.T, p *DevicePlan) {
+	t.Helper()
+	p.Plan.Ops = append(p.Plan.Ops, applyengine.Op{
+		Kind: applyengine.OpSet, Config: "wireless", Type: "wifi-iface",
+		Name: "oowrt_wlan1_radio0", Section: "oowrt_wlan1_radio0",
+		Values: map[string]string{"ssid": "forced-by-test"},
+	})
+	if p.Empty() {
+		t.Fatal("plan is still empty; Apply would return before recording ownership")
+	}
+}
+
+// An apply must not forget a claim on a section it deliberately did not touch.
+//
+// ReplaceOwned replaces rather than merges, on the premise that an apply prunes
+// every owned section absent from the document. render's Retain and Blind broke
+// that premise on purpose — a device whose radios could not be read keeps its
+// sections instead of having them deleted — so the record has to keep saying we
+// own them.
+//
+// The cost of getting this wrong is not bookkeeping. daemon.ownedSections reads
+// this exact table to decide what un-adopt reverts, so a forgotten claim leaves
+// oonfeeWRT's config on a device the operator was told had been cleaned.
+func TestApplyKeepsClaimsOnSectionsItCouldNotDecideAbout(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	// A section we own on the device that this render knows nothing about,
+	// recorded as ours by some earlier apply.
+	const orphan = "oowrt_up990_radio9"
+	if err := db.ReplaceOwned(ctx, dev.ID, []store.OwnedSection{
+		{DeviceID: dev.ID, Config: "wireless", Section: orphan,
+			RenderedHash: "old-hash", AppliedAt: 1000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	// Stand in for what render does on a device it cannot see: the section is
+	// ours on the device, absent from the document, and explicitly not pruned.
+	p.Existing.Configs["wireless"][orphan] = map[string]string{
+		".type": "wifi-iface", render.OwnershipTag: "1", "mode": "sta",
+	}
+	p.Doc.Retain = append(p.Doc.Retain,
+		render.SectionRef{Config: "wireless", Name: orphan})
+	p.Plan.Ops = append(p.Plan.Ops, p.Doc.Prune(p.Existing)...)
+	forceOp(t, p)
+
+	for _, op := range p.Plan.Ops {
+		if op.Kind == applyengine.OpDelete && op.Section == orphan {
+			t.Fatal("the retained section was staged for deletion")
+		}
+	}
+
+	res, err := r.Apply(ctx, c, dev.ID, p, func(context.Context, *ubus.Client) error { return nil })
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.Outcome != applyengine.Applied {
+		t.Fatalf("want Applied, got %s", res)
+	}
+
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept *store.OwnedSection
+	for i := range owned {
+		if owned[i].Section == orphan {
+			kept = &owned[i]
+		}
+	}
+	if kept == nil {
+		t.Fatal("the claim was dropped for a section still on the device and " +
+			"still carrying our marker: un-adopt reverts exactly this table, so " +
+			"that config can never be removed again")
+	}
+	// Carried forward unchanged. We did not re-apply it, and dating a change
+	// that never happened hands detectDrift a hash nothing ever wrote.
+	if kept.RenderedHash != "old-hash" || kept.AppliedAt != 1000 {
+		t.Errorf("the carried-forward claim was restamped: %+v", *kept)
+	}
+	// And the sections we DID render are still claimed on their own account.
+	if len(owned) != 3 {
+		t.Errorf("want the two rendered sections plus the retained one, got %d", len(owned))
+	}
+}
+
+// A claim is carried forward only for a section that is still OURS on the
+// device.
+//
+// The record is what un-adopt deletes, so a claim kept for a section a human
+// has since taken over is the controller deleting someone else's config on the
+// way out — the one thing the ownership marker exists to prevent. Same for a
+// section that is simply gone: claiming it makes the un-adopt panel promise to
+// revert something that is not there.
+func TestApplyDoesNotCarryForwardClaimsThatAreNoLongerOurs(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	// Names no other test in this package writes: the mock ubus server is
+	// shared across the package and keeps what earlier applies put there, so a
+	// reused name arrives already on the device and inverts the fixture.
+	const taken = "oowrt_up991_radio9" // a human replaced this one
+	const gone = "oowrt_mesh992_radio9"
+	if err := db.ReplaceOwned(ctx, dev.ID, []store.OwnedSection{
+		{DeviceID: dev.ID, Config: "wireless", Section: taken, RenderedHash: "h", AppliedAt: 1},
+		{DeviceID: dev.ID, Config: "wireless", Section: gone, RenderedHash: "h", AppliedAt: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	// On the device, but no longer carrying our marker.
+	p.Existing.Configs["wireless"][taken] = map[string]string{
+		".type": "wifi-iface", "mode": "sta",
+	}
+	// `gone` is absent from Existing entirely.
+	p.Doc.Blind = append(p.Doc.Blind, "wireless")
+	p.Plan.Ops = append(p.Plan.Ops, p.Doc.Prune(p.Existing)...)
+	forceOp(t, p)
+
+	if _, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range owned {
+		if o.Section == taken {
+			t.Error("kept a claim on a section a human now owns; un-adopt " +
+				"reverts this table, so the controller would delete their config")
+		}
+		if o.Section == gone {
+			t.Error("kept a claim on a section that is not on the device; the " +
+				"un-adopt panel would promise to revert something absent")
+		}
+	}
+}
+
+// A rendered section must be claimed once, not twice.
+func TestApplyClaimsEachSectionOnce(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	forceOp(t, p)
+	if _, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	// Re-plan against the device we just wrote, with the whole config blind, so
+	// every rendered section is also a candidate for carrying forward.
+	p2, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	p2.Doc.Blind = append(p2.Doc.Blind, "wireless")
+	forceOp(t, p2)
+	if _, err := r.Apply(ctx, c, dev.ID, p2,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, o := range owned {
+		seen[o.Config+"."+o.Section]++
+	}
+	for k, n := range seen {
+		if n > 1 {
+			t.Errorf("%s claimed %d times", k, n)
+		}
+	}
+}

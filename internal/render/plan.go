@@ -167,3 +167,26 @@ func sortedSections(in []Section) []Section {
 	})
 	return out
 }
+
+// Preserved reports an owned section this render deliberately left in place
+// rather than pruning — because it could not decide about it. See Doc.Retain.
+//
+// The counterpart to Prune, and it exists because the ownership RECORD has to
+// agree with what the apply actually did. ReplaceOwned replaces rather than
+// merges, on the premise that an apply prunes everything absent from the
+// document; Retain and Blind made that premise false. A claim dropped for a
+// section still sitting on the device is not a bookkeeping detail: un-adopt
+// removes exactly the sections in that record, so the controller would lose
+// the ability to clean up its own config, and the fleet detail would report
+// our own BSS as somebody else's work.
+func (d Doc) Preserved(existing Existing, config, name string) bool {
+	for _, s := range d.Sections {
+		if s.Config == config && s.Name == name {
+			return false // rendered, so already claimed on its own account
+		}
+	}
+	if !existing.OwnedIn(config, name) {
+		return false // not ours on the device, so not ours to claim
+	}
+	return d.blind(config) || d.retained(config, name)
+}
