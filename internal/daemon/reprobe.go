@@ -180,6 +180,19 @@ var errReprobeBusy = api.ErrReprobeBusy
 func (d *Daemon) logReprobe(ctx context.Context, dev *store.Device,
 	res *api.ReprobeResult, auto bool) {
 	id := dev.ID
+	// Every successful probe is recorded, changes or not.
+	//
+	// Without this there is no way to say "nothing has changed since", and the
+	// preview's capability panel had no way to be cleared: it reads the newest
+	// capabilities_changed event, and a probe that found nothing wrote nothing,
+	// so a stale loss stayed on screen for good. The operator re-probed exactly
+	// as advised and the screen did not move — advice that cannot work, which
+	// is the failure STATUS §6 warns about and this was written while fixing.
+	_ = d.Store.LogEvent(ctx, store.Event{
+		DeviceID: &id, Category: "device", Severity: "info",
+		Event:  EventCapabilitiesProbed,
+		Detail: map[string]any{"automatic": auto, "unchanged": res.Unchanged},
+	})
 	if res.Unchanged {
 		d.Log.Info("capability probe found no changes",
 			"device", dev.MAC, "automatic", auto)
@@ -213,6 +226,12 @@ func (d *Daemon) logReprobe(ctx context.Context, dev *store.Device,
 // EventCapabilitiesChanged is the event a re-probe writes. Named because the
 // preview reads it back to explain itself.
 const EventCapabilitiesChanged = "device.capabilities_changed"
+
+// EventCapabilitiesProbed is written by EVERY successful probe, including one
+// that found nothing. It is what makes "nothing has changed since" a
+// statement the preview can check, and therefore what makes re-probing a
+// remedy rather than a suggestion.
+const EventCapabilitiesProbed = "device.capabilities_probed"
 
 // recentCapabilityLoss finds the newest re-probe that changed something the
 // controller renders against.
@@ -250,6 +269,18 @@ func (d *Daemon) recentCapabilityLoss(ctx context.Context, deviceID int64) *api.
 	if err != nil {
 		d.Log.Debug("could not read capability history",
 			"device", deviceID, "err", err)
+		return nil
+	}
+	// A probe that ran later and found nothing settles it.
+	//
+	// Reading only the newest capabilities_changed event is not enough, because
+	// an unchanged probe writes no such event — so the newest one stays the
+	// newest for ever and the panel could never be cleared. The probe log is
+	// the other half: if the device has been looked at since, what the older
+	// probe saw is no longer the current word on it.
+	probed, err := d.Store.DeviceEvents(ctx, deviceID, EventCapabilitiesProbed, 1)
+	if err == nil && len(probed) > 0 && len(events) > 0 &&
+		probed[0].TS > events[0].TS {
 		return nil
 	}
 	for _, e := range events {

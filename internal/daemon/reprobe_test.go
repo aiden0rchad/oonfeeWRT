@@ -373,22 +373,62 @@ func TestACleanReprobeClearsAnEarlierLoss(t *testing.T) {
 		t.Fatal("a real loss should be offered while it is the latest word")
 	}
 
-	// A later probe that found nothing actionable is the current word.
+	// A later probe that found NOTHING AT ALL. This is the case that matters
+	// and the one the first version of this fix missed: an unchanged probe
+	// writes no capabilities_changed event, so reading only that stream leaves
+	// the stale loss newest for ever. The operator re-probed exactly as advised
+	// and the screen did not move.
 	if err := d.Store.LogEvent(ctx, store.Event{
 		TS: 2000, DeviceID: &id, Category: "device", Severity: "info",
-		Event: EventCapabilitiesChanged,
-		Detail: map[string]any{
-			"actionable": 0,
-			"changes": []map[string]any{{
-				"effect": string(capability.EffectVisible),
-				"detail": "iwinfo-survey can be checked now",
-			}},
-		},
+		Event:  EventCapabilitiesProbed,
+		Detail: map[string]any{"automatic": false, "unchanged": true},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if got := d.recentCapabilityLoss(ctx, id); got != nil {
 		t.Errorf("a superseded loss is still offered as the probable cause of "+
 			"what is missing, so re-probing can never clear it: %+v", got)
+	}
+}
+
+// An unchanged probe must leave a record that it ran.
+//
+// This is the half the first fix missed, and the operator found it: told to
+// re-probe to clear a stale capability panel, they did, and nothing moved.
+// logReprobe returned early on res.Unchanged without writing anything, so
+// there was no evidence the device had been looked at since — and the panel,
+// which reads the newest capabilities_changed event, had nothing newer to
+// compare against.
+func TestAnUnchangedProbeStillRecordsThatItRan(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	dev := &store.Device{MAC: "60:38:e0:00:00:0e", Host: "192.0.2.3", Name: "ap3"}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+
+	d.logReprobe(ctx, dev, &api.ReprobeResult{Unchanged: true}, false)
+
+	got, err := d.Store.DeviceEvents(ctx, dev.ID, EventCapabilitiesProbed, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("a probe that found nothing left no record that it ran, so " +
+			"nothing can ever say the device has been looked at since")
+	}
+
+	// And it must not be filed as a CHANGE, which would put an empty change
+	// list in front of the operator.
+	changed, err := d.Store.DeviceEvents(ctx, dev.ID, EventCapabilitiesChanged, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed) != 0 {
+		t.Errorf("an unchanged probe wrote a capabilities_changed event: %+v", changed)
 	}
 }
