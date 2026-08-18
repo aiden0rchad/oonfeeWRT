@@ -573,10 +573,21 @@ Then, in order of value:
   board looks like. Both devices should report **0 ops, 0 prunes** on an
   unchanged model; anything else is the change you just made.
 
-- **The remaining hardware gap is an APPLY, not a preview.** §5av verified the
-  read-render-plan path end to end. Nothing since §5ap has actually staged and
-  confirmed a change on a device, and `uci.set`'s option-to-list conversion is
-  now measured but the *rendered zone list* form has never been applied.
+- **The apply path is proven on hardware as of §5aw** — both devices, health
+  passed, confirm landed, verified from a fresh session, and a re-plan reports
+  0 ops. `tools/applyone <db> <host>` does one device at a time; run
+  `tools/optdiff` first, which prints the option-level diff before anything is
+  staged.
+
+  **Still never applied on hardware:** the rendered firewall-zone LIST form
+  (§5as). Neither device is a gateway, so no zone section renders on this
+  fleet — it needs a router adopted with `role=gateway` and a VLAN-aware
+  bridge.
+
+- **Check what a setting does when turned OFF, not just on.** §5aw found four
+  settings that could be turned on and not off, one of them the exact remedy
+  for the project's worst known hardware defect. `tools/stalecheck` renders the
+  live model with a flag cleared and reports what the plan would leave behind.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -4378,6 +4389,107 @@ them was reachable by a test in this repository.
 
 ---
 
+### 5aw. Turning 802.11r off did nothing at all — and the round trip that proved it
+
+**Done 2026-08-17.** The plan was a small apply against real hardware to close
+the gap §5av named. Choosing which option to toggle found the worst defect of
+the day, and the apply then became the proof that the fix works.
+
+#### A switch with no off position
+
+`plan.matches` compares only the keys we **write**. An option written under a
+condition and then no longer written is never compared and never cleared. So
+every one of these could be turned on and not off:
+
+| setting | options left on the device |
+|---|---|
+| 802.11r | `ieee80211r`, `mobility_domain`, `reassociation_deadline` |
+| 802.11k/v | `ieee80211k`, `rrm_*`, `bss_transition`, `wnm_sleep_mode` |
+| Hide SSID / client isolation | `hidden`, `isolate` |
+| client limit | `maxassoc` |
+| switching a WLAN to Open | `ieee80211w`, **and the PSK in `key`** |
+
+Measured against **both** reference devices before the fix: setting
+`Roaming.FT = false` produced **ZERO operations**. The preview reported
+*"already matches — nothing to do"*, and `ieee80211r=1` with its mobility
+domain stayed on the air.
+
+`wds` already got this right, with a comment in the same function explaining
+exactly why it writes both directions — *"a stale one is a security posture
+nobody chose"*. Four siblings beside it did not.
+
+**On the WRT3200ACM this is the sharp one.** §5an established that the radio
+wedges 85 seconds after an 802.11r roam, and the mitigation rests on turning
+something off. An operator reaching for the obvious remedy — disable fast
+transition — would get a confirmed apply, a UI showing the feature disabled,
+and a device still running FT into the next wedge. The controller would have
+lied about the one setting the project spent a day root-causing.
+
+**The fix.** Flags are written in both directions. `maxassoc` is the exception
+and the reason `Section.Manages` exists: hostapd does not read `maxassoc 0` as
+"no limit", so there is no safe value for "unset" and the option is deleted
+instead. Deletes are emitted **only** for options the device actually holds,
+because `stage()` aborts the whole batch on a failed op.
+
+`TestNoFlagChangesWhichOptionsExist` is the structural guard: turning every flag
+off must not change *which* options are written, only their values. Any future
+`if flag {` with no `else` fails it — the mistake `wds` documented and four
+siblings then made anyway.
+
+**Two existing tests asserted key ABSENCE** where the invariant is "not
+enabled", so they passed throughout and had to be corrected to assert the state.
+
+**A second defect fell out**: switching a WLAN to Open now deletes the stale
+`key`. The passphrase used to sit in `/etc/config/wireless` on a network that no
+longer had a password.
+
+#### The round trip, on both devices
+
+The first real apply since §5ap, on today's code, and the first ever to exercise
+`flatten`'s list marker, `Retain`/`Blind`, `Manages` and the ownership
+carry-forward.
+
+The change was chosen to be behaviour-neutral: `hidden: "" -> "0"` and
+`isolate: "" -> "0"`, four options per device, all writing the value UCI already
+defaults to. What is being tested is the machinery, not the setting.
+
+```
+Archer C6      2 ops   health passed, confirm landed   446ms
+WRT3200ACM     2 ops   health passed, confirm landed   134ms
+```
+
+Verified **from a fresh ubus session** on each device, because confirm is
+session-bound and the applying session's view proves nothing:
+
+- both options committed and visible on disk
+- **no staged changes left** — nothing stranded in `/tmp/.uci`
+- both radios still broadcasting `oonfee-roam`, ch36 and ch1
+- `ieee80211r` and `ieee80211w` unchanged — nothing moved that was not asked for
+- `owned_sections` re-hashed with a fresh `applied_at`, and the two devices
+  agree on both hashes, which is what identical rendered content should produce
+- a re-plan reports **0 ops, 0 prunes** on both: idempotent
+
+#### The pre-flight audit that produced nothing
+
+A five-agent adversarial audit of the apply path was run before touching
+hardware. **All five agents died on a session limit and it returned zero
+findings.** Recorded because a zero-finding result that arrives from five
+crashed agents looks exactly like a clean bill of health, and this file exists
+mostly to stop that kind of thing being believed later. The verification that
+actually happened is the one above, done by hand.
+
+#### Tools added
+
+- `tools/optdiff` — the option-level diff a plan would make, read-only. This is
+  what made the apply safe to authorise: four options, all inert, printed before
+  anything was staged.
+- `tools/applyone` — applies to ONE device, named explicitly, so a fleet cannot
+  be changed by a mistyped argument.
+- `tools/stalecheck` — renders the live model with a setting turned OFF and
+  reports what the plan would leave behind. This is what found the defect.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4734,6 +4846,15 @@ written and believed.
   `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
   means "not caught misbehaving", and the code, the docs and the field name all
   say so, because a future reader will otherwise round it to "verified".
+- **An option you stop writing is not off — it is whatever you wrote last.**
+  A reconciler that compares only the keys it currently writes cannot see a
+  setting it has stopped managing. Every conditional write needs an explicit
+  false value, or an explicit delete. §5aw: turning 802.11r off produced zero
+  operations and the preview said "already matches".
+- **Zero findings from a crashed run is not a clean bill of health.** §5aw's
+  pre-flight audit returned no findings because all five of its agents died on
+  a session limit. Check the failure count before believing a green result —
+  an empty result and a passing result look identical.
 - **A green suite against a mock proves the mock agrees with you.** §5as–§5au
   fixed nine defects without touching a device. The first run of `tools/dryrun`
   against real hardware found the reference Archer C6 being described back to
