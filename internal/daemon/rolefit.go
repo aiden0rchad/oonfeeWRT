@@ -58,7 +58,11 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 		out = append(out, fmt.Sprintf(
 			"adopted as %q, but its radios could not be listed — the check was "+
 				"refused rather than answered, so whether it has any is unknown. "+
-				"This is an access-control gap on the device, not a wrong role",
+				"This is an access-control gap on the device, not a wrong role. "+
+				"Re-adopt it so its access-control file is rewritten — the one "+
+				"the controller ships grants the calls that list radios — then "+
+				"re-probe from its screen. No WLAN renders here until they can "+
+				"be listed",
 			role))
 
 	case !role.Wireless() && radios > 0:

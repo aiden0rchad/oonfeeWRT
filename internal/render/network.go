@@ -172,7 +172,8 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			Reason: "this device did not report its wired port layout, so a VLAN " +
 				"cannot be tagged onto physical ports here. The check reads the " +
 				"board description and got nothing back — that is a gap in what " +
-				"the controller can see, not a statement about the hardware",
+				"the controller can see, not a statement about the hardware. " +
+				readoptFix,
 		})
 		return nil, omissions, none
 	case len(ports.LAN) == 0:
@@ -228,7 +229,12 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		omissions = append(omissions, Omission{
 			WLAN: n.Name,
 			Reason: fmt.Sprintf("no usable address: %q is not an IPv4 network in "+
-				"CIDR form, so this network gets a VLAN but no addressing", n.CIDR),
+				"CIDR form, so this network gets its VLAN and no gateway address "+
+				"and no DHCP — clients on it will associate and get no lease. To "+
+				"fix it: open this network and write the address with a prefix "+
+				"length, for example %q. A prefix shorter than /8 is refused as a "+
+				"typo rather than accepted as an enormous subnet.",
+				n.CIDR, exampleCIDR(n.VLAN)),
 		})
 		return out, omissions, none
 	}

@@ -579,3 +579,83 @@ func TestTheUnidentifiedHardwareRemedyMatchesWhyItFired(t *testing.T) {
 		}
 	}
 }
+
+// Every "the controller could not read this" message must end with the action
+// that fixes it.
+//
+// Each of them stopped at the diagnosis. That half is right — a refused check
+// is not a missing capability — but an operator told "the check could not run"
+// and nothing else knows they have a problem and not what moves it. The ACL
+// the controller ships grants all of these calls, and adoption is what writes
+// it, so there is one action and it was in none of the messages.
+func TestUnreadableMessagesSayWhatToDoAboutIt(t *testing.T) {
+	says := func(t *testing.T, reasons []string, what string) {
+		t.Helper()
+		for _, r := range reasons {
+			if strings.Contains(r, what) && !strings.Contains(r, "Re-adopt") {
+				t.Errorf("names a gap in what we can see and no way to close it: %q", r)
+			}
+		}
+	}
+	collect := func(rep Report) []string {
+		var out []string
+		for _, o := range rep.Omissions {
+			out = append(out, o.Reason)
+		}
+		return out
+	}
+
+	// Mesh and uplink gates, both undetermined.
+	caps := capability.NewRegistry()
+	caps.Radios = []capability.Radio{
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 5180, Hardware: "Generic MAC80211"},
+	}
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Set(capability.FeatMesh, capability.NotObservable)
+	site := wirelessSite()
+	site.WLANs = nil
+	site.Meshes = []model.Mesh{{ID: 1, MeshID: "bh", NetworkID: 1, GroupID: 1,
+		Band: model.Band5G, Key: "not-a-real-key", Enabled: true}}
+	_, rep, err := Render(site, model.Device{ID: 1, Role: model.RoleAP}, caps, ourWireless())
+	if err != nil {
+		t.Fatal(err)
+	}
+	says(t, collect(rep), "gap in what the controller can see")
+
+	// An unreadable board description, on a device that wants a VLAN.
+	_, rep, err = Render(gatewaySite(), model.Device{ID: 1, Role: model.RoleGateway},
+		capability.NewRegistry(), Existing{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	says(t, collect(rep), "gap in what the controller can see")
+}
+
+// A malformed address must show a good one, not describe the format.
+func TestABadAddressIsShownAGoodOne(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Ports = capability.Ports{Bridge: "br-lan", LAN: []string{"lan1"}}
+	site := gatewaySite()
+	site.Networks[0].CIDR = "10.0.20.1"
+	_, rep, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		caps, vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, o := range rep.Omissions {
+		if !strings.Contains(o.Reason, "no usable address") {
+			continue
+		}
+		found = true
+		if !strings.Contains(o.Reason, "/24") {
+			t.Errorf("no example of a good address: %q", o.Reason)
+		}
+		if !strings.Contains(o.Reason, "get no lease") {
+			t.Errorf("does not say what goes wrong for a client: %q", o.Reason)
+		}
+	}
+	if !found {
+		t.Fatal("a malformed CIDR produced no omission")
+	}
+}

@@ -183,8 +183,19 @@ func TestForeignSectionWithOurNameIsAConflict(t *testing.T) {
 	if !rep.HasConflicts() {
 		t.Fatal("a section with our name that is not ours must be a conflict")
 	}
-	if !strings.Contains(rep.Conflicts[0].Reason, "not ours") {
-		t.Errorf("the conflict should say why: %q", rep.Conflicts[0].Reason)
+	// Why, and what to do about it. A conflict BLOCKS the whole apply, so a
+	// reason that stops at "refusing to overwrite config we did not write"
+	// leaves the operator with a device that will not take any change and no
+	// idea which lever moves it.
+	reason := rep.Conflicts[0].Reason
+	if !strings.Contains(reason, "ownership marker") {
+		t.Errorf("the conflict does not say why: %q", reason)
+	}
+	if !strings.Contains(reason, "To unblock this apply") {
+		t.Errorf("the conflict does not say how to unblock it: %q", reason)
+	}
+	if !strings.Contains(reason, "oowrt_wlan3_radio0") {
+		t.Errorf("the conflict does not name the section: %q", reason)
 	}
 }
 

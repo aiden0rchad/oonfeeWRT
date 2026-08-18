@@ -507,16 +507,28 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			if vals, exists := existing.In("wireless")[name]; exists && vals[OwnershipTag] != "1" {
 				rep.Conflicts = append(rep.Conflicts, Conflict{
 					Config: "wireless", Section: name,
-					Reason: "a section with our name exists but is not ours; " +
-						"refusing to overwrite config we did not write",
+					Reason: "a section named " + name + " already exists in " +
+						"wireless without oonfeeWRT's ownership marker (option " +
+						OwnershipTag + " '1'), so it was written by hand or by an " +
+						"older install — and oonfeeWRT never overwrites config it " +
+						"did not write. To unblock this apply, either rename or " +
+						"delete that section on the device, or, if it really is " +
+						"ours from a previous install, add `option " + OwnershipTag +
+						" '1'` to it so the controller adopts it.",
 				})
 				continue
 			}
 			if other, clash := foreignSSIDOnRadio(existing, radio, w.SSID, name); clash {
 				rep.Conflicts = append(rep.Conflicts, Conflict{
 					Config: "wireless", Section: other,
-					Reason: fmt.Sprintf("SSID %q is already published on %s by a "+
-						"section we do not own", w.SSID, radio),
+					Reason: fmt.Sprintf("SSID %q is already published on %s by "+
+						"wireless.%s, which oonfeeWRT did not write — and it never "+
+						"edits config it did not write, so nothing is applied to "+
+						"this device until that is settled. Two APs answering for "+
+						"one SSID with different keys fails in a way nobody enjoys "+
+						"debugging. To unblock it: delete or rename that section on "+
+						"the device, or change this WLAN's SSID here.",
+						w.SSID, radio, other),
 				})
 				continue
 			}
@@ -626,8 +638,13 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		if vals, exists := existing.In("wireless")[name]; exists && vals[OwnershipTag] != "1" {
 			rep.Conflicts = append(rep.Conflicts, Conflict{
 				Config: "wireless", Section: name,
-				Reason: "a section with our name exists but is not ours; " +
-					"refusing to overwrite config we did not write",
+				Reason: "a section named " + name + " already exists in wireless " +
+					"without oonfeeWRT's ownership marker (option " + OwnershipTag +
+					" '1'), so it was written by hand or by an older install — and " +
+					"oonfeeWRT never overwrites config it did not write. To unblock " +
+					"this apply, rename or delete that section on the device, or add " +
+					"`option " + OwnershipTag + " '1'` to it if it really is ours " +
+					"from a previous install.",
 			})
 			continue
 		}
@@ -1076,8 +1093,13 @@ func addOwned(doc *Doc, rep *Report, existing Existing, sec Section) {
 	if vals, exists := existing.In(sec.Config)[sec.Name]; exists && vals[OwnershipTag] != "1" {
 		rep.Conflicts = append(rep.Conflicts, Conflict{
 			Config: sec.Config, Section: sec.Name,
-			Reason: "a section with our name exists but is not ours; " +
-				"refusing to overwrite config we did not write",
+			Reason: "a section named " + sec.Name + " already exists in " +
+				sec.Config + " without oonfeeWRT's ownership marker (option " +
+				OwnershipTag + " '1'), so it was written by hand or by an older " +
+				"install — and oonfeeWRT never overwrites config it did not " +
+				"write. To unblock this apply, rename or delete that section on " +
+				"the device, or add `option " + OwnershipTag + " '1'` to it if it " +
+				"really is ours from a previous install.",
 		})
 		return
 	}
@@ -1123,4 +1145,25 @@ func unreadableFix(caps *capability.Registry) string {
 	}
 	return "Apply a WLAN and re-probe; once a radio is broadcasting it reports " +
 		"what it is."
+}
+
+// readoptFix is the action behind every "the controller could not read this"
+// message, said once so the four that share it cannot drift apart.
+//
+// Each of them stopped at the diagnosis. That is the honest half — a refused
+// check is not a missing capability — but an operator reading "the check could
+// not run" and nothing else has been told they have a problem and not what
+// moves it. The ACL the controller ships grants every one of these calls, and
+// adoption is what writes it.
+const readoptFix = "Re-adopt this device from the Devices screen — adoption " +
+	"rewrites its access-control file, and the one the controller ships grants " +
+	"this — then re-probe from the device's screen."
+
+// exampleCIDR is a plausible address for a VLAN, for use in an error about a
+// malformed one. Concrete beats "in CIDR form".
+func exampleCIDR(vlan int) string {
+	if vlan < 1 || vlan > 254 {
+		return "192.168.20.1/24"
+	}
+	return fmt.Sprintf("192.168.%d.1/24", vlan)
 }

@@ -118,7 +118,7 @@ func MeshGate(caps *capability.Registry) (bool, string) {
 		return false, "802.11s support could not be established on this device, " +
 			"so no mesh interface is rendered. The check reads which wpad build " +
 			"is installed and could not; that is a gap in what the controller " +
-			"can see, not a statement that the device lacks mesh"
+			"can see, not a statement that the device lacks mesh. " + readoptFix
 	case !st.Decided():
 		// No entry at all, which is not the same as a refused one and not
 		// remotely the same as "no". A record written before this controller

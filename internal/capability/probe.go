@@ -181,7 +181,11 @@ func probeSwitchAndFirewall(ctx context.Context, c *ubus.Client, r *Registry) {
 	}
 	if err := c.Call(ctx, "luci-rpc", "getNetworkDevices", nil, &devs); err != nil {
 		r.Set(FeatDSA, NotObservable)
-		r.Note("DSA undetermined: luci-rpc.getNetworkDevices denied (%v)", err)
+		r.Note("DSA undetermined: luci-rpc.getNetworkDevices denied (%v). "+
+			"The Ports screen stays hidden while this is unknown, because a "+
+			"port map the controller cannot verify is worse than none. "+
+			"Re-adopt the device so its access-control file is rewritten — the "+
+			"one the controller ships grants luci-rpc — then re-probe", err)
 	} else {
 		found := Absent
 		for _, d := range devs {
@@ -410,7 +414,10 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		r.Set(FeatSurvey, NotObservable)
 		r.Set(FeatAirtimeSplit, NotObservable)
 		r.Set(FeatHostapdControl, NotObservable)
-		r.Note("radios undetermined: iwinfo.devices denied (%v)", err)
+		r.Note("radios undetermined: iwinfo.devices denied (%v). "+
+			"No WLAN can be rendered for this device until its radios can be "+
+			"listed. Re-adopt it so its access-control file is rewritten — the "+
+			"one the controller ships grants iwinfo — then re-probe", err)
 		return
 	}
 
@@ -456,7 +463,11 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		r.Set(FeatNeighborReport, NotObservable)
 		r.Note("radios undetermined: luci-rpc.getWirelessDevices failed (%v) "+
 			"and iwinfo listed no broadcasting interface, so nothing "+
-			"enumerated this device's radios", listErr)
+			"enumerated this device's radios. If the call was refused, re-adopt "+
+			"the device so its access-control file is rewritten — the one the "+
+			"controller ships grants luci-rpc — then re-probe. If it failed for "+
+			"another reason the device is answering some calls and not others, "+
+			"and its log is the next place to look", listErr)
 		return
 	}
 

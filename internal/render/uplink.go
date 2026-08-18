@@ -115,7 +115,7 @@ func UplinkGate(caps *capability.Registry) (bool, string) {
 			"not be established — the installed-package list, which is the only " +
 			"source that says whether a supplicant is present, could not be " +
 			"read. That is a gap in what the controller can see, not a " +
-			"statement about the device"
+			"statement about the device. " + readoptFix
 	case !st.Decided():
 		return false, "this device's capability record has no answer about " +
 			"joining a network over the air: the check never ran here, most " +
