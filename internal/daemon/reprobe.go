@@ -231,7 +231,22 @@ const EventCapabilitiesChanged = "device.capabilities_changed"
 // undecodable detail blob. A wrong explanation is worse than none, because an
 // operator will act on it.
 func (d *Daemon) recentCapabilityLoss(ctx context.Context, deviceID int64) *api.CapabilityCause {
-	events, err := d.Store.DeviceEvents(ctx, deviceID, EventCapabilitiesChanged, 5)
+	// Only the MOST RECENT capability event, and only if it is still actionable.
+	//
+	// This used to read five and return the first actionable one, skipping past
+	// anything newer that was not — so a loss stayed pinned to the preview
+	// until five further capability events pushed it out. A clean re-probe did
+	// not supersede it, which makes "re-probe to settle it" advice that cannot
+	// work: the newest probe says the device is fine and the screen keeps
+	// quoting an older one.
+	//
+	// The latest probe is the current word on the device. If it found nothing
+	// actionable, there is nothing here to explain the omissions above.
+	//
+	// Observed on the reference WRT3200ACM: a 39-hour-old event claiming
+	// "radio radio0 is gone" was still being offered as the probable cause of
+	// two VLAN omissions, about a radio that was up and carrying the SSID.
+	events, err := d.Store.DeviceEvents(ctx, deviceID, EventCapabilitiesChanged, 1)
 	if err != nil {
 		d.Log.Debug("could not read capability history",
 			"device", deviceID, "err", err)

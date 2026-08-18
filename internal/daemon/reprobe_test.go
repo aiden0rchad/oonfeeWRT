@@ -330,3 +330,65 @@ func TestOnlyRowsWithSomethingUnexplainedGetACause(t *testing.T) {
 		}
 	}
 }
+
+// A clean re-probe must supersede an earlier loss.
+//
+// This scanned back through five events and returned the first ACTIONABLE
+// one, skipping anything newer that was not — so a loss stayed pinned to the
+// apply preview until five further capability events pushed it out. A
+// successful re-probe did not clear it, which makes "re-probe to settle it"
+// advice that cannot work: the newest probe says the device is fine and the
+// screen keeps quoting an older one.
+//
+// Observed on the reference WRT3200ACM: a 39-hour-old event claiming "radio
+// radio0 is gone" was still being offered as the probable cause of two VLAN
+// omissions, about a radio that was up and carrying the SSID.
+func TestACleanReprobeClearsAnEarlierLoss(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "operator passphrase"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	dev := &store.Device{MAC: "60:38:e0:00:00:0d", Host: "192.0.2.2", Name: "ap2"}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	id := dev.ID
+
+	if err := d.Store.LogEvent(ctx, store.Event{
+		TS: 1000, DeviceID: &id, Category: "device", Severity: "warning",
+		Event: EventCapabilitiesChanged,
+		Detail: map[string]any{
+			"actionable": 1,
+			"changes": []map[string]any{{
+				"effect": string(capability.EffectLost),
+				"detail": "radio phy1 is gone",
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.recentCapabilityLoss(ctx, id); got == nil {
+		t.Fatal("a real loss should be offered while it is the latest word")
+	}
+
+	// A later probe that found nothing actionable is the current word.
+	if err := d.Store.LogEvent(ctx, store.Event{
+		TS: 2000, DeviceID: &id, Category: "device", Severity: "info",
+		Event: EventCapabilitiesChanged,
+		Detail: map[string]any{
+			"actionable": 0,
+			"changes": []map[string]any{{
+				"effect": string(capability.EffectVisible),
+				"detail": "iwinfo-survey can be checked now",
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.recentCapabilityLoss(ctx, id); got != nil {
+		t.Errorf("a superseded loss is still offered as the probable cause of "+
+			"what is missing, so re-probing can never clear it: %+v", got)
+	}
+}
