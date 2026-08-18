@@ -106,14 +106,25 @@ func meshIfaceName(meshID int, radio string) string {
 // already have is worse than saying nothing, and that is exactly what this
 // message did until a real apply exposed it (§5q).
 func MeshGate(caps *capability.Registry) (bool, string) {
-	switch caps.State(capability.FeatMesh) {
-	case capability.Present:
+	st := caps.State(capability.FeatMesh)
+	switch {
+	case st == capability.Present:
 		return true, ""
-	case capability.NotObservable:
+	case st == capability.NotObservable:
 		return false, "802.11s support could not be established on this device, " +
 			"so no mesh interface is rendered. The check reads which wpad build " +
 			"is installed and could not; that is a gap in what the controller " +
 			"can see, not a statement that the device lacks mesh"
+	case !st.Decided():
+		// No entry at all, which is not the same as a refused one and not
+		// remotely the same as "no". A record written before this controller
+		// knew to ask has no key for the feature, so this is what every device
+		// adopted before mesh support existed reports.
+		return false, "this device's capability record has no answer about " +
+			"802.11s: the check never ran here, most often because the record " +
+			"predates it. Re-probe the device from its screen, and re-adopt it " +
+			"if that does not fill the answer in. Nothing about this says the " +
+			"device lacks mesh"
 	}
 	if caps.HasQuirk("mac80211", "mesh-point") {
 		return false, "this device's wireless driver will not run an 802.11s " +

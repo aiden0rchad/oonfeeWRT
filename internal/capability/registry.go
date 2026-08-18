@@ -47,6 +47,25 @@ func (s State) String() string {
 // showing a feature we cannot back with data is worse than omitting it.
 func (s State) Buildable() bool { return s == Present }
 
+// Decided reports whether the check produced an answer ABOUT THE DEVICE.
+//
+// Present and Absent are answers. Unknown and NotObservable are not, and the
+// difference between those two is about us rather than about the device: one
+// check was refused, the other never ran at all. Both must render as "we do not
+// know".
+//
+// This exists because every gate in the tree switched on NotObservable alone
+// and let Unknown fall through to the Absent branch — so a device whose record
+// simply had no entry for a feature was told, in a complete sentence, that its
+// hardware lacks it and which package to install to fix that. Buildable() has
+// grouped the two correctly since the package was written; nothing else did.
+//
+// Unknown is not exotic. A capability record is JSON, and a record written
+// before a Feature existed has no key for it, so EVERY device adopted before a
+// feature was added reads Unknown for it — permanently, until re-probed. Any
+// new Feature makes this reachable on the whole existing fleet at once.
+func (s State) Decided() bool { return s == Present || s == Absent }
+
 // Feature names a capability the UI gates on.
 type Feature string
 

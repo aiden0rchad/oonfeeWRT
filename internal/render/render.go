@@ -409,7 +409,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// FeatSurvey NotObservable with no radios, which is exactly the pair to
 	// test for — Absent with no radios really is a device without wireless.
 	radiosUnknown := caps == nil || (len(caps.Radios) == 0 &&
-		caps.State(capability.FeatSurvey) == capability.NotObservable)
+		!caps.State(capability.FeatSurvey).Decided())
 	if radiosUnknown {
 		doc.Blind = append(doc.Blind, "wireless")
 	}
@@ -623,7 +623,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// already tells them apart.
 	unreadable := caps != nil &&
 		((len(caps.Radios) > 0 && !capability.HardwareIdentified(caps)) ||
-			(len(caps.Radios) == 0 && caps.State(capability.FeatSurvey) == capability.NotObservable))
+			(len(caps.Radios) == 0 && !caps.State(capability.FeatSurvey).Decided()))
 	reportBlind(&doc, &rep, existing)
 	if unreadable {
 		rep.addWarning(Warning{
@@ -918,7 +918,7 @@ func withLiveChannels(caps *capability.Registry, existing Existing) *capability.
 // The whole reason Retain exists: Absent and NotObservable both render
 // nothing, and only one of them is a decision.
 func undetermined(caps *capability.Registry, f capability.Feature) bool {
-	return caps != nil && caps.State(f) == capability.NotObservable
+	return caps != nil && !caps.State(f).Decided()
 }
 
 // retain marks a section Prune must not delete, and tells the operator when

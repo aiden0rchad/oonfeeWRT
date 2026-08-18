@@ -105,15 +105,21 @@ func uplinkIfaceName(uplinkID int, radio string) string {
 // shape of that failure, so the first person to hit it knows what they are
 // looking at rather than rediscovering §5q from scratch.
 func UplinkGate(caps *capability.Registry) (bool, string) {
-	switch caps.State(capability.FeatWirelessUplink) {
-	case capability.Present:
+	st := caps.State(capability.FeatWirelessUplink)
+	switch {
+	case st == capability.Present:
 		return true, ""
-	case capability.NotObservable:
+	case st == capability.NotObservable:
 		return false, "whether this device can join a network over the air could " +
 			"not be established — the installed-package list, which is the only " +
 			"source that says whether a supplicant is present, could not be " +
 			"read. That is a gap in what the controller can see, not a " +
 			"statement about the device"
+	case !st.Decided():
+		return false, "this device's capability record has no answer about " +
+			"joining a network over the air: the check never ran here, most " +
+			"often because the record predates it. Re-probe the device from its " +
+			"screen, and re-adopt it if that does not fill the answer in"
 	}
 	return false, "this device has no wireless supplicant installed, so it can " +
 		"serve a network and cannot join one. Installing a wpad-* package would " +

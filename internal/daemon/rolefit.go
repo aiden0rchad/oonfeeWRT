@@ -40,7 +40,10 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 	// FeatSurvey is the tell. probeRadios sets it NotObservable on the
 	// early-return path and resolves it from evidence otherwise, so it
 	// separates "asked, none" from "could not ask" without a second call.
-	wirelessObservable := caps.State(capability.FeatSurvey) != capability.NotObservable
+	// Decided, not "!= NotObservable": a record with no entry for FeatSurvey is
+	// not evidence that the device reported no radios, and saying so sends the
+	// operator to change a role that was right.
+	wirelessObservable := caps.State(capability.FeatSurvey).Decided()
 
 	switch {
 	case role.Wireless() && radios == 0 && wirelessObservable:

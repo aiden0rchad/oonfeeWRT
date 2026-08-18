@@ -278,12 +278,18 @@ func (d *Daemon) readNeighbourState(ctx context.Context, dev *store.Device,
 	// written to a device exactly twice in its life. Reporting that as "this
 	// device cannot" would send an operator hunting for a hardware limit that
 	// does not exist, so the message names the actual remedy.
-	switch caps.State(capability.FeatNeighborReport) {
-	case capability.Present:
-	case capability.NotObservable:
+	st := caps.State(capability.FeatNeighborReport)
+	switch {
+	case st == capability.Present:
+	case !st.Decided():
+		// Covers both "the check was refused" and "no answer was ever
+		// recorded". They lead to the same remedy here, and neither is a
+		// statement that the hostapd lacks the methods — which is what the
+		// default branch below says, and what Unknown used to be told.
 		row.Skipped = "this device has not been shown to accept neighbour " +
-			"lists. Most often that is an ACL written before this feature " +
-			"existed — re-adopt the device to refresh it, then re-probe"
+			"lists. Most often that is an ACL or a capability record written " +
+			"before this feature existed — re-adopt the device to refresh it, " +
+			"then re-probe"
 		return row
 	default:
 		row.Skipped = "this device's hostapd does not carry the 802.11k " +

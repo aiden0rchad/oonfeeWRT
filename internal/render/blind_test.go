@@ -373,3 +373,83 @@ func TestNilCapabilityRecordIsNothingKnown(t *testing.T) {
 		t.Errorf("deleted %v with no capability record to decide from", got)
 	}
 }
+
+// A capability record with NO entry for a feature must not be reported as the
+// device lacking it.
+//
+// Unknown is the zero value, and a capability record is JSON: a record written
+// before a Feature existed simply has no key for it. So every device adopted
+// before a feature was added reads Unknown for it, permanently, until
+// re-probed — which makes this reachable across the whole existing fleet the
+// moment any new Feature is added.
+//
+// The gates switched on NotObservable alone, so Unknown fell through to the
+// Absent branch and produced a definite claim about the hardware, complete
+// with a package to install. §5q is explicit that telling someone to install a
+// package they already have is worse than saying nothing.
+func TestUnknownFeatureIsNotReportedAsAbsent(t *testing.T) {
+	unprobed := capability.NewRegistry() // every feature Unknown
+
+	ok, why := MeshGate(unprobed)
+	if ok {
+		t.Fatal("an unprobed device was allowed to render a mesh")
+	}
+	for _, forbidden := range []string{"does not carry", "Installing a wpad"} {
+		if strings.Contains(why, forbidden) {
+			t.Errorf("MeshGate claims the device lacks mesh from a check that "+
+				"never ran: %q", why)
+		}
+	}
+
+	ok, why = UplinkGate(unprobed)
+	if ok {
+		t.Fatal("an unprobed device was allowed to render an uplink")
+	}
+	for _, forbidden := range []string{"has no wireless supplicant", "Installing a wpad"} {
+		if strings.Contains(why, forbidden) {
+			t.Errorf("UplinkGate claims the device lacks a supplicant from a "+
+				"check that never ran: %q", why)
+		}
+	}
+
+	// A device that really was checked still gets the plain answer, or this is
+	// just a way of never saying anything.
+	decided := capability.NewRegistry()
+	decided.Set(capability.FeatMesh, capability.Absent)
+	decided.Set(capability.FeatWirelessUplink, capability.Absent)
+	if _, why := MeshGate(decided); !strings.Contains(why, "does not carry") {
+		t.Errorf("a device known to lack mesh should say so plainly: %q", why)
+	}
+	if _, why := UplinkGate(decided); !strings.Contains(why, "no wireless supplicant") {
+		t.Errorf("a device known to lack a supplicant should say so: %q", why)
+	}
+}
+
+// And the same state must protect the interface from Prune, for the same
+// reason it protects a NotObservable one: neither is a decision.
+func TestUnknownFeatureAlsoKeepsTheInterface(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Radios = []capability.Radio{
+		{Device: "phy1-ap0", Phy: "phy1", Frequency: 5180, Hardware: "Generic MAC80211"},
+	}
+	caps.Set(capability.FeatSurvey, capability.Present)
+	// FeatMesh deliberately never set: the record has no entry for it.
+
+	site := wirelessSite()
+	site.WLANs = nil
+	site.Meshes = []model.Mesh{{ID: 1, MeshID: "bh", NetworkID: 1, GroupID: 1,
+		Band: model.Band5G, Key: "not-a-real-key", Enabled: true}}
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {
+			"radio1":             {".type": "wifi-device", "band": "5g"},
+			"oowrt_mesh1_radio1": {".type": "wifi-iface", OwnershipTag: "1", "mesh_id": "bh"},
+		},
+	})
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleAP}, caps, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := deleteOps(t, doc, existing); len(got) != 0 {
+		t.Errorf("deleted %v because the record had no entry for mesh support", got)
+	}
+}
