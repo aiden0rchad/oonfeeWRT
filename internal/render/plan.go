@@ -43,13 +43,15 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 		}
 		// An option that has to become a LIST is deleted first.
 		//
-		// Whether rpcd's uci.set converts a string option into a list when
-		// handed a JSON array is NOT something this project has measured, and
-		// the failure it would produce is the silent one: the section is
-		// accepted, stored in a form netifd ignores, and the apply confirms
-		// healthy. Deleting the option first makes the conversion deterministic
-		// under either behaviour, and costs one staged call in the only case
-		// that needs it — a section an older version of us wrote wrong.
+		// Measured 2026-08-17 (IMPLEMENTATION §14): rpcd's uci.set DOES convert
+		// a string option into a list when handed a JSON array, so this delete
+		// is not required for the conversion on the reference firmware.
+		//
+		// It stays. One firmware is measured, the failure if another does not
+		// convert is the silent one — accepted, stored in a form netifd
+		// ignores, apply confirms healthy — and this costs a single staged call
+		// in the only case that reaches it, a section an older version of us
+		// wrote wrong.
 		//
 		// Staged before the set: applyengine preserves op order through
 		// ubus.Batch, and nothing commits until uci.apply.

@@ -506,8 +506,18 @@ func (e *Engine) awaitRevert(ctx context.Context, applier *ubus.Client, plan Pla
 }
 
 // preApply is what each planned option held before anything was staged, keyed
-// by config/section/option. A missing entry means the read failed; an entry
-// with found=false means the option was not there.
+// by config/section/option. A missing entry means the read failed.
+//
+// found is vestigial on the reference firmware and the reason is worth knowing.
+// Measured 2026-08-17 (IMPLEMENTATION §14): rpcd answers a missing OPTION — and
+// a missing section — with status 0 and an empty body, never NotFound or
+// NoData. So the branch below that would set found=false cannot fire here, and
+// an option that does not exist is recorded as found=true with an empty value.
+//
+// planStillApplied is unaffected, because it only asks whether the value equals
+// what was written and "" never equals a non-empty want: a reverted add still
+// reads as reverted. The branch is kept as insurance for builds that answer
+// with a status, which is why this says so rather than deleting it.
 type preApply map[[3]string]struct {
 	value string
 	found bool

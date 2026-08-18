@@ -1175,6 +1175,52 @@ separately, staged as JSON arrays, and the section hash covers them — a
 bridge-VLAN whose port membership changed but whose options did not is a real
 change.
 
+### uci.get and uci.set semantics, measured 2026-08-17
+
+Settled against the Archer C6 (OpenWrt 25.12.5 r33051) over rpcd, staged only
+and reverted — `/etc/config` untouched, verified by re-reading the config from a
+fresh session afterwards.
+
+**`uci.set` with a JSON array DOES convert an existing string option into a
+list.** Set `probe` to `"a b"`, then `uci.set` the same key with `["a","b"]`:
+the value reads back as a JSON array. An explicit `uci.delete` of the option
+first is therefore *not required* for the conversion.
+
+`render.Doc.Plan` deletes it first anyway, and that stays. The conversion is
+measured on one firmware; the failure if a different build does not convert is
+the silent one — accepted, stored in a form netifd ignores, apply confirms
+healthy — and the delete costs one staged call in the only case that reaches
+it, a section an older version of the controller wrote wrong.
+
+**A missing config is status 4; a config the ACL does not grant is status 6.**
+Distinct, and `reconcile.isMissingConfig` keys on 4, which is correct. Measured
+using `oonfeewrt_probe`, which the ACL grants and which has no file on disk
+(status 4), against `ddns`, which is absent from the ACL (status 6). A name that
+is neither granted nor present reports 6, because the ACL is consulted first —
+so "status 6" alone does not mean the config exists.
+
+**A missing OPTION returns status 0 with an empty body, never 4 or 5.** So does
+a missing section, when queried as `{config, section, option}`:
+
+| query | status | body |
+|---|---|---|
+| existing option | 0 | `{"value":"lan"}` |
+| missing option, existing section | 0 | `{}` |
+| missing section | 0 | `{}` |
+| config not in the ACL | 6 | `{}` |
+
+This makes `applyengine.snapshotPlanned`'s `StatusNotFound`/`StatusNoData`
+branch unreachable on this firmware: a missing option is recorded as
+`found=true, value=""` rather than `found=false`. The verdict is unaffected —
+`planStillApplied` only asks whether the value equals what was written, and an
+empty string never equals a non-empty one, so a reverted add still reads as
+reverted. The branch is kept as insurance for builds that answer differently,
+and `preApply`'s doc no longer claims a `found=false` entry can occur here.
+
+The wider point: **an empty answer from rpcd is not always an error status.**
+Any check that distinguishes "absent" by waiting for a non-zero status will
+silently never fire against this firmware.
+
 ---
 
 ## 15. 802.11k neighbour reports, measured
