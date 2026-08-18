@@ -1,6 +1,15 @@
 package capability
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
+)
+
+var errBroken = errors.New("malformed batch response")
+
+func denied() error { return &ubus.StatusError{Status: ubus.StatusPermissionDenied} }
 
 // Present and Absent are answers about the device. Unknown and NotObservable
 // are not, and every gate in the tree used to switch on NotObservable alone —
@@ -41,5 +50,32 @@ func TestTheZeroStateIsUnknown(t *testing.T) {
 		if r.State(f).Decided() {
 			t.Errorf("%s reports a decision on an unprobed registry", f)
 		}
+	}
+}
+
+// A member call the ACL refused says nothing about whether the device batches.
+//
+// The batch was carried, answered and correlated — which is exactly what this
+// check tests — and one probe inside it was not granted. Recorded as Absent
+// that reads as "this device mishandles batches" and drops every poll to
+// sequential calls for the life of the adoption, which is a verdict spent
+// silently, forever, on evidence that was never gathered.
+func TestBatchingIsNotJudgedByARefusedMemberCall(t *testing.T) {
+	if got := batchVerdict(2, denied(), nil); got != NotObservable {
+		t.Errorf("a denied member call gave %s, want not-observable", got)
+	}
+	if got := batchVerdict(2, nil, denied()); got != NotObservable {
+		t.Errorf("a denied second member call gave %s, want not-observable", got)
+	}
+	// A device that genuinely mishandles the batch is still Absent, or the
+	// sequential-poll fallback could never be selected.
+	if got := batchVerdict(1, nil, nil); got != Absent {
+		t.Errorf("a short batch gave %s, want absent", got)
+	}
+	if got := batchVerdict(2, errBroken, nil); got != Absent {
+		t.Errorf("a failed member call gave %s, want absent", got)
+	}
+	if got := batchVerdict(2, nil, nil); got != Present {
+		t.Errorf("a clean batch gave %s, want present", got)
 	}
 }

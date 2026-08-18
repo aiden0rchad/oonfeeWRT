@@ -118,16 +118,53 @@ func probeBatching(ctx context.Context, c *ubus.Client, r *Registry) {
 		{Object: "system", Method: "info"},
 		{Object: "system", Method: "board"},
 	})
-	switch {
-	case err != nil:
+	if err != nil {
 		r.Set(FeatBatching, NotObservable)
 		r.Note("batching check failed: %v", err)
-	case len(res) == 2 && res[0].Err == nil && res[1].Err == nil:
-		r.Set(FeatBatching, Present)
-	default:
-		r.Set(FeatBatching, Absent)
-		r.Note("device did not answer a 2-call batch correctly; polls will be sequential")
+		return
 	}
+	var err0, err1 error
+	if len(res) > 0 {
+		err0 = res[0].Err
+	}
+	if len(res) > 1 {
+		err1 = res[1].Err
+	}
+	state := batchVerdict(len(res), err0, err1)
+	r.Set(FeatBatching, state)
+	switch state {
+	case Absent:
+		r.Note("device did not answer a 2-call batch correctly; polls will be sequential")
+	case NotObservable:
+		r.Note("batching undetermined: the batch was carried and correlated, " +
+			"but a call inside it was refused by the ACL, so whether this " +
+			"device batches correctly was never actually tested")
+	}
+}
+
+// batchVerdict decides FeatBatching from what came back.
+//
+// Split out so the rule is testable without a device, like meshFromPackages,
+// and because the rule is the whole content of the check.
+//
+// The case worth naming: a member call the ACL REFUSED says nothing about
+// whether the device batches. The batch was carried, answered and correlated —
+// exactly what this tests — and one probe inside it was not granted. Recorded
+// as Absent that reads as "this device mishandles batches" and drops every
+// poll to sequential calls for the life of the adoption. Every other probe in
+// this file separates denied from failed; this one did not, and it is the one
+// whose verdict is spent silently, on every poll, forever.
+func batchVerdict(n int, err0, err1 error) State {
+	if n != 2 {
+		return Absent
+	}
+	switch {
+	case err0 == nil && err1 == nil:
+		return Present
+	case isDenied(err0), isDenied(err1):
+		return NotObservable
+	}
+	return Absent
 }
 
 // probeSwitchAndFirewall uses sources that need no filesystem grant.
