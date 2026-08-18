@@ -41,6 +41,26 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 			// still stage, apply and confirm against a device for no reason.
 			continue
 		}
+		// An option that has to become a LIST is deleted first.
+		//
+		// Whether rpcd's uci.set converts a string option into a list when
+		// handed a JSON array is NOT something this project has measured, and
+		// the failure it would produce is the silent one: the section is
+		// accepted, stored in a form netifd ignores, and the apply confirms
+		// healthy. Deleting the option first makes the conversion deterministic
+		// under either behaviour, and costs one staged call in the only case
+		// that needs it — a section an older version of us wrote wrong.
+		//
+		// Staged before the set: applyengine preserves op order through
+		// ubus.Batch, and nothing commits until uci.apply.
+		for _, k := range sortedKeys(s.Lists) {
+			if isList, known := StoredAsList(current, k); known && !isList {
+				ops = append(ops, applyengine.Op{
+					Kind: applyengine.OpDelete, Config: s.Config,
+					Section: s.Name, Option: k,
+				})
+			}
+		}
 		// Present and ours but different: set rather than add, so options a
 		// previous version of us wrote and this one no longer manages are left
 		// alone rather than being silently dropped.
@@ -203,4 +223,14 @@ func (d Doc) Preserved(existing Existing, config, name string) bool {
 		return false // not ours on the device, so not ours to claim
 	}
 	return d.blind(config) || d.retained(config, name)
+}
+
+// sortedKeys is the deterministic iteration Go maps do not give us.
+func sortedKeys(m map[string][]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

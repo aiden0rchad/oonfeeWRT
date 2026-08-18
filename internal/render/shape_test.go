@@ -1,6 +1,10 @@
 package render
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
+)
 
 func bridgeVLAN() Section {
 	return Section{
@@ -36,11 +40,37 @@ func TestMalformedListIsSeenAsAChangeToMake(t *testing.T) {
 	})
 	doc := Doc{Sections: []Section{bridgeVLAN()}}
 	ops := doc.Plan(existing).Ops
-	if len(ops) != 1 {
-		t.Fatalf("want one op to rewrite the section, got %d", len(ops))
+	// The option is deleted before the list is written. Whether rpcd's uci.set
+	// converts a string option into a list on its own has not been measured
+	// here, and the failure if it does not is the silent one this whole fix is
+	// about.
+	if len(ops) != 2 {
+		t.Fatalf("want a delete of the option then a set, got %d: %+v", len(ops), ops)
 	}
-	if got := ops[0].Lists["ports"]; len(got) != 2 {
+	if ops[0].Kind != applyengine.OpDelete || ops[0].Option != "ports" {
+		t.Errorf("first op should drop the malformed option: %+v", ops[0])
+	}
+	if ops[1].Kind != applyengine.OpSet {
+		t.Errorf("second op should rewrite the section: %+v", ops[1])
+	}
+	if got := ops[1].Lists["ports"]; len(got) != 2 {
 		t.Errorf("the rewrite does not send a list: %v", got)
+	}
+}
+
+// The delete fires ONLY for the malformed shape. A correctly-stored list that
+// merely changed content is a plain set — deleting first on every list change
+// would double the staged calls on the ordinary path.
+func TestContentChangeToACorrectListIsJustASet(t *testing.T) {
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_bv20": {
+			"device": "br-lan", "vlan": "20", OwnershipTag: "1",
+			"ports": "lan1:t", ListsKey: "ports",
+		}},
+	})
+	ops := Doc{Sections: []Section{bridgeVLAN()}}.Plan(existing).Ops
+	if len(ops) != 1 || ops[0].Kind != applyengine.OpSet {
+		t.Errorf("want a single set, got %+v", ops)
 	}
 }
 
