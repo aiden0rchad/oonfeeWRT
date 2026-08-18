@@ -543,32 +543,34 @@ most of the decisions in the code.
 
 Then, in order of value:
 
-- **Finish the package-by-package review sweep. This is the highest-yield work
-  right now and it has a definite end.** Six packages have had a first pass;
-  three have not.
+- **The package-by-package review sweep is FINISHED** (§5ag, §5aq, §5ar, §5as,
+  §5at, §5au — nine packages, fifteen defects). Do not restart it from the top;
+  a second pass over the same code is worth much less than the two things below.
 
-  | reviewed | not yet |
-  |---|---|
-  | `applyengine`, `adoption`, `ubus`, `secrets`, `store` (§5ag) | **`capability`** |
-  | `collector` (§5aq), `telemetry` (§5ar) | |
-  | `render` (§5as), `reconcile` (§5at) | |
+  **What it found, in one sentence, because it will happen again:** every defect
+  sat in the seam between what was ASKED and what came BACK, and the three worst
+  were a question nobody answered being spent as though it were an answer — a
+  refused radio list that deleted every interface on the device, a broken
+  invariant that meant un-adopt could never remove our own config, and a missing
+  record entry that told the operator their hardware lacks a feature.
 
-  **`capability` is the last one**, and it is the right last one: `render` and
-  `reconcile` both act on what it decides, and §5as and §5at each turned on a
-  state it produces. Then the sweep is done and the yield moves elsewhere.
+  **So the standing rule, for any code written from here:** find the values that
+  have a "we do not know" state and check every consumer of them — especially
+  the ones that DELETE, and the ones that produce a sentence an operator will
+  act on. And when a fix changes an invariant, grep for who relied on it; §5at's
+  worst finding was caused by §5as, one package away.
 
-  **Where they have all been hiding: the seam between what was ASKED and what
-  came BACK.** A refused call that leaves no entry, a flag standing in for a
-  freshness check, a counter whose decrease has two possible causes. Read every
-  function that builds a collection by appending on success, and ask what its
-  length means when something failed. Four passes, nine defects, every one of
-  them there.
-
-  **Review what a fix IMPLIES, not only what it does.** §5at's first finding was
-  caused by §5as: `Retain` and `Blind` deliberately broke an invariant that
-  `ReplaceOwned` had written down in plain English one package away, and
-  un-adopt would have left our config on a device forever. The fix and the
-  reliance are rarely in the same file.
+- **Verify the review's fixes against real hardware.** This is now the highest-
+  yield work, and none of §5as–§5au has touched a device. Two things in
+  particular:
+  1. **Does `uci.set` convert a string option into a list?** §5at works around
+     not knowing by deleting the option first. If it does convert, that delete
+     is redundant; if it does not, the delete is load-bearing. Either way the
+     answer belongs in IMPLEMENTATION §14 rather than in a comment saying nobody
+     measured it.
+  2. **Run a preview and an apply against both APs.** The changes touch every
+     plan (`flatten` now records list shape) and every prune (`Retain`/`Blind`).
+     The suite is green and the mock does not model rpcd's list semantics.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -4170,6 +4172,101 @@ only constructor in the tree, so guarding would add a branch nothing can reach �
 
 ---
 
+### 5au. Capability's first review — the sweep's last package, and its own rule broken outside it
+
+**Done 2026-08-17.** `capability` is the most carefully written package in the
+tree, and the review bears that out: its probes separate denied from failed
+almost everywhere, `verdict` encodes the three-state rule *structurally* so a
+new feature cannot reach `Absent` without calling `demonstrated(Absent)`, and
+`diff.go` handles every state transition including the ones that must not read
+as a loss.
+
+The serious finding was **not in the package. It was in everyone who used it.**
+
+#### Unknown was rendered as Absent in every gate that decides what gets written
+
+`State` has four values, and `Buildable()` has grouped them correctly since the
+package was written: *"Unknown and NotObservable mean we do not know."* Nothing
+else did. Five sites switched on `NotObservable` alone and let `Unknown` fall
+through to the `Absent` branch:
+
+| site | what it told the operator |
+|---|---|
+| `MeshGate` | "this device's wpad build does not carry 802.11s. Installing a wpad-mesh-* package would provide it" |
+| `UplinkGate` | "this device has no wireless supplicant installed, so it can serve a network and cannot join one" |
+| `daemon/neighbors` | "this device's hostapd does not carry the 802.11k neighbour-report methods" |
+| `daemon/rolefit` | "this device reported no radios" — and change the role |
+| `render.undetermined` | nothing; it just let `Prune` **delete the interface** |
+
+Every one a definite claim about hardware, derived from a check that never ran.
+§5q is explicit that telling someone to install a package they already have is
+worse than saying nothing, and here the controller says it about a device it
+never asked.
+
+**Unknown is not exotic, and this is the part that matters.** A capability
+record is JSON and `Unknown` is the zero value, so a record written before a
+`Feature` existed has no key for it. Every device adopted before a feature was
+added reads `Unknown` for it — *permanently, until re-probed*. Adding any new
+`Feature` therefore makes this reachable across the entire existing fleet at
+once. **It is a bug that gets worse with every release rather than better**,
+which is why it is worth more than the four defects it resembles.
+
+`State.Decided()` now names the grouping the package already documented, in the
+package that owns it, and all five sites use it. `NotObservable` keeps its own
+message wherever one existed: *"the check was refused"* and *"no answer was ever
+recorded"* send an operator to different remedies, and collapsing those two
+would be the same mistake one level up.
+
+#### A denied call inside a batch was recorded as the device mishandling batches
+
+`probeBatching` sent two calls and, on anything other than two clean results,
+recorded `FeatBatching` **Absent** — "device did not answer a 2-call batch
+correctly; polls will be sequential". A member call the ACL refused lands in
+that branch and says nothing about batching: the batch *was* carried, answered
+and correlated, which is exactly what the check tests.
+
+This is the one verdict in the file that is spent silently on every poll for the
+life of the adoption. A device wrongly graded Absent polls sequentially forever
+and nothing revisits it.
+
+Extracted into `batchVerdict` so the rule is testable without a device, the way
+`meshFromPackages` already is — the split that let the mesh rule be verified at
+all.
+
+#### Checked and left alone
+
+- **`verdict` is the right shape.** `present` beats `absent` beats
+  `refused`/`undetermined`, and the type makes the safe answer the easy one.
+  Its `default: Absent` is reached only when radios were enumerated, because
+  `probeRadios` returns early with explicit `NotObservable` on both refusal
+  paths.
+- **`probeMesh` handles the hardest case in the package correctly**: the daemon
+  carries mesh, but the per-driver check needs a hardware name that iwinfo only
+  reports for a radio with an interface — so it records `NotObservable` rather
+  than the clean bill that once flipped a Marvell radio to Present.
+- **`installedPackages` tries both managers** and returns an error only when
+  neither answered, so a mid-migration device is not read as having no packages.
+- **`diff.featureChange` never reports a `NotObservable` transition as a loss**,
+  and treats a first determination as first rather than as a gain.
+
+#### The sweep is finished
+
+Nine packages, five review sections (§5ag, §5aq, §5ar, §5as, §5at, §5au),
+**fifteen defects.** Every one of them sat in the same seam — the gap between
+what was asked and what came back — and the three worst were all the same
+sentence: *a question nobody answered, spent as though it were an answer.*
+
+- §5as: a refused radio list **deleted every interface** on the device.
+- §5at: a broken invariant meant un-adopt **could never remove our own config**.
+- §5au: a missing record entry **told the operator their hardware lacks a
+  feature**, and will do it to the whole fleet on the next feature added.
+
+The pattern is worth more than the list. **Find the values that have a "we do
+not know" state, and check every consumer — especially the ones that DELETE, and
+the ones that produce a sentence an operator will act on.**
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4526,6 +4623,19 @@ written and believed.
   `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
   means "not caught misbehaving", and the code, the docs and the field name all
   say so, because a future reader will otherwise round it to "verified".
+- **A value with a "we do not know" state is only as good as its worst
+  consumer.** `capability` guards Denied vs Absent meticulously and encodes the
+  rule structurally — and five sites outside it switched on NotObservable alone,
+  so Unknown fell through to the Absent branch and told operators their hardware
+  lacked features nobody had checked for. The producer being careful is not the
+  property that matters. **Check the consumers that DELETE, and the ones that
+  emit a sentence a person will act on.**
+- **A zero value that means "no" is a bug waiting for the next release.**
+  Unknown is State's zero value, capability records are JSON, and a record
+  written before a Feature existed has no key for it — so every device adopted
+  before a feature was added reads Unknown for it. Any gate treating that as
+  Absent breaks on the whole fleet the moment a feature is added. When a type's
+  zero value means "nothing recorded", no branch may treat it as an answer.
 - **A test that never reached its subject looks exactly like one that passed.**
   Two ownership tests in §5at passed without executing a line of the code under
   review: the package's mock ubus server is shared and stateful, the device
