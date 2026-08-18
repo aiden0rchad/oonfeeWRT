@@ -106,11 +106,22 @@ and this project's whole position is that those two must not be blurred.
 | **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
 | **Class B / C device budget** | the CPU and RAM figures in [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
 | **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
+| **The gateway role** — VLAN, addressed interface, DHCP server, firewall zone and its forwarding rule | that the whole wired stack applies and carries traffic. The firewall zone is the sharp part: it is rendered once per zone with its networks as a UCI **list**, and that form has never been written to a device | a device adopted as `role=gateway` whose bridge is already VLAN-aware. Not a hardware limit — both devices here are adopted as APs behind existing gear, and one of them (the C6) could not do the VLAN half anyway: it is a swconfig board with no individually taggable ports |
 
 The budget row is the one worth not lumping in with the others: an ath79 or
 ipq40xx box closes the first three and leaves it exactly where it is, because
 **class C sets the budget** and every measured figure in `DEVICE-BUDGET.md` comes
 from the roomiest class.
+
+The gateway row is the cheapest to close and the easiest to misread. "Gateway"
+is a **role assigned at adoption**, not a class of hardware — every OpenWrt
+router routes out of the box, and the WRT3200ACM here is entirely capable of it.
+What is missing is a device *adopted in that role* with a VLAN-aware bridge, and
+it does not have to be anybody's real gateway: a router on a bench, carrying no
+traffic, renders and applies the identical stack. Note that oonfeeWRT will not
+make a bridge VLAN-aware itself — doing so was measured taking the LAN down on a
+device that then reported healthy, so it stays a one-time change an operator
+makes by hand.
 
 **What HAS been verified on real hardware** — adoption, and un-adoption that
 leaves the device **byte-for-byte as it was**: adopt, apply a WLAN, un-adopt,
