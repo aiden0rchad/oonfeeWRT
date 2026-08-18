@@ -58,10 +58,9 @@ func main() {
 		for _, op := range plan.Plan.Ops {
 			fmt.Printf("  %s %s.%s %s\n", op.Kind, op.Config, op.Section, op.Option)
 		}
-		if plan.Empty() {
-			fmt.Println("nothing to do")
-			return
-		}
+		// No early return on an empty plan. Apply handles that case and it is
+		// not a no-op: it records what the device already carries, which is
+		// how a re-adopted device gets an ownership record at all.
 
 		// The SSIDs that must be on the air when this is over. Same idea as
 		// daemon.healthCheck: verify what was written actually appeared.
