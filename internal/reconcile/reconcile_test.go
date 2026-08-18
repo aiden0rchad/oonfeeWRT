@@ -1207,3 +1207,95 @@ func TestOurOwnPendingEditIsNotDrift(t *testing.T) {
 		t.Errorf("reported our own pending edit as somebody else's: %v", got)
 	}
 }
+
+// A device that already matches must still have its ownership recorded.
+//
+// Re-adopt a device whose config an earlier un-adopt could not remove — the
+// reference fleet's exact state after a routing failure — and the render
+// matches what is already there, so the plan is empty and Apply returned
+// before recording anything.
+//
+// Ownership is what un-adopt reverts (daemon.ownedSections), so the controller
+// was left demonstrably owning config it could not clean up: the sections
+// carry its marker on the device and appear nowhere in its record.
+func TestAnEmptyPlanStillRecordsWhatIsOnTheDevice(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	// Apply once so the device carries our sections, then forget them, which
+	// is what a fresh adoption over an uncleaned device looks like.
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := db.ReplaceOwned(ctx, dev.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now the plan really is empty, and the sections really are ours.
+	p2, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	if !p2.Empty() {
+		t.Fatalf("expected nothing to apply, got %d ops", len(p2.Plan.Ops))
+	}
+	res, err := r.Apply(ctx, c, dev.ID, p2,
+		func(context.Context, *ubus.Client) error { return nil })
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if res.Outcome != applyengine.Applied {
+		t.Fatalf("outcome = %s", res.Outcome)
+	}
+
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned) == 0 {
+		t.Fatal("the controller owns sections on the device and has no record " +
+			"of them, so un-adopt cannot remove its own config")
+	}
+	for _, o := range owned {
+		if o.RenderedHash == "" || o.AppliedAt == 0 {
+			t.Errorf("incomplete claim: %+v", o)
+		}
+	}
+}
+
+// And it must not claim a section the device does not have, which would
+// promise an un-adopt that reverts something absent.
+func TestAnEmptyPlanClaimsNothingTheDeviceLacks(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	p, err := r.PlanDevice(ctx, c, site(dev.ID), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatalf("PlanDevice: %v", err)
+	}
+	// A section that renders but is NOT ours on the device.
+	for _, s := range p.Doc.Sections {
+		p.Existing.Configs[s.Config][s.Name] = map[string]string{".type": "wifi-iface"}
+	}
+	p.Plan.Ops = nil
+	if _, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	owned, err := db.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned) != 0 {
+		t.Errorf("claimed sections the device holds without our marker: %+v", owned)
+	}
+}

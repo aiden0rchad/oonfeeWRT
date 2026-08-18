@@ -332,6 +332,21 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 			len(p.Report.Conflicts), p.Report.Conflicts[0].Reason)
 	}
 	if p.Empty() {
+		// Nothing to write, and possibly a great deal to remember.
+		//
+		// A device can already carry our sections while the store knows
+		// nothing about them: re-adopt a device whose config an earlier
+		// un-adopt could not remove, and the render matches what is there,
+		// the plan is empty, and this returned before recording anything.
+		//
+		// Ownership is what un-adopt reverts (daemon.ownedSections), so the
+		// controller was left demonstrably owning config it could not clean
+		// up — the same hole the carry-forward closed on the applying path,
+		// reached from the other side. Observed on the reference fleet after
+		// exactly that sequence.
+		if err := r.recordOwned(ctx, deviceID, p); err != nil {
+			return applyengine.Result{}, err
+		}
 		return applyengine.Result{Outcome: applyengine.Applied,
 			Reason: "already matches the site model; nothing to do"}, nil
 	}
@@ -345,9 +360,31 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 		return res, nil
 	}
 
+	if err := r.recordOwned(ctx, deviceID, p); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+// recordOwned makes the ownership record match what is on the device.
+//
+// Called on both paths — after a confirmed apply, and when there was nothing
+// to apply because the device already matched. The second is not a special
+// case: a device re-adopted while still carrying our sections reaches it every
+// time, and skipping the record there left un-adopt unable to remove config
+// the controller had written.
+func (r *Reconciler) recordOwned(ctx context.Context, deviceID int64, p *DevicePlan) error {
 	owned := make([]store.OwnedSection, 0, len(p.Doc.Sections))
 	now := r.now().Unix()
 	for _, s := range p.Doc.Sections {
+		// Only what is actually THERE. A rendered section the device does not
+		// have is not owned, and claiming it would promise an un-adopt that
+		// reverts something absent.
+		if !p.Existing.OwnedIn(s.Config, s.Name) {
+			if _, present := p.Existing.In(s.Config)[s.Name]; present {
+				continue // present but not ours: never claim it
+			}
+		}
 		owned = append(owned, store.OwnedSection{
 			DeviceID: deviceID, Config: s.Config, Section: s.Name,
 			RenderedHash: s.Hash(), AppliedAt: now,
@@ -373,7 +410,7 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 	// happened and hand detectDrift a hash nothing ever wrote.
 	prev, err := r.Store.OwnedSections(ctx, deviceID)
 	if err != nil {
-		return res, fmt.Errorf("reconcile: applied, but could not read the "+
+		return fmt.Errorf("reconcile: applied, but could not read the "+
 			"existing ownership claims to carry forward: %w", err)
 	}
 	for _, o := range prev {
@@ -386,9 +423,9 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 	// decided against, so the device holds exactly this set — and merging
 	// left a claim behind for everything ever pruned.
 	if err := r.Store.ReplaceOwned(ctx, deviceID, owned); err != nil {
-		return res, fmt.Errorf("reconcile: applied but could not record ownership: %w", err)
+		return fmt.Errorf("reconcile: applied but could not record ownership: %w", err)
 	}
-	return res, nil
+	return nil
 }
 
 // logOutcome writes an audit event for every apply, including the ones that
