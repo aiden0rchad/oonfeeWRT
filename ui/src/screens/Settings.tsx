@@ -12,6 +12,7 @@ import type {
   NeighbourResult,
   PreviewResult,
   Site,
+  SiteNetwork,
   WLAN,
 } from '../lib/api'
 import { Banner, Button, Card, Field, Prop, Toggle } from '../components/ui'
@@ -952,8 +953,90 @@ function Deviations({
   )
 }
 
+// Zone names the device already owns. oonfeeWRT will not edit the operator's
+// own firewall zones, so a network asking for one is refused at preview — said
+// here too, where it can actually be fixed.
+const deviceOwnedZones = ['lan', 'wan']
+
+// fw4's limit on a zone NAME. Two zones that differ only past it are one zone
+// to the device, which renderZones refuses rather than silently merging.
+const maxZoneName = 11
+
+function zoneWarning(zone: string): string | null {
+  const z = zone.trim().toLowerCase()
+  if (!z) return null
+  if (deviceOwnedZones.includes(z)) {
+    return `"${z}" is a firewall zone the device already has. oonfeeWRT does not edit zones it did not write, so this network will be refused at preview until it has a zone of its own.`
+  }
+  if (z.length > maxZoneName) {
+    return `fw4 only reads the first ${maxZoneName} characters of a zone name, so this becomes "${z.slice(0, maxZoneName)}" on the device. Another zone matching that far would be the same zone.`
+  }
+  return null
+}
+
+// The zone a network's firewall rules live in, editable in place.
+//
+// There was no control for this at all, and store.SaveNetwork used to default
+// it to "lan" — so every network the product could create asked for a second
+// firewall zone named lan beside the device's own, and nothing in the UI could
+// change it. The default is the network's own name now; this is how the ones
+// created before that get fixed.
+function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }) {
+  const [value, setValue] = useState(n.zone)
+  const [busy, setBusy] = useState(false)
+  const trimmed = value.trim()
+  const dirty = trimmed !== n.zone && trimmed !== ''
+  const warning = zoneWarning(dirty ? trimmed : n.zone)
+
+  const save = async () => {
+    if (!dirty || busy) return
+    setBusy(true)
+    try {
+      // The whole network, not just the zone: the handler rebuilds the record
+      // from what it is sent, so a partial post would blank the VLAN and the
+      // address.
+      await api.saveNetwork({ ...n, zone: trimmed })
+      onChanged()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+      setValue(n.zone)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <span style={{ color: 'var(--text-secondary)' }}>zone</span>
+      <input
+        aria-label={`Firewall zone for ${n.name}`}
+        value={value}
+        disabled={busy}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void save()
+          if (e.key === 'Escape') setValue(n.zone)
+        }}
+        onBlur={() => void save()}
+        style={{
+          width: 110, fontSize: 12, padding: '2px 6px',
+          background: 'var(--surface-2)', color: 'var(--text-primary)',
+          border: `1px solid ${warning ? 'var(--warning)' : 'var(--border)'}`,
+          borderRadius: 4,
+        }}
+      />
+      {warning && (
+        <span title={warning} style={{ color: 'var(--warning)', fontSize: 11 }}>
+          ⚠
+        </span>
+      )}
+    </>
+  )
+}
+
 function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
-  const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '' })
+  const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '', zone: '' })
+  const draftWarning = zoneWarning(draft.zone)
   return (
     <Card title="Networks">
       <div style={{ display: 'grid', gap: 8 }}>
@@ -961,8 +1044,9 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
           <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
             <strong>{n.name}</strong>
             <span style={{ color: 'var(--text-secondary)' }}>
-              VLAN {n.vlan} · {n.cidr || 'no address'} · zone {n.zone}
+              VLAN {n.vlan} · {n.cidr || 'no address'} ·
             </span>
+            <NetworkZone n={n} onChanged={onChanged} />
             <div style={{ flex: 1 }} />
             <Button
               onClick={async () => {
@@ -1002,17 +1086,31 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
               onChange={(e) => setDraft({ ...draft, cidr: e.target.value })}
             />
           </div>
+          <div style={{ width: 130 }}>
+            <Field
+              label="Firewall zone"
+              placeholder="same as the name"
+              value={draft.zone}
+              onChange={(e) => setDraft({ ...draft, zone: e.target.value })}
+            />
+          </div>
           <Button
             disabled={!draft.name.trim()}
             onClick={async () => {
-              await api.saveNetwork({ ...draft, name: draft.name.trim(), enabled: true })
-              setDraft({ name: '', vlan: 1, cidr: '' })
+              await api.saveNetwork({
+                ...draft, name: draft.name.trim(),
+                zone: draft.zone.trim(), enabled: true,
+              })
+              setDraft({ name: '', vlan: 1, cidr: '', zone: '' })
               onChanged()
             }}
           >
             Add
           </Button>
         </div>
+        {draftWarning && (
+          <div style={{ fontSize: 11, color: 'var(--warning)' }}>{draftWarning}</div>
+        )}
         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
           A network is the L2/L3 segment a WLAN puts clients on. For a simple
           setup one network named <code>lan</code> on VLAN 1 is enough.

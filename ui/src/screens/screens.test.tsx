@@ -15,6 +15,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 
 const api = {
   clients: vi.fn(),
+  saveNetwork: vi.fn(),
+  deleteNetwork: vi.fn(),
   devices: vi.fn(),
   saveWLAN: vi.fn(),
   noteForeign: vi.fn(),
@@ -968,6 +970,58 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() =>
       expect(screen.getByText(/removes the station interface/)).toBeTruthy(),
     )
+  })
+  // There was no control for a network's firewall zone at all, and
+  // store.SaveNetwork used to default it to "lan" — so every network the
+  // product could create asked for a second zone named lan beside the device's
+  // own, and nothing in the UI could change it. Found on the operator's own
+  // testvlan, stuck that way.
+  it('lets a firewall zone be edited, and warns about one the device owns', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [],
+      networks: [
+        { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+        { id: 2, name: 'testvlan', vlan: 2, cidr: '192.168.2.1/24', zone: 'lan', enabled: true },
+      ],
+    })
+    api.saveNetwork.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+
+    const field = await screen.findByLabelText('Firewall zone for testvlan')
+    expect((field as HTMLInputElement).value).toBe('lan')
+
+    // "lan" is the device's own zone, so it is flagged where it can be fixed
+    // rather than only being refused at preview.
+    expect(screen.getAllByTitle(/firewall zone the device already has/).length)
+      .toBeGreaterThan(0)
+
+    fireEvent.change(field, { target: { value: 'iot' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+
+    await waitFor(() => expect(api.saveNetwork).toHaveBeenCalled())
+    const sent = api.saveNetwork.mock.calls[0][0]
+    expect(sent.zone).toBe('iot')
+    // The whole network, not just the zone: the handler rebuilds the record
+    // from what it is sent, so a partial post would blank the VLAN and address.
+    expect(sent.id).toBe(2)
+    expect(sent.vlan).toBe(2)
+    expect(sent.cidr).toBe('192.168.2.1/24')
+    expect(sent.enabled).toBe(true)
+  })
+
+  // An unchanged zone must not fire a write on every blur.
+  it('does not save a zone that was not changed', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [],
+      networks: [{ id: 2, name: 'iot', vlan: 2, cidr: '10.0.2.1/24', zone: 'iot', enabled: true }],
+    })
+    render(<Settings devices={[]} />)
+    const field = await screen.findByLabelText('Firewall zone for iot')
+    fireEvent.blur(field)
+    await waitFor(() => expect(screen.getByLabelText('Firewall zone for iot')).toBeTruthy())
+    expect(api.saveNetwork).not.toHaveBeenCalled()
   })
 })
 
