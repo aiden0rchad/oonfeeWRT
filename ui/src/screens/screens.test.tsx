@@ -991,10 +991,19 @@ describe('Settings — wireless uplinks', () => {
     const field = await screen.findByLabelText('Firewall zone for testvlan')
     expect((field as HTMLInputElement).value).toBe('lan')
 
-    // "lan" is the device's own zone, so it is flagged where it can be fixed
-    // rather than only being refused at preview.
-    expect(screen.getAllByTitle(/firewall zone the device already has/).length)
-      .toBeGreaterThan(0)
+    // Flagged where it can be fixed, and the flag says WHAT TO DO. The first
+    // version named the problem only, and the operator's reply was "I'm not
+    // actually sure what to do".
+    const note = screen.getByRole('note')
+    const advice = note.getAttribute('title') ?? ''
+    expect(advice).toMatch(/belongs to the device/)
+    expect(advice).toMatch(/To fix it: type a different name/)
+    expect(advice).toMatch(/for example "testvlan"/)
+
+    // And VLAN 1 is NOT flagged: a network on VLAN 0 or 1 renders no firewall
+    // zone at all, so its zone is inert and a warning there is noise on a row
+    // nobody can act on. Only testvlan carries one.
+    expect(screen.getAllByRole('note')).toHaveLength(1)
 
     fireEvent.change(field, { target: { value: 'iot' } })
     fireEvent.keyDown(field, { key: 'Enter' })

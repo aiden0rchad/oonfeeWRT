@@ -962,14 +962,35 @@ const deviceOwnedZones = ['lan', 'wan']
 // to the device, which renderZones refuses rather than silently merging.
 const maxZoneName = 11
 
-function zoneWarning(zone: string): string | null {
+// A zone name the operator can actually type, derived from the network's own
+// name — which is what a network created today defaults to.
+function suggestZone(networkName: string): string {
+  const base = networkName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  const distinct = base && !deviceOwnedZones.includes(base) ? base : `${base || 'net'}_zone`
+  return distinct.slice(0, maxZoneName).replace(/_+$/, '') || 'guest'
+}
+
+// What is wrong, and what to type instead.
+//
+// The first version said only what was wrong. It was accurate, and the
+// operator's reply was "I'm not actually sure what to do" — so it was half a
+// message. STATUS §6 already has the rule about advice that names an action,
+// and this broke it on the very screen where it was written.
+//
+// vlan is taken because a network on VLAN 0 or 1 renders NO firewall zone at
+// all: renderNetwork returns early, that traffic being the device's own LAN.
+// Its zone is inert, so flagging it is a warning on a row nobody can act on.
+function zoneWarning(zone: string, networkName: string, vlan: number): string | null {
   const z = zone.trim().toLowerCase()
-  if (!z) return null
+  if (!z || vlan <= 1) return null
+  const fix = suggestZone(networkName)
+  const owned = deviceOwnedZones.map((q) => `"${q}"`).join(' or ')
   if (deviceOwnedZones.includes(z)) {
-    return `"${z}" is a firewall zone the device already has. oonfeeWRT does not edit zones it did not write, so this network will be refused at preview until it has a zone of its own.`
+    return `Zone "${z}" belongs to the device, not to oonfeeWRT, and oonfeeWRT never edits config it did not write — so applying this network would be refused. To fix it: type a different name in the zone box, for example "${fix}". Any name works as long as it is not ${owned}.`
   }
   if (z.length > maxZoneName) {
-    return `fw4 only reads the first ${maxZoneName} characters of a zone name, so this becomes "${z.slice(0, maxZoneName)}" on the device. Another zone matching that far would be the same zone.`
+    return `Zone "${z}" is longer than fw4 reads. Only the first ${maxZoneName} characters count, so the device sees "${z.slice(0, maxZoneName)}" — and any other zone matching that far becomes the same zone. To fix it: shorten it to ${maxZoneName} characters or fewer, for example "${fix}".`
   }
   return null
 }
@@ -986,7 +1007,7 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
   const [busy, setBusy] = useState(false)
   const trimmed = value.trim()
   const dirty = trimmed !== n.zone && trimmed !== ''
-  const warning = zoneWarning(dirty ? trimmed : n.zone)
+  const warning = zoneWarning(dirty ? trimmed : n.zone, n.name, n.vlan)
 
   const save = async () => {
     if (!dirty || busy) return
@@ -1026,8 +1047,12 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
         }}
       />
       {warning && (
-        <span title={warning} style={{ color: 'var(--warning)', fontSize: 11 }}>
-          ⚠
+        <span
+          title={warning}
+          role="note"
+          style={{ color: 'var(--warning)', fontSize: 11, cursor: 'help' }}
+        >
+          ⚠ needs a different zone
         </span>
       )}
     </>
@@ -1036,7 +1061,12 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
 
 function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
   const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '', zone: '' })
-  const draftWarning = zoneWarning(draft.zone)
+  const draftWarning = zoneWarning(draft.zone, draft.name, draft.vlan)
+  // Spelled out under the card, not only inside a tooltip. A hover on a glyph
+  // is not where the only copy of an instruction belongs.
+  const zoneProblems = site.networks
+    .map((n) => zoneWarning(n.zone, n.name, n.vlan))
+    .filter((w): w is string => w !== null)
   return (
     <Card title="Networks">
       <div style={{ display: 'grid', gap: 8 }}>
@@ -1111,6 +1141,11 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
         {draftWarning && (
           <div style={{ fontSize: 11, color: 'var(--warning)' }}>{draftWarning}</div>
         )}
+        {zoneProblems.map((w) => (
+          <div key={w} style={{ fontSize: 11, color: 'var(--warning)' }}>
+            {w}
+          </div>
+        ))}
         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
           A network is the L2/L3 segment a WLAN puts clients on. For a simple
           setup one network named <code>lan</code> on VLAN 1 is enough.
