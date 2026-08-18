@@ -257,19 +257,58 @@ func detectDrift(doc render.Doc, existing render.Existing, appliedHash map[strin
 		// Our own edit, not the device's. Skipped rather than relabelled: the
 		// plan lists it as a pending change already, and saying it twice under
 		// two names is how one edit looks like two problems.
-		if h, ok := appliedHash[s.Config+"."+s.Name]; ok && h != s.Hash() {
+		h, hadHash := appliedHash[s.Config+"."+s.Name]
+		if hadHash && h != s.Hash() {
 			continue
 		}
-		keys := make([]string, 0, len(s.Values))
-		for k := range s.Values {
+
+		// What we would write, options and lists together.
+		//
+		// Lists were missing, and that is the one class where a silent revert
+		// is worst. A human editing `list ports` on a bridge-VLAN we own left
+		// the section hash unchanged from what we applied — correctly marking
+		// it as not our own pending edit — and then no drift was reported,
+		// because this loop only ever read s.Values. plan.matches saw the
+		// difference and emitted a set, so the edit was reverted on the next
+		// apply with nothing said. This package's opening claim is that drift
+		// is "surfaced, never silently corrected"; for list options it was
+		// silently corrected, and those are the options whose malformed form
+		// took the LAN down.
+		ours := make(map[string]string, len(s.Values)+len(s.Lists))
+		for k, v := range s.Values {
+			ours[k] = v
+		}
+		for k, v := range s.Lists {
+			// Joined, because that is the form the device's values arrive in
+			// (flatten). The SHAPE difference is not drift — nobody edited it,
+			// an older version of us wrote it wrong — and plan.matches already
+			// stages that as a change to make.
+			ours[k] = strings.Join(v, " ")
+		}
+
+		keys := make([]string, 0, len(ours))
+		for k := range ours {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys) // deterministic reporting
 		for _, k := range keys {
-			if have, ok := current[k]; ok && have != s.Values[k] {
+			have, present := current[k]
+			switch {
+			case present && have != ours[k]:
 				out = append(out, Drift{
 					Config: s.Config, Section: s.Name, Option: k,
-					Ours: s.Values[k], Theirs: have,
+					Ours: ours[k], Theirs: have,
+				})
+			case !present && hadHash:
+				// The option is GONE. Only claimed when we have a recorded
+				// hash for this section and it still matches what we would
+				// write, which is the pair that pins down "we applied exactly
+				// this, and it has since been removed". Without a recorded
+				// hash we cannot tell a deletion from an option this version
+				// of the renderer has only just started writing.
+				out = append(out, Drift{
+					Config: s.Config, Section: s.Name, Option: k,
+					Ours: ours[k], Theirs: "",
 				})
 			}
 		}

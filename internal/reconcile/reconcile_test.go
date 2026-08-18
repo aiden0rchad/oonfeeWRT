@@ -1113,3 +1113,97 @@ func TestApplyClaimsEachSectionOnce(t *testing.T) {
 		}
 	}
 }
+
+// driftOn is a section we own on the device, recorded as applied exactly as
+// rendered — the state in which any difference really is somebody else's edit.
+func driftFixture(current map[string]string) (render.Doc, render.Existing, map[string]string) {
+	sec := render.Section{
+		Config: "network", Type: "bridge-vlan", Name: "oowrt_bv20",
+		Values: map[string]string{"device": "br-lan", "vlan": "20",
+			render.OwnershipTag: "1"},
+		Lists: map[string][]string{"ports": {"lan1:t", "lan2:t"}},
+	}
+	doc := render.Doc{Sections: []render.Section{sec}}
+	existing := render.NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_bv20": current},
+	})
+	return doc, existing, map[string]string{"network.oowrt_bv20": sec.Hash()}
+}
+
+// A human editing a LIST option must be reported, not silently reverted.
+//
+// The section hash still matches what we applied, so this is correctly not our
+// own pending edit — and drift then read only s.Values, so nothing was
+// reported while plan.matches quietly staged a set to put it back. This
+// package's opening claim is that drift is surfaced and never silently
+// corrected; for list options it was silently corrected, and those are the
+// options whose malformed form took the LAN down.
+func TestDriftSeesEditsToListOptions(t *testing.T) {
+	doc, existing, applied := driftFixture(map[string]string{
+		"device": "br-lan", "vlan": "20", render.OwnershipTag: "1",
+		"ports":         "lan1:t", // a human removed lan2 in LuCI
+		render.ListsKey: "ports",
+	})
+	got := detectDrift(doc, existing, applied)
+	if len(got) != 1 {
+		t.Fatalf("want the port change reported as drift, got %v", got)
+	}
+	if got[0].Option != "ports" || got[0].Theirs != "lan1:t" {
+		t.Errorf("drift = %+v", got[0])
+	}
+}
+
+// An option a human DELETED from a section we own is an edit too.
+func TestDriftSeesADeletedOption(t *testing.T) {
+	doc, existing, applied := driftFixture(map[string]string{
+		// "vlan" is gone.
+		"device": "br-lan", render.OwnershipTag: "1",
+		"ports": "lan1:t lan2:t", render.ListsKey: "ports",
+	})
+	got := detectDrift(doc, existing, applied)
+	if len(got) != 1 || got[0].Option != "vlan" {
+		t.Fatalf("want the deleted option reported, got %v", got)
+	}
+}
+
+// But only when we have a record of applying it. Without one, an option
+// missing from the device is indistinguishable from an option this version of
+// the renderer has only just started writing — and accusing an operator of
+// deleting something we never applied is the false-drift this whole mechanism
+// was built to stop.
+func TestDriftDoesNotInventADeletionWithoutARecord(t *testing.T) {
+	doc, existing, _ := driftFixture(map[string]string{
+		"device": "br-lan", render.OwnershipTag: "1",
+		"ports": "lan1:t lan2:t", render.ListsKey: "ports",
+	})
+	if got := detectDrift(doc, existing, map[string]string{}); len(got) != 0 {
+		t.Errorf("accused someone of deleting an option we never recorded "+
+			"applying: %v", got)
+	}
+}
+
+// A device holding exactly what we applied is not drifting. Otherwise every
+// poll accuses somebody.
+func TestDriftIsSilentWhenTheDeviceMatches(t *testing.T) {
+	doc, existing, applied := driftFixture(map[string]string{
+		"device": "br-lan", "vlan": "20", render.OwnershipTag: "1",
+		"ports": "lan1:t lan2:t", render.ListsKey: "ports",
+	})
+	if got := detectDrift(doc, existing, applied); len(got) != 0 {
+		t.Errorf("reported drift against an unchanged device: %v", got)
+	}
+}
+
+// Our own pending edit is still not drift: the hash moved, so the plan already
+// lists it as a change to make and naming it twice makes one edit look like
+// two problems.
+func TestOurOwnPendingEditIsNotDrift(t *testing.T) {
+	doc, existing, _ := driftFixture(map[string]string{
+		"device": "br-lan", "vlan": "20", render.OwnershipTag: "1",
+		"ports": "lan1:t lan2:t", render.ListsKey: "ports",
+	})
+	stale := map[string]string{"network.oowrt_bv20": "a-hash-from-before-the-edit"}
+	if got := detectDrift(doc, existing, stale); len(got) != 0 {
+		t.Errorf("reported our own pending edit as somebody else's: %v", got)
+	}
+}
