@@ -560,17 +560,23 @@ Then, in order of value:
   act on. And when a fix changes an invariant, grep for who relied on it; §5at's
   worst finding was caused by §5as, one package away.
 
-- **Verify the review's fixes against real hardware.** This is now the highest-
-  yield work, and none of §5as–§5au has touched a device. Two things in
-  particular:
-  1. **Does `uci.set` convert a string option into a list?** §5at works around
-     not knowing by deleting the option first. If it does convert, that delete
-     is redundant; if it does not, the delete is load-bearing. Either way the
-     answer belongs in IMPLEMENTATION §14 rather than in a comment saying nobody
-     measured it.
-  2. **Run a preview and an apply against both APs.** The changes touch every
-     plan (`flatten` now records list shape) and every prune (`Retain`/`Blind`).
-     The suite is green and the mock does not model rpcd's list semantics.
+- **Run `tools/dryrun` after ANY change to render, reconcile or capability.**
+
+  ```bash
+  go run ./tools/dryrun "$PWD/.run/oonfeewrt.db"
+  ```
+
+  It renders and plans the live site model against the real devices and writes
+  nothing. §5av added it, and it immediately found the reference Archer C6 being
+  told it had not reported a wired layout it had reported perfectly well — with
+  the whole suite green, because no mock in this repo knows what a swconfig
+  board looks like. Both devices should report **0 ops, 0 prunes** on an
+  unchanged model; anything else is the change you just made.
+
+- **The remaining hardware gap is an APPLY, not a preview.** §5av verified the
+  read-render-plan path end to end. Nothing since §5ap has actually staged and
+  confirmed a change on a device, and `uci.set`'s option-to-list conversion is
+  now measured but the *rendered zone list* form has never been applied.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -4267,6 +4273,111 @@ the ones that produce a sentence an operator will act on.**
 
 ---
 
+### 5av. Pointing the code at the real devices, and what the mock could never say
+
+**Done 2026-08-17.** The review sweep (§5as–§5au) fixed nine defects with a green
+suite and never touched a device. This is what happened when it did.
+
+`tools/dryrun` opens the store, reads each device over ubus, renders the live
+site model and plans it. It writes nothing — no stage, no apply, no commit —
+so it is safe against a live fleet with the daemon up.
+
+#### The end-to-end result: both devices, 0 ops, 0 prunes
+
+Which is the confirmation that mattered. The `flatten` change touches **every**
+plan and the `Retain`/`Blind` change touches **every** prune, and neither
+produced a single spurious operation against the real WRT3200ACM or Archer C6.
+
+#### A board that reported its layout was being called unreadable
+
+`probePorts` fails by leaving `Bridge` **empty**. It sets `Bridge` from
+`lan.Device`, with no LAN ports, for a board whose LAN is a single interface
+rather than a set of individually taggable switch ports — a successful read of a
+real layout. The Archer C6 reports exactly that: **bridge `eth0.1`, no LAN
+ports, DSA Absent.** A swconfig board.
+
+Two things treated that as a failed read.
+
+**Mine, from §5as.** The wired-blindness test was `Bridge == "" || len(LAN) ==
+0`, so the C6 was marked blind for `network`, `dhcp` and `firewall`, and `Prune`
+was disabled there. The safe direction — and still the same conflation this
+whole sweep is about, "could not ask" against "asked, and got an answer", now
+applied to every swconfig board in existence.
+
+**Pre-existing.** The omission read *"this device did not report its wired port
+layout"*, which is false. It sends an operator to widen an ACL and re-probe a
+device that answered the first time. The truth is that the board has no
+individually taggable ports and its wired VLANs live in swconfig, which
+oonfeeWRT does not manage — a different problem with a different remedy.
+
+**No test in this repository could have found it**, and that is the point worth
+keeping. The mock does not know what a swconfig board reports. The suite was
+green through the entire sweep while the reference hardware was being described
+back to its owner incorrectly.
+
+#### Three uci semantics measured, after three fixes had guessed at them
+
+Run against the C6 over rpcd, staged only and reverted; both devices re-read
+from a fresh session afterwards and confirmed clean — no staged changes, no
+stray sections. Recorded in IMPLEMENTATION §14.
+
+1. **`uci.set` with a JSON array DOES convert an existing string option into a
+   list.** §5at deletes the option first because nobody had measured this. The
+   delete stays — one firmware measured, and the failure if another build does
+   not convert is the silent one — but the comment now states the measurement
+   rather than the absence of one.
+
+2. **A missing config is status 4; a config the ACL does not grant is status
+   6.** `reconcile.isMissingConfig` keys on 4 and is **correct**. Verified with
+   `oonfeewrt_probe`, which the ACL grants and which has no file, against
+   `ddns`, which is not in the ACL. Worth recording because the ACL is consulted
+   first, so a status 6 alone does not mean the config exists.
+
+3. **A missing OPTION returns status 0 with an empty body, never 4 or 5.** So
+   does a missing section. That makes `applyengine.snapshotPlanned`'s
+   `NotFound`/`NoData` branch **unreachable** on this firmware, and an option
+   that does not exist is recorded as `found=true, value=""` — the opposite of
+   what `preApply`'s doc claimed. The verdict is unaffected, because
+   `planStillApplied` only asks whether the value equals what was written and
+   `""` never equals a non-empty want, so a reverted add still reads as
+   reverted. The branch is kept as insurance for builds that answer with a
+   status, and the doc now says so rather than describing a state that cannot
+   occur here.
+
+**The general lesson: an empty answer from rpcd is not always an error status.**
+Any check that identifies "absent" by waiting for a non-zero status will
+silently never fire against this firmware.
+
+#### A layer-2 loop warning was filed under "not an error"
+
+Found by reading the apply preview rather than the packages. It rendered every
+omission under one heading:
+
+> *"Left out on this device (not an error — the hardware or firmware cannot take
+> it)"*
+
+True of about four of the nineteen omissions the renderer can produce. Two of
+the others describe a network that stops working — an unencrypted mesh anyone in
+range can join, and a wireless bridge that is a layer-2 loop if the device is
+also cabled — and both sat in muted grey directly beneath the reassurance. They
+are the only two conditions in the whole renderer an operator must decide about
+*before* applying.
+
+§5as made it worse: the sections kept in place because the device could not be
+read were added to the same list, so *"the existing wireless uplink section is
+left exactly as it is"* appeared under a heading saying it had been left out.
+
+`Omission` now carries a `Kind`, the preview routes by it, and each list gets a
+heading true of its contents — cautions in a warning banner **above** the change
+list rather than in grey below it. The zero value is unclassified and falls to a
+neutral heading, because a kind nobody set must not inherit an assertion about
+hardware nobody checked.
+
+That is the **forty-eighth** defect found by looking at a screen, and none of
+them was reachable by a test in this repository.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4623,6 +4734,18 @@ written and believed.
   `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
   means "not caught misbehaving", and the code, the docs and the field name all
   say so, because a future reader will otherwise round it to "verified".
+- **A green suite against a mock proves the mock agrees with you.** §5as–§5au
+  fixed nine defects without touching a device. The first run of `tools/dryrun`
+  against real hardware found the reference Archer C6 being described back to
+  its owner incorrectly — a swconfig board reporting bridge `eth0.1` and no
+  taggable ports, which two separate code paths read as "the device did not
+  answer". No test here could have caught it, because no mock in the repo knows
+  what such a board reports. **Point the real code at the real thing, early.**
+- **An empty answer is not always an error status.** Measured against rpcd: a
+  missing UCI *option* returns status 0 with an empty body, never NotFound —
+  while a missing *config* returns 4 and an ACL refusal returns 6. Any check
+  that identifies "absent" by waiting for a non-zero status silently never
+  fires. Verify the shape of the negative answer, not just the positive one.
 - **A value with a "we do not know" state is only as good as its worst
   consumer.** `capability` guards Denied vs Absent meticulously and encodes the
   rule structurally — and five sites outside it switched on NotObservable alone,
