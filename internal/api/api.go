@@ -71,6 +71,14 @@ type Fleet interface {
 	// time. Unknown must mean we could not find out, not that we have not
 	// written it down yet.
 	LiveClients(deviceID int64) (int, bool)
+
+	// LiveStations is which clients the last poll saw associated to a device,
+	// keyed by lower-case MAC.
+	//
+	// From hostapd's get_clients, which runs at the BASELINE rate and already
+	// carries every MAC and its RSSI — the collector used to keep only the
+	// count. False means the read failed, never "nobody is associated".
+	LiveStations(deviceID int64) (map[string]collector.LiveStation, bool)
 }
 
 // Server serves /api/v1.

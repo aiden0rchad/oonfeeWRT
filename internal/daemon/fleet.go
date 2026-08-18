@@ -170,6 +170,7 @@ func (d *Daemon) sink() collector.Sink {
 		d.Samples.Observe(ctx, s)
 		d.recordClients(ctx, s)
 		d.recordLiveClients(s)
+		d.recordLiveStations(s)
 		d.publishLive(s)
 
 		// Record the firmware every time the board is re-read. Without this the
@@ -324,6 +325,36 @@ func (d *Daemon) liveClients(deviceID int64) (int, bool) {
 		return 0, false
 	}
 	return *n, true
+}
+
+// recordLiveStations stores which clients the last poll saw associated, so the
+// clients grid can answer "which AP is this on" from the baseline rate rather
+// than waiting for a focused poll and a five-minute rollup flush.
+func (d *Daemon) recordLiveStations(s collector.Snapshot) {
+	m, ok := s.LiveStations()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastStations == nil {
+		d.lastStations = map[int64]map[string]collector.LiveStation{}
+	}
+	if !ok {
+		// Nil is "we could not find out", which the API must not read as
+		// "nobody is associated" — the same rule lastClients follows.
+		d.lastStations[s.DeviceID] = nil
+		return
+	}
+	d.lastStations[s.DeviceID] = m
+}
+
+// liveStations reports the last poll's associated stations for one device.
+func (d *Daemon) liveStations(deviceID int64) (map[string]collector.LiveStation, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	m, ok := d.lastStations[deviceID]
+	if !ok || m == nil {
+		return nil, false
+	}
+	return m, true
 }
 
 // recordLiveClients stores what a poll learned, including that it could not

@@ -320,6 +320,32 @@ type AP struct {
 	// percentage — 172 is about 67%. Anything rendering it directly as a percent
 	// is wrong.
 	Airtime *Airtime
+
+	// Stations is every client hostapd reported on this BSS, keyed by MAC.
+	//
+	// From the same get_clients call that produces Clients, at the BASELINE
+	// rate, so this costs nothing extra. It used to be discarded: the decoder
+	// read the MAC-keyed map and kept `len()`, so the controller knew how MANY
+	// clients an AP had and not WHICH, every sixty seconds, on every device.
+	//
+	// The clients grid showed "unknown" for connection, access point and signal
+	// on a fleet where two devices were associated and hostapd was reporting
+	// both of them with an RSSI. Only TX retries genuinely needs the focused
+	// tier — hostapd does not report retries here, iwinfo.assoclist does.
+	//
+	// Nil when the call failed, for the same reason Clients is.
+	Stations map[string]LiveStation
+}
+
+// LiveStation is one associated client as hostapd described it at the baseline
+// rate.
+type LiveStation struct {
+	// Iface is the BSS it is associated to.
+	Iface string
+	// Signal is RSSI in dBm, nil when hostapd did not report one. Absent and
+	// zero are different: 0 dBm is a real, implausible reading and would draw
+	// as a perfect signal.
+	Signal *int
 }
 
 // Airtime is hostapd's channel occupancy for one BSS.

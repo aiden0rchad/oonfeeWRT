@@ -401,13 +401,29 @@ func decodeAPStatus(iface string) func(json.RawMessage, *Snapshot) error {
 func decodeAPClients(iface string) func(json.RawMessage, *Snapshot) error {
 	return func(raw json.RawMessage, s *Snapshot) error {
 		var v struct {
-			Clients map[string]json.RawMessage `json:"clients"`
+			Clients map[string]struct {
+				Signal *int `json:"signal"`
+			} `json:"clients"`
 		}
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return err
 		}
 		n := len(v.Clients)
-		s.ap(iface).Clients = &n
+		ap := s.ap(iface)
+		ap.Clients = &n
+		// The MACs, not just how many there are. This call already carries
+		// them and their RSSI; keeping only len() threw away the answer to
+		// "which AP is this client on" that the grid then reported as unknown.
+		//
+		// Lower-cased on the way in. Measured on the reference WRT3200ACM:
+		// hostapd.get_clients returns "f6:97:77:eb:8e:c9" and iwinfo.assoclist
+		// returns "F6:97:77:EB:8E:C9" for the same station in the same minute,
+		// and the clients table stores lower case. A join that did not
+		// normalise would miss every row and look like an empty result.
+		ap.Stations = make(map[string]LiveStation, len(v.Clients))
+		for mac, c := range v.Clients {
+			ap.Stations[strings.ToLower(mac)] = LiveStation{Iface: iface, Signal: c.Signal}
+		}
 		return nil
 	}
 }
@@ -585,6 +601,28 @@ func (s *Snapshot) ap(iface string) *AP {
 // different failure and invisible from the entries — a refused get_status
 // leaves no entry at all, so the radio that did not answer is simply absent and
 // what remains looks whole. APsFresh is the flag that knows, and it also says
+// LiveStations is every associated client the last poll saw, across all of a
+// device's APs, keyed by lower-case MAC.
+//
+// Gated on APsFresh for the same reason ClientCount is: a stale or refused read
+// must report "we do not know", not "nobody is connected". An AP whose station
+// map is nil failed its get_clients call, which is also not an empty AP.
+func (s *Snapshot) LiveStations() (map[string]LiveStation, bool) {
+	if !s.APsFresh {
+		return nil, false
+	}
+	out := map[string]LiveStation{}
+	for _, ap := range s.APs {
+		if ap.Stations == nil {
+			return nil, false
+		}
+		for mac, st := range ap.Stations {
+			out[mac] = st
+		}
+	}
+	return out, true
+}
+
 // yes for a device with no AP interfaces at all: zero clients, known.
 func (s *Snapshot) ClientCount() (int, bool) {
 	// Gated on APsFresh, which is the only thing that knows whether the AP list

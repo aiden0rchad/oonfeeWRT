@@ -41,6 +41,16 @@ type stubFleet struct {
 	// modes is each interface's configured mode. Absent means no poll has read
 	// it, which must never be taken as "they are all APs".
 	modes map[int64]map[string]string
+	// stations is what the last poll saw associated, per device. Absent means
+	// the read failed, which must not read as "nobody is connected".
+	stations map[int64]map[string]collector.LiveStation
+}
+
+func (f *stubFleet) LiveStations(id int64) (map[string]collector.LiveStation, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.stations[id]
+	return m, ok
 }
 
 func (f *stubFleet) IfaceModes(id int64) (map[string]string, bool) {
@@ -2182,5 +2192,109 @@ func TestClientsNoteNamesTheActualReasonTheRadioColumnsAreEmpty(t *testing.T) {
 	})
 	if !strings.Contains(unknown, "no poll has reported") {
 		t.Errorf("with no poll data the note was %q", unknown)
+	}
+}
+
+// A client associated RIGHT NOW must show as wireless, on the right AP, with
+// its signal — without a focused poll and without waiting for a rollup flush.
+//
+// recentStations reads rollup_5m, which only exists after the five-minute
+// flush and is only written while a focused poll runs. So a phone sitting on
+// an AP showed "unknown" in every radio column until somebody opened a device
+// screen and then waited out a flush. Reported by the operator with two
+// devices associated and hostapd reporting both, at −46 and −50 dBm.
+//
+// hostapd's get_clients runs at the BASELINE rate and already carries every
+// MAC and its RSSI; the collector kept only len(). Nothing here costs a call.
+func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	dev := h.seedDevice("ap-wrt", true, nil)
+
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
+		{MAC: "04:2e:c1:6d:f4:0d", Name: "phone", IPv4: "192.168.1.227"},
+		{MAC: "aa:bb:cc:00:00:01", Name: "wired-thing", IPv4: "192.168.1.50"},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	// No rollups at all — nothing has ever run a focused poll here.
+	sig := -50
+	h.fleet.stations = map[int64]map[string]collector.LiveStation{
+		// Upper case on purpose: iwinfo.assoclist returns upper and
+		// hostapd.get_clients returns lower for the same station on the same
+		// device, and the clients table stores lower.
+		dev.ID: {"04:2E:C1:6D:F4:0D": {Iface: "phy0-ap0", Signal: &sig}},
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Clients []clientView `json:"clients"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var phone, wired *clientView
+	for i := range resp.Clients {
+		switch resp.Clients[i].MAC {
+		case "04:2e:c1:6d:f4:0d":
+			phone = &resp.Clients[i]
+		case "aa:bb:cc:00:00:01":
+			wired = &resp.Clients[i]
+		}
+	}
+	if phone == nil || wired == nil {
+		t.Fatalf("expected both clients, got %+v", resp.Clients)
+	}
+	if phone.Connection != "wireless" {
+		t.Errorf("connection = %q; the AP is reporting this station right now",
+			phone.Connection)
+	}
+	if phone.DeviceID == nil || *phone.DeviceID != dev.ID {
+		t.Errorf("device_id = %v, want %d — which AP a client is on is known at "+
+			"the baseline rate", phone.DeviceID, dev.ID)
+	}
+	if phone.Signal == nil || *phone.Signal != -50 {
+		t.Errorf("signal = %v, want -50", phone.Signal)
+	}
+	// A client no AP reports is still not wireless by inference.
+	if wired.Connection != "unknown" || wired.DeviceID != nil {
+		t.Errorf("a client no radio reported was given RF data: %+v", wired)
+	}
+}
+
+// A station hostapd lists without an RSSI is associated and unmeasured. Zero
+// dBm is a real value and would draw as a perfect signal.
+func TestAssociatedWithoutAnRSSIReportsNoSignalRatherThanZero(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	dev := h.seedDevice("ap-wrt", true, nil)
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
+		{MAC: "04:2e:c1:6d:f4:0d", Name: "phone", IPv4: "192.168.1.227"},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	h.fleet.stations = map[int64]map[string]collector.LiveStation{
+		dev.ID: {"04:2e:c1:6d:f4:0d": {Iface: "phy0-ap0"}}, // Signal nil
+	}
+	w := h.do(http.MethodGet, "/api/v1/clients", nil)
+	var resp struct {
+		Clients []clientView `json:"clients"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	c := resp.Clients[0]
+	if c.Connection != "wireless" || c.DeviceID == nil {
+		t.Errorf("an associated station must still report its AP: %+v", c)
+	}
+	if c.Signal != nil {
+		t.Errorf("signal = %v; nothing measured one, and 0 dBm draws as perfect", *c.Signal)
 	}
 }

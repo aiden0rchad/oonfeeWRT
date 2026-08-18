@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -78,15 +79,40 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	// and where. Done as a single query rather than per client: a 40-client
 	// network would otherwise issue 40 round trips to render one screen.
 	rf := s.recentStations(ctx, now)
+	// What is associated RIGHT NOW, over the top of the rollups.
+	//
+	// recentStations reads rollup_5m, which only exists after the five-minute
+	// flush and only gets written at all while a focused poll is running. So a
+	// client that is associated this second showed as "unknown" on every column
+	// until somebody opened a device screen and then waited out a flush.
+	//
+	// hostapd's get_clients runs at the baseline rate and already carries every
+	// MAC and its RSSI. Live wins where both exist: the rollup is an average
+	// over a five-minute bucket, and the question the grid asks is about now.
+	for mac, st := range s.liveStations(ctx) {
+		e := rf[mac]
+		e.deviceID = st.deviceID
+		if st.signal != nil {
+			e.signal = *st.signal
+			e.haveSignal = true
+		}
+		e.live = true
+		rf[mac] = e
+	}
 
 	out := make([]clientView, 0, len(page.Clients))
 	for _, c := range page.Clients {
 		v := clientView{Client: c, Connection: "unknown"}
 		v.Online = c.LastSeen != nil && *c.LastSeen >= onlineCutoff
-		if st, ok := rf[c.MAC]; ok {
+		if st, ok := rf[strings.ToLower(c.MAC)]; ok {
 			v.Connection = "wireless"
-			sig := st.signal
-			v.Signal = &sig
+			// Signal is reported only when something actually measured one. A
+			// station hostapd lists without an RSSI is associated and unmeasured,
+			// and 0 dBm would draw as a perfect signal.
+			if st.haveSignal {
+				sig := st.signal
+				v.Signal = &sig
+			}
 			v.DeviceID = &st.deviceID
 			if st.retry != nil {
 				v.RetryPct = st.retry
@@ -187,7 +213,46 @@ func (s *Server) rfNote(ctx context.Context) string {
 type stationRF struct {
 	deviceID int64
 	signal   int
-	retry    *float64
+	// haveSignal separates "no RSSI was reported" from a reading of 0 dBm,
+	// which is a real value and an implausible one.
+	haveSignal bool
+	retry      *float64
+	// live marks an entry from the current poll rather than a rollup bucket.
+	live bool
+}
+
+// liveStation is one associated client from the baseline poll.
+type liveStation struct {
+	deviceID int64
+	signal   *int
+}
+
+// liveStations asks every adopted device what it currently has associated.
+//
+// The baseline poll already knows: hostapd's get_clients carries each MAC and
+// its RSSI on every poll of every AP. Nothing here costs a device call.
+func (s *Server) liveStations(ctx context.Context) map[string]liveStation {
+	out := map[string]liveStation{}
+	if s.Fleet == nil {
+		return out
+	}
+	devs, err := s.Store.Devices(ctx)
+	if err != nil {
+		return out
+	}
+	for _, d := range devs {
+		if !d.Adopted() {
+			continue
+		}
+		m, ok := s.Fleet.LiveStations(d.ID)
+		if !ok {
+			continue
+		}
+		for mac, st := range m {
+			out[strings.ToLower(mac)] = liveStation{deviceID: d.ID, signal: st.Signal}
+		}
+	}
+	return out
 }
 
 // recentStations reads the newest RSSI (and retry) rollup per station MAC, and
@@ -261,6 +326,7 @@ SELECT s.mac, s.device_id, s.kind, s.avg
 		switch telemetry.Kind(kind) {
 		case telemetry.KindStaRSSI:
 			e.signal = int(avg)
+			e.haveSignal = true
 		case telemetry.KindStaRetry:
 			v := avg
 			e.retry = &v

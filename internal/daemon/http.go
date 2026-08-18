@@ -97,6 +97,10 @@ func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
 	return f.d.liveClients(deviceID)
 }
 
+func (f fleetAdapter) LiveStations(deviceID int64) (map[string]collector.LiveStation, bool) {
+	return f.d.liveStations(deviceID)
+}
+
 func (f fleetAdapter) Degraded(deviceID int64) ([]collector.Degradation, bool) {
 	c := f.d.collectorRef()
 	if c == nil {

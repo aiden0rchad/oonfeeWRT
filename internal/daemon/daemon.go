@@ -68,6 +68,10 @@ type Daemon struct {
 	// value means the device was asked and could not answer, which is not the
 	// same as having no entry.
 	lastClients map[int64]*int
+	// lastStations is which clients the last poll saw associated, per device,
+	// keyed by lower-case MAC. A nil entry is "asked and could not find out",
+	// distinct from having no entry at all.
+	lastStations map[int64]map[string]collector.LiveStation
 
 	// meshes retains the poll-derived half of every backhaul reading. In RAM
 	// because it describes right now: a stale interface list read back from
