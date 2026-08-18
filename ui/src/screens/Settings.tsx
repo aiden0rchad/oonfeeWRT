@@ -15,7 +15,9 @@ import type {
   SiteNetwork,
   WLAN,
 } from '../lib/api'
-import { Banner, Button, Card, DataGrid, Field, Prop, Toggle, Unknown } from '../components/ui'
+import {
+  Banner, Button, Card, DataGrid, Field, Prop, SlideOver, Toggle, Unknown,
+} from '../components/ui'
 import { ago } from '../components/Chart'
 
 /**
@@ -1059,7 +1061,163 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
   )
 }
 
+// What a /nn actually gives you, derived rather than stored.
+//
+// The renderer hardcodes the DHCP pool as start 100, limit 150, lease 12h
+// (render/network.go), so these are facts about what WILL be written, not
+// settings. Shown because an operator sizing a subnet should not have to work
+// out the broadcast address in their head — and labelled read-only, because
+// inventing controls for values the model does not carry would be worse than
+// omitting them.
+function subnetFacts(cidr: string): { label: string; value: string }[] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr.trim())
+  if (!m) return null
+  const octets = [1, 2, 3, 4].map((i) => Number(m[i]))
+  const bits = Number(m[5])
+  if (octets.some((o) => o > 255) || bits < 8 || bits > 30) return null
+  const addr = octets.reduce((acc, o) => acc * 256 + o, 0)
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0
+  const network = (addr & mask) >>> 0
+  const broadcast = (network | (~mask >>> 0)) >>> 0
+  const dot = (n: number) =>
+    [24, 16, 8, 0].map((sh) => (n >>> sh) & 255).join('.')
+  const usable = Math.max(0, broadcast - network - 1)
+  // The pool the renderer writes: start 100, limit 150.
+  const poolStart = network + 100
+  const poolEnd = network + 100 + 150 - 1
+  const facts = [
+    { label: 'Gateway IP', value: dot(addr) },
+    { label: 'Netmask', value: dot(mask) },
+    { label: 'Broadcast IP', value: dot(broadcast) },
+    { label: 'Usable IPs', value: String(usable) },
+  ]
+  if (poolEnd < broadcast) {
+    facts.push({ label: 'DHCP range', value: `${dot(poolStart)} – ${dot(poolEnd)}` })
+    facts.push({ label: 'Lease time', value: '12h' })
+  }
+  return facts
+}
+
+// The editor for a network that already exists.
+//
+// There was none: a network could be created and deleted and nothing else, so
+// a typo in a VLAN or an address meant deleting the row and starting again —
+// and the zone, once it defaulted to "lan", could not be corrected at all.
+function NetworkEditor({
+  n, onClose, onChanged,
+}: { n: SiteNetwork; onClose: () => void; onChanged: () => void }) {
+  const [draft, setDraft] = useState({
+    name: n.name, vlan: n.vlan, cidr: n.cidr ?? '', zone: n.zone,
+    enabled: n.enabled,
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const facts = subnetFacts(draft.cidr)
+  const warning = zoneWarning(draft.zone, draft.name, draft.vlan)
+  const dirty =
+    draft.name !== n.name || draft.vlan !== n.vlan ||
+    (draft.cidr || '') !== (n.cidr ?? '') || draft.zone !== n.zone ||
+    draft.enabled !== n.enabled
+
+  const save = async () => {
+    setBusy(true)
+    setErr('')
+    try {
+      await api.saveNetwork({
+        id: n.id, name: draft.name.trim(), vlan: draft.vlan,
+        cidr: draft.cidr.trim(), zone: draft.zone.trim(), enabled: draft.enabled,
+      })
+      onChanged()
+      onClose()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <SlideOver title={n.name} onClose={onClose}>
+      <div style={{ display: 'grid', gap: 14 }}>
+        {err && <Banner tone="critical">{err}</Banner>}
+        <Card title="Network">
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Field
+              label="Name"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+            <Field
+              label="VLAN"
+              type="number"
+              value={draft.vlan}
+              onChange={(e) => setDraft({ ...draft, vlan: Number(e.target.value) })}
+            />
+            <Field
+              label="Firewall zone"
+              value={draft.zone}
+              onChange={(e) => setDraft({ ...draft, zone: e.target.value })}
+            />
+            {warning && (
+              <div style={{ fontSize: 11, color: 'var(--warning)' }}>{warning}</div>
+            )}
+            <Toggle
+              label="Enabled"
+              on={draft.enabled}
+              onChange={(v) => setDraft({ ...draft, enabled: v })}
+            />
+          </div>
+        </Card>
+
+        <Card title="IPv4">
+          <div style={{ display: 'grid', gap: 8 }}>
+            <Field
+              label="Address"
+              placeholder="10.0.20.1/24"
+              value={draft.cidr}
+              onChange={(e) => setDraft({ ...draft, cidr: e.target.value })}
+            />
+            {draft.cidr.trim() !== '' && !facts && (
+              <div style={{ fontSize: 11, color: 'var(--warning)' }}>
+                Not an IPv4 network in CIDR form, so this network would get its
+                VLAN and no addressing. To fix it: write it as address/prefix,
+                for example "10.0.{draft.vlan}.1/24".
+              </div>
+            )}
+            {facts && (
+              <div style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+                {facts.map((f) => (
+                  <div key={f.label} style={{ display: 'flex', gap: 8 }}>
+                    <span style={{ color: 'var(--text-secondary)', width: 110 }}>
+                      {f.label}
+                    </span>
+                    <span>{f.value}</span>
+                  </div>
+                ))}
+                <div style={{ color: 'var(--text-muted)', marginTop: 4 }}>
+                  Derived from the address. The DHCP pool and lease are fixed by
+                  the renderer and are not settings yet — a range that does not
+                  fit its subnet is a mistake nobody catches until a client
+                  fails to get a lease.
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button disabled={!dirty || busy || !draft.name.trim()} onClick={save}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
+          <Button onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </SlideOver>
+  )
+}
+
 function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
+  const [editing, setEditing] = useState<SiteNetwork | null>(null)
   const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '', zone: '' })
   const draftWarning = zoneWarning(draft.zone, draft.name, draft.vlan)
   // Spelled out under the card, not only inside a tooltip. A hover on a glyph
@@ -1069,6 +1227,13 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
     .filter((w): w is string => w !== null)
   return (
     <Card title="Networks">
+      {editing && (
+        <NetworkEditor
+          n={editing}
+          onClose={() => setEditing(null)}
+          onChanged={onChanged}
+        />
+      )}
       <div style={{ display: 'grid', gap: 10 }}>
         {/* The one grid, per UI-SPEC §5 — the same component the clients and
             devices screens use. This was a stack of flex rows with the fields
@@ -1078,6 +1243,7 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
         <DataGrid
           rows={site.networks}
           rowKey={(n) => String(n.id)}
+          onRowClick={(n) => setEditing(n)}
           empty="No networks yet. Add one below."
           columns={[
             {

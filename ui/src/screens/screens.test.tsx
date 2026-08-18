@@ -1019,6 +1019,67 @@ describe('Settings — wireless uplinks', () => {
     expect(sent.enabled).toBe(true)
   })
 
+  // A network could be created and deleted and nothing else. A typo in a VLAN
+  // or an address meant deleting the row and starting again, and the zone —
+  // once it had defaulted to "lan" — could not be corrected at all.
+  it('opens an editor for an existing network and saves every field', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [],
+      networks: [
+        { id: 2, name: 'testvlan', vlan: 2, cidr: '192.168.2.1/24', zone: 'iot', enabled: true },
+      ],
+    })
+    api.saveNetwork.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+
+    fireEvent.click(await screen.findByText('testvlan'))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy())
+
+    // The facts UniFi shows, derived from the address rather than stored.
+    expect(screen.getByText('192.168.2.255')).toBeTruthy() // broadcast
+    expect(screen.getByText('255.255.255.0')).toBeTruthy() // netmask
+    expect(screen.getByText('192.168.2.100 – 192.168.2.249')).toBeTruthy()
+
+    const dialog = screen.getByRole('dialog')
+    const vlan = within(dialog).getByLabelText('VLAN')
+    fireEvent.change(vlan, { target: { value: '7' } })
+    fireEvent.click(within(dialog).getByText('Save'))
+
+    await waitFor(() => expect(api.saveNetwork).toHaveBeenCalled())
+    const sent = api.saveNetwork.mock.calls[0][0]
+    expect(sent.id).toBe(2)
+    expect(sent.vlan).toBe(7)
+    // Everything else rides along: handleSaveNetwork rebuilds the record from
+    // what it is sent, so a field left out is a field blanked.
+    expect(sent.name).toBe('testvlan')
+    expect(sent.cidr).toBe('192.168.2.1/24')
+    expect(sent.zone).toBe('iot')
+    expect(sent.enabled).toBe(true)
+  })
+
+  // An address that is not a CIDR gets a VLAN and no addressing, which is a
+  // silent half-network. Say so where it is typed.
+  it('says what is wrong with an address that is not in CIDR form', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [],
+      networks: [{ id: 2, name: 'iot', vlan: 4, cidr: '10.0.4.1/24', zone: 'iot', enabled: true }],
+    })
+    render(<Settings devices={[]} />)
+    fireEvent.click(await screen.findByText('iot'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Address'), {
+      target: { value: '10.0.4.1' },
+    })
+    await waitFor(() =>
+      expect(dialog.textContent ?? '').toMatch(/not an IPv4 network in CIDR form/i),
+    )
+    // And it says what to type, not just what is wrong.
+    expect(dialog.textContent ?? '').toMatch(/To fix it: write it as address\/prefix/)
+    expect(dialog.textContent ?? '').toMatch(/10\.0\.4\.1\/24/)
+  })
+
   // An unchanged zone must not fire a write on every blur.
   it('does not save a zone that was not changed', async () => {
     api.site.mockResolvedValue({
