@@ -32,6 +32,47 @@ const OwnershipTag = "oonfeewrt"
 // matters when a human is reading the file over SSH wondering what touched it.
 const NamePrefix = "oowrt"
 
+// ListsKey is where a reader of the device records which of a section's
+// options arrived as UCI *lists* rather than plain strings.
+//
+// It exists because that distinction is otherwise destroyed on the way in.
+// reconcile.flatten renders a list space-joined — which is how `uci get`
+// prints one — so `list ports 'lan1:t'` + `list ports 'lan2:t'` and
+// `option ports 'lan1:t lan2:t'` arrive here as the identical Go string. The
+// two are not the same config: netifd honours the first and silently ignores
+// the second, and Section.Lists records that rendering a bridge-VLAN the
+// second way took the LAN down after an apply had already been confirmed
+// healthy.
+//
+// Without this, plan.matches compared the joined text, found it equal, and
+// reported "already matches" — so a device holding the malformed form could
+// never be corrected by the thing that wrote it.
+//
+// Dotted, like UCI's own .type and .name metadata, so it cannot collide with a
+// real option name. Absent means "nobody recorded this", which is a third
+// state and not "no lists": see StoredAsList.
+const ListsKey = ".oowrt_lists"
+
+// StoredAsList reports how the device holds one option, and whether that is
+// known at all.
+//
+// Three-state on purpose. An Existing built by hand — every test fixture, and
+// any future reader that does not record it — has no marker, and guessing
+// there would either mask the malformed form or rewrite every correct list on
+// every plan.
+func StoredAsList(current map[string]string, option string) (isList, known bool) {
+	raw, ok := current[ListsKey]
+	if !ok {
+		return false, false
+	}
+	for _, name := range strings.Fields(raw) {
+		if name == option {
+			return true, true
+		}
+	}
+	return false, true
+}
+
 // Section is one UCI section we intend to exist.
 type Section struct {
 	Config string

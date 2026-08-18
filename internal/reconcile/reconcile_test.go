@@ -515,8 +515,36 @@ func TestFlattenHandlesEveryTypeADeviceReturns(t *testing.T) {
 	}
 	// Nothing may be dropped: a key that vanished here would read downstream as
 	// "the device does not have this option", which is a different claim.
-	if len(got) != len(want) {
+	//
+	// One key is ADDED — render.ListsKey, recording which options arrived as
+	// UCI lists. Space-joining destroys that, and it is the difference between
+	// a config netifd honours and one it silently ignores.
+	if len(got) != len(want)+1 {
 		t.Errorf("flatten produced %d keys from %d; keys were dropped", len(got), len(want))
+	}
+	if got[render.ListsKey] != "maclist" {
+		t.Errorf("%s = %q, want the one list option", render.ListsKey, got[render.ListsKey])
+	}
+}
+
+// A section with no list options records that it has none — it does not go
+// silent.
+//
+// Absent is the third state, "nobody recorded this". If a list-free section
+// fell into it, every section holding the malformed `option ports 'a b'` form
+// would look unknown, which is precisely the case the marker exists to catch.
+func TestFlattenRecordsTheAbsenceOfListsToo(t *testing.T) {
+	got := flatten(map[string]any{"ssid": "x"})
+	raw, ok := got[render.ListsKey]
+	if !ok {
+		t.Fatal("a section with no lists recorded nothing, so its options are " +
+			"indistinguishable from options nobody looked at")
+	}
+	if raw != "" {
+		t.Errorf("%s = %q, want empty", render.ListsKey, raw)
+	}
+	if isList, known := render.StoredAsList(got, "ssid"); isList || !known {
+		t.Errorf("StoredAsList(ssid) = %v,%v; want false,true", isList, known)
 	}
 }
 

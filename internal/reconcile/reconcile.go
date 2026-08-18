@@ -140,7 +140,8 @@ func isMissingConfig(err error) bool {
 // than dropped — a key that vanished here would read downstream as "the device
 // does not have this option", which is a different claim entirely.
 func flatten(vals map[string]any) map[string]string {
-	out := make(map[string]string, len(vals))
+	out := make(map[string]string, len(vals)+1)
+	var lists []string
 	for k, v := range vals {
 		switch t := v.(type) {
 		case string:
@@ -157,12 +158,28 @@ func flatten(vals map[string]any) map[string]string {
 				parts = append(parts, fmt.Sprint(e))
 			}
 			out[k] = strings.Join(parts, " ")
+			lists = append(lists, k)
 		case nil:
 			out[k] = ""
 		default:
 			out[k] = fmt.Sprint(t)
 		}
 	}
+	// Which options were LISTS, recorded before the evidence is gone.
+	//
+	// Space-joining is lossy in the one direction that matters: it maps
+	// `list ports 'a'` + `list ports 'b'` and `option ports 'a b'` onto the
+	// same string, and those are different configs — netifd honours the first
+	// and silently ignores the second. render.StoredAsList reads this back, so
+	// a section holding the malformed form is seen as a difference to fix
+	// rather than as a match.
+	//
+	// Always set, including to the empty string. Absent is the third state,
+	// "nobody recorded this", and a section with no lists must not fall into
+	// it — otherwise the one case worth catching is exactly the case that
+	// looks unknown.
+	sort.Strings(lists) // deterministic, so nothing downstream hashes a shuffle
+	out[render.ListsKey] = strings.Join(lists, " ")
 	return out
 }
 

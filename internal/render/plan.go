@@ -70,6 +70,20 @@ func matches(s Section, current map[string]string) bool {
 		if current[k] != strings.Join(v, " ") {
 			return false
 		}
+		// Equal text, wrong SHAPE.
+		//
+		// `option ports 'lan1:t lan2:t'` flattens to exactly what our list
+		// joins to, so the comparison above passes while the device holds a
+		// form netifd stores and ignores — VLAN filtering on with no untagged
+		// membership, and the LAN down after a confirmed, healthy apply
+		// (Section.Lists). Reporting "already matches" there means the
+		// controller can never repair a config it wrote.
+		//
+		// Only when the shape is actually known: an Existing with no marker
+		// leaves this alone rather than rewriting every list on every plan.
+		if isList, known := StoredAsList(current, k); known && !isList {
+			return false
+		}
 	}
 	return true
 }
