@@ -468,3 +468,98 @@ func TestARenameIsNotActionable(t *testing.T) {
 		t.Fatal("the rename was not reported at all")
 	}
 }
+
+// A radio that disappears from a record that never described it is not a lost
+// radio.
+//
+// The rename pairing compares HWModes, and its guard tests only the NEW side
+// (len(a.HWModes) == 0). When the OLD record has no modes there is nothing to
+// pair on, so every radio came out as lost AND gained — which is exactly the
+// failure the pairing was written to prevent.
+//
+// Seen on the reference WRT3200ACM: an earlier probe recorded radio0/radio1
+// with a band and no modes, a later one recorded phy0/phy1 with modes, and the
+// apply preview told the operator "radio radio0 is gone. WLANs targeted at its
+// band will not render on this device" about a radio that was up and carrying
+// oonfee-roam — offered as the probable cause of unrelated omissions.
+func TestARadioThatVanishesWithNoModeEvidenceIsNotCalledLost(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{
+		{Device: "radio0", Phy: "radio0", Band: "5g"}, // no HWModes
+		{Device: "radio1", Phy: "radio1", Band: "2g"},
+	}
+	after := NewRegistry()
+	after.Radios = []Radio{
+		{Device: "phy0-ap0", Phy: "phy0", HWModes: []string{"n", "ac"}},
+		{Device: "phy1-ap0", Phy: "phy1", HWModes: []string{"b", "g", "n"}},
+	}
+	var lost, ambiguous int
+	for _, c := range Diff(before, after) {
+		if c.Kind != "radio" {
+			continue
+		}
+		switch c.Effect {
+		case EffectLost:
+			lost++
+			t.Errorf("claimed a loss with no evidence: %q", c.Detail)
+		case EffectAmbiguous:
+			ambiguous++
+			if c.Effect.Actionable() {
+				t.Error("an ambiguous change must not be actionable: it would " +
+					"be offered as the probable cause of missing config")
+			}
+		}
+	}
+	if lost != 0 {
+		t.Errorf("%d radios reported as gone", lost)
+	}
+	if ambiguous != 2 {
+		t.Errorf("ambiguous = %d, want 2", ambiguous)
+	}
+}
+
+// And a radio that really does go, from a record that DID describe it, is
+// still reported as lost — or the fix is just a way of never saying anything.
+func TestARadioThatGenuinelyDisappearsIsStillLost(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{
+		{Device: "phy0-ap0", Phy: "phy0", HWModes: []string{"n", "ac"}},
+		{Device: "phy1-ap0", Phy: "phy1", HWModes: []string{"b", "g", "n"}},
+	}
+	after := NewRegistry()
+	after.Radios = []Radio{
+		{Device: "phy1-ap0", Phy: "phy1", HWModes: []string{"b", "g", "n"}},
+	}
+	var lost int
+	for _, c := range Diff(before, after) {
+		if c.Kind == "radio" && c.Effect == EffectLost {
+			lost++
+			if !c.Effect.Actionable() {
+				t.Error("a real loss must stay actionable")
+			}
+		}
+	}
+	if lost != 1 {
+		t.Errorf("lost = %d, want 1 — a radio that really went must still be reported", lost)
+	}
+}
+
+// The rename path still works when both sides carry modes.
+func TestARenameWithModesOnBothSidesIsStillARename(t *testing.T) {
+	before := NewRegistry()
+	before.Radios = []Radio{{Device: "radio0", Phy: "radio0", HWModes: []string{"n", "ac"}}}
+	after := NewRegistry()
+	after.Radios = []Radio{{Device: "phy0-ap0", Phy: "phy0", HWModes: []string{"n", "ac"}}}
+	var renamed int
+	for _, c := range Diff(before, after) {
+		if c.Kind == "radio" && c.Effect == EffectRenamed {
+			renamed++
+		}
+		if c.Kind == "radio" && c.Effect == EffectLost {
+			t.Errorf("a rename with mode evidence was reported as a loss: %q", c.Detail)
+		}
+	}
+	if renamed != 1 {
+		t.Errorf("renamed = %d, want 1", renamed)
+	}
+}

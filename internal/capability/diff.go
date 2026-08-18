@@ -52,6 +52,15 @@ const (
 	// EffectChanged: a value that is not three-state — a radio, the class, the
 	// port map, the firmware string.
 	EffectChanged Effect = "changed"
+	// EffectAmbiguous: an identifier that is no longer present, where the
+	// earlier record carries no evidence to say whether the thing was removed
+	// or merely renamed.
+	//
+	// Deliberately NOT actionable. It is the honest answer when the rename
+	// pairing has nothing to pair on, and calling it a loss puts "WLANs
+	// targeted at its band will not render on this device" against hardware
+	// that is present and broadcasting.
+	EffectAmbiguous Effect = "ambiguous"
 )
 
 // Actionable reports whether a change alters what the controller may render or
@@ -311,6 +320,26 @@ func radioChanges(old, new *Registry) []Change {
 				Detail: fmt.Sprintf("radio %s appeared (%s). It can carry "+
 					"WLANs once the site is applied", p,
 					strings.Join(a.HWModes, ",")),
+			})
+		case hadBefore && !hasNow && len(b.HWModes) == 0:
+			// No modes on the OLD record, so the rename pairing above had
+			// nothing to compare and could not fire. That is not evidence of a
+			// loss.
+			//
+			// The guard there tests len(a.HWModes) — the new side — and this is
+			// the other half of the same problem. Seen on the reference
+			// WRT3200ACM: an earlier probe recorded radios as radio0/radio1
+			// with a band and no modes, a later one recorded phy0/phy1 with
+			// modes, and the preview then told the operator "radio radio0 is
+			// gone. WLANs targeted at its band will not render on this device"
+			// about a radio that was up and carrying oonfee-roam — offered as
+			// the probable cause of unrelated omissions.
+			out = append(out, Change{
+				Kind: "radio", Name: p, Effect: EffectAmbiguous,
+				Detail: fmt.Sprintf("radio %s is no longer listed under that "+
+					"name. Its earlier record carries no mode information, so "+
+					"whether it was removed or renamed cannot be told from "+
+					"here — re-probe to settle it", p),
 			})
 		case hadBefore && !hasNow:
 			out = append(out, Change{
