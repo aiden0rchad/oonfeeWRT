@@ -550,12 +550,12 @@ Then, in order of value:
   | reviewed | not yet |
   |---|---|
   | `applyengine`, `adoption`, `ubus`, `secrets`, `store` (§5ag) | **`capability`** |
-  | `collector` (§5aq), `telemetry` (§5ar) | **`reconcile`** |
-  | `render` (§5as) | |
+  | `collector` (§5aq), `telemetry` (§5ar) | |
+  | `render` (§5as), `reconcile` (§5at) | |
 
-  Start with **`reconcile`**: it is the only package that both reads a device
-  and writes the store, and §5as left it one named question — see below. Then
-  `capability`, which decides everything `render` acts on.
+  **`capability` is the last one**, and it is the right last one: `render` and
+  `reconcile` both act on what it decides, and §5as and §5at each turned on a
+  state it produces. Then the sweep is done and the yield moves elsewhere.
 
   **Where they have all been hiding: the seam between what was ASKED and what
   came BACK.** A refused call that leaves no entry, a flag standing in for a
@@ -564,14 +564,11 @@ Then, in order of value:
   length means when something failed. Four passes, nine defects, every one of
   them there.
 
-  **One finding is already waiting for the `reconcile` pass.** `flatten` maps a
-  UCI list and a space-joined string option to the same Go value, so
-  `plan.matches` cannot tell them apart. A section holding
-  `option ports 'lan1:t lan2:t'` where UCI wants `list ports` therefore reads as
-  "already matches" and is never corrected — and that exact malformed write is
-  the one `Section.Lists` documents as having taken the LAN down after a
-  confirmed, healthy apply. Nothing writes that form today; a previous version
-  of us did.
+  **Review what a fix IMPLIES, not only what it does.** §5at's first finding was
+  caused by §5as: `Retain` and `Blind` deliberately broke an invariant that
+  `ReplaceOwned` had written down in plain English one package away, and
+  un-adopt would have left our config on a device forever. The fix and the
+  reliance are rarely in the same file.
 - **Look at a screen in a browser.** **Forty-seven** defects have been found
   this way and not one was reachable by any test in the repo. Everything has
   been looked at once now, so the yield is in what CHANGES — and in the screen
@@ -4041,6 +4038,138 @@ which is where the type is discarded.
 
 ---
 
+### 5at. Reconcile's first review — and the regression the render fix caused
+
+**Done 2026-08-17.** `reconcile` is the only package that both reads a device and
+writes the store. Four findings; the first is one **§5as caused**, which is the
+argument for reviewing the consequences of a fix rather than only the fix.
+
+#### Un-adopt would have left our config behind on a device we could not see
+
+`ReplaceOwned` replaces rather than merges, and its comment states the premise
+outright: *an apply prunes every owned section absent from the document, so
+after a confirmed apply the device holds exactly the rendered set.* §5as's
+`Retain` and `Blind` made that premise false **on purpose** — a device whose
+radios or ports could not be read now keeps its sections instead of having them
+deleted.
+
+So the record began dropping claims for sections still on the device and still
+carrying our marker. That is not bookkeeping. `daemon.ownedSections` reads
+exactly this table to decide what un-adopt reverts, so a forgotten claim means
+oonfeeWRT **can never remove that config again** — it stays on a device the
+operator was told had been cleaned. The fleet detail joins against the same
+table to tell our BSSes from a stranger's, so our own SSID would start
+reporting as foreign.
+
+Claims are now carried forward *unchanged* — we did not re-apply them, and
+restamping the hash would date a change that never happened — and only while
+the section is still **ours on the device**, because the record is what
+un-adopt deletes and a claim on a section a human has taken over is the
+controller deleting their config on the way out.
+
+**The lesson is the shape of the bug, not the bug.** A fix that changes an
+invariant has to be checked against everything that ever relied on it, and the
+comment on `ReplaceOwned` had written the invariant down in plain English. It
+was still missed, because the fix and the reliance are in different packages.
+
+#### A malformed list was indistinguishable from a correct one, so it was permanent
+
+Carried into this review from §5as. `flatten` renders a UCI list space-joined,
+which is how `uci get` prints one — and that maps two different configs onto one
+Go string:
+
+```
+list ports 'lan1:t' + list ports 'lan2:t'  ->  "lan1:t lan2:t"
+option ports 'lan1:t lan2:t'               ->  "lan1:t lan2:t"
+```
+
+netifd honours the first and silently ignores the second. `Section.Lists`
+records what the second cost when measured: accepted by `uci.set`, stored,
+VLAN filtering on with no untagged membership, **and the LAN down after the
+apply had already been confirmed healthy.**
+
+`plan.matches` compared the joined text, found it equal, and reported "already
+matches" — so a device holding the malformed form **could never be repaired by
+the thing that wrote it.** Nothing writes that form today; a previous version of
+us did, which is exactly the config still sitting on devices adopted then.
+
+`flatten` now records which options arrived as JSON arrays, under a dotted key
+alongside UCI's own `.type` and `.name`. Three-state, because both guesses fail:
+absent means "nobody recorded this" — every hand-built `Existing` — and guessing
+there would either mask the malformed form or rewrite every correct list on
+every plan, turning each preview into changes that change nothing. A section
+with **no** lists records the empty string rather than going silent, or the one
+case worth catching would be the one that looks unknown.
+
+#### The repair assumed something nobody had measured
+
+The detection above stages a set carrying a JSON array, which relies on rpcd's
+`uci.set` converting a string option into a list. **That is not measured
+anywhere in this repository**, and the failure if it does not is the silent one
+the fix exists to remove.
+
+So the malformed option is deleted first, in the same staged batch (`ubus.Batch`
+preserves order, and nothing commits until `uci.apply`). Only for the malformed
+shape — a correctly-stored list whose content changed is still a plain set.
+
+*Still worth measuring when a device is free: if `uci.set` does convert, the
+delete is merely redundant. Assuming it does and being wrong is unrecoverable
+from the controller.*
+
+#### Drift was blind to list options, so a human edit to them was reverted in silence
+
+The package opens by saying drift is *"surfaced, never silently corrected — the
+operator may have had a good reason, and a controller that quietly reverts human
+edits is worse than one that does not notice them."*
+
+`detectDrift` built its comparison from `s.Values` alone. A human editing `list
+ports` on a bridge-VLAN we own produced **no drift at all**: the section hash was
+unchanged from what we applied, correctly ruling it out as our own pending edit,
+and then nothing looked at the lists. `plan.matches` saw the difference and
+staged a set, so the edit was put back on the next apply with nothing said.
+
+Of every option class to be blind to, this is the worst one — a bridge-VLAN's
+port membership is exactly where the malformed form took the LAN down.
+
+Second gap in the same loop: `if have, ok := current[k]; ok && ...` skipped any
+option the device no longer has, so *"a human deleted our option"* was not drift
+either, and was likewise restored in silence. Deletions are reported now, but
+**only when there is a recorded applied hash** — without one, a missing option is
+indistinguishable from an option this version of the renderer has only just
+started writing, and accusing an operator of deleting something we never applied
+is the false drift the whole mechanism was built to stop.
+
+#### Two tests were passing on nothing
+
+Both new ownership tests initially passed without exercising a single line of
+the code under test. The mock ubus server is **shared and stateful across the
+package**, so by the time they ran the device already matched the site model,
+the plan was empty, and `Apply` returned at its `p.Empty()` guard before
+touching the store. `forceOp` now guarantees a non-empty plan and fails loudly
+if it cannot.
+
+This is the same class as §5as's mutation-harness error, one layer up: *a test
+that never reached its subject looks exactly like a test that passed.*
+
+#### Checked and left alone
+
+- **`ReadExisting` fails closed.** A denied `uci get` returns ubus status 6 and
+  errors the whole plan; only status 4, genuinely no such config, is skipped.
+- **Ownership is recorded only on `Applied`.** Not on `Reverted`, which would
+  claim config that is not there, and not on `Unknown`, which needs a human.
+- **`logOutcome` writes an audit event for every apply, including failures** —
+  and its severity mapping already treats `Unknown` as an error rather than
+  folding it in with `Reverted`.
+
+#### Known and not fixed
+
+`Apply` calls `r.Store` unguarded while `PlanDevice` checks it for nil. A
+`Reconciler` built without `New` would panic there. Left as it is: `New` is the
+only constructor in the tree, so guarding would add a branch nothing can reach —
+§6's rule about guards that cannot fire cuts both ways.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4397,6 +4526,23 @@ written and believed.
   `iwinfo.info` pair jumped 45 dB — same radio, same minute. `Present` therefore
   means "not caught misbehaving", and the code, the docs and the field name all
   say so, because a future reader will otherwise round it to "verified".
+- **A test that never reached its subject looks exactly like one that passed.**
+  Two ownership tests in §5at passed without executing a line of the code under
+  review: the package's mock ubus server is shared and stateful, the device
+  already matched, the plan was empty, and Apply returned at its early guard.
+  When a test depends on the subject actually running, assert that it ran.
+- **Review what a fix IMPLIES, not only whether it is correct.** §5at's worst
+  finding was caused by §5as. `Retain` and `Blind` deliberately broke an
+  invariant that `ReplaceOwned` had stated in plain English one package away,
+  and the consequence was un-adopt silently losing the ability to remove our own
+  config. After changing an invariant, grep for who relied on it — the fix and
+  the reliance are rarely in the same file.
+- **Do not let a repair depend on behaviour nobody measured.** Detecting the
+  malformed list was worth nothing if the write that fixes it needs `uci.set` to
+  convert an option into a list, which this repository has never tested. Deleting
+  the option first costs one staged call and removes the assumption. Where an
+  unverified assumption fails silently, engineer around it rather than betting on
+  it.
 - **Mutation testing needs a COMMITTED baseline.** `git checkout <file>` restores
   the last commit, not the state before the mutation — so undoing a mutation
   while the fix is still uncommitted reverts the fix too, and every subsequent
