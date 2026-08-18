@@ -152,12 +152,38 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		return nil, omissions, none
 	}
 
+	// Two different answers that used to share one sentence.
+	//
+	// probePorts fails by leaving the bridge EMPTY. It sets Bridge from
+	// lan.Device — with no LAN ports — for a board whose LAN is a single
+	// interface rather than a set of individually taggable switch ports, which
+	// is a successful read of a real layout. Saying "did not report its wired
+	// port layout" about that board is false, and it sends an operator to
+	// widen an ACL and re-probe over a device that answered the first time.
+	//
+	// Measured on the reference Archer C6: bridge eth0.1, no LAN ports, DSA
+	// Absent — a swconfig board, where VLANs live in a config oonfeeWRT does
+	// not manage.
 	ports := caps.Ports
-	if ports.Bridge == "" || len(ports.LAN) == 0 {
+	switch {
+	case ports.Bridge == "":
 		omissions = append(omissions, Omission{
 			WLAN: n.Name, Kind: KindUndetermined,
 			Reason: "this device did not report its wired port layout, so a VLAN " +
-				"cannot be tagged onto physical ports here",
+				"cannot be tagged onto physical ports here. The check reads the " +
+				"board description and got nothing back — that is a gap in what " +
+				"the controller can see, not a statement about the hardware",
+		})
+		return nil, omissions, none
+	case len(ports.LAN) == 0:
+		omissions = append(omissions, Omission{
+			WLAN: n.Name,
+			Reason: fmt.Sprintf("this board presents its LAN as a single "+
+				"interface (%s) rather than switch ports that can be tagged "+
+				"individually, so oonfeeWRT cannot add a tagged VLAN to it. That "+
+				"is what the board itself reports, not something the controller "+
+				"failed to read — on this hardware wired VLANs are configured "+
+				"through swconfig, which oonfeeWRT does not manage", ports.Bridge),
 		})
 		return nil, omissions, none
 	}

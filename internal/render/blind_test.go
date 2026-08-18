@@ -453,3 +453,75 @@ func TestUnknownFeatureAlsoKeepsTheInterface(t *testing.T) {
 		t.Errorf("deleted %v because the record had no entry for mesh support", got)
 	}
 }
+
+// A board that reports a bridge and no switch ports has ANSWERED.
+//
+// probePorts fails by leaving Bridge empty. It sets Bridge from lan.Device,
+// with no LAN ports, for a board whose LAN is a single interface rather than a
+// set of individually taggable ports — a successful read of a real layout.
+//
+// Treating that as blindness disabled Prune across every such board, and told
+// the operator the device "did not report its wired port layout" when it had.
+// Measured on the reference Archer C6: bridge eth0.1, no LAN ports, DSA Absent.
+func TestBoardWithNoTaggablePortsIsAnAnswerNotABlindSpot(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Ports = capability.Ports{Bridge: "eth0.1", WAN: "eth0.2"} // LAN nil
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_net_iot": {".type": "interface", OwnershipTag: "1"}},
+	})
+	doc, rep, err := Render(gatewaySite(), model.Device{ID: 1, Role: model.RoleGateway},
+		caps, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.blind("network") {
+		t.Error("a board that reported its layout was treated as unreadable, " +
+			"which disables pruning on every swconfig board")
+	}
+	if got := deleteOps(t, doc, existing); len(got) != 1 {
+		t.Errorf("stale sections should still be pruned here, got %v", got)
+	}
+	// Keyed on the sentence that only this branch produces. The bridge NAME
+	// appears in the VLAN-prerequisite message too, so matching on "eth0.1"
+	// alone passed with this branch deleted.
+	var said bool
+	for _, o := range rep.Omissions {
+		if strings.Contains(o.Reason, "single interface") &&
+			strings.Contains(o.Reason, "eth0.1") && o.Kind != KindUndetermined {
+			said = true
+		}
+		if strings.Contains(o.Reason, "did not report its wired port layout") {
+			t.Errorf("claimed the read failed on a board that answered: %q", o.Reason)
+		}
+	}
+	if !said {
+		t.Error("the operator was not told that this board has no individually " +
+			"taggable ports, which is a different problem from an unreadable one")
+	}
+}
+
+// And the genuinely unreadable case keeps its blindness: an empty bridge is
+// probePorts' only failure signal.
+func TestUnreadableBoardDescriptionIsStillABlindSpot(t *testing.T) {
+	caps := capability.NewRegistry() // Ports entirely zero
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"network": {"oowrt_net_iot": {".type": "interface", OwnershipTag: "1"}},
+	})
+	doc, rep, err := Render(gatewaySite(), model.Device{ID: 1, Role: model.RoleGateway},
+		caps, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := deleteOps(t, doc, existing); len(got) != 0 {
+		t.Errorf("deleted %v with no board description to decide from", got)
+	}
+	var undetermined bool
+	for _, o := range rep.Omissions {
+		if o.Kind == KindUndetermined && strings.Contains(o.Reason, "did not report") {
+			undetermined = true
+		}
+	}
+	if !undetermined {
+		t.Error("an unreadable board description was not reported as undetermined")
+	}
+}

@@ -354,8 +354,17 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// Only counts while the site actually asks for a wired VLAN: with no such
 	// network the render's silence is a decision about the model, not
 	// ignorance about the device.
-	if wantsVLAN(site) && (caps == nil || caps.Ports.Bridge == "" ||
-		len(caps.Ports.LAN) == 0) {
+	//
+	// An EMPTY bridge is the unreadable case, and it is the only one. A board
+	// that reports a bridge and no switch ports has answered: probePorts sets
+	// Bridge from lan.Device precisely for boards whose LAN is one interface
+	// rather than a set of taggable ports. Treating that as blindness disabled
+	// pruning across every such board — the safe direction, and still the same
+	// conflation of "could not ask" with "asked and got an answer".
+	//
+	// Observed on the reference Archer C6, which reports bridge eth0.1, no LAN
+	// ports, and DSA Absent: a swconfig board, read successfully.
+	if wantsVLAN(site) && (caps == nil || caps.Ports.Bridge == "") {
 		doc.Blind = append(doc.Blind, "network", "dhcp", "firewall")
 	}
 
