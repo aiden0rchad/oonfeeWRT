@@ -516,9 +516,27 @@ most-worth-doing first.
 
 ### If you are picking this up cold
 
-**State as of 2026-08-17, end of session.** Working tree clean, everything
-pushed to `origin/main`. All Go packages green, 100 UI tests green, `gofmt`
-clean, `tools/secret-scan.sh` clean. The daemon runs from a scratch build:
+**State as of 2026-08-18, end of session.** Working tree clean, everything
+pushed to `origin/main`. All Go packages green, 107 UI tests green, `gofmt`
+clean, `tools/secret-scan.sh` clean.
+
+**Both devices are adopted and serving.** WRT3200ACM (192.168.1.1, class A) and
+Archer C6 v2 (192.168.1.2), both `role=ap`, both in the `all-aps` group,
+`oonfee-roam` on the air on both radios each, ownership recorded, and a
+re-plan reports **0 ops on both**. The site model is 2 networks, 1 WLAN, 1
+group. They were re-adopted at the end of §5ax after a host networking failure;
+if the fleet looks empty again, read that section before assuming a bug.
+
+**One host-level trap, because it cost an entire evening.** Two USB ethernet
+adapters on the same `192.168.1.0/24` make macOS mark the subnet routes
+`RTF_REJECT`. `curl`, `ping` and Python keep working (blocking connects) while
+every Go dial fails instantly with `no route to host` — so the shell says the
+fleet is fine and the controller cannot see it. Check `netstat -rn -f inet |
+grep 192.168.1` for a `!` flag before believing discovery. **And restart the
+daemon after any routing change**: a running process keeps failing while a
+fresh one connects.
+
+The daemon runs from a scratch build:
 
 ```bash
 go build -o /tmp/oonfeewrtd ./cmd/oonfeewrtd
@@ -540,6 +558,41 @@ why the remaining untested combination is not worth a radio.
 Read **§0** first (the reference hardware lies, and why), then **§6** (the
 mistakes already made and the rules that came out of them). Those two explain
 most of the decisions in the code.
+
+**The next four pieces of work, in order.** Everything below this block is
+standing guidance; this is the actual queue.
+
+1. **Make discovery say "I could not reach this subnet."** Highest value in the
+   tree, and the only open item that has already cost the operator real damage:
+   two ethernet adapters on one subnet made every Go dial fail, discovery
+   reported `found=0`, and working devices were deleted in response (§5ax).
+   `internal/discovery/discovery.go` grades a host `VerdictSilent` when the
+   dial fails, and `Result` carries no notion of "the controller's own host has
+   no usable route here". `EHOSTUNREACH`/`ENETUNREACH` for **every** address in
+   a network is not the same answer as "nothing answered", and the sweep knows
+   which it saw. Surface it on the adopt screen, where the operator reads
+   `found=0` today.
+
+2. **Finish the message audit's remaining eleven findings**, all in the UI. The
+   full list with per-finding suggested wording is in the workflow output —
+   re-run the audit or read it from the journal named in §5ax. The two worth
+   doing first: `Unadopt.tsx` can render the exact `uci` commands to clean up by
+   hand (`adoption/ssh.go` `RemoveFootprint` already builds them), and
+   `Dashboard.tsx`'s "at least one access point's client count could not be
+   read" has the answer available from `LiveClients`.
+
+3. **Apply the firewall-zone LIST form on hardware.** §5as renders a zone once
+   per zone with its networks as a UCI list, and that form has never been
+   written to a device, because neither adopted device is a gateway. Needs a
+   router adopted with `role=gateway` whose bridge is already VLAN-aware — it
+   does not have to be anybody's real gateway, a bench box carrying no traffic
+   exercises the identical path. See the README's "What is NOT tested yet".
+
+4. **Decide what a routing change should do to a running daemon.** §5ax: after
+   the operator fixed their cabling, a fresh process connected while the
+   running daemon kept returning `no route to host`, and the adopt error blamed
+   the route. Either detect it or say so; silently requiring a restart is the
+   kind of thing nobody guesses.
 
 Then, in order of value:
 
@@ -588,9 +641,12 @@ Then, in order of value:
   settings that could be turned on and not off, one of them the exact remedy
   for the project's worst known hardware defect. `tools/stalecheck` renders the
   live model with a flag cleared and reports what the plan would leave behind.
-- **Look at a screen in a browser.** **Forty-seven** defects have been found
-  this way and not one was reachable by any test in the repo. Everything has
-  been looked at once now, so the yield is in what CHANGES — and in the screen
+- **Look at a screen in a browser.** **Forty-seven** defects had been found this
+  way before §5ax, and not one was reachable by any test in the repo. §5ax added
+  more, including "radio radio0 is gone" printed about a radio that was carrying
+  the SSID — found by finally opening the apply preview that §5av's own guidance
+  had recommended and nobody had opened. Everything has been looked at once now,
+  so the yield is in what CHANGES — and in the screen
   ABOVE whatever was just changed, which is where the last two came from
   (§5ai): the daemon's un-adopt path grew a new way to fail, and reading the
   panel over it found that the panel had no way to recover from ANY of them.
@@ -603,15 +659,27 @@ Then, in order of value:
 
 **What the operator has already done** (do not re-raise): the Archer C6's WPA
 passphrase was rotated on 2026-08-17, closing the leak from `02e99d0`. The
-WRT3200ACM was power-cycled to recover from the deliberate PMF wedge, and both
-devices are adopted, named after their models, and carrying `oonfee-roam`.
+WRT3200ACM was power-cycled to recover from the deliberate PMF wedge. Both
+devices were re-adopted on 2026-08-18 after the routing incident in §5ax, are
+named after their models, sit in the `all-aps` group, and carry `oonfee-roam`.
+The second USB ethernet adapter that broke routing has been unplugged.
 
-**One thing still needs the operator, not the next session:**
-- **A third router** unblocks the whole remaining backlog at once — mesh
-   `peered`, the wireless uplink, three-AP fan-out, and the first class B/C
-   budget measurement. Any cheap MT7621 or ath79 box does all four.
+**Two things still need the operator, not the next session:**
+- **A third router** unblocks four backlog items at once — mesh `peered`, the
+  wireless uplink, three-AP fan-out, and the first class B/C budget
+  measurement. Any cheap MT7621 or ath79 box does all four. It would also
+  supply the `role=gateway` device queue item 3 needs, though a bench box
+  already owned would do for that alone.
+- **One re-probe of the WRT3200ACM.** The apply preview still shows a stale
+  "radio radio0 is gone" line from a 2026-08-16 event. §5ax fixed both reasons
+  re-probing could not clear it, but the fix supersedes the old event rather
+  than rewriting it, so it needs one probe from the device's screen. If it is
+  still showing after that, the supersede logic is wrong and worth a look.
 
 ### Where I would start, if picking this up cold
+
+If you are a new harness with no context: read the four-item queue above, then
+§0, then §6. Item 1 is self-contained and does not need the hardware.
 
 Not with a feature. The most valuable half-hour is **running the on-air check
 (§5y) and then reading §0**, in that order. The first tells you whether the
@@ -4490,6 +4558,149 @@ actually happened is the one above, done by hand.
 
 ---
 
+### 5ax. The message audit, the network editor, and an evening lost to two cables
+
+**Done 2026-08-18.** Thirteen commits. Roughly half came from a single question
+the operator asked about a warning triangle, and the other half from a network
+outage that turned out not to be a bug at all — but which exposed three that
+were.
+
+#### "I'm not actually sure what to do"
+
+Said about a firewall-zone warning that read *"lan is a firewall zone the device
+already has. oonfeeWRT does not edit zones it did not write, so this network
+will be refused at preview until it has a zone of its own."* Every word true,
+and it never says what to type.
+
+That sentence had been written **an hour earlier**, by me, in the same session
+that added STATUS §6's rule about advice that names an action. Knowing the rule
+is not the same as applying it.
+
+It now names the action and an example derived from the network's own name, and
+the full sentence is printed under the card rather than living only in a `title`
+attribute. The same pass found the `lan` row on VLAN 1 was flagged too and had
+nothing wrong with it — `renderNetwork` returns early for VLAN 0 and 1, so no
+zone renders and the warning was noise on the one row where no action exists.
+
+#### A 36-agent audit of every operator-facing message
+
+Four surfaces, adversarially verified: **32 findings raised, 24 confirmed, 8
+refuted, 4 of them advice that cannot be followed.**
+
+The sharpest was `render.go`'s `hardware-unidentified` mitigation — *"Apply a
+WLAN and re-probe"* — which STATUS §6 already records as the lesson about
+unfollowable advice. It has two trigger arms and the advice only works for one.
+When the radio LIST was refused, `radiosByBand` returns empty, no wifi-iface
+renders at all, and there is no WLAN to apply. §5as fixed the *deletion* that
+condition caused and left the sentence standing.
+
+Two more had been made false **that same morning**: the clients grid's signal
+and access-point tooltips still said those come "from the focused poll tier",
+hours after `c822765` moved both to the baseline hostapd read.
+
+Nine of the twenty no-remedy findings were fixed in one pass — the two conflict
+reasons above all, because a conflict blocks the whole apply and *"a section
+with our name exists but is not ours"* named no section, no marker and no lever.
+`readoptFix` says the one action behind four separate "could not read this"
+messages once, so they cannot drift apart. **Eleven UI findings remain.**
+
+#### The clients grid threw away the answer it already had
+
+The operator reported a phone and a watch connected and every radio column
+reading unknown. Both were associated the whole time, and hostapd was reporting
+them at −46 and −50 dBm.
+
+`decodeAPClients` unmarshalled the MAC-keyed map and kept `len()`:
+
+```go
+n := len(v.Clients)
+s.ap(iface).Clients = &n
+```
+
+`get_clients` carries each MAC with its RSSI, bytes, packets, rate and airtime,
+and runs at the **baseline** rate. Three of the four empty columns were
+answerable for free, gated behind a tier that exists to pay for per-station
+reads. Only TX retries genuinely needs the focused tier.
+
+A hazard worth keeping: on the same device in the same minute,
+`iwinfo.assoclist` returns `F6:97:77:EB:8E:C9` and `hostapd.get_clients` returns
+`f6:97:77:eb:8e:c9`, and the clients table stores lower case. **A join that does
+not normalise misses every row and looks exactly like an empty result** — which
+is the failure the operator was staring at.
+
+#### "radio radio0 is gone", about a radio carrying the SSID
+
+Found by finally opening the apply preview, which §5av's own guidance had
+recommended and I had not done.
+
+`diff.go` has rename-pairing for exactly this, added two days earlier, whose
+comment says every radio was once reported lost AND gained "with 'WLANs targeted
+at its band will not render' attached to hardware that was working". It pairs on
+`HWModes` and guards `len(a.HWModes) == 0` — **the new side only.** The stored
+event shows the empty side was the old one. A disappearance with no mode
+evidence is `EffectAmbiguous` now, and deliberately not actionable.
+
+Then the remedy for it did not work either, twice over:
+
+1. `recentCapabilityLoss` scanned back five events for the first *actionable*
+   one, so a clean re-probe never superseded an old loss. Narrowed to the newest.
+2. That still failed, because **`logReprobe` returns early on `res.Unchanged`
+   and writes nothing at all.** The operator re-probed exactly as advised and
+   the screen did not move. Every probe now writes
+   `device.capabilities_probed`, so "nothing has changed since" is a statement
+   the preview can check.
+
+Point 2 was caught only because someone followed the instruction and said it did
+not work. Point 1 was written *while fixing this same class*.
+
+#### Networks became a real screen
+
+The card was a stack of flex rows with fields inline — nothing lined up, and the
+bare number after the name had no column header saying it was a VLAN. It uses
+`DataGrid` now, the same component the clients and devices screens use.
+
+A network could previously be **created and deleted and nothing else**. Clicking
+a row opens an editor in the shared `SlideOver`: name, VLAN, zone, enabled,
+address, with the zone warning live. Below the address it derives what UniFi
+shows — gateway, netmask, broadcast, usable count, DHCP range, lease — and says
+plainly that those are **read-only**, because `render/network.go` hardcodes the
+pool and presenting them as settings would be inventing controls that go
+nowhere.
+
+The trap both editors needed pinning: `handleSaveNetwork` rebuilds the record
+from what it is sent, so **a partial post blanks the VLAN and the address**.
+
+#### An evening lost to two cables, and three defects it exposed
+
+The operator reported the devices gone and re-adoption failing. Cause: **two USB
+ethernet adapters on the same `192.168.1.0/24`**, so macOS marked the subnet
+routes `RTF_REJECT`. Go's non-blocking `connect()` got `EHOSTUNREACH`
+immediately while `curl`, `ping` and Python — all blocking connects — kept
+working. Every shell tool said the routers were fine; the controller could not
+reach them.
+
+Not a controller bug. But it cost an evening and it produced three real ones:
+
+1. **Discovery reported `found=0`** with no hint that the controller's own host
+   could not reach the subnet. "Unroutable from here" and "nothing there" are
+   different facts and it reported the second. **This is what led to working
+   devices being deleted.** Not yet fixed, and it is the most valuable open item
+   in the tree.
+2. **A routing change needs a daemon restart**, silently. A fresh process
+   connected while the running daemon kept failing, and the adopt error said
+   `no route to host` when the route was fine.
+3. **The controller owned config it had no record of.** The un-adopt ran while
+   routing was broken so the config stayed; re-adoption then rendered exactly
+   what was there, the plan was empty, and `Apply` returned at its `p.Empty()`
+   guard before recording anything. Ownership is what un-adopt reverts, so it
+   would have walked away and left two marked sections per device. The same hole
+   §5at closed on the applying path, reached from the other side.
+
+`applyone` had the same early return and so could not exercise the path it was
+meant to test.
+
+---
+
 ## 6. Working practices that earned their place
 
 Stated because they repeatedly caught real bugs, including bugs I had already
@@ -4855,6 +5066,26 @@ written and believed.
   pre-flight audit returned no findings because all five of its agents died on
   a session limit. Check the failure count before believing a green result —
   an empty result and a passing result look identical.
+- **A message that names a problem without naming an action is half a message.**
+  §5ax's audit found 24 of them, and the one the operator complained about had
+  been written an hour earlier by the same person who had just written this
+  rule down. Knowing it is not applying it. Give the action AND an example the
+  reader can type; "write it in CIDR form" is not as useful as "for example
+  192.168.20.1/24".
+- **Check the remedy still works after you change the thing it describes.** Two
+  tooltips became false the same morning the code under them changed. A message
+  is a claim about behaviour and ages exactly like code, with nothing compiling
+  it.
+- **When the operator says your fix did not work, believe them before the
+  code.** §5ax's re-probe remedy failed twice: the second failure existed only
+  because `logReprobe` wrote nothing on an unchanged probe, which no test and no
+  reading had caught. It surfaced because someone followed the instruction and
+  reported that the screen did not move.
+- **Distinguish "I could not reach it" from "it is not there" in DISCOVERY too.**
+  Two ethernet adapters on one subnet made the controller unable to route to its
+  own fleet; discovery reported `found=0`, and working devices were deleted in
+  response. The three-state discipline this project applies to capabilities
+  stops at the network layer, and that is where it cost the most.
 - **A green suite against a mock proves the mock agrees with you.** §5as–§5au
   fixed nine defects without touching a device. The first run of `tools/dryrun`
   against real hardware found the reference Archer C6 being described back to

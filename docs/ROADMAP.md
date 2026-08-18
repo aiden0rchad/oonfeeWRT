@@ -8,6 +8,13 @@ independently useful and each de-risks the next.
 
 ## Phase 0 — Transport & safety (the foundation)
 
+**Status 2026-08-18: complete, and both proofs have been run on hardware.**
+Apply with an armed rollback watched changing and reverting on air, and
+un-adoption that leaves the device byte-for-byte as it was (STATUS §5ap). The
+apply path was re-proven end to end on 2026-08-18 after the review sweep
+(§5aw), and re-adoption of both devices exercised discovery → credential →
+probe → ACL → pin on 2026-08-18 (§5ax).
+
 Nothing user-visible. Build this first anyway.
 
 - Go controller skeleton, SQLite schema, embedded SPA shell.
@@ -46,6 +53,14 @@ both work.*
 ---
 
 ## Phase 1 — Read-only fleet view
+
+**Status 2026-08-18: built and running on two devices.** Inventory, adoption,
+the poll ladder, the rollup tables, Dashboard, Devices, and the Client Devices
+grid all exist and are exercised daily against real hardware. The shared
+`DataGrid` (virtualization, column prefs, filter rail) is used by Clients,
+Devices and — since §5ax — Networks. **The resource-budget harness is the one
+unbuilt item**, and it stays unbuilt because it needs a class-C device the lab
+does not have; class C sets the budget, so measuring on class A proves nothing.
 
 The first thing anyone sees.
 
@@ -98,6 +113,21 @@ section elsewhere on those devices is untouched.
 ---
 
 ## Phase 3 — Networks, zones, policy
+
+**Status 2026-08-18: partially built, and the built half has never run on a
+device.** The renderer produces the whole stack for a `role=gateway` device —
+bridge-VLAN, addressed interface, DHCP server, firewall zone and its forwarding
+— and STATUS §5as rewrote zones to render once per zone with their networks as
+a UCI list. None of it has been applied to hardware, because neither adopted
+device is a gateway. The UI has a Networks grid and a per-network editor
+(§5ax); DHCP pool and lease are hardcoded in `render/network.go` and are shown
+read-only rather than as settings, which is the first thing this phase should
+change.
+
+Two limits are deliberate and documented rather than pending: oonfeeWRT will
+not make a bridge VLAN-aware (measured taking the LAN down on a device that
+then reported healthy), and it will not add a network to a firewall zone it did
+not write.
 
 - Networks/VLANs with DHCP, DNS, IPv6, bridge VLAN filtering.
 - Zone model → firewall4 zones + forwardings; the zone-to-zone matrix UI.
