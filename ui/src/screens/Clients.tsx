@@ -129,7 +129,7 @@ export function Clients() {
       numeric: true,
       render: (c) =>
         c.signal == null ? (
-          <Unknown why="signal comes from the focused poll tier, which runs only while a device screen is open" />
+          <Unknown why="no access point this controller manages is reporting this client, so nothing has measured its signal. Associated clients are read from hostapd on every poll — a client on another network's access point will never have a reading here." />
         ) : (
           <span style={{ color: signalTone(c.signal) }}>{c.signal} dBm</span>
         ),
@@ -142,7 +142,7 @@ export function Clients() {
       render: (c) => {
         if (c.device_id == null) {
           return (
-            <Unknown why="which AP a client is on comes from the focused poll tier, which runs only while a device screen is open" />
+            <Unknown why="no access point this controller manages is reporting this client. It reached this list through ARP or DHCP, which sees every host on the network — including ones served by equipment oonfeeWRT does not run." />
           )
         }
         const ap = devices.find((d) => d.id === c.device_id)
@@ -160,7 +160,7 @@ export function Clients() {
       numeric: true,
       render: (c) =>
         c.tx_retry_pct == null ? (
-          <Unknown why="retry data comes from the focused poll tier" />
+          <Unknown why="the retry rate is the one radio figure hostapd does not report, so it comes from the focused poll tier. Open this client's access point from the Devices screen to start one; the figure appears after the next five-minute flush." />
         ) : (
           `${c.tx_retry_pct.toFixed(1)}%`
         ),

@@ -15,7 +15,7 @@ import type {
   SiteNetwork,
   WLAN,
 } from '../lib/api'
-import { Banner, Button, Card, Field, Prop, Toggle } from '../components/ui'
+import { Banner, Button, Card, DataGrid, Field, Prop, Toggle, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
 
 /**
@@ -1069,29 +1069,79 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
     .filter((w): w is string => w !== null)
   return (
     <Card title="Networks">
-      <div style={{ display: 'grid', gap: 8 }}>
-        {site.networks.map((n) => (
-          <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-            <strong>{n.name}</strong>
-            <span style={{ color: 'var(--text-secondary)' }}>
-              VLAN {n.vlan} · {n.cidr || 'no address'} ·
-            </span>
-            <NetworkZone n={n} onChanged={onChanged} />
-            <div style={{ flex: 1 }} />
-            <Button
-              onClick={async () => {
-                try {
-                  await api.deleteNetwork(n.id)
-                  onChanged()
-                } catch (e) {
-                  alert(e instanceof Error ? e.message : String(e))
-                }
-              }}
-            >
-              Delete
-            </Button>
-          </div>
-        ))}
+      <div style={{ display: 'grid', gap: 10 }}>
+        {/* The one grid, per UI-SPEC §5 — the same component the clients and
+            devices screens use. This was a stack of flex rows with the fields
+            inline, so nothing lined up between rows and the columns had no
+            names: an operator had to infer that the bare number after the name
+            was a VLAN. */}
+        <DataGrid
+          rows={site.networks}
+          rowKey={(n) => String(n.id)}
+          empty="No networks yet. Add one below."
+          columns={[
+            {
+              key: 'name',
+              header: 'Name',
+              required: true,
+              render: (n) => (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span
+                    title={n.enabled ? 'enabled' : 'disabled'}
+                    style={{
+                      width: 6, height: 6, borderRadius: '50%',
+                      background: n.enabled ? 'var(--good)' : 'var(--text-muted)',
+                    }}
+                  />
+                  <strong>{n.name}</strong>
+                </span>
+              ),
+              sortBy: (n) => n.name,
+            },
+            {
+              key: 'vlan',
+              header: 'VLAN',
+              numeric: true,
+              width: 80,
+              render: (n) => n.vlan,
+              sortBy: (n) => n.vlan,
+            },
+            {
+              key: 'subnet',
+              header: 'Subnet',
+              width: 150,
+              render: (n) =>
+                n.cidr || <Unknown why="no address is set, so this network gets a VLAN and no addressing" />,
+              sortBy: (n) => n.cidr ?? '',
+            },
+            {
+              key: 'zone',
+              header: 'Firewall zone',
+              width: 240,
+              render: (n) => <NetworkZone n={n} onChanged={onChanged} />,
+              sortBy: (n) => n.zone,
+            },
+            {
+              key: 'actions',
+              header: '',
+              width: 90,
+              render: (n) => (
+                <Button
+                  onClick={async () => {
+                    try {
+                      await api.deleteNetwork(n.id)
+                      onChanged()
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : String(e))
+                    }
+                  }}
+                >
+                  Delete
+                </Button>
+              ),
+            },
+          ]}
+        />
         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ width: 130 }}>
             <Field

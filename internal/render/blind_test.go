@@ -525,3 +525,57 @@ func TestUnreadableBoardDescriptionIsStillABlindSpot(t *testing.T) {
 		t.Error("an unreadable board description was not reported as undetermined")
 	}
 }
+
+// The hardware-unidentified warning has two causes and only ever gave the
+// remedy for one of them.
+//
+// "Apply a WLAN and re-probe" works when radios ARE listed but unnamed:
+// radiosByBand falls back to the configured band, a wifi-iface renders, the
+// apply puts the radio on the air, and iwinfo then names it.
+//
+// It is impossible when the radio LIST could not be read. The same condition
+// makes radiosByBand return an empty map, every band lookup misses, and no
+// wifi-iface is rendered at all — so there is no WLAN to apply, and re-probing
+// reads the same refused list. STATUS §6 records this string as the lesson
+// about advice that cannot work; §5as fixed the deletion it caused and left
+// the sentence standing.
+func TestTheUnidentifiedHardwareRemedyMatchesWhyItFired(t *testing.T) {
+	fix := func(caps *capability.Registry) string {
+		_, rep, err := Render(wirelessSite(), model.Device{ID: 1, Role: model.RoleAP},
+			caps, ourWireless())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, w := range rep.Warnings {
+			if w.DefectID == "hardware-unidentified" {
+				return w.Mitigation
+			}
+		}
+		t.Fatal("the hardware-unidentified warning did not fire")
+		return ""
+	}
+
+	// Radios listed, none named: applying really does settle it.
+	named := capability.NewRegistry()
+	named.Set(capability.FeatSurvey, capability.Present)
+	named.Radios = []capability.Radio{
+		{Device: "phy0-ap0", Phy: "phy0", Frequency: 2412}, // no Hardware
+	}
+	if got := fix(named); !strings.Contains(got, "Apply a WLAN and re-probe") {
+		t.Errorf("a radio that only lacks a NAME should still be told to apply "+
+			"and re-probe, which works: %q", got)
+	}
+
+	// The list itself was refused: applying is not possible.
+	refused := fix(radiosRefused())
+	if strings.Contains(refused, "Apply a WLAN and re-probe") {
+		t.Errorf("told the operator to apply a WLAN on a device where no WLAN "+
+			"can be rendered, so there is nothing to apply: %q", refused)
+	}
+	for _, want := range []string{"Re-adopt", "access-control"} {
+		if !strings.Contains(refused, want) {
+			t.Errorf("the remedy for a refused radio list does not mention %q: %q",
+				want, refused)
+		}
+	}
+}

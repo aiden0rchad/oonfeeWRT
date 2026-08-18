@@ -692,8 +692,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 				"bill of health — it means the check did not run.",
 			Confidence: string(capability.ConfMeasuredHere),
 			Severity:   string(capability.SevSilentlyIgnored),
-			Mitigation: "Apply a WLAN and re-probe; once a radio is broadcasting it " +
-				"reports what it is.",
+			Mitigation: unreadableFix(caps),
 		})
 	}
 	return doc, rep, nil
@@ -1099,4 +1098,29 @@ func radioKind(radiosUnknown bool) OmissionKind {
 		return KindUndetermined
 	}
 	return KindUnclassified
+}
+
+// unreadableFix is the remedy for hardware-unidentified, which has two causes
+// and only ever offered the remedy for one.
+//
+// The warning fires when radios exist and none reported a hardware name, OR
+// when the radio list itself could not be read. It said "apply a WLAN and
+// re-probe" for both — and in the second case that is impossible: the same
+// condition makes radiosByBand return an empty map, every band lookup misses,
+// and NO wifi-iface is rendered, so there is no WLAN to apply. Re-probing then
+// reads the same refused list.
+//
+// STATUS §6 records this exact string as the lesson about advice that cannot
+// work. §5as fixed the DELETION it caused and left the sentence standing.
+func unreadableFix(caps *capability.Registry) string {
+	if caps != nil && len(caps.Radios) == 0 {
+		return "This device's radio list could not be read at all, so no WLAN " +
+			"can be rendered here and applying one will not change that — there " +
+			"is nothing to apply. The list comes from luci-rpc.getWirelessDevices " +
+			"and iwinfo.devices, both of which the device's access-control file " +
+			"must grant. Re-adopt the device from the Devices screen: adoption " +
+			"rewrites that file, and the current one grants both. Then re-probe."
+	}
+	return "Apply a WLAN and re-probe; once a radio is broadcasting it reports " +
+		"what it is."
 }
