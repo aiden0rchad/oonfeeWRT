@@ -28,7 +28,11 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 	// states say which one they are: "your device cannot" and "we could not
 	// find out" send an operator to completely different places.
 	if ok, reason := MeshGate(caps); !ok {
-		return Section{}, []Omission{{WLAN: m.MeshID, Reason: reason}}
+		// Classified here rather than by changing MeshGate's signature, which
+		// two screens share. A gate that could not establish the answer is an
+		// undetermined omission, not a hardware limit.
+		return Section{}, []Omission{{WLAN: m.MeshID, Reason: reason,
+			Kind: gateKind(caps, capability.FeatMesh)}}
 	}
 
 	v := map[string]string{
@@ -51,7 +55,7 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 		// decision is visible, because the consequence is not obvious: joining a
 		// mesh is joining the network behind it.
 		omissions = append(omissions, Omission{
-			WLAN: m.MeshID,
+			WLAN: m.MeshID, Kind: KindCaution,
 			Reason: "this mesh is unencrypted: any device in radio range can peer " +
 				"with it and reach the network behind it. Set a passphrase unless " +
 				"that is deliberate",

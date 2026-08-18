@@ -1164,12 +1164,38 @@ function Preview({ p }: { p: PreviewResult }) {
             </div>
           )}
 
+          {/* Three lists, because they were one and the heading was true of
+              about a fifth of it. A layer-2 loop warning and a section kept in
+              place because we could not see the device were both being shown
+              as "not an error — the hardware cannot take it", the first in
+              muted grey and the second saying the reverse of what happened. */}
+          {d.cautions && d.cautions.length > 0 && (
+            <Banner tone="warning">
+              These will be applied, and are worth a look first:
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {d.cautions.map((o) => (
+                  <li key={o}>{o}</li>
+                ))}
+              </ul>
+            </Banner>
+          )}
+
           {d.omitted && d.omitted.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              Left out on this device (not an error — the hardware or firmware
-              cannot take it):
+              Not rendered on this device:
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {d.omitted.map((o) => (
+                  <li key={o}>{o}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {d.undetermined && d.undetermined.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+              Could not be determined, so nothing here was changed or removed:
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {d.undetermined.map((o) => (
                   <li key={o}>{o}</li>
                 ))}
               </ul>

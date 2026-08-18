@@ -618,6 +618,15 @@ export interface DevicePreview {
   conflicts?: string[]
   /** Options this hardware cannot take. Absent, not failed. */
   omitted?: string[]
+  /** Rendered and applied, and needing a human decision first — an unencrypted
+   *  mesh, a wireless bridge that is a layer-2 loop if the device is also
+   *  cabled. These used to sit in `omitted`, under a heading that called them
+   *  not an error. */
+  cautions?: string[]
+  /** What could not be established, including sections left in place because
+   *  nothing could be decided about them. The opposite of `omitted`: nothing
+   *  was left out, and the reason is a gap in what the controller can see. */
+  undetermined?: string[]
   /** Settings this device WILL accept and will not honour, or will break on,
    *  because its wireless driver is known to be broken in that specific way.
    *  Unlike `omitted`, these ARE applied — the controller does not silently

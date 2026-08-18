@@ -12,6 +12,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
+	"github.com/aiden0rchad/oonfeewrt/internal/render"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
@@ -102,9 +103,7 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 		p.Conflicts = append(p.Conflicts,
 			fmt.Sprintf("%s.%s: %s", cf.Config, cf.Section, cf.Reason))
 	}
-	for _, om := range plan.Report.Omissions {
-		p.Omitted = append(p.Omitted, fmt.Sprintf("%s: %s", om.WLAN, om.Reason))
-	}
+	p.Omitted, p.Cautions, p.Undetermined = splitOmissions(plan.Report.Omissions)
 	for _, w := range plan.Report.Warnings {
 		p.DriverDefects = append(p.DriverDefects, api.DriverDefect{
 			WLAN: w.WLAN, DefectID: w.DefectID, Summary: w.Summary,
@@ -521,6 +520,32 @@ func applyOrder(devices []*store.Device) []*store.Device {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// splitOmissions routes each omission to the list whose heading is true of it.
+//
+// One list under one heading was telling an operator that a layer-2 loop
+// warning and a section kept in place because the device could not be read
+// were both "not an error — the hardware or firmware cannot take it". The
+// first describes a network that stops working; the second is the reverse of
+// "left out".
+//
+// Split out so the routing is testable without a device, like batchVerdict and
+// meshFromPackages. An unclassified omission falls to Omitted, whose heading
+// asserts nothing about why.
+func splitOmissions(oms []render.Omission) (omitted, cautions, undetermined []string) {
+	for _, om := range oms {
+		line := fmt.Sprintf("%s: %s", om.WLAN, om.Reason)
+		switch om.Kind {
+		case render.KindCaution:
+			cautions = append(cautions, line)
+		case render.KindUndetermined:
+			undetermined = append(undetermined, line)
+		default:
+			omitted = append(omitted, line)
+		}
+	}
+	return omitted, cautions, undetermined
 }
 
 // deviceCaps decodes the capability record the probe stored at adoption.

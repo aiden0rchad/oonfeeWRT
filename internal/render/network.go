@@ -143,7 +143,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 	// error, but a contract half the package honours is not a contract.
 	if caps == nil {
 		omissions = append(omissions, Omission{
-			WLAN: n.Name,
+			WLAN: n.Name, Kind: KindUndetermined,
 			Reason: "nothing is known about this device's hardware, so no wired " +
 				"configuration is rendered for it. This is not a statement that " +
 				"the device cannot carry a VLAN — it means there is no " +
@@ -155,7 +155,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 	ports := caps.Ports
 	if ports.Bridge == "" || len(ports.LAN) == 0 {
 		omissions = append(omissions, Omission{
-			WLAN: n.Name,
+			WLAN: n.Name, Kind: KindUndetermined,
 			Reason: "this device did not report its wired port layout, so a VLAN " +
 				"cannot be tagged onto physical ports here",
 		})

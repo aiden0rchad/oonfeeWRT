@@ -82,7 +82,7 @@ func TestRefusedRadioListPrunesNothing(t *testing.T) {
 	// a device whose config the controller can no longer account for.
 	var kept string
 	for _, o := range rep.Omissions {
-		if o.WLAN == "(kept)" {
+		if o.Kind == KindUndetermined && strings.Contains(o.Reason, "left exactly as they are") {
 			kept = o.Reason
 		}
 	}
@@ -222,7 +222,7 @@ func TestUndecidedFeatureGateKeepsTheInterface(t *testing.T) {
 	}
 	kept := map[string]bool{}
 	for _, o := range rep.Omissions {
-		if o.WLAN == "(kept)" {
+		if o.Kind == KindUndetermined {
 			kept[o.Reason] = true
 		}
 	}
@@ -314,7 +314,7 @@ func TestUnreadablePortLayoutPrunesNothing(t *testing.T) {
 	}
 	var told bool
 	for _, o := range rep.Omissions {
-		if o.WLAN == "(kept)" && strings.Contains(o.Reason, "oowrt_net_iot") {
+		if o.Kind == KindUndetermined && strings.Contains(o.Reason, "oowrt_net_iot") {
 			told = true
 		}
 	}

@@ -28,7 +28,8 @@ func renderUplink(u model.Uplink, w model.WLAN, net model.Network, radio string,
 	caps *capability.Registry) (Section, []Omission) {
 
 	if ok, reason := UplinkGate(caps); !ok {
-		return Section{}, []Omission{{WLAN: w.SSID, Reason: reason}}
+		return Section{}, []Omission{{WLAN: w.SSID, Reason: reason,
+			Kind: gateKind(caps, capability.FeatWirelessUplink)}}
 	}
 
 	v := map[string]string{
@@ -61,7 +62,7 @@ func renderUplink(u model.Uplink, w model.WLAN, net model.Network, radio string,
 	// to — so it does not refuse, it states the condition and leaves the
 	// operator, who can see the room, to decide.
 	omissions := []Omission{{
-		WLAN: w.SSID,
+		WLAN: w.SSID, Kind: KindCaution,
 		Reason: "this device will join " + w.SSID + " as a wireless bridge. If it " +
 			"is ALSO connected by ethernet to the same network, that is a " +
 			"layer-2 loop — OpenWrt bridges ship with STP off, so nothing will " +

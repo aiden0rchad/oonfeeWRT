@@ -67,10 +67,27 @@ type DevicePreview struct {
 	// conflict is how you get half a WLAN.
 	Blocked   bool     `json:"blocked"`
 	Conflicts []string `json:"conflicts,omitempty"`
-	// Omitted names options this device's hardware or firmware cannot take.
-	// Absent, not failed: a WLAN asking for 6 GHz on a device with no 6 GHz
-	// radio renders nothing there and says so.
+	// Omitted names things the site model asked for that are not on this
+	// device. Absent, not failed: a WLAN asking for 6 GHz on a device with no
+	// 6 GHz radio renders nothing there and says so.
 	Omitted []string `json:"omitted,omitempty"`
+	// Cautions are rendered, applied, and need a human decision first — an
+	// unencrypted mesh anyone in range can join, a wireless bridge that is a
+	// layer-2 loop if the device is also cabled.
+	//
+	// Split out because they used to sit in Omitted, under a heading that read
+	// "not an error — the hardware or firmware cannot take it". Both of them
+	// describe a network that stops working, and both were styled as the
+	// reassurance directly above them.
+	Cautions []string `json:"cautions,omitempty"`
+	// Undetermined is what could not be established, including every section
+	// left in place because nothing could be decided about it.
+	//
+	// The opposite of Omitted rather than a flavour of it: nothing was left
+	// out, and the reason is a gap in what the controller can see. Showing
+	// "the existing uplink is left exactly as it is" under a heading about
+	// hardware limits says the reverse of what happened.
+	Undetermined []string `json:"undetermined,omitempty"`
 	// DriverDefects are settings this device WILL accept and will not honour,
 	// or will break on, because its wireless driver is known to be broken in
 	// that specific way.

@@ -165,12 +165,38 @@ func (d Doc) Configs() []string {
 	return out
 }
 
-// Omission records something the operator asked for that this device cannot
-// do. These are shown in the diff preview: silently dropping a requested SSID
-// is how a controller loses trust.
+// OmissionKind separates the reasons a thing is not on the device, because
+// they are not one reason and the screen was presenting them as one.
+//
+// The preview rendered every omission under "Left out on this device (not an
+// error — the hardware or firmware cannot take it)". That sentence is true of
+// roughly four of the nineteen. Two of the others are conditions an operator
+// has to act on BEFORE applying — an unencrypted mesh anyone in range can join,
+// and a wireless bridge that is a layer-2 loop if the device is also cabled —
+// and both sat in muted grey under a heading calling them not an error. The
+// rest are decisions (a role, an override, a VLAN we do not own) or things we
+// could not determine, which is the opposite of a hardware limit.
+type OmissionKind string
+
+const (
+	// KindUnclassified is the zero value, and it deliberately claims nothing.
+	// An omission added without a kind gets a neutral heading rather than
+	// inheriting an assertion about the hardware nobody checked.
+	KindUnclassified OmissionKind = ""
+	// KindCaution is rendered, and needs a human decision before the apply.
+	KindCaution OmissionKind = "caution"
+	// KindUndetermined is "we could not establish this", which includes every
+	// section left in place because nothing could be decided about it.
+	KindUndetermined OmissionKind = "undetermined"
+)
+
+// Omission records something the operator asked for that is not on the device,
+// and why. These are shown in the diff preview: silently dropping a requested
+// SSID is how a controller loses trust.
 type Omission struct {
 	WLAN   string
 	Reason string
+	Kind   OmissionKind
 }
 
 // Conflict is a foreign section we refuse to touch. Conflicts abort the render
@@ -443,6 +469,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			if !ok {
 				rep.Omissions = append(rep.Omissions, Omission{
 					WLAN: w.SSID, Reason: noRadio(band),
+					Kind: radioKind(radiosUnknown),
 				})
 				continue
 			}
@@ -930,7 +957,8 @@ func undetermined(caps *capability.Registry, f capability.Feature) bool {
 func (d *Doc) retain(rep *Report, existing Existing, name, reason string) {
 	d.Retain = append(d.Retain, SectionRef{Config: "wireless", Name: name})
 	if existing.OwnedIn("wireless", name) {
-		rep.Omissions = append(rep.Omissions, Omission{WLAN: "(kept)", Reason: reason})
+		rep.Omissions = append(rep.Omissions, Omission{
+			WLAN: name, Reason: reason, Kind: KindUndetermined})
 	}
 }
 
@@ -957,7 +985,7 @@ func reportBlind(doc *Doc, rep *Report, existing Existing) {
 		}
 		sort.Strings(kept)
 		rep.Omissions = append(rep.Omissions, Omission{
-			WLAN: "(kept)",
+			WLAN: config, Kind: KindUndetermined,
 			Reason: fmt.Sprintf("%s configuration on this device could not be "+
 				"determined, so these sections we own are left exactly as they "+
 				"are rather than removed: %s. Nothing here is a statement that "+
@@ -997,4 +1025,20 @@ func addOwned(doc *Doc, rep *Report, existing Existing, sec Section) {
 		return
 	}
 	doc.Sections = append(doc.Sections, sec)
+}
+
+// gateKind classifies a refused gate by whether it decided anything.
+func gateKind(caps *capability.Registry, f capability.Feature) OmissionKind {
+	if undetermined(caps, f) {
+		return KindUndetermined
+	}
+	return KindUnclassified
+}
+
+// radioKind classifies a missing band by whether we know it is missing.
+func radioKind(radiosUnknown bool) OmissionKind {
+	if radiosUnknown {
+		return KindUndetermined
+	}
+	return KindUnclassified
 }

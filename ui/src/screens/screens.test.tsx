@@ -1558,6 +1558,51 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
   }
 
+  // The preview showed every omission under one heading: "Left out on this
+  // device (not an error — the hardware or firmware cannot take it)".
+  //
+  // Two of the things in that list describe a network that stops working — an
+  // unencrypted mesh anyone in range can join, and a wireless bridge that is a
+  // layer-2 loop if the device is also cabled — and both were rendered in muted
+  // grey directly under the reassurance. A third kind says a section was KEPT
+  // because the device could not be read, which is the reverse of "left out".
+  it('does not file a pre-apply hazard under "not an error"', async () => {
+    api.preview.mockResolvedValue({
+      devices: [
+        {
+          device_id: 1, name: 'ap-1', role: 'ap', changes: [],
+          blocked: false, touches_traversal: false, driver_defects: [],
+          omitted: ['home: device has no 6g radio'],
+          cautions: [
+            'roam: this device will join roam as a wireless bridge. If it is ' +
+              'ALSO connected by ethernet to the same network, that is a layer-2 loop',
+          ],
+          undetermined: [
+            'oowrt_up1_radio1: the existing wireless uplink section is left exactly as it is',
+          ],
+        },
+      ],
+      site_errors: [],
+    })
+    render(<Settings devices={[]} />)
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalled())
+
+    // The hazard is present, and is NOT under the heading that calls it fine.
+    await waitFor(() =>
+      expect(screen.getByText(/layer-2 loop/)).toBeTruthy())
+    expect(screen.getByText(/worth a look first/)).toBeTruthy()
+    expect(screen.queryByText(/hardware or firmware cannot take it/)).toBeNull()
+
+    // A section kept in place is not described as left out.
+    expect(screen.getByText(/Could not be determined/)).toBeTruthy()
+    expect(screen.getByText(/left exactly as it is/)).toBeTruthy()
+
+    // And a genuine omission still shows.
+    expect(screen.getByText(/no 6g radio/)).toBeTruthy()
+  })
+
   const applyBtn = () =>
     screen.getAllByText(/^Apply/).map((n) => n.closest('button')!).find(Boolean)!
 
