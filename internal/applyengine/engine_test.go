@@ -433,3 +433,80 @@ func TestConfirmFailureStillReachesVerificationInsideTheDeadline(t *testing.T) {
 	}
 	t.Logf("outcome=%s stranded=%v reason=%s", res.Outcome, res.Stranded, res.Reason)
 }
+
+func TestRollbackBudgetUsesExactRollbackAndRevertFloor(t *testing.T) {
+	e := New()
+	if got, want := MinApplyBudget(), 105*time.Second; got != want {
+		t.Fatalf("default minimum apply budget = %s, want %s", got, want)
+	}
+
+	deadline := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	required := DefaultTimeout + DefaultRevertGrace
+	if err := e.requireRollbackBudget(ctx, deadline.Add(-required), DefaultTimeout); err != nil {
+		t.Fatalf("the exact rollback + revert floor must be accepted: %v", err)
+	}
+	if err := e.requireRollbackBudget(ctx, deadline.Add(-required+time.Nanosecond), DefaultTimeout); err == nil {
+		t.Fatal("one nanosecond below the rollback + revert floor must be refused")
+	}
+	if err := e.requireRollbackBudget(context.Background(), deadline, DefaultTimeout); err != nil {
+		t.Fatalf("a context without a deadline has no finite budget to reject: %v", err)
+	}
+}
+
+// The fleet admission check happens before connecting and planning, but those
+// steps plus staging can consume its safety margin. Model that passage with the
+// injected clock: the operation starts with exactly enough time, then reaches
+// the post-verification arm point one second late. The live marker must remain
+// untouched and the staged delta must be gone.
+func TestApplyRefusesWhenStagingConsumesRollbackBudget(t *testing.T) {
+	c := dial(t)
+	seed(t, c, "oonfeewrt_probe2", "BASE")
+
+	e := fastEngine()
+	p := plan("oonfeewrt_probe2", "MUST_NOT_LAND")
+	required := p.Timeout + e.RevertGrace
+	deadline := time.Now().Add(30 * time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	started := deadline.Add(-required)
+	nowCalls := 0
+	e.Now = func() time.Time {
+		nowCalls++
+		if nowCalls == 1 {
+			return started
+		}
+		return started.Add(time.Second)
+	}
+	healthCalled := false
+	res, err := e.Apply(ctx, c, p, func(context.Context, *ubus.Client) error {
+		healthCalled = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "insufficient rollback budget after staging") {
+		t.Fatalf("Apply error = %v, want post-staging rollback-budget refusal", err)
+	}
+	if !strings.Contains(err.Error(), "no live configuration was written") {
+		t.Fatalf("refusal must state the write boundary truthfully: %v", err)
+	}
+	if res.Outcome != "" {
+		t.Fatalf("pre-write refusal must not claim a router outcome, got %q", res.Outcome)
+	}
+	if healthCalled {
+		t.Fatal("health ran even though uci.apply was never armed")
+	}
+	if got := marker(t, c, "oonfeewrt_probe2"); got != "BASE" {
+		t.Fatalf("budget refusal changed live config: marker = %q", got)
+	}
+	var changes struct {
+		Changes map[string][]any `json:"changes"`
+	}
+	if err := c.Call(context.Background(), "uci", "changes", struct{}{}, &changes); err != nil {
+		t.Fatalf("uci.changes: %v", err)
+	}
+	if len(changes.Changes) != 0 {
+		t.Fatalf("budget refusal left staged changes behind: %v", changes.Changes)
+	}
+}

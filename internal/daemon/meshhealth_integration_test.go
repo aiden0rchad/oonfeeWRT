@@ -104,7 +104,9 @@ func TestIntegrationMeshHealth(t *testing.T) {
 			t.Logf("could not delete the test mesh: %v", err)
 			return
 		}
-		if _, err := d.ApplySite(context.Background(), api.ApplyRequest{}); err != nil {
+		cleanupCtx := context.Background()
+		if _, err := d.ApplySite(cleanupCtx,
+			boundApplyRequest(t, d, cleanupCtx, api.ApplyRequest{})); err != nil {
 			t.Logf("could not prune the test mesh from the devices: %v", err)
 		}
 	})
@@ -135,7 +137,7 @@ func TestIntegrationMeshHealth(t *testing.T) {
 			t.Logf("preview %s omitted: %s", row.Name, om)
 		}
 	}
-	res, err := d.ApplySite(ctx, api.ApplyRequest{})
+	res, err := d.ApplySite(ctx, api.ApplyRequest{PreviewToken: prev.PreviewToken})
 	if err != nil {
 		t.Fatal(err)
 	}

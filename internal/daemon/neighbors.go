@@ -9,7 +9,6 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/roaming"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
@@ -261,7 +260,7 @@ func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult
 func (d *Daemon) readNeighbourState(ctx context.Context, dev *store.Device,
 	managed map[string]bool, obs map[roaming.Target]*bssObservation) *api.NeighbourDevice {
 
-	if !dev.Adopted() || !model.RoleOf(dev.Role).Wireless() {
+	if !dev.Adopted() || !deviceFunctions(dev).Wireless() {
 		return nil
 	}
 	row := &api.NeighbourDevice{DeviceID: dev.ID, Name: dev.Name}

@@ -154,7 +154,9 @@ func (b *SSHBootstrap) Close() error {
 }
 
 // run executes one command, optionally feeding it stdin, and returns its output.
-func (b *SSHBootstrap) run(ctx context.Context, stdin []byte, cmd string) (string, error) {
+// operation is a fixed, operator-safe label: cmd may contain generated
+// credentials and must never become part of an error or log message.
+func (b *SSHBootstrap) run(ctx context.Context, stdin []byte, operation, cmd string, secrets ...string) (string, error) {
 	sess, err := b.client.NewSession()
 	if err != nil {
 		return "", fmt.Errorf("adoption: open SSH session: %w", err)
@@ -176,14 +178,38 @@ func (b *SSHBootstrap) run(ctx context.Context, stdin []byte, cmd string) (strin
 		return "", ctx.Err()
 	case err := <-done:
 		if err != nil {
-			msg := strings.TrimSpace(errb.String())
-			if msg == "" {
-				msg = strings.TrimSpace(out.String())
-			}
-			return out.String(), fmt.Errorf("adoption: %q failed: %w (%s)", cmd, err, msg)
+			return out.String(), sshRunError(operation, err, out.String(), errb.String(), cmd, secrets)
 		}
 	}
 	return out.String(), nil
+}
+
+func sshRunError(operation string, runErr error, stdout, stderr, cmd string, secrets []string) error {
+	redactions := append([]string{cmd}, secrets...)
+	status := redactSSHError(runErr.Error(), redactions)
+	if len(secrets) > 0 {
+		// A remote shell may echo or reformat its input. For commands carrying a
+		// verifier, suppressing its output is the only reliable redaction.
+		return fmt.Errorf("adoption: %s failed: %s (remote output withheld)", operation, status)
+	}
+	msg := strings.TrimSpace(stderr)
+	if msg == "" {
+		msg = strings.TrimSpace(stdout)
+	}
+	msg = redactSSHError(msg, redactions)
+	if msg == "" {
+		return fmt.Errorf("adoption: %s failed: %s", operation, status)
+	}
+	return fmt.Errorf("adoption: %s failed: %s (%s)", operation, status, msg)
+}
+
+func redactSSHError(msg string, values []string) string {
+	for _, value := range values {
+		if value != "" {
+			msg = strings.ReplaceAll(msg, value, "[redacted]")
+		}
+	}
+	return msg
 }
 
 // InstallACL writes the file and proves it landed.
@@ -198,22 +224,32 @@ func (b *SSHBootstrap) InstallACL(ctx context.Context, path string, content []by
 		return fmt.Errorf("adoption: refusing to write an unsafe path %q", path)
 	}
 	tmp := path + ".oonfee-tmp"
-	if _, err := b.run(ctx, content, "cat > "+shellQuote(tmp)); err != nil {
+	if _, err := b.run(ctx, content, "write temporary ACL", "cat > "+shellQuote(tmp)); err != nil {
 		return err
 	}
-	want := sha256.Sum256(content)
-	got, err := b.run(ctx, nil, "sha256sum "+shellQuote(tmp))
+	got, err := b.run(ctx, nil, "verify temporary ACL", "sha256sum "+shellQuote(tmp))
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(strings.TrimSpace(got), hex.EncodeToString(want[:])) {
-		_, _ = b.run(ctx, nil, "rm -f "+shellQuote(tmp))
-		return fmt.Errorf("adoption: the ACL file did not survive the transfer "+
-			"(wrote %d bytes, device reports %s)", len(content), strings.Fields(got)[0])
+	if err := verifyACLHash(content, got); err != nil {
+		_, _ = b.run(ctx, nil, "discard temporary ACL", "rm -f "+shellQuote(tmp))
+		return err
 	}
-	if _, err := b.run(ctx, nil,
+	if _, err := b.run(ctx, nil, "install ACL",
 		"mv "+shellQuote(tmp)+" "+shellQuote(path)+" && chmod 0644 "+shellQuote(path)); err != nil {
 		return err
+	}
+	return nil
+}
+
+func verifyACLHash(content []byte, output string) error {
+	fields := strings.Fields(output)
+	if len(fields) == 0 {
+		return fmt.Errorf("adoption: the ACL file could not be verified after transfer (wrote %d bytes, device returned no digest)", len(content))
+	}
+	want := sha256.Sum256(content)
+	if fields[0] != hex.EncodeToString(want[:]) {
+		return fmt.Errorf("adoption: the ACL file did not survive the transfer (wrote %d bytes, device returned a different digest)", len(content))
 	}
 	return nil
 }
@@ -250,8 +286,27 @@ func (b *SSHBootstrap) CreateLogin(ctx context.Context, user, passHash string, g
 	}
 	sb.WriteString("uci commit rpcd")
 
-	if _, err := b.run(ctx, nil, sb.String()); err != nil {
+	if _, err := b.run(ctx, nil, "create controller login", sb.String(), passHash); err != nil {
 		return err
+	}
+	return nil
+}
+
+// RemoveACL removes only the controller ACL. It is the rollback used when
+// CreateLogin fails, because that failure does not prove ownership of the
+// login section and therefore must not delete it.
+func (b *SSHBootstrap) RemoveACL(ctx context.Context, aclPath string) error {
+	if !safePath(aclPath) {
+		return fmt.Errorf("adoption: refusing to remove an unsafe path %q", aclPath)
+	}
+	out, err := b.run(ctx, nil, "remove controller ACL", fmt.Sprintf(
+		"rm -f %s; printf 'acl=%%s\\n' \"$([ -e %s ] && echo present || echo gone)\"",
+		shellQuote(aclPath), shellQuote(aclPath)))
+	if err != nil {
+		return err
+	}
+	if strings.Contains(out, "acl=present") {
+		return fmt.Errorf("adoption: the ACL file %s is still on the device after removal", aclPath)
 	}
 	return nil
 }
@@ -284,7 +339,7 @@ func (b *SSHBootstrap) RemoveFootprint(ctx context.Context, aclPath, user string
 	// rather than a live one; what it costs is the report. Un-adopt says the
 	// device is clean, the controller deletes its inventory row, and the
 	// residue nobody was told about is now recorded nowhere at all.
-	out, err := b.run(ctx, nil, fmt.Sprintf(
+	out, err := b.run(ctx, nil, "remove controller footprint", fmt.Sprintf(
 		"uci -q delete rpcd.%s; uci commit rpcd; rm -f %s; "+
 			"printf 'login=%%s acl=%%s\n' "+
 			"\"$(uci -q get rpcd.%s >/dev/null 2>&1 && echo present || echo gone)\" "+

@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
 	"net"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
+	"github.com/aiden0rchad/oonfeewrt/internal/observability"
+	"github.com/aiden0rchad/oonfeewrt/internal/radio"
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -24,10 +27,53 @@ const loadScale = 65536.0
 type call struct {
 	inv    ubus.Invocation
 	decode func(json.RawMessage, *Snapshot) error
+	// radioInventory marks the optional getWirelessDevices source. Its outcome
+	// is tracked independently from system.info: a healthy device poll does not
+	// make a denied radio refresh current.
+	radioInventory bool
+	// radioKey marks a freqlist attempt for one stable UCI radio. The poll uses
+	// it to preserve a failed/denied answer as unknown rather than stale data.
+	radioKey string
+	// topologySource groups one or more calls into one explicit source state.
+	topologySource string
+	// assocIface identifies one focused assoclist question. Asked and answered
+	// are tracked separately so a partial multi-BSS radio never becomes a
+	// whole-radio aggregate.
+	assocIface string
 
 	// optional marks a call whose failure degrades the snapshot rather than
 	// meaning the device is unreachable.
 	optional bool
+}
+
+func degradationCause(err error, status ubus.Status) DegradationCause {
+	switch status {
+	case ubus.StatusPermissionDenied:
+		return CausePermission
+	case ubus.StatusMethodNotFound, ubus.StatusNotFound, ubus.StatusNoData,
+		ubus.StatusNotSupported:
+		return CauseUnsupported
+	case ubus.StatusTimeout, ubus.StatusConnectionFailed:
+		return CauseTransport
+	case ubus.StatusUnknownError:
+		return CauseDevice
+	case ubus.StatusInvalidCommand, ubus.StatusInvalidArgument:
+		return CauseProtocol
+	}
+	var denied *ubus.DeniedError
+	if errors.As(err, &denied) {
+		return CausePermission
+	}
+	var protocol *ubus.ProtocolError
+	if errors.As(err, &protocol) {
+		return CauseProtocol
+	}
+	var network net.Error
+	if errors.As(err, &network) || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return CauseTransport
+	}
+	return CauseUnknown
 }
 
 // poll performs one complete poll in a single HTTP round trip.
@@ -36,14 +82,15 @@ type call struct {
 // ~0.5 ms per call from ten calls up, and a 60 s baseline poll never reuses its
 // connection anyway (uhttpd's keep-alive is 20 s), so every call it does not
 // batch costs another handshake.
-func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
+func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier Tier,
 	ifaces []string, modes map[string]string) Snapshot {
 	snap := Snapshot{
-		DeviceID: p.target.DeviceID,
-		MAC:      p.target.MAC,
-		Name:     p.target.Name,
-		Tier:     tier,
-		At:       p.c.now(),
+		DeviceID:     target.DeviceID,
+		MAC:          target.MAC,
+		Name:         target.Name,
+		Tier:         tier,
+		At:           p.c.now(),
+		AirtimeSplit: target.AirtimeSplit,
 	}
 	// What this poll is about to ask about broadcasting interfaces. The flag
 	// itself is set at the END, from what came BACK — see below.
@@ -55,6 +102,26 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 		}
 	}
 	calls := p.buildCalls(tier, ifaces, modes)
+	for _, spec := range calls {
+		if spec.radioInventory {
+			snap.radioInventoryAsked = true
+		}
+		if spec.radioKey == "" {
+			if spec.assocIface != "" {
+				if snap.AssocAsked == nil {
+					snap.AssocAsked = map[string]bool{}
+					snap.AssocAnswered = map[string]bool{}
+				}
+				snap.AssocAsked[spec.assocIface] = true
+			}
+			continue
+		}
+		if snap.radioFrequencyAsked == nil {
+			snap.radioFrequencyAsked = map[string]bool{}
+		}
+		snap.radioFrequencyAsked[spec.radioKey] = true
+	}
+	snap.prepareTopology(calls)
 	invs := make([]ubus.Invocation, len(calls))
 	for i, c := range calls {
 		invs[i] = c.inv
@@ -79,9 +146,12 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 	for i, res := range results {
 		spec := calls[i]
 		if res.Err != nil {
+			cause := degradationCause(res.Err, res.Status)
+			snap.topologyFailed(spec.topologySource, cause)
 			d := Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
-				Status: res.Status, Err: res.Err.Error(),
+				Status: res.Status, Cause: cause,
+				Err:       res.Err.Error(),
 				Permanent: ubus.IsPermanent(res.Err),
 			}
 			if !spec.optional {
@@ -96,9 +166,10 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 			continue
 		}
 		if err := spec.decode(res.Data, &snap); err != nil {
+			snap.topologyFailed(spec.topologySource, CauseDecode)
 			d := Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
-				Err: fmt.Sprintf("decode: %v", err),
+				Cause: CauseDecode, Err: fmt.Sprintf("decode: %v", err),
 			}
 			snap.Degraded = append(snap.Degraded, d)
 			if !spec.optional {
@@ -110,6 +181,11 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 				// taken, indistinguishable from an idle device.
 				snap.Err = fmt.Errorf("collector: %s: %w", d, err)
 				return snap
+			}
+		} else {
+			snap.topologyAnswered(spec.topologySource)
+			if spec.assocIface != "" {
+				snap.AssocAnswered[spec.assocIface] = true
 			}
 		}
 	}
@@ -128,6 +204,64 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 	// recordable. Every early return above leaves it false, which is correct —
 	// none of them reached the device in a useful sense.
 	snap.APsFresh = listed && snap.apStatusOK == askedAPs
+	snap.LogsFresh = snap.logReadOK && snap.logBootOK && snap.logPIDOK
+	snap.Topology.Sources = append(snap.Topology.Sources, topologyAssociationSource(&snap))
+	snap.finalizeTopology()
+	return snap
+}
+
+// buildAuxCalls assembles the one-minute lightweight request. WAN and router
+// logs share the same batch when both are due; neither repeats full-poll work.
+func (p *poller) buildAuxCalls() (calls []call, wan, logs bool) {
+	if p.takeWANProbe() {
+		calls = append(calls, wanProbeCall())
+		wan = true
+	}
+	if p.takeLogs() {
+		calls = append(calls, logCalls()...)
+		logs = true
+	}
+	return calls, wan, logs
+}
+
+func (p *poller) pollAux(ctx context.Context, c *ubus.Client, target Target,
+	calls []call, wan, logs bool) Snapshot {
+	snap := Snapshot{DeviceID: target.DeviceID, MAC: target.MAC, Name: target.Name,
+		Tier: Baseline, At: p.c.now(), WANOnly: wan, LogOnly: logs}
+	invs := make([]ubus.Invocation, len(calls))
+	for i := range calls {
+		invs[i] = calls[i].inv
+	}
+	start := p.c.now()
+	results, err := c.Batch(ctx, invs)
+	snap.Duration = p.c.now().Sub(start)
+	if err != nil {
+		snap.Err = err
+		return snap
+	}
+	if len(results) != len(calls) {
+		snap.Err = fmt.Errorf("collector: auxiliary poll returned %d results for %d calls",
+			len(results), len(calls))
+		return snap
+	}
+	for i, result := range results {
+		spec := calls[i]
+		if result.Err != nil {
+			snap.Degraded = append(snap.Degraded, Degradation{
+				Object: spec.inv.Object, Method: spec.inv.Method, Status: result.Status,
+				Cause: degradationCause(result.Err, result.Status), Err: result.Err.Error(),
+				Permanent: ubus.IsPermanent(result.Err),
+			})
+			continue
+		}
+		if err := spec.decode(result.Data, &snap); err != nil {
+			snap.Degraded = append(snap.Degraded, Degradation{
+				Object: spec.inv.Object, Method: spec.inv.Method,
+				Cause: CauseDecode, Err: fmt.Sprintf("decode: %v", err),
+			})
+		}
+	}
+	snap.LogsFresh = snap.logReadOK && snap.logBootOK && snap.logPIDOK
 	return snap
 }
 
@@ -138,6 +272,8 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, tier Tier,
 // is actually looking. Measured: iwinfo is ~92% of a focused poll (194 ms vs
 // 15.8 ms without it), and hostapd answers the per-AP questions ~30× faster.
 func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string) []call {
+	needIfaces := p.needIfaces()
+	needTopology := p.needTopology()
 	calls := []call{
 		{inv: ubus.Invocation{Object: "system", Method: "info"}, decode: decodeInfo},
 		{
@@ -160,7 +296,10 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			decode:   decodeDHCPLeases,
 			optional: true,
 		})
-	if p.needIfaces() {
+	if p.takeWANProbe() {
+		calls = append(calls, wanProbeCall())
+	}
+	if needIfaces {
 		// In the batch, not beside it. A separate Call here was the one thing
 		// breaking this package's own "one request per poll" rule, and it cost a
 		// whole extra HTTP request — measured by the budget harness as 1.08
@@ -176,14 +315,68 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			decode:   decodeIfaces,
 			optional: true,
 		})
-		// And what each of them is FOR, from the one call that answers it for
-		// every interface at once. iwinfo.info would need one call per
-		// interface; this needs one per device, on the 15-minute cadence.
+	}
+	if needIfaces || needTopology {
+		// One selective decoder supplies configured modes plus stable radio and
+		// topology identities without retaining the plaintext key in this reply.
 		calls = append(calls, call{
-			inv:      ubus.Invocation{Object: "luci-rpc", Method: "getWirelessDevices"},
-			decode:   decodeIfaceModes,
-			optional: true,
+			inv:            ubus.Invocation{Object: "luci-rpc", Method: "getWirelessDevices"},
+			decode:         decodeIfaceModes,
+			optional:       true,
+			radioInventory: true,
+			topologySource: func() string {
+				if needTopology {
+					return TopologySourceWirelessDevices
+				}
+				return ""
+			}(),
 		})
+	}
+	// One read-only frequency-list call per stable UCI radio, on the same slow
+	// cadence as inventory. Multiple BSSes share one radio and therefore never
+	// multiply this work. AP interfaces are preferred because they are the
+	// serving runtime identity; a mesh/STA interface is a fallback only.
+	for _, target := range p.radioFrequencyTargets() {
+		calls = append(calls, call{
+			inv: ubus.Invocation{Object: "iwinfo", Method: "freqlist",
+				Args: map[string]any{"device": target.iface}},
+			decode: decodeRadioFrequencies(target.key), optional: true,
+			radioKey: target.key,
+		})
+	}
+	if needTopology {
+		calls = append(calls,
+			call{inv: ubus.Invocation{Object: "luci-rpc", Method: "getNetworkDevices"},
+				decode: decodeTopologyNetworkDevices, optional: true,
+				topologySource: TopologySourceNetworkDevices},
+			call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+				"command": "/sbin/ip", "params": []string{"-4", "neigh", "show"},
+			}}, decode: decodeTopologyNeighbors(4), optional: true,
+				topologySource: topology.SourceNeighbors(4)},
+			call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+				"command": "/sbin/ip", "params": []string{"-6", "neigh", "show"},
+			}}, decode: decodeTopologyNeighbors(6), optional: true,
+				topologySource: topology.SourceNeighbors(6)},
+			call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+				"command": "/usr/sbin/lldpcli", "params": []string{"-f", "json", "show", "neighbors", "hidden"},
+			}}, decode: decodeTopologyLLDP, optional: true,
+				topologySource: topology.SourceLLDP},
+		)
+		for _, bridge := range p.topologyBridgeList() {
+			calls = append(calls,
+				call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+					"command": "/usr/sbin/brctl", "params": []string{"showmacs", bridge},
+				}}, decode: decodeTopologyFDB(bridge), optional: true,
+					topologySource: topology.SourceBridgeFDB},
+				call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+					"command": "/usr/sbin/brctl", "params": []string{"showstp", bridge},
+				}}, decode: decodeTopologySTP(bridge), optional: true,
+					topologySource: TopologySourceBridgeSTP},
+			)
+		}
+		p.mu.Lock()
+		p.topologyAt = p.c.now()
+		p.mu.Unlock()
 	}
 	if p.needMeshPeers() {
 		// Mesh peers, on their own slow cadence and only for interfaces already
@@ -247,7 +440,8 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			p.mu.Unlock()
 		}
 	}
-	if p.needNetworks() {
+	needNetworks := p.needNetworks()
+	if needNetworks || needTopology {
 		// Same reasoning as the radio list: in the batch, on the slow cadence,
 		// and used by the poll that asked for it rather than the next one — the
 		// hosts it classifies arrive in this same batch. Subnets change when a
@@ -257,15 +451,23 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			inv:      ubus.Invocation{Object: "network.interface", Method: "dump"},
 			decode:   decodeNetworks,
 			optional: true,
+			topologySource: func() string {
+				if needTopology {
+					return topology.SourceDefaultRoute
+				}
+				return ""
+			}(),
 		})
 		// Stamped on the ATTEMPT, not on the answer. A device whose ACL does not
 		// grant network.interface would otherwise never set the timestamp and so
 		// would re-request the call on every single poll, forever, for an answer
 		// it is never going to give. The decoder separately marks a successful
 		// read, which is what decides whether the cached subnets are replaced.
-		p.mu.Lock()
-		p.netAt = p.c.now()
-		p.mu.Unlock()
+		if needNetworks {
+			p.mu.Lock()
+			p.netAt = p.c.now()
+			p.mu.Unlock()
+		}
 	}
 	if p.needBoard() {
 		calls = append(calls, call{
@@ -273,6 +475,9 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 			decode:   decodeBoard,
 			optional: true,
 		})
+	}
+	if p.takeLogs() {
+		calls = append(calls, logCalls()...)
 	}
 	for _, iface := range ifaces {
 		// A mesh point's peers are other access points, not clients. Asking
@@ -298,14 +503,17 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 		return calls
 	}
 	for _, iface := range ifaces {
-		// assoclist on a mesh point returns its peers, which would land in the
-		// station telemetry and then in the client grid as wireless clients.
-		if servesClients(modes, iface) {
+		// assoclist on mesh/STA interfaces returns infrastructure peers. Unlike
+		// hostapd probing above, a mode-less iwinfo call cannot distinguish those
+		// peers from downstream clients, so focused station telemetry requires an
+		// explicit AP classification.
+		if modes[iface] == "ap" {
 			calls = append(calls, call{
 				inv: ubus.Invocation{Object: "iwinfo", Method: "assoclist",
 					Args: map[string]any{"device": iface}},
-				decode:   decodeAssoclist(iface),
-				optional: true,
+				decode:     decodeAssoclist(iface),
+				optional:   true,
+				assocIface: iface,
 			})
 		}
 		// The survey is asked of every interface regardless. Channel
@@ -320,6 +528,52 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 		})
 	}
 	return calls
+}
+
+type radioFrequencyTarget struct {
+	key   string
+	iface string
+}
+
+func (p *poller) radioFrequencyTargets() []radioFrequencyTarget {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.radiosKnown || (!p.radioAt.IsZero() &&
+		p.c.now().Sub(p.radioAt) < rediscoverInterval) {
+		return nil
+	}
+	targets := make([]radioFrequencyTarget, 0, len(p.radios))
+	for _, state := range p.radios {
+		if iface := preferredRadioInterface(state.Interfaces); iface != "" {
+			targets = append(targets, radioFrequencyTarget{key: state.Key, iface: iface})
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].key < targets[j].key })
+	if len(targets) > 0 {
+		// Stamp the attempt, not the answer. A denied optional call must not run
+		// on every baseline poll forever.
+		p.radioAt = p.c.now()
+	}
+	return targets
+}
+
+func preferredRadioInterface(interfaces []radio.Interface) string {
+	var ap, fallback string
+	for _, iface := range interfaces {
+		if iface.Name == "" {
+			continue
+		}
+		if fallback == "" || iface.Name < fallback {
+			fallback = iface.Name
+		}
+		if iface.Mode == "ap" && (ap == "" || iface.Name < ap) {
+			ap = iface.Name
+		}
+	}
+	if ap != "" {
+		return ap
+	}
+	return fallback
 }
 
 // system.info is the one required call. If it fails the device is not usefully
@@ -357,9 +611,42 @@ func decodeBoard(raw json.RawMessage, s *Snapshot) error {
 }
 
 func decodeNetDevices(raw json.RawMessage, s *Snapshot) error {
-	var v map[string]Interface
-	if err := json.Unmarshal(raw, &v); err != nil {
+	var rows map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
 		return err
+	}
+	v := make(map[string]Interface, len(rows))
+	for name, row := range rows {
+		var iface Interface
+		if err := json.Unmarshal(row, &iface); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		var present struct {
+			Stats *struct {
+				RxBytes   *int64 `json:"rx_bytes"`
+				TxBytes   *int64 `json:"tx_bytes"`
+				RxPackets *int64 `json:"rx_packets"`
+				TxPackets *int64 `json:"tx_packets"`
+				RxErrors  *int64 `json:"rx_errors"`
+				TxErrors  *int64 `json:"tx_errors"`
+			} `json:"statistics"`
+		}
+		if err := json.Unmarshal(row, &present); err != nil {
+			return fmt.Errorf("%s presence: %w", name, err)
+		}
+		if present.Stats != nil {
+			iface.Stats.RxBytesKnown = present.Stats.RxBytes != nil
+			iface.Stats.TxBytesKnown = present.Stats.TxBytes != nil
+			iface.Stats.RxPacketsKnown = present.Stats.RxPackets != nil
+			iface.Stats.TxPacketsKnown = present.Stats.TxPackets != nil
+			iface.Stats.RxErrorsKnown = present.Stats.RxErrors != nil
+			iface.Stats.TxErrorsKnown = present.Stats.TxErrors != nil
+		}
+		if (iface.Stats.RxBytesKnown && iface.Stats.RxBytes < 0) ||
+			(iface.Stats.TxBytesKnown && iface.Stats.TxBytes < 0) {
+			return fmt.Errorf("%s: negative byte counter", name)
+		}
+		v[name] = iface
 	}
 	s.Interfaces = v
 	// Answered — recorded explicitly rather than inferred from the map.
@@ -431,15 +718,63 @@ func decodeAPClients(iface string) func(json.RawMessage, *Snapshot) error {
 func decodeAssoclist(iface string) func(json.RawMessage, *Snapshot) error {
 	return func(raw json.RawMessage, s *Snapshot) error {
 		var v struct {
-			Results []Station `json:"results"`
+			Results []json.RawMessage `json:"results"`
 		}
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return err
 		}
-		for i := range v.Results {
-			v.Results[i].Iface = iface
+		decoded := make([]Station, 0, len(v.Results))
+		for _, item := range v.Results {
+			var st Station
+			if err := json.Unmarshal(item, &st); err != nil {
+				return err
+			}
+			var present struct {
+				Signal    *int `json:"signal"`
+				SignalAvg *int `json:"signal_avg"`
+				RX        *struct {
+					Bytes   *int64 `json:"bytes"`
+					Packets *int64 `json:"packets"`
+					Rate    *int64 `json:"rate"`
+				} `json:"rx"`
+				TX *struct {
+					Bytes   *int64 `json:"bytes"`
+					Packets *int64 `json:"packets"`
+					Rate    *int64 `json:"rate"`
+					Retries *int64 `json:"retries"`
+					Failed  *int64 `json:"failed"`
+				} `json:"tx"`
+			}
+			if err := json.Unmarshal(item, &present); err != nil {
+				return err
+			}
+			st.Iface = iface
+			st.PresenceKnown = true
+			st.SignalKnown = present.Signal != nil
+			st.SignalAvgKnown = present.SignalAvg != nil
+			if present.RX != nil {
+				st.RX.BytesKnown = present.RX.Bytes != nil
+				st.RX.PacketsKnown = present.RX.Packets != nil
+				st.RX.RateKnown = present.RX.Rate != nil
+			}
+			if present.TX != nil {
+				st.TX.BytesKnown = present.TX.Bytes != nil
+				st.TX.PacketsKnown = present.TX.Packets != nil
+				st.TX.RateKnown = present.TX.Rate != nil
+				st.TX.RetriesKnown = present.TX.Retries != nil
+				st.TX.FailedKnown = present.TX.Failed != nil
+			}
+			st.TXQualityKnown = present.TX != nil && present.TX.Packets != nil &&
+				present.TX.Retries != nil && present.TX.Failed != nil
+			if (st.RX.BytesKnown && st.RX.Bytes < 0) ||
+				(st.TX.BytesKnown && st.TX.Bytes < 0) ||
+				(st.RX.RateKnown && st.RX.Rate < 0) ||
+				(st.TX.RateKnown && st.TX.Rate < 0) {
+				return errors.New("assoclist carried a negative byte counter or rate")
+			}
+			decoded = append(decoded, st)
 		}
-		s.Stations = append(s.Stations, v.Results...)
+		s.Stations = append(s.Stations, decoded...)
 		return nil
 	}
 }
@@ -447,17 +782,109 @@ func decodeAssoclist(iface string) func(json.RawMessage, *Snapshot) error {
 func decodeSurvey(iface string) func(json.RawMessage, *Snapshot) error {
 	return func(raw json.RawMessage, s *Snapshot) error {
 		var v struct {
-			Results []Survey `json:"results"`
+			Results []json.RawMessage `json:"results"`
 		}
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return err
 		}
-		for i := range v.Results {
-			v.Results[i].Iface = iface
-			s.Surveys = append(s.Surveys, v.Results[i])
+		decoded := make([]Survey, 0, len(v.Results))
+		for _, item := range v.Results {
+			var survey Survey
+			if err := json.Unmarshal(item, &survey); err != nil {
+				return err
+			}
+			var present struct {
+				MHz        *int    `json:"mhz"`
+				Noise      *int    `json:"noise"`
+				ActiveTime *int64  `json:"active_time"`
+				BusyTime   *int64  `json:"busy_time"`
+				RxTime     *uint64 `json:"rx_time"`
+				TxTime     *uint64 `json:"tx_time"`
+			}
+			if err := json.Unmarshal(item, &present); err != nil {
+				return err
+			}
+			survey.Iface = iface
+			survey.PresenceKnown = true
+			survey.MHzKnown = present.MHz != nil
+			survey.NoiseKnown = present.Noise != nil
+			survey.ActiveTimeKnown = present.ActiveTime != nil
+			survey.BusyTimeKnown = present.BusyTime != nil
+			survey.RxTimeKnown = present.RxTime != nil
+			survey.TxTimeKnown = present.TxTime != nil
+			if !survey.MHzKnown || !survey.ActiveTimeKnown || !survey.BusyTimeKnown {
+				return errors.New("survey row omitted mhz, active_time, or busy_time")
+			}
+			if survey.MHz <= 0 || survey.ActiveTime < 0 || survey.BusyTime < 0 {
+				return errors.New("survey row carried an invalid frequency or counter")
+			}
+			decoded = append(decoded, survey)
 		}
+		s.Surveys = append(s.Surveys, decoded...)
 		return nil
 	}
+}
+
+func decodeLogRows(raw json.RawMessage, s *Snapshot) error {
+	rows, err := observability.DecodeLogRead(raw)
+	if err != nil {
+		return err
+	}
+	s.Logs, s.logReadOK = rows, true
+	return nil
+}
+
+func decodeLogBootID(raw json.RawMessage, s *Snapshot) error {
+	var response struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return err
+	}
+	bootID := strings.ToLower(strings.TrimSpace(response.Data))
+	if !validBootID(bootID) {
+		return errors.New("invalid kernel boot ID")
+	}
+	s.LogEpoch.BootID, s.logBootOK = bootID, true
+	return nil
+}
+
+func decodeLogService(raw json.RawMessage, s *Snapshot) error {
+	var services map[string]struct {
+		Instances map[string]struct {
+			Running bool  `json:"running"`
+			PID     int64 `json:"pid"`
+		} `json:"instances"`
+	}
+	if err := json.Unmarshal(raw, &services); err != nil {
+		return err
+	}
+	var pids []int64
+	for _, instance := range services["log"].Instances {
+		if instance.Running && instance.PID > 0 {
+			pids = append(pids, instance.PID)
+		}
+	}
+	if len(pids) != 1 {
+		return fmt.Errorf("logd has %d running instances with a positive pid", len(pids))
+	}
+	s.LogEpoch.PID, s.logPIDOK = pids[0], true
+	return nil
+}
+
+func validBootID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for i, r := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // decodeHostHints reads luci-rpc's ARP/neighbour/DHCP merge, keyed by MAC.
@@ -489,6 +916,7 @@ func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
 	var v struct {
 		Interface []struct {
 			Name string `json:"interface"`
+			Up   bool   `json:"up"`
 			IPv4 []struct {
 				Address string `json:"address"`
 				Mask    int    `json:"mask"`
@@ -527,7 +955,13 @@ func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
 				Upstream: upstream,
 			})
 		}
+		if upstream && i.Up {
+			s.Topology.Uplinks = append(s.Topology.Uplinks, topology.Uplink{
+				DeviceID: s.DeviceID, Interface: i.Name, Active: true,
+			})
+		}
 	}
+	s.topologyEvidence(topology.SourceDefaultRoute, len(s.Topology.Uplinks))
 	s.Networks = out
 	s.askedNetworks = true
 	return nil
@@ -607,18 +1041,22 @@ func (s *Snapshot) ap(iface string) *AP {
 // Gated on APsFresh for the same reason ClientCount is: a stale or refused read
 // must report "we do not know", not "nobody is connected". An AP whose station
 // map is nil failed its get_clients call, which is also not an empty AP.
-func (s *Snapshot) LiveStations() (map[string]LiveStation, bool) {
+func (s *Snapshot) LiveStations() (LiveStationSet, bool) {
 	if !s.APsFresh {
 		return nil, false
 	}
-	out := map[string]LiveStation{}
+	out := LiveStationSet{}
 	for _, ap := range s.APs {
 		if ap.Stations == nil {
 			return nil, false
 		}
 		for mac, st := range ap.Stations {
-			out[mac] = st
+			mac = strings.ToLower(mac)
+			out[mac] = append(out[mac], st)
 		}
+	}
+	for mac := range out {
+		sort.Slice(out[mac], func(i, j int) bool { return out[mac][i].Iface < out[mac][j].Iface })
 	}
 	return out, true
 }
@@ -680,9 +1118,9 @@ func decodeIfaces(raw json.RawMessage, s *Snapshot) error {
 //
 // getWirelessDevices returns each interface's whole UCI config — including
 // `key`, the wireless passphrase, in plaintext. Nothing here needs it and
-// nothing here should hold it, so the struct below names exactly two fields and
-// the rest of the response is discarded by the JSON decoder rather than being
-// carried around in a map[string]any that some later log line might print.
+// nothing here should hold it, so the narrow structs below name only
+// operational fields and discard the rest rather than carrying the response in
+// a map[string]any that some later log line might print.
 func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 	var v map[string]struct {
 		Interfaces []struct {
@@ -696,10 +1134,15 @@ func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
 	}
+	inventory, err := radio.DecodeWirelessDevices(raw)
+	if err != nil {
+		return err
+	}
 	modes := map[string]string{}
 	sections := map[string]string{}
+	radios := map[string]string{}
 	var configuredButAbsent []string
-	for _, radio := range v {
+	for radioKey, radio := range v {
 		for _, i := range radio.Interfaces {
 			if i.Config.Mode == "" {
 				continue
@@ -718,6 +1161,7 @@ func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 				continue
 			}
 			modes[i.IfName] = i.Config.Mode
+			radios[i.IfName] = radioKey
 			// Optional, and treated as such. The captured fixture carries
 			// `section` on some entries and not others, so an interface without
 			// one is attributed to the device rather than guessed at by mesh id
@@ -731,8 +1175,33 @@ func decodeIfaceModes(raw json.RawMessage, s *Snapshot) error {
 	sort.Strings(configuredButAbsent)
 	s.IfaceModes = modes
 	s.IfaceSections = sections
+	s.IfaceRadios = radios
+	s.radioInventory = inventory
+	s.radioInventoryOK = true
 	s.ConfiguredIfacesAbsent = configuredButAbsent
+	if s.Topology.expected[TopologySourceWirelessDevices] > 0 {
+		wireless, err := topology.DecodeWirelessDevices(raw)
+		if err != nil {
+			return err
+		}
+		s.Topology.Wireless = wireless
+		s.topologyEvidence(TopologySourceWirelessDevices, len(wireless))
+	}
 	return nil
+}
+
+func decodeRadioFrequencies(key string) func(json.RawMessage, *Snapshot) error {
+	return func(raw json.RawMessage, s *Snapshot) error {
+		frequencies, err := radio.DecodeFrequencyList(raw)
+		if err != nil {
+			return err
+		}
+		if s.radioFrequencies == nil {
+			s.radioFrequencies = map[string][]radio.Frequency{}
+		}
+		s.radioFrequencies[key] = frequencies
+		return nil
+	}
 }
 
 // servesClients reports whether an interface is one whose associated stations
@@ -825,11 +1294,49 @@ func (p *poller) needBoard() bool {
 	return p.boardAt.IsZero() || p.c.now().Sub(p.boardAt) >= rediscoverInterval
 }
 
+func logCalls() []call {
+	return []call{
+		{inv: ubus.Invocation{Object: "file", Method: "read", Args: map[string]any{
+			"path": "/proc/sys/kernel/random/boot_id",
+		}}, decode: decodeLogBootID, optional: true},
+		{inv: ubus.Invocation{Object: "service", Method: "list", Args: map[string]any{
+			"name": "log", "verbose": true,
+		}}, decode: decodeLogService, optional: true},
+		{inv: ubus.Invocation{Object: "log", Method: "read", Args: map[string]any{
+			"lines": 512, "stream": false,
+		}}, decode: decodeLogRows, optional: true},
+	}
+}
+
+// takeLogs is the cadence gate and attempt stamp. A denied optional call still
+// waits until the next minute; a backwards controller clock is rebased rather
+// than suppressing coverage until wall time catches up.
+func (p *poller) takeLogs() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.c.now()
+	elapsed := now.Sub(p.logAt)
+	if !p.logAt.IsZero() && elapsed >= 0 && elapsed < p.logIntervalLocked() {
+		return false
+	}
+	p.logAt = now
+	return true
+}
+
 // rediscoverInterval governs the two facts that change only when a human
 // changes them: the firmware identity and the list of radios. Asking for either
 // every minute would add calls to every poll for an answer that is almost always
 // the one we already have.
 const rediscoverInterval = 15 * time.Minute
+
+const logReadInterval = time.Minute
+
+func (p *poller) logIntervalLocked() time.Duration {
+	if p.logInterval > 0 {
+		return p.logInterval
+	}
+	return logReadInterval
+}
 
 // decodeMeshPeers reads one mesh interface's peer list.
 //

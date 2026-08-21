@@ -2,16 +2,20 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +105,81 @@ func mockConnect(t *testing.T) Connect {
 		t.Cleanup(c.Close)
 		return c, nil
 	}
+}
+
+type testRPCRequest struct {
+	ID int `json:"id"`
+}
+
+func pollRPCServer(t *testing.T, hook func(http.ResponseWriter, int32) bool) (
+	string, *atomic.Int32, *atomic.Int32,
+) {
+	t.Helper()
+	var connections, logins, batches atomic.Int32
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read RPC body: %v", err)
+			http.Error(w, "read", http.StatusBadRequest)
+			return
+		}
+		trimmed := strings.TrimSpace(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		if !strings.HasPrefix(trimmed, "[") {
+			logins.Add(1)
+			var req testRPCRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("decode login: %v", err)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": []any{0, map[string]any{
+					"ubus_rpc_session": "route-test-token", "timeout": 300,
+				}},
+			})
+			return
+		}
+
+		var reqs []testRPCRequest
+		if err := json.Unmarshal(body, &reqs); err != nil {
+			t.Errorf("decode batch: %v", err)
+			return
+		}
+		n := batches.Add(1)
+		if hook != nil && hook(w, n) {
+			return
+		}
+		responses := make([]map[string]any, len(reqs))
+		for i, req := range reqs {
+			responses[i] = map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"result": []any{0, map[string]any{
+					"uptime": 1, "load": []int{1, 1, 1}, "memory": map[string]any{},
+				}},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(responses)
+	})
+	s := httptest.NewUnstartedServer(h)
+	s.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	s.Start()
+	t.Cleanup(s.Close)
+	return strings.TrimPrefix(s.URL, "http://"), &connections, &logins
+}
+
+func loggedTestClient(t *testing.T, host string) *ubus.Client {
+	t.Helper()
+	c := ubus.New(ubus.Options{Host: host})
+	if err := c.Login(context.Background(), "controller", "secret"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	t.Cleanup(c.Close)
+	return c
 }
 
 // recorder collects snapshots and lets a test wait for the next one.
@@ -339,6 +418,108 @@ func TestQuiesceStopsPolling(t *testing.T) {
 	}
 }
 
+func TestQuiesceWaitsForInFlightCycleAndBlocksLaterEmission(t *testing.T) {
+	enteredSink := make(chan struct{})
+	finishSink := make(chan struct{})
+	var finishOnce sync.Once
+	unblockSink := func() { finishOnce.Do(func() { close(finishSink) }) }
+	defer unblockSink()
+
+	var observed atomic.Int32
+	c := New(SinkFunc(func(context.Context, Snapshot) {
+		if observed.Add(1) == 1 {
+			close(enteredSink)
+			<-finishSink
+		}
+	}), fastOptions())
+	c.Add(Target{
+		DeviceID: 1,
+		MAC:      "aa:bb:cc:dd:ee:ff",
+		Name:     "ap1",
+		Connect:  mockConnect(t),
+	})
+	p := c.pollers[1]
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	firstDone := make(chan struct{})
+	go func() {
+		p.tick(ctx)
+		close(firstDone)
+	}()
+	select {
+	case <-enteredSink:
+	case <-time.After(5 * time.Second):
+		t.Fatal("poll did not reach the sink")
+	}
+
+	quiesceDone := make(chan func(), 1)
+	go func() { quiesceDone <- c.Quiesce(1) }()
+	deadline := time.Now().Add(time.Second)
+	for !c.Quiesced(1) {
+		if time.Now().After(deadline) {
+			t.Fatal("Quiesce did not mark the poller quiesced")
+		}
+	}
+	select {
+	case <-quiesceDone:
+		t.Fatal("Quiesce returned while the in-flight cycle was still in the sink")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// This cycle is queued after Quiesce raised the flag. Whether it or
+	// Quiesce acquires cycleMu first after the sink drains, it must not emit.
+	laterDone := make(chan struct{})
+	go func() {
+		p.tick(ctx)
+		close(laterDone)
+	}()
+	unblockSink()
+
+	select {
+	case <-firstDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("in-flight cycle did not finish after the sink was released")
+	}
+	var release func()
+	select {
+	case release = <-quiesceDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Quiesce did not return after the in-flight cycle drained")
+	}
+	select {
+	case <-laterDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cycle queued behind Quiesce did not finish")
+	}
+	if got := observed.Load(); got != 1 {
+		t.Fatalf("%d snapshots emitted before release, want 1", got)
+	}
+
+	// A cycle begun after the boundary returns is also suppressed.
+	p.tick(ctx)
+	if got := observed.Load(); got != 1 {
+		t.Fatalf("%d snapshots emitted while quiesced, want 1", got)
+	}
+
+	release()
+	release() // idempotent
+	select {
+	case <-p.wake:
+	case <-time.After(time.Second):
+		t.Fatal("release did not wake the poller")
+	}
+	select {
+	case <-p.wake:
+		t.Fatal("idempotent release woke the poller twice")
+	default:
+	}
+	p.tick(ctx)
+	if got := observed.Load(); got != 2 {
+		t.Fatalf("%d snapshots emitted after release, want 2", got)
+	}
+}
+
 // A denied call inside an otherwise good batch must degrade the snapshot, not
 // discard it — and must never be recorded as a zero reading.
 func TestPartialFailureDegradesRatherThanDiscards(t *testing.T) {
@@ -548,6 +729,199 @@ func TestAddAndRemove(t *testing.T) {
 	// can hold a handle to a device that was un-adopted underneath it.
 	c.Focus(999)()
 	c.Quiesce(999)()
+}
+
+func TestAddInvalidatesClientWhenSameDeviceConnectionChanges(t *testing.T) {
+	host, _, _ := pollRPCServer(t, nil)
+	client := loggedTestClient(t, host)
+	c := New(newRecorder(), fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa", Name: "router",
+		ConnectionKey: "endpoint-a"})
+	p := c.pollers[1]
+	p.client = client
+
+	c.Add(Target{DeviceID: 1, MAC: "aa", Name: "router",
+		ConnectionKey: "endpoint-b"})
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.client != nil {
+		t.Fatal("same-MAC endpoint replacement retained the old client")
+	}
+	if p.target.ConnectionKey != "endpoint-b" {
+		t.Fatalf("connection key = %q, want endpoint-b", p.target.ConnectionKey)
+	}
+	if p.requestsBase != client.Requests() || p.bytesBase != client.BytesOut() {
+		t.Fatalf("dropped client cost was not banked: requests=%d/%d bytes=%d/%d",
+			p.requestsBase, client.Requests(), p.bytesBase, client.BytesOut())
+	}
+}
+
+func TestRefreshAccessForcesFreshLoginAndSlowSourceRetryAfterACLRefresh(t *testing.T) {
+	host, _, _ := pollRPCServer(t, nil)
+	oldClient := loggedTestClient(t, host)
+	freshClient := loggedTestClient(t, host)
+	connects := 0
+	c := New(newRecorder(), fastOptions())
+	c.Add(Target{DeviceID: 1, MAC: "aa", Name: "router", ConnectionKey: "endpoint",
+		Connect: func(context.Context) (*ubus.Client, error) {
+			connects++
+			return freshClient, nil
+		}})
+	p := c.pollers[1]
+	p.client = oldClient
+	stamp := time.Unix(100, 0)
+	p.ifaceAt, p.meshAt, p.radioAt, p.boardAt = stamp, stamp, stamp, stamp
+	p.logAt, p.wanProbeAt, p.topologyAt, p.netAt = stamp, stamp, stamp, stamp
+	if !c.RefreshAccess(1) {
+		t.Fatal("registered device was not invalidated")
+	}
+	got, err := p.dial(context.Background(), p.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != freshClient || got == oldClient || connects != 1 {
+		t.Fatalf("next poll reused old ACL session: got=%p old=%p fresh=%p connects=%d",
+			got, oldClient, freshClient, connects)
+	}
+	if !p.ifaceAt.IsZero() || !p.meshAt.IsZero() || !p.radioAt.IsZero() ||
+		!p.boardAt.IsZero() || !p.logAt.IsZero() || !p.wanProbeAt.IsZero() ||
+		!p.topologyAt.IsZero() || !p.netAt.IsZero() {
+		t.Fatalf("ACL-dependent cadence was not reset: %+v", p)
+	}
+	if c.RefreshAccess(99) {
+		t.Fatal("unknown device reported a session invalidation")
+	}
+}
+
+func TestAddWithoutConnectionKeyFailsClosed(t *testing.T) {
+	c := New(newRecorder(), fastOptions())
+	target := Target{DeviceID: 1, MAC: "aa", Name: "router"}
+	c.Add(target)
+	p := c.pollers[1]
+	p.client = ubus.New(ubus.Options{Host: "127.0.0.1:1"})
+
+	target.Name = "renamed"
+	c.Add(target)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.client != nil {
+		t.Fatal("target without a connection key retained an unverifiable client")
+	}
+}
+
+func TestFirstHardPollFailureForcesFreshConnectionWithoutRelogin(t *testing.T) {
+	host, connections, logins := pollRPCServer(t,
+		func(w http.ResponseWriter, batch int32) bool {
+			if batch != 1 {
+				return false
+			}
+			http.Error(w, "temporary failure", http.StatusBadGateway)
+			return true
+		})
+	client := loggedTestClient(t, host)
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	target := Target{DeviceID: 1, MAC: "aa", Name: "router",
+		ConnectionKey: "endpoint", Connect: func(context.Context) (*ubus.Client, error) {
+			return client, nil
+		}}
+	p := newPoller(c, target)
+	p.client = client
+
+	p.tick(context.Background())
+	if snap := rec.next(t, time.Second); snap.Err == nil {
+		t.Fatal("fixture's first poll unexpectedly succeeded")
+	}
+	p.tick(context.Background())
+	if snap := rec.next(t, time.Second); snap.Err != nil {
+		t.Fatalf("second poll failed: %v", snap.Err)
+	}
+
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("TCP connections = %d, want 2 (fresh connection after failure)", got)
+	}
+	if got := logins.Load(); got != 1 {
+		t.Fatalf("logins = %d, want 1 (socket redial must retain the session)", got)
+	}
+}
+
+func TestInFlightPollKeepsItsTargetSnapshotLabels(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	host, _, _ := pollRPCServer(t, func(_ http.ResponseWriter, batch int32) bool {
+		if batch == 1 {
+			close(entered)
+			<-release
+		}
+		return false
+	})
+	client := loggedTestClient(t, host)
+	rec := newRecorder()
+	c := New(rec, fastOptions())
+	old := Target{DeviceID: 1, MAC: "aa", Name: "old-name",
+		ConnectionKey: "endpoint", Connect: func(context.Context) (*ubus.Client, error) {
+			return client, nil
+		}}
+	c.Add(old)
+	p := c.pollers[1]
+	p.client = client
+
+	done := make(chan struct{})
+	go func() {
+		p.tick(context.Background())
+		close(done)
+	}()
+	<-entered
+	replacement := old
+	replacement.Name = "new-name"
+	c.Add(replacement)
+	close(release)
+	<-done
+
+	snap := rec.next(t, time.Second)
+	if snap.Name != "old-name" {
+		t.Fatalf("in-flight snapshot name = %q, want old-name", snap.Name)
+	}
+}
+
+func TestRemoveIsABoundaryForInFlightSnapshotEmission(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	emitted := 0
+	c := New(SinkFunc(func(context.Context, Snapshot) {
+		close(entered)
+		<-release
+		emitted++
+	}), fastOptions())
+	p := newPoller(c, Target{DeviceID: 7, MAC: "aa"})
+	c.pollers[7] = p
+	emitDone := make(chan struct{})
+	go func() {
+		p.emit(context.Background(), Snapshot{DeviceID: 7})
+		close(emitDone)
+	}()
+	<-entered
+	removed := make(chan struct{})
+	go func() {
+		c.Remove(7)
+		close(removed)
+	}()
+	select {
+	case <-removed:
+		t.Fatal("Remove returned while a snapshot was still entering the sink")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-emitDone
+	<-removed
+
+	// A poll already in its network call may finish after Remove. It must see
+	// the closed boundary and never publish under an ID that can now be reused.
+	p.emit(context.Background(), Snapshot{DeviceID: 7})
+	if emitted != 1 {
+		t.Fatalf("%d snapshots emitted, want only the one Remove waited for", emitted)
+	}
 }
 
 func TestStopIsIdempotent(t *testing.T) {
@@ -887,7 +1261,7 @@ func TestAttributableCPUIsPerClassAndSaysItsBasis(t *testing.T) {
 		t.Fatalf("class A baseline cost = %v, ok=%v — the measurement is missing", measured, ok)
 	}
 	if _, ok := cpuCost("C", Baseline); ok {
-		t.Error("class C has a CPU figure, but it has never been measured; " +
+		t.Error("class C has a CPU figure, but no per-poll control measurement; " +
 			"reporting class A's number for it would be a guess in a " +
 			"measurement's clothing")
 	}
@@ -996,6 +1370,17 @@ func TestMeshInterfacesAreNotAskedForClients(t *testing.T) {
 	}
 }
 
+func TestSTAInterfacesAreUplinkTelemetryNotDownstreamClients(t *testing.T) {
+	p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
+	for _, c := range p.buildCalls(Focused, []string{"phy0-ap0", "phy0-sta0"},
+		map[string]string{"phy0-ap0": "ap", "phy0-sta0": "sta"}) {
+		if c.inv.Object == "hostapd.phy0-sta0" ||
+			(c.inv.Method == "assoclist" && argDevice(c.inv.Args) == "phy0-sta0") {
+			t.Fatalf("STA peer was queried as a downstream client: %+v", c.inv)
+		}
+	}
+}
+
 // Channel utilization is a property of the radio's channel, not of what the
 // interface is for. A radio carrying only a mesh point would otherwise report
 // no utilization at all.
@@ -1013,23 +1398,23 @@ func TestSurveyIsStillAskedOfAMeshInterface(t *testing.T) {
 	}
 }
 
-// An interface whose mode was never established is treated as an AP.
-//
-// That is the behaviour that existed before modes were read at all. Answering
-// "not an AP" for an unread interface would let a denied call quietly stop
-// counting real clients — a number that is too low, with nothing saying so.
-func TestAnInterfaceWithNoKnownModeIsStillAskedForClients(t *testing.T) {
+// Hostapd remains the fail-safe presence check for an unknown mode, but
+// iwinfo.assoclist must not run until the interface is proven AP mode: a live
+// STA interface returns its upstream AP as a row with full station counters.
+func TestUnknownInterfaceModeNeverBecomesAClientTelemetrySource(t *testing.T) {
 	for _, modes := range []map[string]string{nil, {}, {"other": "ap"}} {
 		p := &poller{c: New(newRecorder(), fastOptions()), target: Target{DeviceID: 1}}
-		var asked bool
+		var hostapdAsked, assocAsked bool
 		for _, c := range p.buildCalls(Focused, []string{"phy0-ap0"}, modes) {
+			if c.inv.Object == "hostapd.phy0-ap0" && c.inv.Method == "get_clients" {
+				hostapdAsked = true
+			}
 			if c.inv.Method == "assoclist" && argDevice(c.inv.Args) == "phy0-ap0" {
-				asked = true
+				assocAsked = true
 			}
 		}
-		if !asked {
-			t.Errorf("modes=%v: an interface of unknown mode stopped being polled "+
-				"for clients", modes)
+		if !hostapdAsked || assocAsked {
+			t.Errorf("modes=%v hostapd=%v assoclist=%v", modes, hostapdAsked, assocAsked)
 		}
 	}
 }
@@ -1259,12 +1644,12 @@ func TestAPsFreshComesFromTheAnswerNotTheIntent(t *testing.T) {
 	modes := map[string]string{"wlan0": "ap", "wlan1": "ap"}
 
 	// 1. Nothing has been asked yet: no interface list, and none ever read.
-	if snap := p.poll(ctx, client, Baseline, nil, nil); snap.APsFresh {
+	if snap := p.poll(ctx, client, p.target, Baseline, nil, nil); snap.APsFresh {
 		t.Error("a poll with no interface list reported that it had asked")
 	}
 
 	// 2. A real list, and the hostapd calls answer.
-	snap := p.poll(ctx, client, Baseline, []string{"wlan0", "wlan1"}, modes)
+	snap := p.poll(ctx, client, p.target, Baseline, []string{"wlan0", "wlan1"}, modes)
 	if !snap.APsFresh {
 		t.Fatalf("a poll whose hostapd calls answered was not marked fresh "+
 			"(degraded: %v)", snap.Degraded)
@@ -1276,7 +1661,7 @@ func TestAPsFreshComesFromTheAnswerNotTheIntent(t *testing.T) {
 	p.mu.Lock()
 	p.ifaceAt = time.Now()
 	p.mu.Unlock()
-	if snap := p.poll(ctx, client, Baseline, nil, nil); !snap.APsFresh {
+	if snap := p.poll(ctx, client, p.target, Baseline, nil, nil); !snap.APsFresh {
 		t.Error("a device with nothing serving clients could not record that " +
 			"it had been looked at")
 	}
@@ -1298,9 +1683,23 @@ func TestAPsFreshComesFromTheAnswerNotTheIntent(t *testing.T) {
 	}
 	defer admin.Call(ctx, "__test", "set_acl_gap", map[string]any{"pairs": []any{}}, nil)
 
-	denied := p.poll(ctx, client, Baseline, []string{"wlan0", "wlan1"}, modes)
+	denied := p.poll(ctx, client, p.target, Baseline, []string{"wlan0", "wlan1"}, modes)
 	if denied.APsFresh {
 		t.Errorf("every hostapd call was refused and the poll still claimed to "+
 			"know what is broadcasting (degraded: %v)", denied.Degraded)
+	}
+	var hostapdGaps int
+	for _, d := range denied.Degraded {
+		if d.Object != "hostapd.wlan0" && d.Object != "hostapd.wlan1" {
+			continue
+		}
+		hostapdGaps++
+		if d.Cause != CausePermission || !d.Permanent {
+			t.Errorf("ACL refusal lost its failure domain: %+v", d)
+		}
+	}
+	if hostapdGaps != 2 {
+		t.Errorf("recorded %d hostapd degradations, want 2: %+v",
+			hostapdGaps, denied.Degraded)
 	}
 }

@@ -1,0 +1,319 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { TopologySnapshot } from '../lib/api'
+
+const api = {
+  topology: vi.fn(),
+  topologyHistory: vi.fn(),
+  device: vi.fn(),
+  deviceSeries: vi.fn(),
+  overhead: vi.fn(),
+  stats: vi.fn(),
+}
+
+vi.mock('../lib/api', () => ({ api }))
+
+const { Topology, detailText, edgeLaneOffsets, layoutTopology, topologyEdgesAt } = await import('./Topology')
+
+const current: TopologySnapshot = {
+  at: 1_787_100_000_000,
+  complete: false,
+  truncated: false,
+  gaps: ['device:2/lldp: unknown', 'device:1/vlan: unavailable'],
+  nodes: [
+    { id: 'device:aa:bb:cc:dd:ee:01', kind: 'device', name: 'Gateway', device_id: 1, online: true, synthetic: false },
+    { id: 'device:aa:bb:cc:dd:ee:02', kind: 'device', name: 'Hall AP', device_id: 2, online: true, synthetic: false },
+  ],
+  edges: [{
+    id: 7,
+    child_id: 'device:aa:bb:cc:dd:ee:02',
+    parent_id: 'device:aa:bb:cc:dd:ee:01',
+    parent_device_id: 1,
+    parent_port: 'lan2',
+    medium: 'wired',
+    confidence: 'ambiguous',
+    valid_from: 1_787_099_900_000,
+    last_seen: 1_787_100_000_000,
+    evidence: [{
+      kind: 'bridge_fdb', source: 'brctl.showmacs', device_id: 1,
+      detail: { bridge: 'br-lan', observed_mac: 'aa:bb:cc:dd:ee:02' },
+    }],
+    ambiguities: ['BusyBox FDB does not identify VLAN'],
+  }],
+}
+
+it('renders nested evidence without JavaScript object placeholders', () => {
+  const text = detailText({
+    attachment: { scope: 'physical', ports: ['lan1', 'lan3'] },
+    vlan: 3,
+  })
+  expect(text).toBe('attachment: {ports: [lan1, lan3], scope: physical} · vlan: 3')
+  expect(text).not.toContain('[object Object]')
+})
+
+beforeEach(() => {
+  vi.resetAllMocks()
+  api.topology.mockResolvedValue(current)
+  api.topologyHistory.mockResolvedValue({ ...current, complete: true, gaps: [] })
+  api.device.mockResolvedValue({
+    id: 2, mac: 'aa:bb:cc:dd:ee:02', name: 'Hall AP', host: '192.0.2.2', role: 'ap',
+    functions: ['ap', 'switch'], adopted: true, adopted_at: 1, class: 'A', firmware: 'OpenWrt',
+    last_seen: 2, poll_state: 'baseline', status: 'online', capabilities: null,
+    interfaces: [], radios: [], stations: [],
+  })
+  api.deviceSeries.mockResolvedValue({ series: {} })
+  api.overhead.mockRejectedValue(new Error('none'))
+  api.stats.mockRejectedValue(new Error('none'))
+})
+
+describe('Topology', () => {
+  it('renders partial evidence as unknown and exposes the graph in a table', async () => {
+    const reviewCapabilities = vi.fn()
+    render(<Topology onReviewCapabilities={reviewCapabilities} />)
+
+    expect(await screen.findByText(/Topology is partial/)).toBeTruthy()
+    expect(screen.getByText(/2 coverage issues are recorded/)).toBeTruthy()
+    const details = screen.getByText('Show technical details (2)').closest('details')
+    expect(details?.open).toBe(false)
+    fireEvent.click(screen.getByText('Show technical details (2)'))
+    expect(details?.open).toBe(true)
+    expect(screen.getByText(/device:2\/lldp: unknown/)).toBeTruthy()
+    const graph = screen.getByRole('group', { name: /2 topology nodes and 1 links/ })
+    expect(graph).toBeTruthy()
+    expect(within(graph).getAllByRole('button')).toHaveLength(2)
+    expect(screen.queryByRole('img', { name: /topology nodes/ })).toBeNull()
+
+    const table = screen.getByRole('table', { name: /Matching active parent-child links/ })
+    expect(within(table).getByText('Hall AP')).toBeTruthy()
+    expect(within(table).getByText('Gateway')).toBeTruthy()
+    expect(within(table).getByText('ambiguous')).toBeTruthy()
+    fireEvent.click(within(table).getByText(/1 source · 1 ambiguity/))
+    expect(within(table).getByText(/BusyBox FDB does not identify VLAN/)).toBeTruthy()
+    expect(within(table).getByText(/bridge_fdb via brctl.showmacs/)).toBeTruthy()
+    expect(screen.queryByText(/optional oonfeeWRT topology capability/i)).toBeNull()
+  })
+
+  it('offers the opt-in capability path without installing from Topology', async () => {
+    const reviewCapabilities = vi.fn()
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      gaps: [
+        'device:1/brctl.showstp: source call failure: access/permission denied',
+        'device:1/ip-4-neigh: source call failure: access/permission denied',
+        'device:2/ip-6-neigh: source call failure: access/permission denied, decode/invalid data',
+      ],
+    })
+    render(<Topology onReviewCapabilities={reviewCapabilities} />)
+
+    expect(await screen.findByText(/Some topology sources are unavailable on 2 routers/i)).toBeTruthy()
+    expect(screen.getByText(/Would you like to add this functionality/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review optional capability' }))
+    expect(reviewCapabilities).toHaveBeenCalledTimes(1)
+    expect(api.topology).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not offer an ACL change for stale or non-permission failures', async () => {
+    const reviewCapabilities = vi.fn()
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      gaps: [
+        'device:1/ip-4-neigh: source state is stale',
+        'device:2/brctl.showstp: source call failure: unsupported operation',
+        'device:3/brctl.showmacs: source call failure: decode/invalid data',
+        'device:4/ip-6-neigh: source call failure: transport error',
+        'device:5/lldp: source call failure: access/permission denied',
+        'device:6/ip-4-neigh: a legacy permission check failed',
+      ],
+    })
+    render(<Topology onReviewCapabilities={reviewCapabilities} />)
+    await screen.findByText(/Topology is partial/)
+    expect(screen.queryByText(/Would you like to add this functionality/i)).toBeNull()
+  })
+
+  it('requests a bounded history interval and draws only the selected instant', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-08-19T12:00:00Z'))
+    try {
+      const transition = current.edges[0].valid_from
+      api.topologyHistory.mockResolvedValueOnce({
+        ...current,
+        complete: true,
+        gaps: [],
+        edges: [
+          { ...current.edges[0], id: 6, parent_port: 'lan1', valid_from: transition - 10_000, valid_to: transition },
+          current.edges[0],
+        ],
+      })
+      render(<Topology />)
+      await waitFor(() => expect(api.topology).toHaveBeenCalledTimes(1))
+      fireEvent.click(screen.getByRole('button', { name: 'History' }))
+      await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(1))
+
+      const [from, to] = api.topologyHistory.mock.calls[0]
+      expect(to - from).toBe(24 * 60 * 60 * 1000)
+      expect(Math.abs(Date.now() - to)).toBeLessThan(100)
+      expect(await screen.findByText(/All link intervals intersecting/)).toBeTruthy()
+      const graph = screen.getByRole('group', { name: /topology nodes/ })
+      expect(within(graph).getByText('lan2')).toBeTruthy()
+      expect(within(graph).queryByText('lan1')).toBeNull()
+      fireEvent.change(screen.getByLabelText('Selected topology history time'), { target: { value: transition - 1 } })
+      expect(within(graph).getByText('lan1')).toBeTruthy()
+      expect(within(graph).queryByText('lan2')).toBeNull()
+      const selectedTable = screen.getByRole('table', { name: /Links active at/ })
+      expect(within(selectedTable).getByText('lan1')).toBeTruthy()
+      expect(within(selectedTable).queryByText('lan2')).toBeNull()
+      const table = screen.getByRole('table', { name: /All link intervals intersecting/ })
+      expect(within(table).getByText('lan1')).toBeTruthy()
+      expect(within(table).getByText('lan2')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('filters, zooms, and opens keyboard-accessible node details', async () => {
+    render(<Topology />)
+    const graph = await screen.findByRole('group', { name: /topology nodes/ })
+
+    fireEvent.change(screen.getByLabelText('Filter topology by confidence'), { target: { value: 'measured' } })
+    expect(screen.getByRole('group', { name: /2 topology nodes and 0 links/ })).toBeTruthy()
+    expect(screen.getByRole('table', { name: /Matching active parent-child links/ }).textContent)
+      .toMatch(/No links match/)
+    fireEvent.change(screen.getByLabelText('Filter topology by confidence'), { target: { value: 'all' } })
+
+    fireEvent.click(screen.getByLabelText('Zoom in topology'))
+    expect(screen.getByLabelText('Reset topology zoom').textContent).toBe('125%')
+
+    const hallAP = within(graph).getByRole('button', { name: 'Open details for Hall AP' })
+    hallAP.focus()
+    fireEvent.keyDown(hallAP, { key: 'Enter' })
+    const panel = await screen.findByRole('dialog', { name: 'Hall AP' })
+    expect(panel).toBeTruthy()
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog', { name: 'Hall AP' })).toBeNull()
+    expect(document.activeElement).toBe(hallAP)
+  })
+
+  it('never relabels a stale or late response under a new mode', async () => {
+		let resolveHistory!: (value: TopologySnapshot) => void
+		const history = new Promise<TopologySnapshot>((resolve) => { resolveHistory = resolve })
+		api.topologyHistory.mockReturnValueOnce(history)
+		render(<Topology />)
+		await screen.findByText(/Matching active parent-child links/)
+		fireEvent.click(screen.getByRole('button', { name: 'History' }))
+		await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(1))
+		expect(screen.queryByRole('group', { name: /topology nodes/ })).toBeNull()
+		expect(screen.getByText('Loading topology…')).toBeTruthy()
+		fireEvent.click(screen.getByRole('button', { name: 'Current' }))
+		await waitFor(() => expect(api.topology).toHaveBeenCalledTimes(2))
+		await screen.findByText(/Matching active parent-child links/)
+		resolveHistory({ ...current, complete: true, gaps: [], edges: [] })
+		await Promise.resolve()
+		expect(screen.getByRole('group', { name: /2 topology nodes and 1 links/ })).toBeTruthy()
+		expect(screen.queryByText(/Infrastructure history/)).toBeNull()
+  })
+
+	it('hides a prior graph when the newly selected mode fails', async () => {
+		api.topologyHistory.mockRejectedValueOnce(new Error('history unavailable'))
+		render(<Topology />)
+		await screen.findByText(/Matching active parent-child links/)
+		fireEvent.click(screen.getByRole('button', { name: 'History' }))
+		await screen.findByText(/history unavailable/)
+		expect(screen.queryByRole('group', { name: /topology nodes/ })).toBeNull()
+		expect(screen.getByText(/no graph is available for this request/i)).toBeTruthy()
+	})
+
+  it('labels a failed refresh as stale data instead of claiming the graph is absent', async () => {
+    api.topology.mockResolvedValueOnce(current).mockRejectedValueOnce(new Error('refresh failed'))
+    render(<Topology />)
+    await screen.findByRole('group', { name: /topology nodes/ })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByRole('alert')).toHaveProperty(
+      'textContent', 'refresh failed — showing the last topology that loaded successfully.',
+    )
+    expect(screen.getByRole('group', { name: /topology nodes/ })).toBeTruthy()
+  })
+
+  it('exposes toggle state, selected time text, and direct truncation', async () => {
+    api.topologyHistory.mockResolvedValueOnce({ ...current, complete: true, truncated: true, gaps: [] })
+    render(<Topology />)
+    await screen.findByRole('group', { name: /topology nodes/ })
+    expect(screen.getByRole('button', { name: 'Current' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByText(/Topology history reached its retained or response limit/)
+    expect(screen.getByRole('button', { name: 'History' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByLabelText('Selected topology history time').getAttribute('aria-valuetext')).toBeTruthy()
+  })
+
+  it('reaches the full retained range and applies an accessible bounded custom range', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))
+    try {
+      render(<Topology />)
+      await waitFor(() => expect(api.topology).toHaveBeenCalledTimes(1))
+      fireEvent.click(screen.getByRole('button', { name: 'History' }))
+      await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(1))
+
+      fireEvent.change(screen.getByLabelText('Topology history range'), { target: { value: '744' } })
+      await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(2))
+      const [retainedFrom, retainedTo] = api.topologyHistory.mock.calls[1]
+      expect(retainedTo - retainedFrom).toBe(31 * 24 * 60 * 60 * 1000)
+
+      fireEvent.change(screen.getByLabelText('Topology history range'), { target: { value: 'custom' } })
+      expect(api.topologyHistory).toHaveBeenCalledTimes(2)
+      const fromInput = screen.getByLabelText('Custom topology history start') as HTMLInputElement
+      const toInput = screen.getByLabelText('Custom topology history end') as HTMLInputElement
+      expect(fromInput.type).toBe('datetime-local')
+      expect(toInput.type).toBe('datetime-local')
+      fireEvent.change(fromInput, { target: { value: '2026-08-01T08:00' } })
+      fireEvent.change(toInput, { target: { value: '2026-08-20T08:00' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Apply custom range' }))
+      await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(3))
+      expect(api.topologyHistory.mock.calls[2]).toEqual([
+        new Date('2026-08-01T08:00').getTime(),
+        new Date('2026-08-20T08:00').getTime(),
+      ])
+
+      fireEvent.change(fromInput, { target: { value: '2026-07-01T08:00' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Apply custom range' }))
+      expect(screen.getByRole('alert').textContent).toMatch(/cannot exceed 31 days/)
+      expect(api.topologyHistory).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('layoutTopology', () => {
+  it('places parents above children and retains disconnected nodes', () => {
+    const detached = { id: 'mac:aa:bb:cc:dd:ee:ff', kind: 'client' as const, name: 'Unknown', mac: 'aa:bb:cc:dd:ee:ff', synthetic: false }
+    const result = layoutTopology([...current.nodes, detached], current.edges)
+    expect(result.positions.get('device:aa:bb:cc:dd:ee:01')!.y)
+      .toBeLessThan(result.positions.get('device:aa:bb:cc:dd:ee:02')!.y)
+    expect(result.positions.has(detached.id)).toBe(true)
+  })
+
+  it('bounds the canvas when ambiguous evidence contains a cycle', () => {
+    const reversed = { ...current.edges[0], id: 8, child_id: current.edges[0].parent_id, parent_id: current.edges[0].child_id }
+    const result = layoutTopology(current.nodes, [...current.edges, reversed])
+    expect(result.height).toBeLessThanOrEqual(244)
+  })
+
+  it('routes simultaneous parent candidates through separate visual lanes', () => {
+    const alternate = {
+      ...current.edges[0], id: 8,
+      parent_id: 'device:aa:bb:cc:dd:ee:02', parent_device_id: 2, parent_port: 'eth0.1',
+    }
+    const offsets = edgeLaneOffsets([current.edges[0], alternate])
+    expect(offsets.get(current.edges[0].id)).not.toBe(offsets.get(alternate.id))
+    expect((offsets.get(current.edges[0].id) ?? 0) + (offsets.get(alternate.id) ?? 0)).toBe(0)
+  })
+})
+
+describe('topologyEdgesAt', () => {
+  it('uses half-open validity intervals', () => {
+    const first = { ...current.edges[0], valid_from: 100, valid_to: 200 }
+    const second = { ...current.edges[0], id: 8, valid_from: 200 }
+    expect(topologyEdgesAt([first, second], 199).map((edge) => edge.id)).toEqual([7])
+    expect(topologyEdgesAt([first, second], 200).map((edge) => edge.id)).toEqual([8])
+  })
+})

@@ -100,6 +100,25 @@ func TestIsPermanentSeesThroughWrapping(t *testing.T) {
 	}
 }
 
+func TestStatusPermanenceDistinguishesRefusalFromTransientFailure(t *testing.T) {
+	for _, tc := range []struct {
+		status Status
+		want   bool
+	}{
+		{StatusPermissionDenied, true},
+		{StatusNotSupported, true},
+		{StatusNotFound, true},
+		{StatusTimeout, false},
+		{StatusUnknownError, false},
+		{StatusConnectionFailed, false},
+	} {
+		err := &StatusError{Object: "x", Method: "y", Status: tc.status}
+		if got := IsPermanent(err); got != tc.want {
+			t.Errorf("%s permanent = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
 // Batch is the poll's workhorse; its chunking and its recovery path had no
 // coverage at all.
 func TestBatchChunksOnBytesAndKeepsOrder(t *testing.T) {
@@ -184,5 +203,30 @@ func TestBatchRecoversFromADeadSession(t *testing.T) {
 	}
 	if c.Session() == dead {
 		t.Error("Batch should have re-logged in once to recover")
+	}
+}
+
+func TestBatchMarksAPartialDenialAsAPermanentACLGap(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	setACLGap(t, c, [2]string{"rc", "init"})
+	before := c.Session()
+
+	res, err := c.Batch(ctx, []Invocation{
+		{Object: "rc", Method: "init", Args: map[string]any{"name": "x", "action": "y"}},
+		{Object: "system", Method: "info"},
+	})
+	if err != nil {
+		t.Fatalf("Batch: %v", err)
+	}
+	if len(res) != 2 || res[0].Err == nil || res[1].Err != nil {
+		t.Fatalf("mixed batch results = %+v", res)
+	}
+	var denied *DeniedError
+	if !errors.As(res[0].Err, &denied) || !denied.Retried || !IsPermanent(res[0].Err) {
+		t.Fatalf("partial denial was not identified as an ACL gap: %v", res[0].Err)
+	}
+	if c.Session() != before {
+		t.Fatal("a successful sibling call already proved the session; re-login was unnecessary")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,13 +14,45 @@ import (
 // stubEnroller records what the handler passed down, so the tests can assert on
 // validation and on what does NOT reach the orchestration.
 type stubEnroller struct {
-	mu       sync.Mutex
-	adopted  []AdoptRequest
-	unadopt  []UnadoptRequest
-	adoptErr error
-	unaErr   error
-	result   *AdoptResult
-	unaRes   *UnadoptResult
+	mu         sync.Mutex
+	inspected  []InspectRequest
+	adopted    []AdoptRequest
+	refreshed  []RefreshACLRequest
+	unadopt    []UnadoptRequest
+	adoptErr   error
+	unaErr     error
+	result     *AdoptResult
+	unaRes     *UnadoptResult
+	inspectErr error
+	inspectRes *InspectResult
+	refreshErr error
+	refreshRes *RefreshACLResult
+}
+
+func (e *stubEnroller) RefreshACL(_ context.Context, req RefreshACLRequest) (*RefreshACLResult, error) {
+	e.mu.Lock()
+	e.refreshed = append(e.refreshed, req)
+	e.mu.Unlock()
+	if e.refreshErr != nil {
+		return nil, e.refreshErr
+	}
+	if e.refreshRes != nil {
+		return e.refreshRes, nil
+	}
+	return &RefreshACLResult{DeviceID: req.DeviceID, ACLUpdated: true, ControllerVerified: true}, nil
+}
+
+func (e *stubEnroller) Inspect(_ context.Context, req InspectRequest) (*InspectResult, error) {
+	e.mu.Lock()
+	e.inspected = append(e.inspected, req)
+	e.mu.Unlock()
+	if e.inspectErr != nil {
+		return nil, e.inspectErr
+	}
+	if e.inspectRes != nil {
+		return e.inspectRes, nil
+	}
+	return &InspectResult{Model: req.Host}, nil
 }
 
 func (e *stubEnroller) Adopt(_ context.Context, req AdoptRequest) (*AdoptResult, error) {
@@ -64,18 +97,204 @@ func TestAdoptValidatesInput(t *testing.T) {
 		body map[string]any
 		want int
 	}{
-		{"no host", map[string]any{"username": "root", "password": "x"}, http.StatusBadRequest},
-		{"blank host", map[string]any{"host": "   ", "username": "root"}, http.StatusBadRequest},
-		{"no username", map[string]any{"host": "192.168.1.1"}, http.StatusBadRequest},
-		{"bad scheme", map[string]any{"host": "h", "username": "root", "scheme": "ftp"}, http.StatusBadRequest},
-		{"bad port", map[string]any{"host": "h", "username": "root", "port": 99999}, http.StatusBadRequest},
-		{"valid", map[string]any{"host": "192.168.1.1", "username": "root", "password": "p"}, http.StatusCreated},
+		{"no host", map[string]any{"username": "root", "password": "x", "acknowledge_router_changes": true}, http.StatusBadRequest},
+		{"blank host", map[string]any{"host": "   ", "username": "root", "acknowledge_router_changes": true}, http.StatusBadRequest},
+		{"no username", map[string]any{"host": "192.168.1.1", "acknowledge_router_changes": true}, http.StatusBadRequest},
+		{"bad scheme", map[string]any{"host": "h", "username": "root", "scheme": "ftp", "acknowledge_router_changes": true}, http.StatusBadRequest},
+		{"bad port", map[string]any{"host": "h", "username": "root", "port": 99999, "acknowledge_router_changes": true}, http.StatusBadRequest},
+		{"valid", map[string]any{"host": "192.168.1.1", "username": "root", "password": "p", "acknowledge_router_changes": true}, http.StatusCreated},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := harnessWithEnroller(t)
 			w := h.do(http.MethodPost, "/api/v1/devices/adopt", tc.body)
 			if w.Code != tc.want {
 				t.Fatalf("got %d want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAdoptRequiresExplicitRouterChangeAcknowledgementBeforeEnroller(t *testing.T) {
+	// Enroller is the handler's only path to the daemon, SSH dialer, and router
+	// mutations. No recorded call therefore proves this boundary is pre-write.
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing", map[string]any{"host": "192.0.2.1", "username": "root"}},
+		{"false", map[string]any{"host": "192.0.2.1", "username": "root", "acknowledge_router_changes": false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			w := h.do(http.MethodPost, "/api/v1/devices/adopt", tc.body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "acknowledge_router_changes") {
+				t.Fatalf("rejection does not name the required acknowledgement: %s", w.Body.String())
+			}
+			if len(e.adopted) != 0 {
+				t.Fatalf("unacknowledged adoption reached the enroller: %+v", e.adopted)
+			}
+		})
+	}
+}
+
+func TestRefreshACLRequiresExplicitAdministratorCredentialAndPassesNoSecretsToResponse(t *testing.T) {
+	h, e := harnessWithEnroller(t)
+	if w := h.do(http.MethodPost, "/api/v1/devices/7/refresh-acl", map[string]any{
+		"username": " ", "password": "sentinel-password", "acknowledge_router_changes": true,
+	}); w.Code != http.StatusBadRequest {
+		t.Fatalf("blank username status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(e.refreshed) != 0 {
+		t.Fatalf("invalid request reached enroller: %+v", e.refreshed)
+	}
+	w := h.do(http.MethodPost, "/api/v1/devices/7/refresh-acl", map[string]any{
+		"username": "root", "password": "sentinel-password", "private_key": "sentinel-key",
+		"acknowledge_router_changes": true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(e.refreshed) != 1 || e.refreshed[0].DeviceID != 7 ||
+		e.refreshed[0].Username != "root" || e.refreshed[0].Password != "sentinel-password" ||
+		e.refreshed[0].PrivateKey != "sentinel-key" || !e.refreshed[0].AcknowledgeRouterChanges {
+		t.Fatalf("refresh request=%+v", e.refreshed)
+	}
+	if strings.Contains(w.Body.String(), "sentinel-password") || strings.Contains(w.Body.String(), "sentinel-key") {
+		t.Fatalf("refresh response exposed operator credential: %s", w.Body.String())
+	}
+}
+
+func TestRefreshACLRequiresExplicitRouterChangeAcknowledgementBeforeEnroller(t *testing.T) {
+	// As above, reaching Enroller is what can open SSH and replace the ACL file.
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing", map[string]any{"username": "root"}},
+		{"false", map[string]any{"username": "root", "acknowledge_router_changes": false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			w := h.do(http.MethodPost, "/api/v1/devices/7/refresh-acl", tc.body)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "acknowledge_router_changes") {
+				t.Fatalf("rejection does not name the required acknowledgement: %s", w.Body.String())
+			}
+			if len(e.refreshed) != 0 {
+				t.Fatalf("unacknowledged ACL refresh reached the enroller: %+v", e.refreshed)
+			}
+		})
+	}
+}
+
+func TestInspectValidatesInputAndNeverEchoesCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want int
+	}{
+		{"no host", map[string]any{"username": "root"}, http.StatusBadRequest},
+		{"no username", map[string]any{"host": "192.0.2.1"}, http.StatusBadRequest},
+		{"bad scheme", map[string]any{"host": "h", "username": "root", "scheme": "ssh"}, http.StatusBadRequest},
+		{"bad port", map[string]any{"host": "h", "username": "root", "port": -1}, http.StatusBadRequest},
+		{"valid", map[string]any{"host": " 192.0.2.1 ", "username": "root", "password": "inspect-secret"}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			w := h.do(http.MethodPost, "/api/v1/devices/inspect", tc.body)
+			if w.Code != tc.want {
+				t.Fatalf("got %d want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "inspect-secret") {
+				t.Fatal("inspection echoed the device administrator password")
+			}
+			if tc.name == "valid" {
+				e.mu.Lock()
+				got := e.inspected[0]
+				e.mu.Unlock()
+				if got.Host != "192.0.2.1" || got.Password != "inspect-secret" {
+					t.Fatalf("inspection request was not normalised/passed through: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestAdoptCanonicalisesIndependentFunctionsAndLegacyRole(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		body          map[string]any
+		wantRole      string
+		wantFunctions string
+	}{
+		{"legacy gateway", map[string]any{"role": "Gateway"}, "gateway", "gateway,ap,switch"},
+		{"gateway only", map[string]any{"role": "ap", "functions": []string{"gateway"}}, "gateway", "gateway"},
+		{"AP and switch", map[string]any{"role": "gateway", "functions": []string{"switch", "AP"}}, "ap", "ap,switch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			body := map[string]any{"host": "192.0.2.1", "username": "root", "acknowledge_router_changes": true}
+			for k, v := range tc.body {
+				body[k] = v
+			}
+			w := h.do(http.MethodPost, "/api/v1/devices/adopt", body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("adopt: %d %s", w.Code, w.Body.String())
+			}
+			e.mu.Lock()
+			got := e.adopted[0]
+			e.mu.Unlock()
+			if got.Role != tc.wantRole || strings.Join(got.Functions, ",") != tc.wantFunctions {
+				t.Fatalf("role=%q functions=%v, want %q %q", got.Role, got.Functions, tc.wantRole, tc.wantFunctions)
+			}
+		})
+	}
+}
+
+func TestAdoptRejectsEmptyOrUnknownFunctionsBeforeEnroller(t *testing.T) {
+	for _, functions := range [][]string{{}, {"router"}, {"ap", "mesh"}} {
+		h, e := harnessWithEnroller(t)
+		w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
+			"host": "192.0.2.1", "username": "root", "functions": functions,
+			"acknowledge_router_changes": true,
+		})
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("functions %v: got %d want 400: %s", functions, w.Code, w.Body.String())
+		}
+		e.mu.Lock()
+		calls := len(e.adopted)
+		e.mu.Unlock()
+		if calls != 0 {
+			t.Fatalf("functions %v reached the enroller", functions)
+		}
+	}
+}
+
+func TestAdoptRejectsExplicitNullOrNonArrayFunctions(t *testing.T) {
+	for name, functions := range map[string]any{
+		"null":   nil,
+		"string": "gateway",
+		"object": map[string]any{"gateway": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
+				"host": "192.0.2.1", "username": "root", "functions": functions,
+				"acknowledge_router_changes": true,
+			})
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("got %d want 400: %s", w.Code, w.Body.String())
+			}
+			e.mu.Lock()
+			calls := len(e.adopted)
+			e.mu.Unlock()
+			if calls != 0 {
+				t.Fatal("invalid functions reached the enroller")
 			}
 		})
 	}
@@ -99,27 +318,67 @@ func TestAdoptRequiresAuthAndCSRF(t *testing.T) {
 	}
 }
 
+func TestInspectRequiresAuthAndCSRF(t *testing.T) {
+	h, _ := harnessWithEnroller(t)
+	good := h.csrf
+	body := map[string]any{"host": "h", "username": "root"}
+
+	h.csrf = ""
+	if w := h.do(http.MethodPost, "/api/v1/devices/inspect", body); w.Code != http.StatusForbidden {
+		t.Fatalf("without CSRF: %d, want 403", w.Code)
+	}
+	h.csrf = good
+	h.cookies = nil
+	if w := h.do(http.MethodPost, "/api/v1/devices/inspect", body); w.Code != http.StatusUnauthorized {
+		t.Fatalf("without a session: %d, want 401", w.Code)
+	}
+}
+
+func TestRefreshACLRequiresAuthAndCSRF(t *testing.T) {
+	h, _ := harnessWithEnroller(t)
+	good := h.csrf
+	body := map[string]any{"username": "root", "password": "placeholder"}
+
+	h.csrf = ""
+	if w := h.do(http.MethodPost, "/api/v1/devices/1/refresh-acl", body); w.Code != http.StatusForbidden {
+		t.Fatalf("without CSRF: %d, want 403", w.Code)
+	}
+	h.csrf = good
+	h.cookies = nil
+	if w := h.do(http.MethodPost, "/api/v1/devices/1/refresh-acl", body); w.Code != http.StatusUnauthorized {
+		t.Fatalf("without a session: %d, want 401", w.Code)
+	}
+}
+
 // The device's administrator credential is used for one transaction and must
 // not survive it — not in the response, not in the event log.
 func TestAdoptDoesNotEchoOrLogTheOperatorCredential(t *testing.T) {
 	h, e := harnessWithEnroller(t)
-	const secret = "the-routers-admin-password"
+	const (
+		secret = "the-routers-admin-password"
+		key    = "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate-key-sentinel\n-----END OPENSSH PRIVATE KEY-----"
+	)
 
 	w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
-		"host": "192.168.1.1", "username": "root", "password": secret, "name": "ap1",
+		"host": "192.168.1.1", "username": "root", "password": secret,
+		"private_key": key, "name": "ap1", "acknowledge_router_changes": true,
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("adopt: %d %s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), secret) {
-		t.Error("the response echoed the device's administrator password")
+	for name, value := range map[string]string{"password": secret, "private key": key} {
+		if strings.Contains(w.Body.String(), value) {
+			t.Errorf("the response echoed the device's administrator %s", name)
+		}
 	}
 	// It did reach the orchestration — that is the whole point of the call.
 	e.mu.Lock()
-	got := e.adopted[0].Password
+	gotPassword := e.adopted[0].Password
+	gotKey := e.adopted[0].PrivateKey
 	e.mu.Unlock()
-	if got != secret {
-		t.Fatalf("the password did not reach the enroller: %q", got)
+	if gotPassword != secret || gotKey != key {
+		t.Fatalf("the credentials did not reach the enroller: password=%q key=%q",
+			gotPassword, gotKey)
 	}
 
 	events, err := h.db.RecentEvents(context.Background(), 50)
@@ -128,8 +387,10 @@ func TestAdoptDoesNotEchoOrLogTheOperatorCredential(t *testing.T) {
 	}
 	for _, ev := range events {
 		blob, _ := json.Marshal(ev)
-		if strings.Contains(string(blob), secret) {
-			t.Fatalf("event %q recorded the device's administrator password", ev.Event)
+		for name, value := range map[string]string{"password": secret, "private key": key} {
+			if strings.Contains(string(blob), value) {
+				t.Fatalf("event %q recorded the device's administrator %s", ev.Event, name)
+			}
 		}
 	}
 }
@@ -139,10 +400,14 @@ func TestAdoptDoesNotEchoOrLogTheOperatorCredential(t *testing.T) {
 // credential with it.
 func TestAdoptFailureIsReportedWithoutTheCredential(t *testing.T) {
 	h, e := harnessWithEnroller(t)
+	var logs strings.Builder
+	h.srv.Log = slog.New(slog.NewTextHandler(&logs, nil))
 	e.adoptErr = errors.New("could not sign in to 192.168.1.1: access denied")
+	const key = "private-key-sentinel-on-failure"
 
 	w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
 		"host": "192.168.1.1", "username": "root", "password": "hunter2",
+		"private_key": key, "acknowledge_router_changes": true,
 	})
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("got %d, want 502: %s", w.Code, w.Body.String())
@@ -152,6 +417,14 @@ func TestAdoptFailureIsReportedWithoutTheCredential(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "hunter2") {
 		t.Error("the failure response leaked the password")
+	}
+	if strings.Contains(w.Body.String(), key) {
+		t.Error("the failure response leaked the SSH private key")
+	}
+	for name, value := range map[string]string{"password": "hunter2", "private key": key} {
+		if strings.Contains(logs.String(), value) {
+			t.Errorf("the failure log leaked the operator %s", name)
+		}
 	}
 }
 
@@ -270,16 +543,21 @@ func TestAnUnadoptFailureWithNoReportStaysAPlainError(t *testing.T) {
 func TestUnadoptPassesTheDeviceID(t *testing.T) {
 	h, e := harnessWithEnroller(t)
 	dev := h.seedDevice("ap-v", true, nil)
+	const key = "private-key-sentinel-for-unadopt"
 
 	w := h.do(http.MethodPost, "/api/v1/devices/"+itoa(int(dev.ID))+"/unadopt",
-		map[string]any{"username": "root", "password": "p"})
+		map[string]any{"username": "root", "password": "p", "private_key": key})
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
+	if strings.Contains(w.Body.String(), key) {
+		t.Fatal("the un-adopt response echoed the SSH private key")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if len(e.unadopt) != 1 || e.unadopt[0].DeviceID != dev.ID {
-		t.Fatalf("device id did not reach the enroller: %+v", e.unadopt)
+	if len(e.unadopt) != 1 || e.unadopt[0].DeviceID != dev.ID ||
+		e.unadopt[0].PrivateKey != key {
+		t.Fatalf("device id or private key did not reach the enroller: %+v", e.unadopt)
 	}
 }
 
@@ -305,7 +583,7 @@ func TestAdoptLogsExactlyOneOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := h.do(http.MethodPost, "/api/v1/devices/adopt",
-		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p"})
+		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p", "acknowledge_router_changes": true})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("adopt: %d", w.Code)
 	}
@@ -333,7 +611,7 @@ func TestAdoptLogsExactlyOneOutcome(t *testing.T) {
 	e := h.srv.Enroll.(*stubEnroller)
 	e.adoptErr = errors.New("nope")
 	h.do(http.MethodPost, "/api/v1/devices/adopt",
-		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p"})
+		map[string]any{"host": "192.168.1.1", "username": "root", "password": "p", "acknowledge_router_changes": true})
 	failed, err := h.db.RecentEvents(ctx, 200)
 	if err != nil {
 		t.Fatal(err)

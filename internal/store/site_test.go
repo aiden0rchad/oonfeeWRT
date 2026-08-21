@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,6 +21,28 @@ func seedSite(t *testing.T, db *DB) (netID, groupID int) {
 		t.Fatal(err)
 	}
 	return n.ID, g.ID
+}
+
+func TestMissingNetworksAndGroupsReturnNotFound(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+
+	for name, run := range map[string]func() error{
+		"update network": func() error {
+			return db.SaveNetwork(ctx, &model.Network{ID: 999, Name: "gone", VLAN: 9})
+		},
+		"delete network": func() error { return db.DeleteNetwork(ctx, 999) },
+		"update group": func() error {
+			return db.SaveGroup(ctx, &model.APGroup{ID: 999, Name: "gone"})
+		},
+		"delete group": func() error { return db.DeleteGroup(ctx, 999) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("error = %v, want ErrNotFound", err)
+			}
+		})
+	}
 }
 
 // The site UUID seeds the mobility-domain derivation, so every AP computes the
@@ -457,5 +480,81 @@ func TestNewNetworkGetsItsOwnFirewallZone(t *testing.T) {
 	}
 	if n.Zone != "iot" {
 		t.Errorf("zone = %q, want the network's own name", n.Zone)
+	}
+}
+
+func TestNetworkDHCPSurvivesRoundTripAndOlderClientUpdate(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: "30m"}
+	n := &model.Network{Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24",
+		DHCP: &dhcp, Enabled: true}
+	if err := db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+
+	// A pre-DHCP API client omits the new object on an unrelated edit. Nil means
+	// preserve on update, not reset to the renderer's old constants.
+	older := &model.Network{ID: n.ID, Name: "things", VLAN: 20,
+		CIDR: "10.0.20.1/24", Zone: n.Zone, Enabled: true}
+	if err := db.SaveNetwork(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(site.Networks) != 1 || site.Networks[0].EffectiveDHCP() != dhcp {
+		t.Fatalf("DHCP changed during an older-client update: %+v", site.Networks)
+	}
+}
+
+func TestLegacyEmptyDHCPJSONLoadsHistoricalDefaults(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, enabled)
+		 VALUES ('legacy', 20, '10.0.20.1/24', 'legacy', ' { } ', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := site.Networks[0].EffectiveDHCP(), model.DefaultDHCPConfig(); got != want {
+		t.Fatalf("legacy DHCP = %+v, want %+v", got, want)
+	}
+	if !site.Networks[0].LegacyDHCPDefaults {
+		t.Fatal("dhcp_json={} lost its legacy-default marker")
+	}
+
+	// An older client may rename this row without making a DHCP decision. The
+	// marker must survive so an unrelated edit cannot bypass the apply block.
+	legacy := site.Networks[0]
+	legacy.Name = "renamed"
+	legacy.DHCP = nil
+	if err := db.SaveNetwork(ctx, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	site, err = db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !site.Networks[0].LegacyDHCPDefaults {
+		t.Fatal("older-client update cleared the legacy-default marker")
+	}
+
+	custom := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: "30m"}
+	legacy = site.Networks[0]
+	legacy.DHCP = &custom
+	if err := db.SaveNetwork(ctx, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	site, err = db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Networks[0].LegacyDHCPDefaults {
+		t.Fatal("explicit DHCP choice did not clear the legacy-default marker")
 	}
 }

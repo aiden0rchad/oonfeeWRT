@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -131,6 +132,60 @@ SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
 	return scanClients(rows)
 }
 
+// ClientsByMACs returns only inventory rows referenced by another bounded
+// result, such as a topology graph. It avoids turning the entire historical
+// lease table into disconnected UI nodes.
+func (db *DB) ClientsByMACs(ctx context.Context, macs []string) ([]Client, error) {
+	if len(macs) == 0 {
+		return []Client{}, nil
+	}
+	seen := make(map[string]bool, len(macs))
+	normalized := make([]string, 0, len(macs))
+	for _, raw := range macs {
+		mac, err := canonicalMAC(raw)
+		if err != nil {
+			return nil, fmt.Errorf("store: topology client MAC: %w", err)
+		}
+		if !seen[mac] {
+			seen[mac] = true
+			normalized = append(normalized, mac)
+		}
+	}
+	if len(normalized) > 10_000 {
+		return nil, fmt.Errorf("store: too many topology client identities: %d", len(normalized))
+	}
+	sort.Strings(normalized)
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(normalized)), ",")
+	args := make([]any, len(normalized))
+	for i := range normalized {
+		args[i] = normalized[i]
+	}
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT mac, COALESCE(name,''), COALESCE(note,''), COALESCE(fixed_ip,''),
+       COALESCE(ip,''), blocked, COALESCE(grp,''), first_seen, last_seen,
+       COALESCE(scope,'')
+  FROM clients
+ WHERE lower(mac) IN (`+placeholders+`)
+ ORDER BY mac`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: list topology clients: %w", err)
+	}
+	return scanClients(rows)
+}
+
+// ClientExists reports whether a MAC is in the observed client inventory.
+// Desired policy state deliberately does not duplicate that inventory.
+func (db *DB) ClientExists(ctx context.Context, mac string) (bool, error) {
+	var exists bool
+	err := db.sql.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM clients WHERE lower(mac)=lower(?))`,
+		strings.TrimSpace(mac)).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("store: find client: %w", err)
+	}
+	return exists, nil
+}
+
 // scanClients reads the client column list, which two queries share.
 func scanClients(rows *sql.Rows) ([]Client, error) {
 	defer rows.Close()
@@ -163,6 +218,9 @@ type ClientFilter struct {
 	SeenSince int64
 	// ActiveSince is the line between online and offline.
 	ActiveSince int64
+	// LiveActive carries current authoritative evidence that has not reached a
+	// rollup yet (hostapd, a confirmed neighbor, or recent dynamic bridge FDB).
+	LiveActive []string
 
 	// WirelessKinds are the telemetry series kinds whose presence means "this
 	// MAC was associated to a radio". Supplied by the caller rather than
@@ -170,6 +228,14 @@ type ClientFilter struct {
 	// same list has to drive both this query and the per-row enrichment the API
 	// does, or the rail and the rows disagree about what "wireless" means.
 	WirelessKinds []string
+	// LiveWireless are MACs the latest in-memory baseline hostapd reads report
+	// associated. They must participate in the SQL dimension before paging;
+	// overlaying them afterwards can paint a row wireless while the Wireless
+	// filter and its facet have already excluded that same row.
+	LiveWireless []string
+	// ExcludeMACs are managed infrastructure identities. They stay in inventory
+	// history but cannot enter a client page, facet, or dashboard count.
+	ExcludeMACs []string
 
 	Presence   string // "", "online", "offline"
 	Connection string // "", "wireless", "unknown"
@@ -211,13 +277,13 @@ func (d clientDim) pred() (string, []any) {
 // expression, filter by everybody else's".
 func (f ClientFilter) dims() (presence, connection, scope clientDim) {
 	presence = clientDim{
-		expr: `CASE WHEN last_seen IS NOT NULL AND last_seen >= ?
-		            THEN 'online' ELSE 'offline' END`,
-		args: []any{f.ActiveSince},
+		expr: `CASE WHEN ` + f.activeExists() + ` THEN 'online' ELSE 'offline' END`,
+		args: f.activeArgs(),
 		sel:  f.Presence,
 	}
 
-	// Connection is derived from telemetry, not stored on the client row, and
+	// Connection is derived from telemetry and the current in-memory hostapd
+	// association set, not stored on the client row, and
 	// that is why it is expressed in SQL rather than computed after the fetch.
 	// A rail counted over the returned page reports "4 wireless" from a page of
 	// 100 while the table holds four hundred — in the same typeface as a true
@@ -226,8 +292,8 @@ func (f ClientFilter) dims() (presence, connection, scope clientDim) {
 	// series(kind, key) index serves.
 	//
 	// The value for "no wireless evidence" is "unknown", never "wired": a
-	// client the focused tier has never covered has not been shown to be on a
-	// cable, and labelling it as such invents a fact.
+	// client no managed AP has reported has not been shown to be on a cable, and
+	// labelling it as such invents a fact.
 	connection = clientDim{
 		expr: `CASE WHEN ` + f.wirelessExists() + ` THEN 'wireless' ELSE 'unknown' END`,
 		args: f.wirelessArgs(),
@@ -241,30 +307,73 @@ func (f ClientFilter) dims() (presence, connection, scope clientDim) {
 	return presence, connection, scope
 }
 
+func (f ClientFilter) activeExists() string {
+	if len(f.LiveActive) > 0 {
+		return `lower(clients.mac) IN
+			(SELECT lower(value) FROM json_each(?))`
+	}
+	return `0`
+}
+
+func (f ClientFilter) activeArgs() []any {
+	if len(f.LiveActive) > 0 {
+		raw, _ := json.Marshal(f.LiveActive)
+		return []any{string(raw)}
+	}
+	return nil
+}
+
 func (f ClientFilter) wirelessExists() string {
-	if len(f.WirelessKinds) == 0 {
+	parts := make([]string, 0, 2)
+	if len(f.LiveWireless) > 0 {
+		// One JSON parameter rather than one bind variable per associated MAC.
+		// SQLite ships json_each, and a busy controller can legitimately have
+		// more stations than a conservative variable limit permits.
+		parts = append(parts, `lower(clients.mac) IN
+			(SELECT lower(value) FROM json_each(?))`)
+	}
+	if len(f.WirelessKinds) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(f.WirelessKinds)), ",")
+		parts = append(parts, `EXISTS (SELECT 1 FROM rollup_5m r
+		                  JOIN series se ON se.id = r.series_id
+		                 WHERE se.kind IN (`+ph+`)
+		                   AND lower(se.key) = lower(clients.mac) AND r.ts >= ?)`)
+	}
+	if len(parts) == 0 {
 		// No kinds means nothing can be shown to be wireless. Rendering this as
 		// a constant false keeps the column present and every row "unknown",
 		// which is the honest reading; omitting the dimension would instead
 		// make the rail disappear.
 		return `0`
 	}
-	ph := strings.TrimSuffix(strings.Repeat("?,", len(f.WirelessKinds)), ",")
-	return `EXISTS (SELECT 1 FROM rollup_5m r
-	                  JOIN series se ON se.id = r.series_id
-	                 WHERE se.kind IN (` + ph + `)
-	                   AND se.key = clients.mac AND r.ts >= ?)`
+	return `(` + strings.Join(parts, ` OR `) + `)`
 }
 
 func (f ClientFilter) wirelessArgs() []any {
-	if len(f.WirelessKinds) == 0 {
-		return nil
+	args := make([]any, 0, len(f.WirelessKinds)+2)
+	if len(f.LiveWireless) > 0 {
+		raw, _ := json.Marshal(f.LiveWireless) // []string cannot fail to marshal
+		args = append(args, string(raw))
 	}
-	args := make([]any, 0, len(f.WirelessKinds)+1)
 	for _, k := range f.WirelessKinds {
 		args = append(args, k)
 	}
-	return append(args, f.ActiveSince)
+	if len(f.WirelessKinds) > 0 {
+		args = append(args, f.ActiveSince)
+	}
+	return args
+}
+
+func (f ClientFilter) basePredicate() (string, []any) {
+	base := `(? = 0 OR last_seen >= ?)`
+	args := []any{f.SeenSince, f.SeenSince}
+	if len(f.ExcludeMACs) > 0 {
+		raw, _ := json.Marshal(f.ExcludeMACs)
+		base += ` AND lower(clients.mac) NOT IN
+			(SELECT lower(value) FROM json_each(?))`
+		args = append(args, string(raw))
+	}
+	return base, args
 }
 
 // ClientsPage returns one page of clients and the counts for all three rails.
@@ -286,8 +395,7 @@ func (db *DB) ClientsPage(ctx context.Context, f ClientFilter) (ClientPage, erro
 
 	// The base predicate applies to everything, facets included: it is the
 	// list's scope, not one of its rails.
-	base := `(? = 0 OR last_seen >= ?)`
-	baseArgs := []any{f.SeenSince, f.SeenSince}
+	base, baseArgs := f.basePredicate()
 
 	where := func(dims ...clientDim) (string, []any) {
 		sql := base
@@ -393,23 +501,27 @@ type ClientScopeCount struct {
 // survives server-side paging, and a count that changes when you turn to page 2
 // is worse than no count.
 //
-// seenSince bounds which clients are counted at all (0 = everything ever seen);
-// activeSince decides which of those count as Active. All three scopes are
+// SeenSince bounds which clients are counted at all (0 = everything ever seen);
+// current authoritative evidence decides which count as Active. All three scopes are
 // always present in the result, zero-filled, so a caller never has to tell an
 // absent key from a genuine zero — "0 local, 11 upstream" is an answer, and a
 // missing key would render as an empty rail instead.
-func (db *DB) ClientCounts(ctx context.Context, seenSince, activeSince int64) (map[string]ClientScopeCount, error) {
+func (db *DB) ClientCounts(ctx context.Context, f ClientFilter) (map[string]ClientScopeCount, error) {
 	out := map[string]ClientScopeCount{
 		ScopeLocal: {}, ScopeUpstream: {}, ScopeUnknown: {},
 	}
+	active := f.activeExists()
+	base, baseArgs := f.basePredicate()
+	args := []any{ScopeUnknown}
+	args = append(args, f.activeArgs()...)
+	args = append(args, baseArgs...)
 	rows, err := db.sql.QueryContext(ctx, `
 SELECT COALESCE(NULLIF(scope,''), ?) AS s,
        COUNT(*),
-       COALESCE(SUM(CASE WHEN last_seen IS NOT NULL AND last_seen >= ?
-                         THEN 1 ELSE 0 END), 0)
+       COALESCE(SUM(CASE WHEN `+active+` THEN 1 ELSE 0 END), 0)
   FROM clients
- WHERE (? = 0 OR last_seen >= ?)
- GROUP BY s`, ScopeUnknown, activeSince, seenSince, seenSince)
+ WHERE `+base+`
+ GROUP BY s`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: count clients by scope: %w", err)
 	}
@@ -432,9 +544,13 @@ SELECT COALESCE(NULLIF(scope,''), ?) AS s,
 // Without it the table grows forever on any network with randomised MACs, where
 // a single phone can produce a new "client" per SSID per reconnect.
 func (db *DB) PruneClients(ctx context.Context, before time.Time) (int64, error) {
+	db.siteMu.Lock()
+	defer db.siteMu.Unlock()
 	res, err := db.sql.ExecContext(ctx,
 		`DELETE FROM clients WHERE last_seen IS NOT NULL AND last_seen < ?
-		   AND blocked = 0 AND (note IS NULL OR note = '')`, before.Unix())
+		   AND blocked = 0 AND (note IS NULL OR note = '')
+		   AND (fixed_ip IS NULL OR fixed_ip = '')
+		   AND (grp IS NULL OR grp = '')`, before.Unix())
 	if err != nil {
 		return 0, fmt.Errorf("store: prune clients: %w", err)
 	}

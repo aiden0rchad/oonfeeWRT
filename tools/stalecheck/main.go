@@ -13,7 +13,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
 	"github.com/aiden0rchad/oonfeewrt/internal/render"
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
 	_ "modernc.org/sqlite"
@@ -22,8 +22,13 @@ import (
 // What an operator turns OFF in the UI, and what the device is then told.
 func main() {
 	ctx := context.Background()
-	db, _ := store.Open(ctx, "sqlite", os.Args[1])
-	defer db.Close()
+	handle, err := toolstore.OpenReadOnly(ctx, os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer handle.Close()
+	db := handle.DB
 	site, _ := db.Site(ctx)
 	devs, _ := db.Devices(ctx)
 
@@ -62,8 +67,7 @@ func main() {
 			s2 := site
 			s2.WLANs = append([]model.WLAN(nil), site.WLANs...)
 			m.mod(&s2.WLANs[0])
-			doc, _, err := render.Render(s2, model.Device{
-				ID: d.ID, Name: d.Name, Role: model.RoleOf(d.Role)}, &caps, existing)
+			doc, _, err := render.Render(s2, d.ModelDevice(), &caps, existing)
 			if err != nil {
 				fmt.Printf("  %-36s render error: %v\n", m.name, err)
 				continue
@@ -100,7 +104,7 @@ func main() {
 					continue
 				}
 				if !written[k] && !deleted[k] {
-					stale = append(stale, fmt.Sprintf("%s=%s", k, cur[k]))
+					stale = append(stale, formatStaleOption(k, cur[k]))
 				}
 			}
 			if len(stale) > 0 {
@@ -116,4 +120,8 @@ func main() {
 			}
 		}
 	}
+}
+
+func formatStaleOption(option, value string) string {
+	return fmt.Sprintf("%s=%s", option, reconcile.RedactOptionValue(option, value))
 }

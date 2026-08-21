@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
 
 // seedDevices creates the device rows the series table's foreign key requires.
@@ -72,6 +75,64 @@ func TestWriteRollupsCreatesSeriesOnce(t *testing.T) {
 	}
 	if got.Points[0].Avg != 100 || got.Points[2].Avg != 300 {
 		t.Errorf("points out of order or wrong: %+v", got.Points)
+	}
+}
+
+func TestWriteRollupsSkipsOnlyRowsWhoseDeviceWasDeleted(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1, 2)
+	if _, err := db.SQL().ExecContext(ctx, `DELETE FROM devices WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Truncate(5 * time.Minute).Unix()
+	if err := db.WriteRollups(ctx, []RollupRow{
+		{DeviceID: 1, Kind: "ap_airtime_pct", Key: "phy0-ap0", TS: base, Avg: 80, Cnt: 5},
+		{DeviceID: 2, Kind: "sys_load1", TS: base, Avg: 0.2, Cnt: 5},
+	}); err != nil {
+		t.Fatalf("a deleted device discarded the surviving device's window: %v", err)
+	}
+	var deleted, surviving, rollups int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM series WHERE device_id=1`).Scan(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM series WHERE device_id=2`).Scan(&surviving); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM rollup_5m`).Scan(&rollups); err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 || surviving != 1 || rollups != 1 {
+		t.Fatalf("series after stale flush: deleted=%d surviving=%d rollups=%d; want 0,1,1",
+			deleted, surviving, rollups)
+	}
+}
+
+func TestWriteRollupsStillReturnsUnrelatedDataErrors(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1)
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER reject_bad_series
+		BEFORE INSERT ON series WHEN NEW.kind='bad'
+		BEGIN SELECT RAISE(ABORT, 'synthetic series data failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err := db.WriteRollups(ctx, []RollupRow{
+		{DeviceID: 1, Kind: "sys_load1", TS: 300, Avg: 1, Cnt: 1},
+		{DeviceID: 1, Kind: "bad", TS: 300, Avg: 1, Cnt: 1},
+	})
+	if err == nil || !strings.Contains(err.Error(), "synthetic series data failure") {
+		t.Fatalf("unrelated series error was hidden: %v", err)
+	}
+	var n int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM series`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("failed rollup transaction left %d series rows, want 0", n)
 	}
 }
 
@@ -287,6 +348,156 @@ func TestPruneCapsEventsByRowCount(t *testing.T) {
 	// The newest are kept, not the oldest.
 	if got[0].TS != 1024 {
 		t.Errorf("newest event ts = %d, want 1024", got[0].TS)
+	}
+}
+
+func TestPruneKeepsOpenWRTLogWindowIndependentOfEventCap(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	now := time.Unix(2_000_000, 999_000_000).UTC()
+	cutoffMS := now.Add(-24 * time.Hour).UnixMilli()
+	cutoff := cutoffMS / 1000
+	events := []Event{
+		{TS: cutoff - 1, IngestedAt: cutoffMS - 1, Event: "log-too-old", Source: "openwrt-logd"},
+		{TS: cutoff, IngestedAt: cutoffMS, Event: "log-at-cutoff", Source: "openwrt-logd"},
+		// Router wall time is untrusted. Retention follows when the controller
+		// ingested the row, so a future timestamp cannot make it immortal.
+		{TS: now.Add(365 * 24 * time.Hour).Unix(), IngestedAt: cutoffMS - 1,
+			Event: "future-router-clock-too-old", Source: "openwrt-logd"},
+		{TS: now.Unix(), Event: "controller-capped"},
+		{TS: cutoff - 10, Category: "audit", Event: "audit-kept"},
+		{TS: now.Unix(), Event: "controller-kept"},
+		{TS: now.Unix(), IngestedAt: now.UnixMilli(), Event: "log-recent", Source: "openwrt-logd"},
+	}
+	for _, event := range events {
+		event.Severity = "info"
+		if err := db.LogEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := DefaultRetention()
+	if r.OpenWRTLogs != 24*time.Hour {
+		t.Fatalf("default OpenWrt log retention=%s, want 24h", r.OpenWRTLogs)
+	}
+	if r.TopologyHistory != 31*24*time.Hour {
+		t.Fatalf("default topology retention=%s, want 31d", r.TopologyHistory)
+	}
+	r.FiveMinute, r.Hourly, r.MaxEvents = 0, 0, 2
+	res, err := db.Prune(ctx, now, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Events != 3 {
+		t.Fatalf("pruned %d events, want two expired logs and one capped controller event", res.Events)
+	}
+	got, err := db.RecentEvents(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := make(map[string]bool, len(got))
+	for _, event := range got {
+		kept[event.Event] = true
+	}
+	for _, name := range []string{"log-at-cutoff", "log-recent", "audit-kept", "controller-kept"} {
+		if !kept[name] {
+			t.Errorf("event %q was pruned", name)
+		}
+	}
+	for _, name := range []string{"log-too-old", "future-router-clock-too-old", "controller-capped"} {
+		if kept[name] {
+			t.Errorf("event %q survived pruning", name)
+		}
+	}
+}
+
+func TestPruneBoundsClosedTopologyHistoryAndPreservesActiveEdges(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-31 * 24 * time.Hour).UnixMilli()
+	closed := func(lastByte byte, end int64) model.TopologyEdge {
+		return model.TopologyEdge{
+			ChildNode:  fmt.Sprintf("mac:02:00:00:00:00:%02x", lastByte),
+			ParentNode: "synthetic:internet", Medium: "uplink", Confidence: "measured",
+			ValidFrom: end - 60_000, ValidTo: &end, LastSeen: end - 1,
+			Evidence: []model.TopologyEvidence{}, Ambiguities: []string{},
+		}
+	}
+	old := closed(1, cutoff-1)
+	atCutoff := closed(2, cutoff)
+	recent := closed(3, cutoff+1)
+	active := closed(4, cutoff-1)
+	active.ValidTo = nil
+	active.LastSeen = now.UnixMilli()
+	for _, edge := range []*model.TopologyEdge{&old, &atCutoff, &recent, &active} {
+		if err := db.SaveTopologyEdge(ctx, edge); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := db.Prune(ctx, now, Retention{TopologyHistory: 31 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Topology != 2 {
+		t.Fatalf("pruned topology=%d, want 2", result.Topology)
+	}
+	var remaining, activeRemaining int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM topology_edges`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM topology_edges WHERE id=? AND valid_to IS NULL`, active.ID).
+		Scan(&activeRemaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 2 || activeRemaining != 1 {
+		t.Fatalf("remaining=%d active=%d", remaining, activeRemaining)
+	}
+}
+
+func TestPruneBoundsFreshOpenWRTLogsWithoutEvictingControllerHistory(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	now := time.Now().UTC()
+	device1, device2 := int64(1), int64(2)
+	for i := 1; i <= 3; i++ {
+		for _, deviceID := range []*int64{&device1, &device2} {
+			if err := db.LogEvent(ctx, Event{
+				TS: now.Unix(), IngestedAt: now.UnixMilli(), DeviceID: deviceID,
+				Category: "system", Severity: "info", Source: "openwrt-logd",
+				Event: fmt.Sprintf("router-%d-%d", *deviceID, i),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := db.LogEvent(ctx, Event{TS: now.Unix(), Category: "audit", Severity: "info",
+		Event: "controller-kept"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Retention{OpenWRTLogs: 24 * time.Hour, MaxOpenWRTEventsPerDevice: 2,
+		MaxOpenWRTEvents: 3, MaxEvents: 10}
+	result, err := db.Prune(ctx, now, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Events != 3 {
+		t.Fatalf("pruned=%d, want 3 capped router logs", result.Events)
+	}
+	events, err := db.RecentEvents(ctx, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs, controller := 0, false
+	for _, event := range events {
+		if event.Source == "openwrt-logd" {
+			logs++
+		}
+		controller = controller || event.Event == "controller-kept"
+	}
+	if logs != 3 || !controller {
+		t.Fatalf("remaining logs=%d controller=%v events=%+v", logs, controller, events)
 	}
 }
 

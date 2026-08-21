@@ -8,20 +8,33 @@ import (
 )
 
 // Retention is how long each resolution is kept. Defaults are decision D4's:
-// 5-minute rollups for 14 days, hourly for 13 months, and the event log capped
-// by row count rather than age so a quiet install keeps its history.
+// 5-minute rollups for 14 days, hourly for 13 months, controller/audit events
+// capped by row count, OpenWrt logd events kept for 24 hours, closed topology
+// intervals kept for the API's 31-day history window, and explicit RF scans
+// capped per stable radio identity.
 type Retention struct {
-	FiveMinute time.Duration
-	Hourly     time.Duration
-	MaxEvents  int
+	FiveMinute      time.Duration
+	Hourly          time.Duration
+	OpenWRTLogs     time.Duration
+	TopologyHistory time.Duration
+	// MaxRadioScansPerRadio caps terminal rows only; active work is preserved.
+	MaxRadioScansPerRadio     int
+	MaxOpenWRTEvents          int
+	MaxOpenWRTEventsPerDevice int
+	MaxEvents                 int
 }
 
 // DefaultRetention returns the shipped policy.
 func DefaultRetention() Retention {
 	return Retention{
-		FiveMinute: 14 * 24 * time.Hour,
-		Hourly:     396 * 24 * time.Hour, // 13 months
-		MaxEvents:  100_000,
+		FiveMinute:                14 * 24 * time.Hour,
+		Hourly:                    396 * 24 * time.Hour, // 13 months
+		OpenWRTLogs:               24 * time.Hour,
+		TopologyHistory:           31 * 24 * time.Hour,
+		MaxRadioScansPerRadio:     1,
+		MaxOpenWRTEvents:          100_000,
+		MaxOpenWRTEventsPerDevice: 50_000,
+		MaxEvents:                 100_000,
 	}
 }
 
@@ -46,8 +59,10 @@ type RollupRow struct {
 // not.
 //
 // Rows are upserted rather than inserted. A flush that is retried after a crash
-// must not double-count a window, and the aggregate for a given window is
+// must not double-count a window, and the aggregate for a completed window is
 // idempotent by construction — the same samples produce the same average.
+// Callers must never pass an in-progress window: aggregates carry no durable
+// fragment identity, so a later process could only replace or double-count it.
 func (db *DB) WriteRollups(ctx context.Context, rows []RollupRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -65,7 +80,8 @@ func (db *DB) WriteRollups(ctx context.Context, rows []RollupRow) error {
 	}
 	defer findSeries.Close()
 	addSeries, err := tx.PrepareContext(ctx,
-		`INSERT INTO series (device_id, kind, key) VALUES (?,?,?)`)
+		`INSERT INTO series (device_id, kind, key)
+		 SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM devices WHERE id=?)`)
 	if err != nil {
 		return err
 	}
@@ -83,13 +99,26 @@ func (db *DB) WriteRollups(ctx context.Context, rows []RollupRow) error {
 	// produces hundreds of rows across a handful of series, and looking each one
 	// up per row is the difference between one query and hundreds.
 	ids := map[RollupRow]int64{}
+	deletedDevices := map[int64]bool{}
 	for _, r := range rows {
+		if deletedDevices[r.DeviceID] {
+			continue
+		}
 		ck := RollupRow{DeviceID: r.DeviceID, Kind: r.Kind, Key: r.Key}
 		id, ok := ids[ck]
 		if !ok {
-			id, err = seriesID(ctx, findSeries, addSeries, r.DeviceID, r.Kind, r.Key)
+			var parentExists bool
+			id, parentExists, err = seriesID(ctx, findSeries, addSeries,
+				r.DeviceID, r.Kind, r.Key)
 			if err != nil {
 				return err
+			}
+			if !parentExists {
+				// A completed poll can already be in the in-memory flush when
+				// un-adoption deletes its device. Drop only that deleted
+				// parent's rows; all other rows in this window still land.
+				deletedDevices[r.DeviceID] = true
+				continue
 			}
 			ids[ck] = id
 		}
@@ -103,20 +132,32 @@ func (db *DB) WriteRollups(ctx context.Context, rows []RollupRow) error {
 	return nil
 }
 
-func seriesID(ctx context.Context, find, add *sql.Stmt, deviceID int64, kind, key string) (int64, error) {
+func seriesID(ctx context.Context, find, add *sql.Stmt, deviceID int64,
+	kind, key string) (int64, bool, error) {
 	var id int64
 	err := find.QueryRowContext(ctx, deviceID, kind, key).Scan(&id)
 	if err == nil {
-		return id, nil
+		return id, true, nil
 	}
 	if err != sql.ErrNoRows {
-		return 0, fmt.Errorf("store: look up series %s/%s: %w", kind, key, err)
+		return 0, false, fmt.Errorf("store: look up series %s/%s: %w", kind, key, err)
 	}
-	res, err := add.ExecContext(ctx, deviceID, kind, key)
+	res, err := add.ExecContext(ctx, deviceID, kind, key, deviceID)
 	if err != nil {
-		return 0, fmt.Errorf("store: create series %s/%s: %w", kind, key, err)
+		return 0, false, fmt.Errorf("store: create series %s/%s: %w", kind, key, err)
 	}
-	return res.LastInsertId()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, fmt.Errorf("store: inspect created series %s/%s: %w", kind, key, err)
+	}
+	if n == 0 {
+		return 0, false, nil
+	}
+	id, err = res.LastInsertId()
+	if err != nil {
+		return 0, false, fmt.Errorf("store: identify created series %s/%s: %w", kind, key, err)
+	}
+	return id, true, nil
 }
 
 // FoldHourly aggregates completed 5-minute rollups into hourly ones.
@@ -168,6 +209,8 @@ type PruneResult struct {
 	FiveMinute int64
 	Hourly     int64
 	Events     int64
+	Topology   int64
+	RadioScans int64
 }
 
 // Prune enforces retention. It runs after FoldHourly, never before: dropping a
@@ -175,6 +218,11 @@ type PruneResult struct {
 // downsampling it.
 func (db *DB) Prune(ctx context.Context, now time.Time, r Retention) (PruneResult, error) {
 	var out PruneResult
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return out, fmt.Errorf("store: begin prune: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
 	if r.FiveMinute > 0 {
 		// Aligned DOWN to an hour boundary so an hour is always either wholly
 		// present at 5-minute resolution or wholly gone. An unaligned cutoff
@@ -182,30 +230,120 @@ func (db *DB) Prune(ctx context.Context, now time.Time, r Retention) (PruneResul
 		// only the surviving tail.
 		cut := now.Add(-r.FiveMinute).Unix()
 		cut -= ((cut % 3600) + 3600) % 3600
-		res, err := db.sql.ExecContext(ctx, `DELETE FROM rollup_5m WHERE ts < ?`, cut)
+		res, err := tx.ExecContext(ctx, `DELETE FROM rollup_5m WHERE ts < ?`, cut)
 		if err != nil {
 			return out, fmt.Errorf("store: prune 5m rollups: %w", err)
 		}
 		out.FiveMinute, _ = res.RowsAffected()
 	}
 	if r.Hourly > 0 {
-		res, err := db.sql.ExecContext(ctx, `DELETE FROM rollup_1h WHERE ts < ?`,
+		res, err := tx.ExecContext(ctx, `DELETE FROM rollup_1h WHERE ts < ?`,
 			now.Add(-r.Hourly).Unix())
 		if err != nil {
 			return out, fmt.Errorf("store: prune hourly rollups: %w", err)
 		}
 		out.Hourly, _ = res.RowsAffected()
 	}
+	if r.OpenWRTLogs > 0 {
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM events WHERE source='openwrt-logd' AND COALESCE(ingested_at, ts * 1000) < ?`,
+			now.Add(-r.OpenWRTLogs).UnixMilli())
+		if err != nil {
+			return out, fmt.Errorf("store: prune OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		out.Events += n
+	}
+	if r.MaxOpenWRTEventsPerDevice > 0 {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE ingest_cursors
+   SET continuity_gap_at=MAX(continuity_gap_at, ?)
+ WHERE source='openwrt-logd' AND device_id IN (
+   SELECT device_id FROM (
+     SELECT device_id,
+            ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY id DESC) AS n
+       FROM events
+      WHERE source='openwrt-logd' AND device_id IS NOT NULL
+   ) WHERE n > ?
+)`, now.UnixMilli(), r.MaxOpenWRTEventsPerDevice); err != nil {
+			return out, fmt.Errorf("store: mark per-device OpenWrt logd truncation: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `
+DELETE FROM events WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY id DESC) AS n
+      FROM events WHERE source='openwrt-logd'
+  ) WHERE n > ?
+)`, r.MaxOpenWRTEventsPerDevice)
+		if err != nil {
+			return out, fmt.Errorf("store: prune per-device OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		out.Events += n
+	}
+	if r.MaxOpenWRTEvents > 0 {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE ingest_cursors
+   SET continuity_gap_at=MAX(continuity_gap_at, ?)
+ WHERE source='openwrt-logd' AND device_id IN (
+   SELECT DISTINCT device_id FROM events
+    WHERE source='openwrt-logd' AND device_id IS NOT NULL AND id NOT IN (
+      SELECT id FROM events WHERE source='openwrt-logd' ORDER BY id DESC LIMIT ?
+    )
+)`, now.UnixMilli(), r.MaxOpenWRTEvents); err != nil {
+			return out, fmt.Errorf("store: mark global OpenWrt logd truncation: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `
+DELETE FROM events WHERE source='openwrt-logd' AND id NOT IN (
+  SELECT id FROM events WHERE source='openwrt-logd' ORDER BY id DESC LIMIT ?
+)`, r.MaxOpenWRTEvents)
+		if err != nil {
+			return out, fmt.Errorf("store: prune global OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		out.Events += n
+	}
 	if r.MaxEvents > 0 {
-		// By row count, not by age: an install that sees little activity should
-		// keep its history rather than lose it to a calendar.
-		res, err := db.sql.ExecContext(ctx, `
-DELETE FROM events WHERE id NOT IN (
-  SELECT id FROM events ORDER BY id DESC LIMIT ?)`, r.MaxEvents)
+		// Controller/audit history remains row-count based. OpenWrt logd rows use
+		// their independent time window above, so a noisy router cannot evict
+		// controller outcomes or lose recent logs to this cap.
+		res, err := tx.ExecContext(ctx, `
+DELETE FROM events WHERE source <> 'openwrt-logd' AND id NOT IN (
+  SELECT id FROM events WHERE source <> 'openwrt-logd' ORDER BY id DESC LIMIT ?)`, r.MaxEvents)
 		if err != nil {
 			return out, fmt.Errorf("store: prune events: %w", err)
 		}
-		out.Events, _ = res.RowsAffected()
+		n, _ := res.RowsAffected()
+		out.Events += n
+	}
+	if r.TopologyHistory > 0 {
+		// Active edges are the current graph and have no expiry. Only intervals
+		// whose exclusive end is outside the retained replay window are removed.
+		res, err := tx.ExecContext(ctx,
+			`DELETE FROM topology_edges WHERE valid_to IS NOT NULL AND valid_to <= ?`,
+			now.Add(-r.TopologyHistory).UnixMilli())
+		if err != nil {
+			return out, fmt.Errorf("store: prune topology history: %w", err)
+		}
+		out.Topology, _ = res.RowsAffected()
+	}
+	if r.MaxRadioScansPerRadio > 0 {
+		// The Radios API serves only the newest explicit result for a stable
+		// radio key. Bound terminal history to that contract while leaving
+		// pending/running device work untouched. Child BSS rows cascade.
+		res, err := tx.ExecContext(ctx, `
+DELETE FROM radio_scans WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY device_id, radio_key ORDER BY started_at DESC, id DESC
+    ) AS n
+      FROM radio_scans WHERE status IN ('completed','failed')
+  ) WHERE n > ?
+)`, r.MaxRadioScansPerRadio)
+		if err != nil {
+			return out, fmt.Errorf("store: prune RF scans: %w", err)
+		}
+		out.RadioScans, _ = res.RowsAffected()
 	}
 	// Rollups whose series is gone, collected only when one actually can be.
 	//
@@ -226,10 +364,13 @@ DELETE FROM events WHERE id NOT IN (
 	// keys are client MACs — the one identifier guaranteed to churn. This runs
 	// after the orphan sweep above, not before, or it would delete the series
 	// that sweep uses to decide what is an orphan.
-	if _, err := db.sql.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
                      AND id NOT IN (SELECT series_id FROM rollup_1h)`); err != nil {
 		return out, fmt.Errorf("store: prune empty series: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return out, fmt.Errorf("store: commit prune: %w", err)
 	}
 	return out, nil
 }

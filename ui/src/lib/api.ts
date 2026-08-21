@@ -12,6 +12,7 @@
 
 export class ApiError extends Error {
   status: number
+	  writeState?: 'none' | 'possible'
   /** The decoded response body.
    *
    *  Kept because some non-2xx responses ARE the answer rather than a failure:
@@ -23,6 +24,10 @@ export class ApiError extends Error {
     super(message)
     this.status = status
     this.body = body
+    if (body && typeof body === 'object' && 'write_state' in body) {
+      const state = (body as { write_state?: unknown }).write_state
+      if (state === 'none' || state === 'possible') this.writeState = state
+    }
   }
 }
 
@@ -58,10 +63,28 @@ async function request<T>(
     throw new ApiError(401, 'not signed in')
   }
   const text = await resp.text()
-  const body = text ? JSON.parse(text) : {}
+  let body: unknown
+  try {
+    body = text ? JSON.parse(text) : undefined
+  } catch {
+    // Reverse proxies and upstream failures commonly return text or HTML. Keep
+    // their HTTP status, but do not leak a JSON SyntaxError past this boundary.
+    throw new ApiError(
+      resp.status,
+      resp.ok
+        ? `server returned an invalid response (${resp.status})`
+        : `request failed (${resp.status})`,
+    )
+  }
   if (!resp.ok) {
-    throw new ApiError(resp.status,
-      body.error ?? `request failed (${resp.status})`, body)
+    const message = body && typeof body === 'object' && 'error' in body &&
+      typeof (body as { error?: unknown }).error === 'string'
+      ? (body as { error: string }).error
+      : `request failed (${resp.status})`
+    throw new ApiError(resp.status, message, body)
+  }
+  if (body === undefined) {
+    throw new ApiError(resp.status, `server returned an empty response (${resp.status})`)
   }
   return body as T
 }
@@ -79,6 +102,9 @@ export interface Device {
   name: string
   host: string
   role: string
+  /** Independently managed device functions. Older servers and rows may omit
+   *  this; `role` remains the compatibility fallback. */
+  functions?: DeviceFunction[]
   adopted: boolean
   adopted_at: number | null
   class: string | null
@@ -91,16 +117,18 @@ export interface Device {
   quiesced?: boolean
 }
 
-/** One call the last poll could not use, and what that costs.
- *
- *  A standing property of the device's ACL or driver rather than an event —
- *  which is why it needs somewhere to be READ. A limitation the controller
- *  knows about and never shows is one you discover from a number being quietly
- *  wrong. */
+/** One call the last poll could not use, its failure domain, and what that
+ *  costs. This carries both standing ACL/driver limits and current exchange
+ *  failures; `cause` and `permanent` tell the UI which is which. */
 export interface Degradation {
   call: string
   error: string
-  /** A refusal retrying cannot fix — an ACL gap rather than a busy device. */
+  /** Failure domain supplied by the collector; never inferred from `error`. */
+  cause: 'permission' | 'unsupported' | 'device' | 'transport' | 'protocol' | 'decode' | 'unknown'
+  /** Present only when the device returned a ubus status code. */
+  status?: { code: number; name: string }
+  /** Whether retrying the same exchange can help. `cause` determines whether
+   *  a non-retryable result is a device limit or a controller/protocol fault. */
   permanent: boolean
   costs?: string
 }
@@ -161,6 +189,10 @@ export interface DeviceDetail extends Device {
   /** The UCI sections this controller wrote, which un-adopt would revert.
    *  Named rather than counted, because un-adopt is not rollback-armed. */
   owned_sections?: string[]
+  /** False means the ownership ledger could not be read. An absent/empty
+   *  owned_sections list is safe to interpret as empty only when this is true.
+   *  Optional solely for compatibility with older controller responses. */
+  owned_sections_known?: boolean
 }
 
 export interface Registry {
@@ -176,16 +208,24 @@ export interface Client {
   mac: string
   name: string
   ipv4?: string
+  /** Desired-state grouping used by Object Manager. Polling never rewrites it. */
+  group?: string
+  /** Desired static lease. Empty/absent means dynamic addressing. */
+  fixed_ip?: string
   first_seen: number | null
   last_seen: number | null
   blocked: boolean
-  /** "wireless" only when a focused poll saw it; never "wired" by inference. */
+  /** "wireless" when a managed AP reports it in a baseline hostapd read;
+   *  never "wired" by inference. */
   connection: 'wireless' | 'unknown'
   online: boolean
-  /** Absent, not zero, when no focused poll has covered this client. */
+  /** Absent, not zero, when no managed AP reports this client or RSSI. */
   signal?: number
   tx_retry_pct?: number
   device_id?: number
+  /** Current evidence contains competing managed devices or BSSes, so AP/RF
+   *  fields are withheld rather than selected by response order. */
+  association_ambiguous?: boolean
   /** Which side of the router: a client of this network, a neighbour on its
    *  uplink, or not established. "unknown" is a real answer — a host with no
    *  observed address has not been shown to be either. */
@@ -209,12 +249,36 @@ export interface Series {
 }
 
 export interface EventRow {
+  /** Stable database identity used by keyset paging and detail lookup. */
+  ID: number
   TS: number
   DeviceID: number | null
   Category: string
   Severity: string
   Event: string
   Detail: unknown
+  Source: string
+  SourceID: string
+  SourceBoot: string
+  IngestedAt: number
+  ClientMAC: string
+  Action: string
+  Direction: string
+  InIface: string
+  OutIface: string
+  SrcIP: string
+  DstIP: string
+  SrcPort: number | null
+  DstPort: number | null
+  ZoneIn: string
+  ZoneOut: string
+  PolicyID: number | null
+}
+
+export interface EventCursor {
+  /** Event time remains Unix seconds; id breaks timestamp ties. */
+  ts: number
+  id: number
 }
 
 /** One filter option and how many rows would match it. */
@@ -232,8 +296,250 @@ export interface EventPage {
   events: EventRow[] | null
   total: number
   limit: number
-  offset: number
+  /** Present only on the legacy offset endpoint. */
+  offset?: number
+  scope?: 'general' | 'audit'
+  next_before?: EventCursor | null
   facets: { category: Facet[]; severity: Facet[] }
+  coverage: {
+    complete: boolean
+    expected_devices: number
+    observed_devices: number
+    gaps: string[]
+  }
+}
+
+export interface TopologyNode {
+  id: string
+  kind: 'device' | 'client' | 'synthetic'
+  name: string
+  device_id?: number
+  mac?: string
+  online?: boolean
+  synthetic: boolean
+}
+
+export interface TopologyEvidence {
+  kind: string
+  source: string
+  device_id?: number
+  /** Sanitized fields selected by the server, never a raw router payload. */
+  detail: Record<string, unknown>
+}
+
+export interface TopologyEdge {
+  id: string | number
+  child_id: string
+  parent_id: string
+  parent_device_id?: number
+  parent_port?: string
+  medium: 'wired' | 'wireless' | 'mesh' | 'uplink' | 'unknown'
+  confidence: 'measured' | 'inferred' | 'ambiguous'
+  valid_from: number
+  valid_to?: number
+  last_seen: number
+  evidence: TopologyEvidence[]
+  ambiguities: string[]
+}
+
+export interface TopologySnapshot {
+  /** Unix milliseconds represented by this graph. */
+  at: number
+  complete: boolean
+  /** Older intervals were omitted by retention or the bounded API response. */
+  truncated: boolean
+  nodes: TopologyNode[]
+  edges: TopologyEdge[]
+  /** Sorted sources the controller could not observe. */
+  gaps: string[]
+}
+
+export type ChannelPlanState = 'in-use' | 'enabled' | 'restricted' | 'unknown'
+
+export interface RadioChannel {
+  band?: string
+  channel: number
+  mhz: number
+  state: ChannelPlanState
+  availability: Exclude<ChannelPlanState, 'in-use'>
+  in_use: boolean
+  /** null means iwinfo did not report it. */
+  restricted: boolean | null
+  /** Always null until a regulatory source proves DFS independently. */
+  dfs: boolean | null
+  /** Always null until a persisted exclusion model exists. */
+  excluded: boolean | null
+  flags: string[]
+}
+
+export interface RadioScanBSS {
+  scan_id: number
+  bssid: string
+  ssid: string
+  mhz: number
+  channel: number
+  signal?: number
+  width?: number
+}
+
+export interface RadioScan {
+  id: number
+  radio: { device_id: number; radio_key: string }
+  started_at: number
+  finished_at?: number
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  detail: Record<string, unknown>
+}
+
+export interface RadioSuggestion {
+  channel: number
+  mhz: number
+  score: number
+  basis: string
+  scan_id: number
+  observed_at: number
+}
+
+export interface RadioView {
+  radio_key: string
+  up?: boolean
+  disabled?: boolean
+  pending?: boolean
+  band?: string
+  configured_channel?: string
+  htmode?: string
+  current_mhz?: number
+  current_channel?: number
+  current_ambiguous?: boolean
+  inventory_observed_at?: number
+  channels_observed_at?: number
+  stale: boolean
+  interfaces: { name: string; mode?: string }[]
+  channels: RadioChannel[]
+  channels_known: boolean
+  scan_capability: 'present' | 'absent' | 'not-observable' | 'unknown'
+  latest_scan?: RadioScan
+  latest_observations: RadioScanBSS[]
+  suggested?: RadioSuggestion
+}
+
+export interface RadioCollectionStatus {
+  observed_at?: number
+  last_poll_at?: number
+  last_poll_ok: boolean
+  consecutive_failures: number
+  last_source_attempt_at?: number
+  last_source_attempt_ok?: boolean
+  stale: boolean
+}
+
+export interface RadiosResponse {
+  generated_at: number
+  devices: { device_id: number; name: string; status?: RadioCollectionStatus; radios: RadioView[] }[]
+  gaps: string[]
+}
+
+export interface ObservabilityGap {
+  from: number
+  to: number
+}
+
+export interface MetricAvailability {
+  state: 'available' | 'partial' | 'unavailable'
+  /** `rollup_5m`, `rollup_1h`, or the fixed formula derived from one. */
+  source: string
+  observed_points: number
+  expected_points: number
+  gaps: ObservabilityGap[]
+  reason?: string
+}
+
+export interface ClientObservabilityMetric {
+  id: string
+  scope: 'client' | 'ap' | 'site'
+  kind: string
+  label: string
+  unit: string
+  device_id?: number
+  device_name?: string
+  key?: string
+  /** Index-aligned with ClientObservability.timestamps. Null is unavailable. */
+  values: (number | null)[]
+  /** Stored rollup envelope and source-sample count, aligned with values.
+   *  Optional only so the UI remains honest during a rolling controller/UI upgrade. */
+  mins?: (number | null)[]
+  maxs?: (number | null)[]
+  counts?: (number | null)[]
+  availability: MetricAvailability
+}
+
+export interface ClientObservabilityEvent {
+  id: number
+  /** Unix milliseconds; data_contract names its source resolution. */
+  ts: number
+  device_id?: number
+  category: string
+  severity: string
+  event: string
+  detail: Record<string, unknown>
+  source: string
+  source_id?: string
+  source_boot?: string
+  ingested_at: number
+  client_mac: string
+  action?: string
+  direction?: string
+  in_iface?: string
+  out_iface?: string
+  src_ip?: string
+  dst_ip?: string
+  src_port?: number
+  dst_port?: number
+  zone_in?: string
+  zone_out?: string
+  policy_id?: number
+}
+
+export interface ClientObservabilityPath {
+  node_ids: string[]
+  labels: string[]
+  mediums: string[]
+  confidence: string
+}
+
+export interface ClientObservabilityPathInterval {
+  from: number
+  to: number
+  complete: boolean
+  paths: ClientObservabilityPath[]
+  gaps: string[]
+}
+
+export interface ClientObservability {
+  client_mac: string
+  from: number
+  to: number
+  resolution: '5m' | '1h'
+  bucket_ms: number
+  timestamps: number[]
+  /** AP provenance at each timestamp, aligned with timestamps. */
+  ap_device_at: (number | null)[]
+  metrics: ClientObservabilityMetric[]
+  events: ClientObservabilityEvent[]
+  paths: ClientObservabilityPathInterval[]
+  gaps: string[]
+  experience_formula: {
+    name: 'wifi-v1'
+    weights: { rssi: number; retry_delta: number; tx_fail_delta: number }
+    missing_policy: string
+  }
+  data_contract: {
+    metric_source: string
+    raw_samples_persisted: false
+    event_time_resolution_ms: number
+    events_truncated: boolean
+    topology_source: string
+  }
 }
 
 /** What a capability change licenses a reader to conclude.
@@ -275,6 +581,15 @@ export interface ReprobeResult {
   note: string
 }
 
+export interface RefreshACLResult {
+  device_id: number
+  name: string
+  acl_updated: boolean
+  controller_verified: boolean
+  features: string[]
+  unobservable?: string[]
+}
+
 /** One page of the client grid. Same shape as EventPage and for the same
  *  reason: filters, paging and facet counts are all server-side, so the rail
  *  counts the whole filtered table rather than the rows that arrived. */
@@ -296,9 +611,16 @@ export interface Dashboard {
     pending: number
     unknown: number
   }
-  /** Stations associated to the radios. null when any AP's count could not be
-   *  read — see wireless_clients_unknown_on. */
-  wireless_clients: number | null
+  /** Online, local Client Devices rows whose current hostapd state or recent
+   *  station telemetry identifies them as wireless. This is the same count as
+   *  Client Devices with Network=this network, Presence=online and
+   *  Connection=wireless. It is safe to present as the full total only when
+   *  wireless_clients_complete is true. */
+  wireless_clients: number
+  /** False when at least one adopted device could not report its current
+   *  station set. In that state wireless_clients is still the exact number of
+   *  matching rows identified by available evidence, but not a fleet total. */
+  wireless_clients_complete: boolean
   wireless_clients_unknown_on?: string[]
   /** Hosts on THIS network — a different question from wireless_clients, and
    *  scoped to `local`: a gateway's neighbour tables also cover its uplink.
@@ -317,7 +639,8 @@ export interface Dashboard {
 /** What a device is for. A closed vocabulary — the API refuses anything else
  *  rather than storing it, because the role decides what gets sent to the
  *  device and a typo used to mean "silently an access point". */
-export type DeviceRole = 'gateway' | 'ap' | 'switch'
+export type DeviceFunction = 'gateway' | 'ap' | 'switch'
+export type DeviceRole = DeviceFunction
 
 export interface AdoptResult {
   device_id: number
@@ -326,6 +649,8 @@ export interface AdoptResult {
   model: string
   class: string
   firmware: string
+  /** The functions accepted at adoption. Absent on a legacy server. */
+  functions?: DeviceFunction[]
   cert_fp?: string
   features?: string[]
   /** Checks that were REFUSED, not features the hardware lacks. */
@@ -336,13 +661,47 @@ export interface AdoptResult {
   warnings?: string[]
 }
 
+/** Credentialed, read-only adoption preflight. It creates no controller
+ *  account and writes no configuration to the device. */
+export interface InspectResult {
+  mac: string
+  model: string
+  class: string
+  firmware: string
+  radio_count: number
+  lan_ports: string[]
+  wan_port?: string
+  /** What inspection can safely claim about the switch. DSA support remains
+   *  conditional on an already VLAN-aware bridge; observe-only is telemetry. */
+  switch_mode: 'dsa-conditional' | 'observe-only' | 'unknown' | 'none'
+  functions_supported: DeviceFunction[]
+  functions_recommended: DeviceFunction[]
+  /** Evidence that could not be read is not the same as absent hardware. */
+  functions_unknown?: DeviceFunction[]
+  /** Null means the read-only check was unavailable, not that the fact is false. */
+  gateway_evidence: {
+    active_wan_default_route: boolean | null
+    lan_dhcp_enabled: boolean | null
+  }
+  notes?: string[]
+  unobservable?: string[]
+}
+
 export interface UnadoptResult {
   removed_from_inventory: boolean
   reverted_sections: number
+  /** True only when every owned UCI section was proved deleted and committed.
+   *  Optional for compatibility with older controller responses. */
+  config_revert_complete?: boolean
+  /** Exact owned sections not proved gone. These survive in the response even
+   *  after a forced inventory deletion, when the ledger no longer exists. */
+  config_remains?: string[]
   login_removed: boolean
   acl_removed: boolean
   footprint_remains: boolean
   residue?: string[]
+  /** Exact stock-OpenWrt commands for residue left on the device. */
+  cleanup_commands?: string[]
   errors?: string[]
   needs_operator_credential: boolean
   /** The call's overall failure, when there was one. Present on a non-2xx that
@@ -373,7 +732,11 @@ export interface Discovered {
     /** Distinct hostapd PHYs with a running BSS — configured radios, not
      *  installed silicon. */
     radios: number
+    /** Compatibility name: true means a WAN-named rpcd interface object was
+     *  published, not that a default route or forwarding was observed. */
     gateway: boolean
+    /** Compatibility name: true means a dnsmasq/dhcp rpcd object was
+     *  published, not that an enabled LAN pool was observed. */
     dhcp: boolean
     wireless: boolean
   }
@@ -392,6 +755,14 @@ export interface ScanResult {
   answered: number
   networks: string[]
   skipped?: string[]
+  /** Networks the controller attempted but could not test. `unreachable`
+   *  means every dial returned EHOSTUNREACH or ENETUNREACH, so an empty
+   *  `found` is not evidence that the subnet has no devices. */
+  failures?: Array<{
+    network: string
+    reason: 'unreachable'
+    attempts: number
+  }>
   elapsed_ms: number
 }
 
@@ -408,8 +779,8 @@ export interface WLAN {
   bands: string[]
   security_mode: 'sae' | 'sae-mixed' | 'psk2' | 'owe' | 'none'
   pmf: '0' | '1' | '2'
-  /** Whether a passphrase is set. The passphrase itself never rides along in a
-   *  list — fetch one WLAN with reveal to see it. */
+  /** Whether a passphrase is set. The passphrase is write-only and is never
+   *  returned; omit key on an edit to preserve the existing value. */
   has_key: boolean
   key?: string
   roaming: { ft: boolean; ft_over_ds: boolean; kv: boolean; ft_with_psk2: boolean }
@@ -435,7 +806,149 @@ export interface SiteNetwork {
   vlan: number
   cidr: string
   zone: string
+  /** Missing only when talking to a controller version from before DHCP became
+   * editable; the UI supplies the historical defaults in that case. */
+  dhcp?: {
+    enabled: boolean
+    start: number
+    limit: number
+    leasetime: string
+    /** True only for an upgraded dhcp_json={} row. An explicit save clears it. */
+    legacy_default?: boolean
+  }
   enabled: boolean
+}
+
+/** Effective forwarding policy for one managed routed zone.
+ *
+ * `explicit: false` is the inherited legacy default, not a missing policy:
+ * that zone may initiate to `wan` and nowhere else. An explicit empty list is
+ * different and means the zone may initiate nowhere. */
+export interface SiteZonePolicy {
+  name: string
+  forward_to: string[]
+  explicit: boolean
+}
+
+export type PolicyKind = 'firewall_rule' | 'port_forward' | 'static_route'
+export type PolicyOrigin = 'manual' | 'object_manager'
+
+export interface FirewallRule {
+  /** This release renders explicit firewall rules as OpenWrt family=ipv4.
+   *  There is no selectable family field yet; IPv6 traffic is unaffected. */
+  action: 'accept' | 'drop' | 'reject'
+  source_zone: string
+  /** Empty means traffic to the router itself. */
+  destination_zone?: string
+  protocols: Array<'all' | 'tcp' | 'udp' | 'icmp'>
+  source_cidr?: string
+  destination_cidr?: string
+  source_port?: string
+  destination_port?: string
+  source_macs?: string[]
+}
+
+export interface PortForward {
+  /** Port forwards are IPv4 DNAT in this release. */
+  source_zone: 'wan'
+  destination_zone: string
+  protocols: Array<'tcp' | 'udp'>
+  external_port: number
+  destination_ip: string
+  destination_port: number
+  source_cidr?: string
+}
+
+export interface StaticRoute {
+  /** Static routes are IPv4 routes in this release. */
+  /** 0 means the device's WAN; a positive value names a managed network. */
+  network_id: number
+  target: string
+  gateway: string
+  metric: number
+}
+
+/** One persisted policy record. Drafts returned by Object Manager have id 0. */
+export interface Policy {
+  id: number
+  order: number
+  name: string
+  kind: PolicyKind
+  origin: PolicyOrigin
+  enabled: boolean
+  firewall?: FirewallRule
+  port_forward?: PortForward
+  static_route?: StaticRoute
+}
+
+export type PolicyRowKind =
+  | 'zone_forward'
+  | PolicyKind
+  | 'client_block'
+  | 'fixed_ip'
+
+export interface PolicyRow {
+  id: string
+  record_id?: number
+  origin: 'legacy_default' | 'zone_matrix' | PolicyOrigin | 'client'
+  kind: PolicyRowKind
+  name: string
+  enabled: boolean
+  order: number
+  order_scope: 'zone_forwarding' | 'firewall' | 'network_route' | 'dhcp' | string
+  /** Server-authored scope, including `address_families`. Explicit firewall,
+   *  NAT and route rows report only `ipv4`; Client Block reports ipv4+ipv6. */
+  effective_scope: Record<string, unknown>
+  mutable: boolean
+  renderable: boolean
+  gated_reason?: string
+  rule?: unknown
+}
+
+export interface PolicyCapability {
+  kind: 'firewall' | 'nat' | 'route' | 'fixed_ip' | 'qos' | 'rate_limit' | 'application' | 'priority'
+  available: boolean
+  reason?: string
+}
+
+export interface PolicyMaster {
+  rows: PolicyRow[]
+  capabilities: PolicyCapability[]
+}
+
+export interface PolicyClient {
+  mac: string
+  group?: string
+  blocked: boolean
+  fixed_ip?: string
+}
+
+export interface PolicyObjectTarget {
+  kind: 'device' | 'group' | 'network'
+  /** Device MAC, exact group name, numeric network ID, or `wan`. */
+  id: string
+}
+
+export interface PolicyObjectOutcome {
+  /** `secure` compiles an IPv4-only firewall draft in this release. */
+  kind: 'secure' | 'route' | 'qos' | 'application'
+  destination_zone?: string
+  target?: string
+  gateway?: string
+  metric?: number
+  rate_kbps?: number
+}
+
+export interface ObjectCompileResult {
+  drafts: Policy[]
+  gates: Array<{
+    object: PolicyObjectTarget
+    outcome: PolicyObjectOutcome['kind']
+    reason: string
+  }>
+  persisted: false
+  applied: false
+  note: string
 }
 
 /** One device's deviation from the site model. */
@@ -553,10 +1066,12 @@ export interface Mesh {
   network_id: number
   group_id: number
   band: '2g' | '5g' | '6g'
-  /** The passphrase is never sent in a list. has_key is what a list screen
-   *  needs: an open mesh is joinable by anyone in radio range. */
+  /** The passphrase is write-only and never returned. has_key is what an edit
+   *  screen needs: an open mesh is joinable by anyone in radio range. */
   has_key: boolean
   key?: string
+  /** Write-only. Explicitly erase the stored key; blank key alone preserves it. */
+  clear_key?: boolean
   enabled: boolean
 }
 
@@ -570,6 +1085,11 @@ export interface Site {
   uplinks: Uplink[]
   groups: APGroup[]
   networks: SiteNetwork[]
+  zones: SiteZonePolicy[]
+  /** Unified effective policy rows. Optional only for mixed-version upgrades. */
+  policies?: PolicyRow[]
+  /** Backend/capability gates shown without implying an unavailable rule shipped. */
+  policy_capabilities?: PolicyCapability[]
   problems: string[]
   /** Every per-device deviation, listed. The risk of overrides is not any one
    *  of them; it is a fleet drifting apart until nobody can say what is
@@ -613,6 +1133,7 @@ export interface DevicePreview {
   device_id: number
   name: string
   role: string
+  functions: DeviceFunction[]
   changes: Change[]
   /** A human owns something this change would touch. Nothing is applied to a
    *  blocked device — a partial apply around a conflict gives you half a WLAN. */
@@ -656,6 +1177,8 @@ export interface DevicePreview {
 export interface PreviewResult {
   site_name: string
   devices: DevicePreview[]
+  /** Opaque server binding for the complete desired state and full-fleet plans. */
+  preview_token: string
   site_errors?: string[]
 }
 
@@ -665,14 +1188,51 @@ export interface DeviceApply {
   /** applied | reverted | unknown | error. "unknown" needs a human: the
    *  confirm never landed and what the device did could not be established. */
   outcome: string
+  /** Device-side truth, retained when controller bookkeeping fails later. */
+  router_outcome?: string
   reason?: string
   changes?: number
 }
 
 export interface ApplyResult {
+  operation_id?: string
   devices: DeviceApply[]
   aborted: boolean
   aborted_after?: string
+}
+
+export type ApplyOperationState =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'unknown'
+
+export interface ApplyOperation {
+  operation_id: string
+  state: ApplyOperationState
+  created_at: number
+  started_at?: number
+  finished_at?: number
+  result?: ApplyResult
+  error?: string
+  write_state?: 'none' | 'possible'
+  devices: ApplyOperationDevice[]
+}
+
+export interface ApplyOperationDevice {
+  ordinal: number
+  device_id: number
+  device_mac: string
+  device_name: string
+  state: 'queued' | 'applying' | 'completed' | 'failed' | 'unknown' | 'skipped'
+  write_state: 'none' | 'possible'
+  router_outcome?: string
+  outcome?: string
+  changes: number
+  reason?: string
+  started_at?: number
+  finished_at?: number
 }
 
 /** What the controller costs one device (DEVICE-BUDGET §7). */
@@ -752,6 +1312,12 @@ export const api = {
   deviceSeries: (id: number) =>
     get<{ series: Record<string, string[]> }>(`/devices/${id}/series`),
   reprobe: (id: number) => post<ReprobeResult>(`/devices/${id}/reprobe`, {}),
+  refreshACL: (id: number, credential: {
+    username: string
+    password: string
+    private_key?: string
+    acknowledge_router_changes: true
+  }) => post<RefreshACLResult>(`/devices/${id}/refresh-acl`, credential),
   distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
   /** The most recent distribution, WITHOUT running one. `ran: false` means no
    *  cycle has completed since the controller started — not that nothing
@@ -793,21 +1359,45 @@ export const api = {
     const qs = p.toString()
     return get<ClientPage>(`/clients${qs ? `?${qs}` : ''}`)
   },
+  clientObservability: (mac: string, from: number, to: number) => {
+    const q = new URLSearchParams({
+      from: String(Math.trunc(from)),
+      to: String(Math.trunc(to)),
+    })
+    return get<ClientObservability>(
+      `/clients/${encodeURIComponent(mac)}/observability?${q}`,
+    )
+  },
   adopt: (req: {
     host: string
     name?: string
     username: string
+    /** Still required for the ubus sign-in even when SSH uses a key. */
+    password: string
+    /** Optional one-time SSH bootstrap credential; never persisted. */
+    private_key?: string
+    scheme?: 'http' | 'https'
+    port?: number
+    /** Additive capability selection. `role` is sent too so a mixed-version
+     *  controller still has a deterministic legacy fallback. */
+    functions?: DeviceFunction[]
+    role?: DeviceRole
+    acknowledge_router_changes: true
+  }) => post<AdoptResult>('/devices/adopt', req),
+  inspectDevice: (req: {
+    host: string
+    username: string
     password: string
     scheme?: 'http' | 'https'
     port?: number
-    role?: DeviceRole
-  }) => post<AdoptResult>('/devices/adopt', req),
-  unadopt: (id: number, req?: { username?: string; password?: string; force?: boolean }) =>
-    post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),
+  }) => post<InspectResult>('/devices/inspect', req),
+  unadopt: (
+    id: number,
+    req?: { username?: string; password?: string; private_key?: string; force?: boolean },
+  ) => post<UnadoptResult>(`/devices/${id}/unadopt`, req ?? {}),
   site: () => get<Site>('/site'),
   setSiteName: (name: string) => post<{ name: string }>('/site/name', { name }),
-  wlan: (id: number, reveal = false) =>
-    get<WLAN>(`/site/wlans/${id}${reveal ? '?reveal=1' : ''}`),
+  wlan: (id: number) => get<WLAN>(`/site/wlans/${id}`),
   saveWLAN: (w: Partial<WLAN> & { id?: number }) =>
     post<{ wlan: WLAN; problems: string[] }>(
       w.id ? `/site/wlans/${w.id}` : '/site/wlans', w),
@@ -823,11 +1413,61 @@ export const api = {
   saveNetwork: (n: Partial<SiteNetwork> & { id?: number }) =>
     post<SiteNetwork>(n.id ? `/site/networks/${n.id}` : '/site/networks', n),
   deleteNetwork: (id: number) => del<{ deleted: number }>(`/site/networks/${id}`),
+  saveZonePolicy: (name: string, forwardTo: string[]) =>
+    post<SiteZonePolicy>(`/site/zones/${encodeURIComponent(name)}`, {
+      forward_to: forwardTo,
+    }),
+  resetZonePolicy: (name: string) =>
+    del<SiteZonePolicy>(`/site/zones/${encodeURIComponent(name)}`),
+  policies: () => get<PolicyMaster>('/site/policies'),
+  savePolicy: (policy: Omit<Policy, 'id'> & { id?: number }) => {
+    const { id, ...body } = policy
+    return post<Policy>(id ? `/site/policies/${id}` : '/site/policies', body)
+  },
+  deletePolicy: (id: number) =>
+    del<{ deleted: number; note: string }>(`/site/policies/${id}`),
+  saveClientPolicy: (
+    mac: string,
+    changes: { blocked?: boolean; fixed_ip?: string; group?: string },
+  ) => post<{ client: PolicyClient; note: string }>(
+    `/clients/${encodeURIComponent(mac)}/policy`, changes,
+  ),
+  compilePolicyObjects: (
+    objects: PolicyObjectTarget[],
+    outcomes: PolicyObjectOutcome[],
+  ) => post<ObjectCompileResult>('/site/object-manager/compile', { objects, outcomes }),
   setOverride: (deviceID: number, wlan_id: number, key: string, value: string) =>
     post<{ note: string }>(`/site/devices/${deviceID}/override`, { wlan_id, key, value }),
   preview: () => get<PreviewResult>('/site/preview'),
-  applySite: (opts: { device_ids?: number[]; acknowledge_traversal?: boolean } = {}) =>
+  applySite: (opts: {
+    operation_id: string
+    preview_token: string
+    device_ids?: number[]
+    acknowledge_traversal?: boolean
+    acknowledge_driver_risk?: boolean
+    acknowledge_cautions?: boolean
+    acknowledge_partial_fleet?: boolean
+  }) =>
     post<ApplyResult>('/site/apply', opts),
+  applyOperation: (operationID: string) =>
+    get<ApplyOperation>(`/site/apply/${encodeURIComponent(operationID)}`),
+
+  topology: (at?: number) =>
+    get<TopologySnapshot>(`/topology${at == null ? '' : `?at=${Math.trunc(at)}`}`),
+  topologyHistory: (from: number, to: number) => {
+    const q = new URLSearchParams({
+      from: String(Math.trunc(from)),
+      to: String(Math.trunc(to)),
+    })
+    return get<TopologySnapshot>(`/topology/history?${q}`)
+  },
+
+  radios: () => get<RadiosResponse>('/radios'),
+  scanRadio: (deviceID: number, radioKey: string, acknowledgeDisruption: boolean) =>
+    post<{ scan: RadioScan; observations: RadioScanBSS[] }>(
+      `/devices/${deviceID}/radios/${encodeURIComponent(radioKey)}/scan`,
+      { acknowledge_disruption: acknowledgeDisruption },
+    ),
 
   scanPlan: () => get<ScanPlan>('/discovery'),
   scan: (req?: { networks?: string[]; https?: boolean }) =>
@@ -835,16 +1475,24 @@ export const api = {
   events: (opts: {
     limit?: number
     offset?: number
+    scope?: 'general' | 'audit'
+    before?: EventCursor | null
     category?: string
     severity?: string
   } = {}) => {
     const q = new URLSearchParams()
     q.set('limit', String(opts.limit ?? 100))
     if (opts.offset) q.set('offset', String(opts.offset))
+    if (opts.scope) q.set('scope', opts.scope)
+    if (opts.before) {
+      q.set('before_ts', String(opts.before.ts))
+      q.set('before_id', String(opts.before.id))
+    }
     if (opts.category) q.set('category', opts.category)
     if (opts.severity) q.set('severity', opts.severity)
     return get<EventPage>(`/events?${q}`)
   },
+  eventDetail: (id: number) => get<EventRow>(`/events/${id}`),
   stats: (kind: string, deviceID: number, key: string, from: number, to: number) =>
     get<Series>(
       `/stats/${kind}?device_id=${deviceID}&key=${encodeURIComponent(key)}` +

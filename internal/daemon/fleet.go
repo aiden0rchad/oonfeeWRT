@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
@@ -59,9 +62,24 @@ func (d *Daemon) StartCollector(ctx context.Context, opts collector.Options) err
 // when the daemon starts must not prevent the daemon from starting.
 func (d *Daemon) target(dev *store.Device) collector.Target {
 	id, mac, name := dev.ID, dev.MAC, dev.Name
+	baselineSeconds := max(0, dev.PollInterval)
+	if baselineSeconds > int((15*time.Minute)/time.Second) {
+		// Older databases may contain values accepted before the API capped the
+		// control. Keep radio/topology refresh truthful without requiring a data
+		// rewrite merely to normalize a scheduling option.
+		baselineSeconds = int((15 * time.Minute) / time.Second)
+	}
+	baseline := time.Duration(baselineSeconds) * time.Second
+	airtimeSplit := false
+	if caps, err := deviceCaps(dev); err == nil {
+		airtimeSplit = caps.State(capability.FeatAirtimeSplit).Buildable()
+	}
 	return collector.Target{
 		DeviceID: id, MAC: mac, Name: name, Class: dev.Class,
-		Baseline: time.Duration(dev.PollInterval) * time.Second,
+		Gateway:       deviceFunctions(dev).Routes(),
+		AirtimeSplit:  airtimeSplit,
+		ConnectionKey: deviceConnectionKey(dev),
+		Baseline:      baseline,
 		Connect: func(ctx context.Context) (*ubus.Client, error) {
 			// Re-read the row each time: the address, the certificate pin and
 			// the credential can all have changed since the collector started,
@@ -75,11 +93,34 @@ func (d *Daemon) target(dev *store.Device) collector.Target {
 	}
 }
 
+func deviceConnectionKey(dev *store.Device) string {
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%q\x00%q\x00%d\x00%q\x00%q\x00",
+		dev.MAC, dev.Host, dev.Port, dev.Scheme, dev.CertFP)
+	_, _ = h.Write(dev.CredEnc)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Track brings a newly adopted device into the poll loop.
 func (d *Daemon) Track(dev *store.Device) {
 	if c := d.collectorRef(); c != nil && dev.Adopted() {
 		c.Add(d.target(dev))
 	}
+}
+
+// registerDevice makes inventory identity creation and collector registration
+// atomic with deletion's post-commit purge. Without this boundary SQLite can
+// reuse the deleted ID while deleteDevice still holds old process state, and
+// that purge can erase the replacement's samples, ownership, subscriptions,
+// and freshly registered poller.
+func (d *Daemon) registerDevice(ctx context.Context, dev *store.Device) error {
+	d.telemetryLifecycle.Lock()
+	defer d.telemetryLifecycle.Unlock()
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		return err
+	}
+	d.Track(dev)
+	return nil
 }
 
 // Untrack removes a device from the poll loop, for un-adoption or deletion.
@@ -92,10 +133,66 @@ func (d *Daemon) Untrack(deviceID int64) {
 	if c := d.collectorRef(); c != nil {
 		c.Remove(deviceID)
 	}
+	d.purgeDeviceState(deviceID)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := d.Store.SweepOrphans(ctx); err != nil {
 		d.Log.Error("could not sweep orphaned telemetry", "err", err)
+	}
+}
+
+// purgeDeviceState is the single identity boundary for process-local state.
+// SQLite may reuse an INTEGER PRIMARY KEY immediately after deletion, so every
+// cache keyed by that number must become unknown before a replacement can be
+// observed. The collector is removed first; Remove is an emission barrier, so
+// an old in-flight poll cannot repopulate these maps after this returns.
+func (d *Daemon) purgeDeviceState(deviceID int64) {
+	d.telemetryLifecycle.Lock()
+	defer d.telemetryLifecycle.Unlock()
+	d.purgeDeviceStateLocked(deviceID)
+}
+
+// purgeDeviceStateLocked requires telemetryLifecycle. deleteDevice already
+// holds it across the database identity boundary and calls this form directly.
+func (d *Daemon) purgeDeviceStateLocked(deviceID int64) {
+	if d.Samples != nil {
+		d.Samples.ForgetDevice(deviceID)
+	}
+
+	d.mu.Lock()
+	delete(d.lastClients, deviceID)
+	delete(d.lastStations, deviceID)
+	delete(d.lastPresence, deviceID)
+	apiServer := d.api
+	d.mu.Unlock()
+
+	d.meshes.forget(deviceID)
+	d.reprobes.forget(deviceID)
+
+	d.sinkMu.Lock()
+	delete(d.sinkUp, deviceID)
+	delete(d.sinkKnown, deviceID)
+	delete(d.sinkFirmware, deviceID)
+	logs, topologyIngest, cascadeIngest := d.logIngest, d.topologyIngest, d.cascadeIngest
+	d.sinkMu.Unlock()
+	if logs != nil {
+		logs.forgetDevice(deviceID)
+	}
+	if topologyIngest != nil {
+		topologyIngest.forgetDevice(deviceID)
+	}
+	if cascadeIngest != nil {
+		cascadeIngest.forgetDevice(deviceID)
+	}
+
+	// The last neighbour result embeds a fleet roster. Invalidate the whole
+	// cycle rather than trying to edit a historical result into a new identity.
+	d.nbrMu.Lock()
+	d.lastNeighbourRun = nil
+	d.nbrMu.Unlock()
+
+	if apiServer != nil && apiServer.Hub != nil {
+		apiServer.Hub.ForgetDevice(deviceID)
 	}
 }
 
@@ -122,47 +219,101 @@ func (d *Daemon) collectorRef() *collector.Collector {
 // rather than every interval. A device that has been down for a day should
 // appear in the log once, not 1,440 times.
 func (d *Daemon) sink() collector.Sink {
-	var (
-		mu    sync.Mutex
-		up    = map[int64]bool{}
-		known = map[int64]bool{}
-		fw    = map[int64]string{}
-	)
+	d.sinkMu.Lock()
+	if d.sinkUp == nil {
+		d.sinkUp = map[int64]bool{}
+		d.sinkKnown = map[int64]bool{}
+		d.sinkFirmware = map[int64]string{}
+	}
+	if d.logIngest == nil {
+		d.logIngest = newLogIngestor(d.Store)
+	}
+	if d.topologyIngest == nil {
+		d.topologyIngest = newTopologyIngestor(d.Store)
+	}
+	if d.cascadeIngest == nil {
+		d.cascadeIngest = newCascadeGrouper(
+			d.Store, d.Log, cascadeOfflineWindow, cascadeOnlineWindow, true)
+	}
+	logs, topologyIngest, cascadeIngest := d.logIngest, d.topologyIngest, d.cascadeIngest
+	d.sinkMu.Unlock()
 	return collector.SinkFunc(func(ctx context.Context, s collector.Snapshot) {
-		mu.Lock()
-		wasUp, seen := up[s.DeviceID], known[s.DeviceID]
-		up[s.DeviceID], known[s.DeviceID] = s.OK(), true
-		lastFW := fw[s.DeviceID]
-		if s.Board != nil {
-			fw[s.DeviceID] = s.Board.Release.Description
+		if s.WANOnly || s.LogOnly {
+			// A minute auxiliary poll carries no fresh uptime, load, clients or
+			// topology. Consume only the payloads explicitly marked present.
+			if s.WANOnly {
+				d.Samples.Observe(ctx, s)
+			}
+			if s.LogOnly && s.LogsFresh {
+				if err := logs.record(ctx, s.DeviceID, s.At, s.LogEpoch, s.Logs); err != nil {
+					d.Log.Error("could not ingest auxiliary OpenWrt log page", "device", s.MAC, "err", err)
+				}
+			}
+			for _, deg := range s.Degraded {
+				d.Log.Debug("auxiliary poll degraded", "device", s.MAC,
+					"detail", deg.String(), "permanent", deg.Permanent)
+			}
+			return
 		}
-		mu.Unlock()
+		d.sinkMu.Lock()
+		wasUp, seen := d.sinkUp[s.DeviceID], d.sinkKnown[s.DeviceID]
+		d.sinkUp[s.DeviceID], d.sinkKnown[s.DeviceID] = s.OK(), true
+		lastFW := d.sinkFirmware[s.DeviceID]
+		if s.Board != nil {
+			d.sinkFirmware[s.DeviceID] = s.Board.Release.Description
+		}
+		d.sinkMu.Unlock()
 
 		d.meshes.put(s)
 
 		id := s.DeviceID
 		switch {
 		case !s.OK():
+			if err := topologyIngest.unavailable(ctx, s); err != nil {
+				d.Log.Error("could not mark topology sources unavailable", "device", s.MAC, "err", err)
+			}
 			if !seen || wasUp {
 				d.Log.Warn("device unreachable", "device", s.MAC, "err", s.Err)
-				_ = d.Store.LogEvent(ctx, store.Event{
+				if err := d.Store.LogEvent(ctx, store.Event{
 					DeviceID: &id, Category: "device", Severity: "warning",
 					Event:  "device.unreachable",
 					Detail: map[string]any{"error": s.Err.Error(), "tier": string(s.Tier)},
-				})
+				}); err != nil {
+					d.Log.Error("could not persist device unreachable event", "device", s.MAC, "err", err)
+				}
+				if err := cascadeIngest.observe(ctx, cascadeOffline, id, s.At); err != nil {
+					d.Log.Error("could not group device unreachable event", "device", s.MAC, "err", err)
+				}
 				_ = d.Store.SetLastSeen(ctx, id, s.At.Unix(), "backoff")
 			}
 			return
 		case !wasUp && seen:
 			d.Log.Info("device reachable again", "device", s.MAC)
-			_ = d.Store.LogEvent(ctx, store.Event{
+			if err := d.Store.LogEvent(ctx, store.Event{
 				DeviceID: &id, Category: "device", Severity: "info",
 				Event: "device.reachable",
-			})
+			}); err != nil {
+				d.Log.Error("could not persist device reachable event", "device", s.MAC, "err", err)
+			}
+			if err := cascadeIngest.observe(ctx, cascadeOnline, id, s.At); err != nil {
+				d.Log.Error("could not group device reachable event", "device", s.MAC, "err", err)
+			}
 		}
 
+		lastSeenRecorded := true
 		if err := d.Store.SetLastSeen(ctx, id, s.At.Unix(), string(s.Tier)); err != nil {
+			lastSeenRecorded = false
 			d.Log.Error("could not record last_seen", "device", s.MAC, "err", err)
+		}
+		if s.LogsFresh && lastSeenRecorded {
+			if err := logs.record(ctx, id, s.At, s.LogEpoch, s.Logs); err != nil {
+				d.Log.Error("could not ingest OpenWrt log page", "device", s.MAC, "err", err)
+			}
+		}
+		if lastSeenRecorded {
+			if err := topologyIngest.record(ctx, s); err != nil {
+				d.Log.Error("could not persist topology observation", "device", s.MAC, "err", err)
+			}
 		}
 
 		// Into the ring. Nothing reaches the database here: raw samples are
@@ -170,6 +321,11 @@ func (d *Daemon) sink() collector.Sink {
 		d.Samples.Observe(ctx, s)
 		d.recordClients(ctx, s)
 		d.recordLiveClients(s)
+		// Publish timestamped presence before the untimestamped station map.
+		// An API read may otherwise observe a newly associated MAC without the
+		// poll time that proves it current. The reverse intermediate state is
+		// safe: evidence can exist briefly before RF enrichment catches up.
+		d.recordLivePresence(s)
 		d.recordLiveStations(s)
 		d.publishLive(s)
 
@@ -210,6 +366,16 @@ func (d *Daemon) sink() collector.Sink {
 	})
 }
 
+func (d *Daemon) stopCascadeEvents(ctx context.Context) error {
+	d.sinkMu.Lock()
+	grouper := d.cascadeIngest
+	d.sinkMu.Unlock()
+	if grouper == nil {
+		return nil
+	}
+	return grouper.stopAndFlush(ctx)
+}
+
 // StartMaintenance begins the telemetry tick: drain the ring into rollups, fold
 // the hourly ladder, prune to retention.
 //
@@ -218,6 +384,7 @@ func (d *Daemon) sink() collector.Sink {
 // keeping are different decisions.
 func (d *Daemon) StartMaintenance(ctx context.Context) {
 	m := telemetry.NewMaintainer(d.Store, d.Samples, d.Log)
+	m.Lifecycle = &d.telemetryLifecycle
 	if d.api != nil {
 		// Idle sessions and lapsed login lockouts expire on the same cadence.
 		// They want a periodic sweep, not a timer each.
@@ -335,7 +502,7 @@ func (d *Daemon) recordLiveStations(s collector.Snapshot) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.lastStations == nil {
-		d.lastStations = map[int64]map[string]collector.LiveStation{}
+		d.lastStations = map[int64]collector.LiveStationSet{}
 	}
 	if !ok {
 		// Nil is "we could not find out", which the API must not read as
@@ -347,7 +514,7 @@ func (d *Daemon) recordLiveStations(s collector.Snapshot) {
 }
 
 // liveStations reports the last poll's associated stations for one device.
-func (d *Daemon) liveStations(deviceID int64) (map[string]collector.LiveStation, bool) {
+func (d *Daemon) liveStations(deviceID int64) (collector.LiveStationSet, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	m, ok := d.lastStations[deviceID]
@@ -355,6 +522,77 @@ func (d *Daemon) liveStations(deviceID int64) (map[string]collector.LiveStation,
 		return nil, false
 	}
 	return m, true
+}
+
+// recordLivePresence retains the last proof per MAC, not the last time an
+// inventory source repeated the MAC. The retention bound matches the durable
+// client inventory, so randomized addresses cannot grow this map forever.
+func (d *Daemon) recordLivePresence(s collector.Snapshot) {
+	observations := s.ClientPresenceObservations()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastPresence == nil {
+		d.lastPresence = map[int64]*clientPresenceCache{}
+	}
+	state := d.lastPresence[s.DeviceID]
+	if state == nil {
+		state = &clientPresenceCache{
+			sources: map[string]collector.ClientPresence{}, lastSeen: collector.ClientPresence{},
+		}
+	}
+	cutoff := s.At.Add(-telemetry.DefaultClientTTL).Unix()
+	for source, clients := range state.sources {
+		for mac, at := range clients {
+			if at < cutoff {
+				delete(clients, mac)
+			}
+		}
+		if len(clients) == 0 {
+			delete(state.sources, source)
+		}
+	}
+	for mac, at := range state.lastSeen {
+		if at < cutoff {
+			delete(state.lastSeen, mac)
+		}
+	}
+	for _, observation := range observations {
+		clients := make(collector.ClientPresence, len(observation.Clients))
+		for mac, at := range observation.Clients {
+			clients[mac] = at
+			if at > state.lastSeen[mac] {
+				state.lastSeen[mac] = at
+			}
+		}
+		// Replacement is load-bearing: a successful known-empty source clears
+		// its previous current set. Failed/unasked sources emit no observation
+		// and retain their timestamp until the API freshness window expires.
+		state.sources[observation.Source] = clients
+	}
+	d.lastPresence[s.DeviceID] = state
+}
+
+func (d *Daemon) livePresence(deviceID int64) (collector.ClientPresenceState, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	state, ok := d.lastPresence[deviceID]
+	if !ok {
+		return collector.ClientPresenceState{}, false
+	}
+	out := collector.ClientPresenceState{
+		Active: collector.ClientPresence{}, LastSeen: collector.ClientPresence{},
+	}
+	for _, clients := range state.sources {
+		for mac, at := range clients {
+			if at > out.Active[mac] {
+				out.Active[mac] = at
+			}
+		}
+	}
+	for mac, at := range state.lastSeen {
+		out.LastSeen[mac] = at
+	}
+	return out, true
 }
 
 // recordLiveClients stores what a poll learned, including that it could not
@@ -411,9 +649,23 @@ func (d *Daemon) publishLive(s collector.Snapshot) {
 	}
 	stations := make([]map[string]any, 0, len(s.Stations))
 	for _, st := range s.Stations {
+		var signal *int
+		if st.SignalKnown || (!st.PresenceKnown && st.Signal != 0) {
+			value := st.Signal
+			signal = &value
+		}
+		var rx, tx *int64
+		if st.RX.RateKnown || !st.PresenceKnown {
+			value := st.RX.Rate
+			rx = &value
+		}
+		if st.TX.RateKnown || !st.PresenceKnown {
+			value := st.TX.Rate
+			tx = &value
+		}
 		stations = append(stations, map[string]any{
-			"mac": st.MAC, "iface": st.Iface, "signal": st.Signal,
-			"rx_kbit": st.RX.Rate, "tx_kbit": st.TX.Rate,
+			"mac": st.MAC, "iface": st.Iface, "signal": signal,
+			"rx_kbit": rx, "tx_kbit": tx,
 			"connected_seconds": st.ConnectedTime,
 		})
 	}

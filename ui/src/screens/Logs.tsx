@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import type { Device, EventPage, EventRow } from '../lib/api'
-import { Banner, Card, DataGrid, FilterRail, Pager, useColumnPrefs } from '../components/ui'
+import type { Device, EventCursor, EventPage, EventRow } from '../lib/api'
+import { Banner, Button, Card, DataGrid, FilterRail, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
+
+type EventScope = 'general' | 'audit'
 
 /**
  * The event log.
@@ -20,32 +22,76 @@ import type { Column } from '../components/ui'
  * The comment asserted precisely the property it did not have.
  */
 export function Logs() {
+  const [scope, setScope] = useState<EventScope>('general')
   const [category, setCategory] = useState('')
   const [severity, setSeverity] = useState('')
   const [limit, setLimit] = useState(100)
-  const [offset, setOffset] = useState(0)
-  const [page, setPage] = useState<EventPage | null>(null)
-  const [err, setErr] = useState('')
+  const [before, setBefore] = useState<EventCursor | null>(null)
+  const [history, setHistory] = useState<(EventCursor | null)[]>([])
+  const [loaded, setLoaded] = useState<{
+    query: string
+    page: EventPage
+  } | null>(null)
+  const [failure, setFailure] = useState<{
+    query: string
+    message: string
+  } | null>(null)
+  const requestGeneration = useRef(0)
+  const inFlight = useRef<{ query: string; generation: number } | null>(null)
+  const detailGeneration = useRef(0)
+  const detailTrigger = useRef<HTMLElement | null>(null)
+  const [detail, setDetail] = useState<EventRow | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
   const [colPrefs, setColPrefs] = useColumnPrefs('logs')
   // Only to turn a device id into a name. Fetched once: the log reloads every
   // 10s and the roster does not change on that timescale.
   const [devices, setDevices] = useState<Device[]>([])
 
+  // Bind every response to the exact query that started it. A periodic refresh
+  // can still be in flight when an operator changes a filter; without both the
+  // generation check and the query tag, that older response can replace the
+  // filtered page after the newer response has rendered.
+  const query = JSON.stringify([scope, limit, before?.ts, before?.id, category, severity])
   const load = useCallback(async () => {
+    // Do not start another refresh for the same query while one is unresolved.
+    // Otherwise every 10s tick invalidates the previous generation, and an API
+    // that consistently takes longer than 10s can never publish a response.
+    if (inFlight.current?.query === query) return
+    const generation = ++requestGeneration.current
+    inFlight.current = { query, generation }
     try {
-      setPage(await api.events({ limit, offset, category, severity }))
-      setErr('')
+      const page = await api.events({ scope, limit, before, category, severity })
+      if (generation !== requestGeneration.current) return
+      setLoaded({ query, page })
+      setFailure(null)
     } catch (e) {
-      // Keep the last good page on screen. Blanking it on one dropped request
-      // would look like "no events", which is a different claim entirely.
-      setErr(e instanceof Error ? e.message : String(e))
+      if (generation !== requestGeneration.current) return
+      // A same-query refresh keeps its last good page. A different query's
+      // cached page is hidden below: showing it would claim those rows match
+      // filters they were never fetched with.
+      setFailure({
+        query,
+        message: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      if (inFlight.current?.generation === generation) inFlight.current = null
     }
-  }, [limit, offset, category, severity])
+  }, [scope, limit, before, category, severity, query])
 
   useEffect(() => {
     load()
     const t = setInterval(load, 10_000)
-    return () => clearInterval(t)
+    return () => {
+      clearInterval(t)
+      // Invalidate a request from the previous filter even in the small window
+      // before the next effect starts its replacement request.
+      requestGeneration.current++
+      // The request itself may still finish, but it is now obsolete. Clearing
+      // this marker lets the next query start immediately and also keeps React
+      // StrictMode's setup-cleanup-setup cycle from waiting for the old call.
+      inFlight.current = null
+    }
   }, [load])
 
   useEffect(() => {
@@ -57,15 +103,56 @@ export function Logs() {
       .catch(() => {})
   }, [])
 
-  // Changing a filter has to reset the offset. Page 4 of the unfiltered log is
-  // not page 4 of the filtered one, and keeping the offset lands on an empty
-  // page that reads as "no matches".
-  const setFilter = (set: (v: string) => void) => (v: string) => {
-    set(v)
-    setOffset(0)
+  const resetPage = () => {
+    setBefore(null)
+    setHistory([])
+    detailGeneration.current++
+    setDetail(null)
+    setDetailError('')
   }
 
+  // A keyset cursor belongs to one exact filter. Reusing it after a filter
+  // change would skip the newer matching rows that preceded that cursor.
+  const setFilter = (set: (v: string) => void) => (v: string) => {
+    set(v)
+    resetPage()
+  }
+
+  const selectScope = (next: EventScope) => {
+    setScope(next)
+    setCategory('')
+    setSeverity('')
+    resetPage()
+  }
+
+  // Never label rows from one query with another query's active filters. The
+  // last page remains cached for a same-query refresh failure, but is not a
+  // valid answer while a different filter/page is loading.
+  const page = loaded?.query === query ? loaded.page : null
+  const coverage = page?.coverage ?? {
+    complete: false, expected_devices: 0, observed_devices: 0,
+    gaps: ['router log coverage was not reported by this controller response'],
+  }
   const rows = page?.events ?? []
+  const err = failure?.query === query ? failure.message : ''
+  const loading = page === null && err === ''
+
+  const openDetail = async (row: EventRow) => {
+    const generation = ++detailGeneration.current
+    setDetail(null)
+    setDetailError('')
+    setDetailLoading(true)
+    try {
+      const event = await api.eventDetail(row.ID)
+      if (generation === detailGeneration.current) setDetail(event)
+    } catch (e) {
+      if (generation === detailGeneration.current) {
+        setDetailError(e instanceof Error ? e.message : String(e))
+      }
+    } finally {
+      if (generation === detailGeneration.current) setDetailLoading(false)
+    }
+  }
 
   const columns: Column<EventRow>[] = [
     {
@@ -120,6 +207,18 @@ export function Logs() {
         <span style={{ color: 'var(--text-secondary)' }}>{summarise(e.Detail)}</span>
       ),
     },
+    {
+      key: 'view',
+      header: 'Action',
+      width: 76,
+      required: true,
+      render: (e) => (
+        <Button aria-label={`View event ${e.ID}: ${e.Event}`} onClick={(event) => {
+          detailTrigger.current = event.currentTarget
+          void openDetail(e)
+        }}>View</Button>
+      ),
+    },
   ]
 
   return (
@@ -131,6 +230,7 @@ export function Logs() {
         alignItems: 'start',
       }}
     >
+      <h1 style={{ margin: 0, fontSize: 20, gridColumn: '1 / -1' }}>Logs</h1>
       <FilterRail
         counted="all"
         groups={[
@@ -148,38 +248,273 @@ export function Logs() {
           },
         ]}
       />
-      <Card title={`Events (${(page?.total ?? 0).toLocaleString()})`} pad={false}>
-        {err && (
-          <div style={{ padding: 12 }}>
-            <Banner tone="critical">{err}</Banner>
-          </div>
-        )}
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          prefs={colPrefs}
-          onPrefsChange={setColPrefs}
-          rowKey={(e) => `${e.TS}-${e.Category}-${e.Event}`}
-          empty={
-            category || severity
-              ? 'No events match these filters.'
-              : 'No events yet.'
-          }
-        />
-        {page && (
-          <Pager
-            total={page.total}
-            limit={limit}
-            offset={offset}
-            onChange={(l, o) => {
-              setLimit(l)
-              setOffset(o)
+      <div style={{ display: 'grid', gap: 12 }}>
+        <Card
+          title={`Events (${page == null ? '…' : page.total.toLocaleString()})`}
+          actions={(
+            <div role="group" aria-label="Event view" style={{ display: 'flex', gap: 6 }}>
+              {(['general', 'audit'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={scope === value}
+                  onClick={() => selectScope(value)}
+                  style={{
+                    height: 28,
+                    padding: '0 12px',
+                    borderRadius: 6,
+                    border: '1px solid var(--border-strong)',
+                    color: scope === value ? '#fff' : 'var(--text-primary)',
+                    background: scope === value ? 'var(--accent)' : 'var(--surface-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {value === 'general' ? 'General' : 'Audit'}
+                </button>
+              ))}
+            </div>
+          )}
+          pad={false}
+        >
+          {err && (
+            <div role="alert" style={{ padding: 12 }}>
+              <Banner tone="critical">{err}</Banner>
+            </div>
+          )}
+          {scope === 'general' && (
+            <div style={{ padding: '12px 12px 0' }}>
+              <Banner>
+                General includes controller events plus router syslog and hostapd association events.
+                Packet-flow/NFLOG, GeoIP, and application identity are not collected in this phase;
+                blank enrichment fields mean unavailable, not no traffic.
+              </Banner>
+            </div>
+          )}
+          {scope === 'general' && page && !coverage.complete && (
+            <div style={{ padding: '12px 12px 0' }} role="status">
+              <Banner tone="warning">
+                Router log coverage is incomplete. {coverage.gaps.join(' · ')}
+              </Banner>
+            </div>
+          )}
+          <DataGrid
+            tableLabel={`${scope === 'audit' ? 'Audit' : 'General'} events`}
+            totalRows={page?.total}
+            rowOffset={history.length * limit}
+            rows={rows}
+            columns={columns}
+            prefs={colPrefs}
+            onPrefsChange={setColPrefs}
+            rowKey={(e) => `event-${e.ID}`}
+            empty={
+              loading
+                ? 'Loading events…'
+                : err
+                  ? 'Events for these filters could not be loaded.'
+                  : category || severity
+                    ? 'No events match these filters.'
+                    : scope === 'audit'
+                      ? 'No audit events yet.'
+                      : coverage.complete
+                        ? 'No general events were observed.'
+                        : 'General event coverage is incomplete; an empty result is not proven.'
+            }
+          />
+          {page && (
+            <div
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px',
+                borderTop: '1px solid var(--border)', fontSize: 11,
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <span className="num">
+                Page {history.length + 1} · {rows.length.toLocaleString()} rows · {page.total.toLocaleString()} matching
+              </span>
+              <div style={{ flex: 1 }} />
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                Rows
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value))
+                    resetPage()
+                  }}
+                  style={{
+                    background: 'var(--surface-0)', color: 'var(--text-primary)',
+                    border: '1px solid var(--border-strong)', borderRadius: 4,
+                    fontSize: 11, padding: '1px 4px',
+                  }}
+                >
+                  {[50, 100, 250, 500, 1000].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <Button
+                disabled={history.length === 0}
+                onClick={() => {
+                  setBefore(history[history.length - 1] ?? null)
+                  setHistory((current) => current.slice(0, -1))
+                }}
+              >
+                Previous
+              </Button>
+              <Button
+                disabled={!page.next_before}
+                onClick={() => {
+                  if (!page.next_before) return
+                  setHistory((current) => [...current, before])
+                  setBefore(page.next_before)
+                }}
+              >
+                Next
+              </Button>
+            </div>
+          )}
+        </Card>
+
+        {(detailLoading || detailError || detail) && (
+          <EventDetail
+            event={detail}
+            loading={detailLoading}
+            error={detailError}
+            returnFocus={detailTrigger.current}
+            deviceName={detail?.DeviceID == null
+              ? ''
+              : (devices.find((d) => d.id === detail.DeviceID)?.name ?? `device ${detail.DeviceID}`)}
+            onClose={() => {
+              detailGeneration.current++
+              setDetail(null)
+              setDetailError('')
+              setDetailLoading(false)
             }}
           />
         )}
-      </Card>
+      </div>
     </div>
   )
+}
+
+function EventDetail({
+  event, loading, error, deviceName, returnFocus, onClose,
+}: {
+  event: EventRow | null
+  loading: boolean
+  error: string
+  deviceName: string
+  returnFocus: HTMLElement | null
+  onClose: () => void
+}) {
+  const panel = useRef<HTMLElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const previous = returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
+    const focusable = () => Array.from(panel.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) ?? [])
+    const onKey = (keyboard: KeyboardEvent) => {
+      if (keyboard.key === 'Escape') {
+        keyboard.preventDefault()
+        closeRef.current()
+        return
+      }
+      if (keyboard.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        keyboard.preventDefault()
+        panel.current?.focus()
+        return
+      }
+      const first = items[0]
+      const last = items.at(-1)!
+      if (keyboard.shiftKey && document.activeElement === first) {
+        keyboard.preventDefault()
+        last.focus()
+      } else if (!keyboard.shiftKey && document.activeElement === last) {
+        keyboard.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    requestAnimationFrame(() => (focusable()[0] ?? panel.current)?.focus())
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [])
+
+  const facts = event == null ? [] : [
+    ['Time', new Date(event.TS * 1000).toLocaleString()],
+    ['Ingested', new Date(event.IngestedAt).toLocaleString()],
+    ['Device', deviceName],
+    ['Source', event.Source],
+    ['Source identity', [event.SourceBoot, event.SourceID].filter(Boolean).join(' · ')],
+    ['Client', event.ClientMAC],
+    ['Action', event.Action],
+    ['Direction', event.Direction],
+    ['Interfaces', [event.InIface, event.OutIface].filter(Boolean).join(' → ')],
+    ['Endpoints', endpointSummary(event)],
+    ['Zones', [event.ZoneIn, event.ZoneOut].filter(Boolean).join(' → ')],
+    ['Policy', event.PolicyID == null ? '' : String(event.PolicyID)],
+  ].filter(([, value]) => value !== '')
+
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        onMouseDown={onClose}
+        style={{ position: 'fixed', inset: 0, zIndex: 39, background: 'rgb(0 0 0 / 44%)' }}
+      />
+      <aside
+        ref={panel}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="event-detail-title"
+        tabIndex={-1}
+        style={{
+          position: 'fixed', zIndex: 40, top: 48, right: 8, bottom: 8,
+          width: 'min(720px, calc(100vw - 76px))', overflow: 'auto',
+          background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8,
+          boxShadow: '0 18px 64px rgb(0 0 0 / 45%)', padding: 14,
+        }}
+      >
+        <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <h2 id="event-detail-title" style={{ margin: 0, fontSize: 15, flex: 1 }}>
+            {event ? `${event.Event} · event ${event.ID}` : 'Event detail'}
+          </h2>
+          <Button onClick={onClose}>Close</Button>
+        </header>
+        {loading && <div role="status" aria-live="polite" style={{ color: 'var(--text-secondary)' }}>Loading event detail…</div>}
+        {error && <div role="alert"><Banner tone="critical">{error}</Banner></div>}
+        {event && (
+          <div style={{ display: 'grid', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+            {facts.map(([label, value]) => (
+              <div key={label}>
+                <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{label}</div>
+                <div style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <pre style={{
+            margin: 0, padding: 10, maxHeight: 320, overflow: 'auto', borderRadius: 6,
+            background: 'var(--surface-0)', border: '1px solid var(--border)',
+            whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 11,
+          }}>
+            {JSON.stringify(event.Detail ?? {}, null, 2)}
+          </pre>
+          </div>
+        )}
+      </aside>
+    </>
+  )
+}
+
+function endpointSummary(event: EventRow): string {
+  const endpoint = (ip: string, port: number | null) => ip && port != null ? `${ip}:${port}` : ip
+  return [endpoint(event.SrcIP, event.SrcPort), endpoint(event.DstIP, event.DstPort)]
+    .filter(Boolean)
+    .join(' → ')
 }
 
 function severityTone(s: string): string {

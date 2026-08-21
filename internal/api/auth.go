@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -453,6 +454,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 // nobody rotates is the single most common way a self-hosted controller ends up
 // on the public internet with a known password.
 func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// Same-origin is not enough before an administrator exists: an attacker can
+	// make its own DNS name resolve to this LAN service in the victim's browser.
+	if !directSetupHost(r.Host) {
+		writeErr(w, http.StatusForbidden,
+			"first-run setup requires a direct localhost or literal IP URL; open this controller by IP address and try again")
+		return
+	}
 	n, err := s.Store.AdminCount(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not read the account table")
@@ -509,6 +517,22 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		"username": admin.Username,
 		"csrf":     sess.csrf,
 	})
+}
+
+func directSetupHost(hostport string) bool {
+	host := hostport
+	if splitHost, port, err := net.SplitHostPort(hostport); err == nil {
+		if port == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return false
+		}
+		host = splitHost
+	} else if len(hostport) >= 2 && hostport[0] == '[' && hostport[len(hostport)-1] == ']' {
+		host = hostport[1 : len(hostport)-1]
+	}
+	return strings.EqualFold(host, "localhost") || net.ParseIP(host) != nil
 }
 
 // handleSetupState tells the UI whether to show the setup screen or the login

@@ -1,5 +1,5 @@
 // Command dryrun previews the live site model against real devices without
-// the daemon, and writes nothing anywhere.
+// the daemon, and mutates neither controller nor router state.
 //
 // It exists because the mock cannot answer the questions that matter. The
 // suite was green while the reference Archer C6 was being marked blind about
@@ -8,9 +8,9 @@
 // swconfig board reports. Pointing the real renderer at the real devices found
 // it in one run (§5av).
 //
-// Read-only by construction: it opens the store, renders, and plans. It never
-// stages, applies, commits or writes. Safe to run against a live fleet while
-// the daemon is up.
+// Read-only by construction: SQLite is opened with mode=ro and query_only, then
+// the tool renders and plans. It never stages, applies, commits or writes. Safe
+// to run against a live fleet while the daemon is up.
 //
 //	go run ./tools/dryrun /path/to/.run/oonfeewrt.db
 //
@@ -20,25 +20,37 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
 	"github.com/aiden0rchad/oonfeewrt/internal/render"
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
 	_ "modernc.org/sqlite"
 )
 
 func main() {
+	dbPath, err := databasePath(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fatal:", err)
+		os.Exit(2)
+	}
+
 	ctx := context.Background()
-	db, err := store.Open(ctx, "sqlite", os.Args[1])
+	handle, err := toolstore.OpenReadOnly(ctx, dbPath)
 	must(err)
-	defer db.Close()
+	defer handle.Close()
+	db := handle.DB
 
 	site, err := db.Site(ctx)
 	must(err)
@@ -73,8 +85,7 @@ func main() {
 			c.Close()
 			continue
 		}
-		doc, rep, err := render.Render(site, model.Device{
-			ID: d.ID, Name: d.Name, Role: model.RoleOf(d.Role)}, &caps, existing)
+		doc, rep, err := render.Render(site, d.ModelDevice(), &caps, existing)
 		if err != nil {
 			fmt.Println("  render:", err)
 			c.Close()
@@ -114,6 +125,30 @@ func main() {
 		}
 		c.Close()
 	}
+}
+
+func databasePath(args []string, output io.Writer) (string, error) {
+	fs := flag.NewFlagSet("dryrun", flag.ContinueOnError)
+	fs.SetOutput(output)
+	fs.Usage = func() {
+		fmt.Fprintln(output, "usage: dryrun /path/to/.run/oonfeewrt.db")
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return "", fmt.Errorf("expected exactly one existing controller database")
+	}
+	path := fs.Arg(0)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("controller database %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("controller database %q is not a regular file", path)
+	}
+	return path, nil
 }
 
 func must(err error) {

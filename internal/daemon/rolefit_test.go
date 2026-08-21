@@ -27,8 +27,9 @@ func radioCaps(n int) *capability.Registry {
 
 // An empty radio list means either "this device has none" or "we could not
 // ask", and those need different messages: one says the role is wrong, the
-// other says the ACL is narrow. Telling an operator to change the role when the
-// real problem is a refused call sends them to fix the wrong thing.
+// other says the check failed. Telling an operator to change the role when the
+// probe established nothing sends them to fix the wrong thing; claiming every
+// NotObservable state is an ACL refusal is equally misleading.
 func TestRoleFitSeparatesNoRadiosFromNoAnswer(t *testing.T) {
 	none := capability.NewRegistry()
 	none.Set(capability.FeatSurvey, capability.Absent) // asked; there are none
@@ -50,8 +51,12 @@ func TestRoleFitSeparatesNoRadiosFromNoAnswer(t *testing.T) {
 	if strings.Contains(got[0], "reported no radios") {
 		t.Errorf("a refused check was reported as an absence of radios: %q", got[0])
 	}
-	if !strings.Contains(got[0], "refused") {
-		t.Errorf("the message %q does not say the check was refused", got[0])
+	if !strings.Contains(got[0], "could not be listed") ||
+		!strings.Contains(got[0], "capability notes") {
+		t.Errorf("the message %q does not point to the recorded cause", got[0])
+	}
+	if strings.Contains(got[0], "This is an access-control gap") {
+		t.Errorf("an unclassified failure was asserted to be an ACL refusal: %q", got[0])
 	}
 }
 
@@ -102,6 +107,18 @@ func TestRoleFitFlagsAGatewayWithNoWANOnlyWhenPortsWereReadable(t *testing.T) {
 func TestRoleFitToleratesAMissingRegistry(t *testing.T) {
 	if got := roleFit(model.RoleAP, nil); got != nil {
 		t.Errorf("got %v for a nil registry", got)
+	}
+}
+
+func TestFunctionFitDoesNotInventSwitchControl(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Set(capability.FeatSurvey, capability.Absent)
+	caps.Set(capability.FeatSwitchPorts, capability.Absent)
+	caps.Ports.Bridge = "eth0"
+	got := functionFit(model.DeviceFunctions{model.FunctionSwitch}, caps)
+	if len(got) != 1 || !strings.Contains(got[0], "does not invent") ||
+		!strings.Contains(got[0], "managed-VLAN") {
+		t.Fatalf("unobservable switch control warning=%v", got)
 	}
 }
 

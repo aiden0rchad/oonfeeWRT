@@ -127,9 +127,9 @@ func (o Override) Describe(ssid string) string {
 		return fmt.Sprintf("%s beacons its name here", ssid)
 	case OverrideIsolate:
 		if o.Bool() {
-			return fmt.Sprintf("%s isolates clients from each other here", ssid)
+			return fmt.Sprintf("%s requests client isolation on this access point", ssid)
 		}
-		return fmt.Sprintf("%s does not isolate clients here", ssid)
+		return fmt.Sprintf("%s does not request client isolation on this access point", ssid)
 	case OverrideMaxAssoc:
 		if n, ok := o.Int(); ok && n > 0 {
 			return fmt.Sprintf("%s allows at most %d clients here", ssid, n)

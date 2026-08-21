@@ -266,7 +266,11 @@ func TestIntegrationAdoptUnadoptLeavesNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save the WLAN this test exists to revert: %v", err)
 	}
-	ares, err := d.ApplySite(ctx, api.ApplyRequest{})
+	preview, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	ares, err := d.ApplySite(ctx, api.ApplyRequest{PreviewToken: preview.PreviewToken})
 	if err != nil {
 		t.Fatalf("ApplySite: %v", err)
 	}

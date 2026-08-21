@@ -68,11 +68,16 @@ type ScanResult struct {
 	// Swept and Answered make an empty Found legible: "probed 508 addresses, 12
 	// answered, none of them published a ubus endpoint" is an answer. An empty
 	// list on its own is indistinguishable from a scanner that did nothing.
-	Swept     int      `json:"swept"`
-	Answered  int      `json:"answered"`
-	Networks  []string `json:"networks"`
-	Skipped   []string `json:"skipped,omitempty"`
-	ElapsedMS int64    `json:"elapsed_ms"`
+	Swept    int      `json:"swept"`
+	Answered int      `json:"answered"`
+	Networks []string `json:"networks"`
+	Skipped  []string `json:"skipped,omitempty"`
+	// Failures are networks that were attempted but could not be tested. This
+	// is additive so existing clients keep their summary fields; clients that
+	// understand it must not describe an empty Found as proof the network is
+	// empty when a route failure is present.
+	Failures  []discovery.NetworkFailure `json:"failures,omitempty"`
+	ElapsedMS int64                      `json:"elapsed_ms"`
 }
 
 // maxScanNetworks bounds an operator-supplied list. Each network is separately

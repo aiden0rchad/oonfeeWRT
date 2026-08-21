@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
 	"github.com/aiden0rchad/oonfeewrt/internal/render"
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
 	_ "modernc.org/sqlite"
@@ -22,8 +21,13 @@ import (
 
 func main() {
 	ctx := context.Background()
-	db, _ := store.Open(ctx, "sqlite", os.Args[1])
-	defer db.Close()
+	handle, err := toolstore.OpenReadOnly(ctx, os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer handle.Close()
+	db := handle.DB
 	site, _ := db.Site(ctx)
 	devs, _ := db.Devices(ctx)
 	for _, d := range devs {
@@ -41,8 +45,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		doc, _, err := render.Render(site, model.Device{
-			ID: d.ID, Name: d.Name, Role: model.RoleOf(d.Role)}, &caps, existing)
+		doc, _, err := render.Render(site, d.ModelDevice(), &caps, existing)
 		if err != nil {
 			continue
 		}
@@ -56,14 +59,8 @@ func main() {
 			sort.Strings(keys)
 			var changes []string
 			for _, k := range keys {
-				if k == "key" {
-					if cur[k] != s.Values[k] {
-						changes = append(changes, "key: <redacted change>")
-					}
-					continue
-				}
 				if cur[k] != s.Values[k] {
-					changes = append(changes, fmt.Sprintf("%s: %q -> %q", k, cur[k], s.Values[k]))
+					changes = append(changes, formatOptionChange(k, cur[k], s.Values[k]))
 				}
 			}
 			for _, k := range s.Manages {
@@ -71,7 +68,7 @@ func main() {
 					continue
 				}
 				if _, on := cur[k]; on {
-					changes = append(changes, fmt.Sprintf("%s: %q -> DELETED", k, cur[k]))
+					changes = append(changes, formatOptionDelete(k, cur[k]))
 				}
 			}
 			if len(changes) == 0 {
@@ -84,4 +81,16 @@ func main() {
 			}
 		}
 	}
+}
+
+func formatOptionChange(option, current, desired string) string {
+	if reconcile.IsSensitiveOption(option) {
+		return fmt.Sprintf("%s: <redacted change>", option)
+	}
+	return fmt.Sprintf("%s: %q -> %q", option, current, desired)
+}
+
+func formatOptionDelete(option, current string) string {
+	return fmt.Sprintf("%s: %q -> DELETED", option,
+		reconcile.RedactOptionValue(option, current))
 }

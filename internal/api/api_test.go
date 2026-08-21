@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,7 +18,11 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
 // stubFleet stands in for the collector so the API can be tested without a
@@ -43,14 +46,66 @@ type stubFleet struct {
 	modes map[int64]map[string]string
 	// stations is what the last poll saw associated, per device. Absent means
 	// the read failed, which must not read as "nobody is connected".
-	stations map[int64]map[string]collector.LiveStation
+	stations map[int64]collector.LiveStationSet
+	presence map[int64]collector.ClientPresenceState
 }
 
-func (f *stubFleet) LiveStations(id int64) (map[string]collector.LiveStation, bool) {
+type recordingProvisioner struct {
+	mu                 sync.Mutex
+	got                ApplyRequest
+	applyCalls         int
+	applyErr           error
+	applyResult        *ApplyResult
+	requireLiveContext bool
+	applyStarted       chan struct{}
+	applyRelease       <-chan struct{}
+	startOnce          sync.Once
+}
+
+func (p *recordingProvisioner) Preview(context.Context) (*PreviewResult, error) {
+	return &PreviewResult{}, nil
+}
+
+func (p *recordingProvisioner) ApplySite(ctx context.Context, req ApplyRequest) (*ApplyResult, error) {
+	p.mu.Lock()
+	p.got = req
+	p.applyCalls++
+	p.mu.Unlock()
+	if p.applyStarted != nil {
+		p.startOnce.Do(func() { close(p.applyStarted) })
+	}
+	if p.applyRelease != nil {
+		<-p.applyRelease
+	}
+	if p.requireLiveContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if p.applyResult != nil {
+		return p.applyResult, p.applyErr
+	}
+	return &ApplyResult{}, p.applyErr
+}
+
+func (f *stubFleet) LiveStations(id int64) (collector.LiveStationSet, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m, ok := f.stations[id]
 	return m, ok
+}
+
+func (f *stubFleet) LivePresence(id int64) (collector.ClientPresenceState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.presence[id]
+	return m, ok
+}
+
+func activePresence(active collector.ClientPresence) collector.ClientPresenceState {
+	lastSeen := make(collector.ClientPresence, len(active))
+	for mac, at := range active {
+		lastSeen[mac] = at
+	}
+	return collector.ClientPresenceState{Active: active, LastSeen: lastSeen}
 }
 
 func (f *stubFleet) IfaceModes(id int64) (map[string]string, bool) {
@@ -78,7 +133,8 @@ func newStubFleet() *stubFleet {
 	return &stubFleet{focused: map[int64]int{}, tier: map[int64]collector.Tier{},
 		quiesced: map[int64]bool{}, clients: map[int64]*int{},
 		overhead: map[int64]collector.Overhead{},
-		degraded: map[int64][]collector.Degradation{}}
+		degraded: map[int64][]collector.Degradation{},
+		presence: map[int64]collector.ClientPresenceState{}}
 }
 
 func (f *stubFleet) Focus(deviceID int64) func() {
@@ -171,15 +227,26 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	db, err := store.Open(context.Background(), "sqlite",
-		filepath.Join(t.TempDir(), "test.db"))
+	dir := t.TempDir()
+	keeper, err := secrets.Create(filepath.Join(dir, secrets.FileName),
+		[]byte("api-test-key"), secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
 	if err != nil {
+		t.Fatalf("secrets.Create: %v", err)
+	}
+	db, err := store.Open(context.Background(), "sqlite",
+		filepath.Join(dir, "test.db"), keeper)
+	if err != nil {
+		keeper.Close()
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		db.Close()
+		keeper.Close()
+	})
 
 	fleet := newStubFleet()
 	srv := New(db, fleet, nil, quiet())
+	srv.Keys = keeper
 	return &harness{t: t, srv: srv, mux: srv.Routes(), db: db, fleet: fleet}
 }
 
@@ -194,6 +261,7 @@ func (h *harness) do(method, path string, body any) *httptest.ResponseRecorder {
 		r = bytes.NewReader(blob)
 	}
 	req := httptest.NewRequest(method, path, r)
+	req.Host = testSetupHost
 	req.RemoteAddr = "192.0.2.10:12345"
 	for _, c := range h.cookies {
 		req.AddCookie(c)
@@ -219,7 +287,15 @@ func (h *harness) json(w *httptest.ResponseRecorder) map[string]any {
 	return v
 }
 
-const testPassword = "a-sufficiently-long-password"
+const (
+	testPassword  = "a-sufficiently-long-password"
+	testSetupHost = "127.0.0.1:8080"
+)
+
+const (
+	testApplyOperationID  = "01962c09-7d62-7cd7-a1c2-450eba830892"
+	testApplyOperationID2 = "01962c09-7d62-7cd7-a1c2-450eba830893"
+)
 
 // setup enrols the first operator and keeps the session.
 func (h *harness) setup() {
@@ -276,6 +352,73 @@ func TestSetupThenLogin(t *testing.T) {
 	}
 	if h.json(w)["username"] != "admin" {
 		t.Errorf("session reports %v", h.json(w)["username"])
+	}
+}
+
+func TestSetupAcceptsLocalhostAndLiteralIPHosts(t *testing.T) {
+	for _, host := range []string{
+		"localhost", "localhost:8080",
+		"192.0.2.44", "192.0.2.44:8080",
+		"[2001:db8::44]", "[2001:db8::44]:8080",
+	} {
+		t.Run(host, func(t *testing.T) {
+			h := newHarness(t)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
+				strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+			req.Host = host
+			req.RemoteAddr = "192.0.2.10:1"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			w := httptest.NewRecorder()
+			h.mux.ServeHTTP(w, req)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("host %q: got %d, want 201: %s", host, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestSetupRejectsSameOriginDNSHostBeforePasswordWorkOrMutation(t *testing.T) {
+	h := newHarness(t)
+	for range cap(h.srv.hashing) {
+		h.srv.hashing <- struct{}{}
+	}
+	defer func() {
+		for range cap(h.srv.hashing) {
+			<-h.srv.hashing
+		}
+	}()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
+		strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	req.Host = "controller.attacker.invalid:8080"
+	req.RemoteAddr = "192.0.2.10:1"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "literal IP") {
+		t.Fatalf("same-origin DNS host: got %d %s", w.Code, w.Body.String())
+	}
+	if n, err := h.db.AdminCount(context.Background()); err != nil || n != 0 {
+		t.Fatalf("administrator count after rejected setup = %d, %v", n, err)
+	}
+}
+
+func TestLoginStillAcceptsSameOriginDNSHost(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	h.cookies, h.csrf = nil, ""
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/login",
+		strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	req.Host = "controller.local"
+	req.RemoteAddr = "192.0.2.10:1"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("login through DNS host: got %d, want 200: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -570,6 +713,47 @@ func TestDevicesStatusIsDerivedFromLastSeen(t *testing.T) {
 	}
 }
 
+func TestDeviceStatusUsesConfiguredAndAdaptiveFullPollCadence(t *testing.T) {
+	adopted := int64(1)
+	lastSeen := int64(1_000)
+	fleet := newStubFleet()
+	s := &Server{Fleet: fleet}
+
+	configured := &store.Device{ID: 1, AdoptedAt: &adopted, LastSeen: &lastSeen, PollInterval: 900}
+	if got := s.viewDevice(configured, time.Unix(lastSeen, 0).Add(20*time.Minute)).Status; got != "online" {
+		t.Fatalf("healthy 15-minute target status=%q, want online", got)
+	}
+	if got := s.viewDevice(configured, time.Unix(lastSeen, 0).Add(31*time.Minute)).Status; got != "offline" {
+		t.Fatalf("overdue 15-minute target status=%q, want offline", got)
+	}
+
+	adaptive := &store.Device{ID: 2, AdoptedAt: &adopted, LastSeen: &lastSeen}
+	fleet.overhead[2] = collector.Overhead{Interval: 5 * time.Minute}
+	if got := s.viewDevice(adaptive, time.Unix(lastSeen, 0).Add(8*time.Minute)).Status; got != "online" {
+		t.Fatalf("healthy adaptively widened target status=%q, want online", got)
+	}
+	if got := s.viewDevice(adaptive, time.Unix(lastSeen, 0).Add(11*time.Minute)).Status; got != "offline" {
+		t.Fatalf("overdue adaptively widened target status=%q, want offline", got)
+	}
+}
+
+func TestPollIntervalCapsFullStateFreshnessAtFifteenMinutes(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("slow-ap", true, nil)
+
+	w := h.do(http.MethodPost, fmt.Sprintf("/api/v1/devices/%d/poll-interval", dev.ID),
+		map[string]int{"seconds": 900})
+	if w.Code != http.StatusOK {
+		t.Fatalf("15-minute interval: %d %s", w.Code, w.Body.String())
+	}
+	w = h.do(http.MethodPost, fmt.Sprintf("/api/v1/devices/%d/poll-interval", dev.ID),
+		map[string]int{"seconds": 901})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("overlong interval: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDeviceDetailAndSeries(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
@@ -639,6 +823,9 @@ func TestStatsValidatesItsInput(t *testing.T) {
 			"/api/v1/stats/sys_load1?device_id=%d&from=0&to=%d", dev.ID,
 			time.Now().Unix()), http.StatusBadRequest},
 		{"valid", fmt.Sprintf("/api/v1/stats/sys_load1?device_id=%d", dev.ID), http.StatusOK},
+		{"valid WAN latency", fmt.Sprintf("/api/v1/stats/site_wan_latency_ms?device_id=%d", dev.ID), http.StatusOK},
+		{"valid WAN loss", fmt.Sprintf("/api/v1/stats/site_wan_loss_pct?device_id=%d", dev.ID), http.StatusOK},
+		{"valid WAN up", fmt.Sprintf("/api/v1/stats/site_wan_up?device_id=%d", dev.ID), http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := h.do(http.MethodGet, tc.path, nil)
@@ -719,6 +906,9 @@ func TestEventsFilter(t *testing.T) {
 		if e.Category != "device" {
 			t.Errorf("category filter let %q through", e.Category)
 		}
+		if e.ID == 0 {
+			t.Error("events API omitted the stable database id")
+		}
 	}
 	if len(resp.Events) != 2 {
 		t.Errorf("got %d device events, want 2", len(resp.Events))
@@ -733,9 +923,11 @@ func TestEventsFilter(t *testing.T) {
 	}
 }
 
-// The fleet client total must refuse to be summed when any AP's count is
-// unreadable — a partial sum draws a dip that means "a radio did not answer".
-func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
+// Dashboard "Wireless clients" is the Client Devices grid's online + local +
+// wireless result, not a second per-device counter. A bare AP count has no IP
+// address and therefore cannot exclude an upstream association or include a
+// private-MAC client on another managed VLAN by the same rule as the grid.
+func TestDashboardWirelessTotalMatchesScopedClientRows(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
 	now := time.Now()
@@ -745,12 +937,41 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	a := h.seedDevice("ap-one", true, &recent)
 	b := h.seedDevice("ap-two-x", true, &recent)
 	ctx := context.Background()
-	// One AP answered with a count; the other could not be asked at all. The
-	// counts are LIVE state from the last poll, not rollups — asking the rollup
-	// table would report "unknown" for the first five minutes of every run.
-	five := 5
-	h.fleet.setClients(a.ID, &five)
-	h.fleet.setClients(b.ID, nil)
+	// This reproduces the live failure shape: the legacy device total says zero
+	// while hostapd's station map identifies the fresh private-MAC client that
+	// Client Devices renders as wireless.
+	zero := 0
+	h.fleet.setClients(a.ID, &zero)
+	h.fleet.setClients(b.ID, &zero)
+	sig := -48
+	h.fleet.mu.Lock()
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		a.ID: {"2A:1E:00:00:00:01": {{Iface: "phy0-ap0", Signal: &sig}}},
+		b.ID: {"22:22:22:22:22:22": {{Iface: "phy1-ap0", Signal: &sig}}},
+	}
+	h.fleet.presence[a.ID] = activePresence(collector.ClientPresence{
+		"2a:1e:00:00:00:01": now.Unix(),
+		"11:11:11:11:11:11": now.Unix(),
+		"22:22:22:22:22:22": now.Unix(),
+		"33:33:33:33:33:33": now.Unix(),
+	})
+	h.fleet.mu.Unlock()
+
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{
+		// A locally administered/private MAC on the managed test VLAN. Scope,
+		// not MAC type or the primary LAN's subnet, decides that it is local.
+		{MAC: "2a:1e:00:00:00:01", Name: "private-phone", IPv4: "192.168.2.137",
+			Scope: store.ScopeLocal},
+		{MAC: "11:11:11:11:11:11", Name: "wired-nas", IPv4: "192.168.1.20",
+			Scope: store.ScopeLocal},
+		// Also associated, but on the default-route side of the gateway. It
+		// appears under the grid's upstream scope and not in either local count.
+		{MAC: "22:22:22:22:22:22", Name: "upstream-station", IPv4: "10.7.46.20",
+			Scope: store.ScopeUpstream},
+		{MAC: "33:33:33:33:33:33", Name: "unplaced", Scope: store.ScopeUnknown},
+	}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
 	if w.Code != http.StatusOK {
@@ -763,43 +984,8 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 	if d.Devices.Total != 2 || d.Devices.Online != 2 {
 		t.Errorf("device counts = %+v", d.Devices)
 	}
-	if d.WirelessClients != nil {
-		t.Errorf("wireless_clients = %d, want null — device %q has no readable count",
-			*d.WirelessClients, b.Name)
-	}
-	if len(d.ClientsUnsure) != 1 || d.ClientsUnsure[0] != b.Name {
-		t.Errorf("clients_unknown_on = %v, want [%s]", d.ClientsUnsure, b.Name)
-	}
-
-	// Once every AP can be read, the total is reported.
-	four := 4
-	h.fleet.setClients(b.ID, &four)
-	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
-	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
-		t.Fatal(err)
-	}
-	if d.WirelessClients == nil || *d.WirelessClients != 9 {
-		t.Fatalf("wireless_clients = %v, want 9", d.WirelessClients)
-	}
-
-	// The LAN inventory is a different question and must not be conflated with
-	// associated stations — and it counts THIS network, not everything the
-	// device can see. A gateway's neighbour tables also cover its uplink.
-	if err := h.db.UpsertClients(ctx, []store.SeenClient{
-		{MAC: "11:11:11:11:11:11", Name: "wired-nas", IPv4: "192.168.1.20",
-			Scope: store.ScopeLocal},
-		{MAC: "22:22:22:22:22:22", Name: "upstream-router", IPv4: "10.7.46.1",
-			Scope: store.ScopeUpstream},
-		{MAC: "33:33:33:33:33:33", Name: "unplaced", Scope: store.ScopeUnknown},
-	}, now.Unix()); err != nil {
-		t.Fatal(err)
-	}
-	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
-	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
-		t.Fatal(err)
-	}
-	if d.KnownDevices != 1 || d.ActiveDevices != 1 {
-		t.Errorf("known/active devices = %d/%d, want 1/1 — the upstream "+
+	if d.KnownDevices != 2 || d.ActiveDevices != 2 {
+		t.Errorf("known/active devices = %d/%d, want 2/2 — the upstream "+
 			"neighbour and the unplaced host are not on this network",
 			d.KnownDevices, d.ActiveDevices)
 	}
@@ -808,36 +994,218 @@ func TestDashboardClientTotalRefusesWhenUnknown(t *testing.T) {
 			"still be reported, or the headline is just quietly smaller",
 			d.UpstreamDevices, d.UnscopedDevices)
 	}
-	if d.WirelessClients == nil || *d.WirelessClients != 9 {
-		t.Errorf("the LAN inventory changed the wireless total: %v", d.WirelessClients)
+	if d.WirelessClients != 1 {
+		t.Fatalf("wireless_clients = %d, want 1 local wireless row; the legacy "+
+			"per-device counters both say zero", d.WirelessClients)
+	}
+	if !d.WirelessClientsComplete || len(d.ClientsUnsure) != 0 {
+		t.Fatalf("complete station maps reported incomplete: complete=%v unknown_on=%v",
+			d.WirelessClientsComplete, d.ClientsUnsure)
 	}
 
-	// The client list's own scope counts must agree with the dashboard's: they
-	// are the same question and used to be computed two different ways. Asked
-	// with all=1 so both cover the same set — the grid's default view is the
-	// last 24 hours, the dashboard's totals are all-time.
-	w = h.do(http.MethodGet, "/api/v1/clients?all=1", nil)
+	// Ask Client Devices with exactly the dashboard contract. Both its returned
+	// rows and its server-side facet must report the same one private-MAC row.
+	w = h.do(http.MethodGet,
+		"/api/v1/clients?presence=online&scope=local&connection=wireless", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
 	}
 	var cl struct {
-		Facets struct {
-			Scope []store.Facet `json:"scope"`
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+		Facets  struct {
+			Connection []store.Facet `json:"connection"`
 		} `json:"facets"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &cl); err != nil {
 		t.Fatal(err)
 	}
-	scopes := map[string]int{}
-	for _, f := range cl.Facets.Scope {
-		scopes[f.Value] = f.Count
+	if cl.Total != d.WirelessClients || len(cl.Clients) != 1 ||
+		cl.Clients[0].MAC != "2a:1e:00:00:00:01" ||
+		cl.Clients[0].Connection != "wireless" ||
+		cl.Clients[0].Scope != store.ScopeLocal {
+		t.Fatalf("dashboard=%d, scoped Client Devices response=%+v",
+			d.WirelessClients, cl)
 	}
-	if scopes[store.ScopeLocal] != d.KnownDevices {
-		t.Errorf("the client list says %d local, the dashboard says %d",
-			scopes[store.ScopeLocal], d.KnownDevices)
+	connections := map[string]int{}
+	for _, f := range cl.Facets.Connection {
+		connections[f.Value] = f.Count
 	}
-	if scopes[store.ScopeUpstream] != 1 || scopes[store.ScopeUnknown] != 1 {
-		t.Errorf("client scope counts = %v, want 1 upstream and 1 unknown", scopes)
+	if connections["wireless"] != d.WirelessClients {
+		t.Errorf("connection facet says %d wireless, dashboard says %d",
+			connections["wireless"], d.WirelessClients)
+	}
+}
+
+// A row-scoped count is still only a complete fleet total when every adopted
+// device reported its station set. The known rows remain useful and must keep
+// matching Client Devices, but the dashboard must not present them as a zero or
+// short total while one device is unreadable.
+func TestDashboardWirelessTotalMarksUnknownStationCoverage(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	recent := now.Add(-10 * time.Second).Unix()
+
+	a := h.seedDevice("ap-one", true, &recent)
+	b := h.seedDevice("ap-two-x", true, &recent)
+	firstUnknown := h.seedDevice("00-unreadable", true, &recent)
+	at := int64(1)
+	duplicateName := &store.Device{
+		MAC: "aa:bb:cc:dd:ee:99", Host: "192.0.2.99", Name: b.Name,
+		Role: "ap", Functions: []string{"ap", "switch"},
+		AdoptedAt: &at, LastSeen: &recent,
+	}
+	if err := h.db.UpsertDevice(context.Background(), duplicateName); err != nil {
+		t.Fatal(err)
+	}
+	sig := -48
+	h.fleet.mu.Lock()
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		a.ID: {"2A:1E:00:00:00:01": {{Iface: "phy0-ap0", Signal: &sig}}},
+		// b is deliberately absent: LiveStations returns ok=false, not an empty
+		// map, so the fleet total is incomplete.
+	}
+	h.fleet.presence[a.ID] = activePresence(collector.ClientPresence{
+		"2a:1e:00:00:00:01": now.Unix(),
+	})
+	h.fleet.mu.Unlock()
+
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
+		MAC: "2a:1e:00:00:00:01", Name: "private-phone",
+		IPv4: "192.168.2.137", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d %s", w.Code, w.Body.String())
+	}
+	var d dashboard
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.WirelessClients != 1 {
+		t.Fatalf("known row count = %d, want 1", d.WirelessClients)
+	}
+	if d.WirelessClientsComplete {
+		t.Fatal("wireless client total reported complete while one AP was unreadable")
+	}
+	if len(d.ClientsUnsure) != 2 || d.ClientsUnsure[0] != firstUnknown.Name ||
+		d.ClientsUnsure[1] != b.Name {
+		t.Fatalf("unknown_on = %v, want sorted/deduplicated [%s %s]",
+			d.ClientsUnsure, firstUnknown.Name, b.Name)
+	}
+
+	w = h.do(http.MethodGet,
+		"/api/v1/clients?presence=online&scope=local&connection=wireless", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var clients struct {
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &clients); err != nil {
+		t.Fatal(err)
+	}
+	if clients.Total != d.WirelessClients {
+		t.Fatalf("dashboard known rows=%d, Client Devices=%d",
+			d.WirelessClients, clients.Total)
+	}
+}
+
+func TestDashboardWirelessCompletenessIgnoresDevicesWithoutAPFunction(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	recent := now.Add(-10 * time.Second).Unix()
+	at := int64(1)
+
+	ap := h.seedDevice("managed-ap", true, &recent)
+	for _, d := range []*store.Device{
+		{MAC: "aa:bb:cc:dd:ee:10", Host: "192.0.2.10", Name: "gateway-only",
+			Role: "gateway", Functions: []string{"gateway"}, AdoptedAt: &at, LastSeen: &recent},
+		{MAC: "aa:bb:cc:dd:ee:11", Host: "192.0.2.11", Name: "switch-only",
+			Role: "switch", Functions: []string{"switch"}, AdoptedAt: &at, LastSeen: &recent},
+	} {
+		if err := h.db.UpsertDevice(context.Background(), d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.fleet.mu.Lock()
+	h.fleet.stations = map[int64]collector.LiveStationSet{ap.ID: {}}
+	h.fleet.mu.Unlock()
+
+	w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d %s", w.Code, w.Body.String())
+	}
+	var d dashboard
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if !d.WirelessClientsComplete || len(d.ClientsUnsure) != 0 {
+		t.Fatalf("non-AP devices made wireless coverage incomplete: complete=%v unknown_on=%v",
+			d.WirelessClientsComplete, d.ClientsUnsure)
+	}
+}
+
+func TestWirelessEvidenceAndRFNoteIgnoreSwitchOnlyStationData(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	recent, at := now.Add(-10*time.Second).Unix(), int64(1)
+	ap := h.seedDevice("unknown-ap", true, &recent)
+	switchOnly := &store.Device{
+		MAC: "aa:bb:cc:dd:ee:12", Host: "192.0.2.12", Name: "switch-only",
+		Role: "switch", Functions: []string{"switch"}, AdoptedAt: &at, LastSeen: &recent,
+	}
+	if err := h.db.UpsertDevice(context.Background(), switchOnly); err != nil {
+		t.Fatal(err)
+	}
+	mac, zero := "2a:1e:00:00:00:12", 0
+	h.fleet.mu.Lock()
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		switchOnly.ID: {mac: {{Iface: "lan1"}}},
+	}
+	h.fleet.clients = map[int64]*int{switchOnly.ID: &zero}
+	h.fleet.mu.Unlock()
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
+		MAC: mac, Name: "wired-client", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients?scope=local", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Clients []clientView `json:"clients"`
+		Note    string       `json:"note"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Clients) != 1 || got.Clients[0].Connection != "unknown" ||
+		got.Clients[0].DeviceID != nil || !strings.Contains(got.Note, "could not determine") {
+		t.Fatalf("switch evidence escaped AP scope: clients=%+v note=%q", got.Clients, got.Note)
+	}
+	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dashboard: %d %s", w.Code, w.Body.String())
+	}
+	var dashboard dashboard
+	if err := json.Unmarshal(w.Body.Bytes(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.WirelessClients != 0 || dashboard.WirelessClientsComplete ||
+		len(dashboard.ClientsUnsure) != 1 || dashboard.ClientsUnsure[0] != ap.Name {
+		t.Fatalf("wireless summary=%+v", dashboard)
 	}
 }
 
@@ -854,6 +1222,7 @@ func TestMalformedBodiesAreRejected(t *testing.T) {
 	h := newHarness(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"a","password":"b","extra":1}`))
+	req.Host = testSetupHost
 	req.RemoteAddr = "192.0.2.10:1"
 	w := httptest.NewRecorder()
 	h.mux.ServeHTTP(w, req)
@@ -861,7 +1230,18 @@ func TestMalformedBodiesAreRejected(t *testing.T) {
 		t.Fatalf("unknown field: %d, want 400", w.Code)
 	}
 
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(
+		`{"username":"admin","password":"`+testPassword+`"}{}`))
+	req.Host = testSetupHost
+	req.RemoteAddr = "192.0.2.10:1"
+	w = httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON value: %d, want 400", w.Code)
+	}
+
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(`not json`))
+	req.Host = testSetupHost
 	req.RemoteAddr = "192.0.2.10:1"
 	w = httptest.NewRecorder()
 	h.mux.ServeHTTP(w, req)
@@ -926,11 +1306,16 @@ func TestClientsGrid(t *testing.T) {
 	if err := h.db.WriteRollups(ctx, []store.RollupRow{
 		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb:cc:11:22:33",
 			TS: base, Avg: -52, Cnt: 12},
-		{DeviceID: dev.ID, Kind: "sta_retry_pct", Key: "aa:bb:cc:11:22:33",
+		{DeviceID: dev.ID, Kind: "sta_retry_delta_pct", Key: "aa:bb:cc:11:22:33",
 			TS: base, Avg: 4.5, Cnt: 12},
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.fleet.mu.Lock()
+	h.fleet.presence[dev.ID] = activePresence(collector.ClientPresence{
+		"aa:bb:cc:11:22:33": base,
+	})
+	h.fleet.mu.Unlock()
 
 	w := h.do(http.MethodGet, "/api/v1/clients", nil)
 	if w.Code != http.StatusOK {
@@ -938,6 +1323,9 @@ func TestClientsGrid(t *testing.T) {
 	}
 	var resp struct {
 		Clients []clientView `json:"clients"`
+		Facets  struct {
+			Presence []store.Facet `json:"presence"`
+		} `json:"facets"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
@@ -963,16 +1351,260 @@ func TestClientsGrid(t *testing.T) {
 	if !seen.Online {
 		t.Error("a client seen just now is not online")
 	}
+	if seen.LastSeen == nil || *seen.LastSeen != base {
+		t.Errorf("authoritative last_seen = %v, want rollup source time %d", seen.LastSeen, base)
+	}
 
-	// The one with no focused-poll data must report unknown and carry NO signal
-	// — not "wired", and certainly not 0 dBm.
+	// The one with no managed-AP evidence must report unknown and carry NO
+	// signal — not "wired", and certainly not 0 dBm.
 	unseen := byMAC["aa:bb:cc:44:55:66"]
 	if unseen.Connection != "unknown" {
 		t.Errorf("connection = %q; absence of wireless evidence is not evidence "+
 			"of a cable", unseen.Connection)
 	}
 	if unseen.Signal != nil {
-		t.Errorf("signal = %v for a client no focused poll has covered", *unseen.Signal)
+		t.Errorf("signal = %v for a client no managed AP reported", *unseen.Signal)
+	}
+	if unseen.Online || unseen.LastSeen != nil {
+		t.Errorf("fresh inventory-only row claimed presence: online=%v last_seen=%v",
+			unseen.Online, unseen.LastSeen)
+	}
+	presence := map[string]int{}
+	for _, facet := range resp.Facets.Presence {
+		presence[facet.Value] = facet.Count
+	}
+	if presence["online"] != 1 || presence["offline"] != 1 {
+		t.Errorf("presence facet=%v, want one evidence-backed online and one offline", presence)
+	}
+
+	w = h.do(http.MethodGet, "/api/v1/clients?presence=online", nil)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Clients) != 1 || resp.Clients[0].MAC != seen.MAC {
+		t.Fatalf("online filter returned %+v", resp.Clients)
+	}
+}
+
+func TestClientsPresenceDoesNotRefreshFromInventoryOrStaleStationCache(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	t0 := now.Add(-clientActiveWindow - time.Minute)
+	h.srv.Now = func() time.Time { return now }
+	recentDevice := now.Unix()
+	dev := h.seedDevice("presence-ap", true, &recentDevice)
+	mac := "02:00:00:00:00:51"
+	signal := -50
+	h.fleet.mu.Lock()
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		dev.ID: {mac: {{Iface: "phy0-ap0", Signal: &signal}}},
+	}
+	h.fleet.presence[dev.ID] = activePresence(collector.ClientPresence{mac: t0.Unix()})
+	h.fleet.mu.Unlock()
+
+	// Simulates getHostHints repeating the disconnected client just now. The
+	// station cache is also deliberately stale after a failed whole-device poll.
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
+		MAC: mac, Name: "departed-phone", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients?presence=online&scope=local", nil)
+	var online struct {
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &online); err != nil {
+		t.Fatal(err)
+	}
+	if online.Total != 0 {
+		t.Fatalf("inventory/stale station cache kept client online: %s", w.Body.String())
+	}
+
+	w = h.do(http.MethodGet, "/api/v1/clients?presence=offline&scope=local", nil)
+	var offline struct {
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &offline); err != nil {
+		t.Fatal(err)
+	}
+	if offline.Total != 1 || len(offline.Clients) != 1 || offline.Clients[0].Online {
+		t.Fatalf("offline response=%+v", offline)
+	}
+	if offline.Clients[0].LastSeen == nil || *offline.Clients[0].LastSeen != t0.Unix() {
+		t.Fatalf("last_seen=%v, want authoritative source time %d, not inventory time %d",
+			offline.Clients[0].LastSeen, t0.Unix(), now.Unix())
+	}
+}
+
+func TestClientsPresenceFiltersAndFacetsIgnoreRecentRSSIAfterRestart(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Date(2026, 8, 20, 17, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	dev := h.seedDevice("restart-ap", true, nil)
+	mac := "02:00:00:00:00:52"
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{{
+		MAC: mac, Name: "departed-after-restart", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.WriteRollups(ctx, []store.RollupRow{{
+		DeviceID: dev.ID, Kind: string(telemetry.KindStaRSSI), Key: mac,
+		TS: now.Truncate(5 * time.Minute).Unix(), Avg: -48, Cnt: 3,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The daemon's in-memory presence cache is intentionally empty, as it is
+	// immediately after restart. The durable inventory and RSSI rollup are
+	// recent, but neither is current reachability evidence.
+	type response struct {
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+		Facets  struct {
+			Presence []store.Facet `json:"presence"`
+		} `json:"facets"`
+	}
+	get := func(path string) response {
+		t.Helper()
+		w := h.do(http.MethodGet, path, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+		var got response
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	all := get("/api/v1/clients?scope=local")
+	if all.Total != 1 || len(all.Clients) != 1 || all.Clients[0].Online ||
+		all.Clients[0].LastSeen != nil || all.Clients[0].Connection != "wireless" {
+		t.Fatalf("restart response=%+v", all)
+	}
+	counts := map[string]int{}
+	for _, facet := range all.Facets.Presence {
+		counts[facet.Value] = facet.Count
+	}
+	if counts["online"] != 0 || counts["offline"] != 1 {
+		t.Fatalf("restart presence facets=%v", counts)
+	}
+
+	online := get("/api/v1/clients?scope=local&presence=online")
+	if online.Total != 0 || len(online.Clients) != 0 {
+		t.Fatalf("recent RSSI entered online filter: %+v", online)
+	}
+	counts = map[string]int{}
+	for _, facet := range online.Facets.Presence {
+		counts[facet.Value] = facet.Count
+	}
+	if counts["offline"] != 1 || counts["online"] != 0 {
+		t.Fatalf("online-filter presence facets=%v", counts)
+	}
+
+	offline := get("/api/v1/clients?scope=local&presence=offline")
+	if offline.Total != 1 || len(offline.Clients) != 1 || offline.Clients[0].Online {
+		t.Fatalf("offline filter response=%+v", offline)
+	}
+
+	// A recently retained LastSeen value remains useful display history after
+	// a known-empty source replacement, but cannot disagree with the same
+	// Active set used by SQL filtering and facets.
+	h.fleet.mu.Lock()
+	h.fleet.presence[dev.ID] = collector.ClientPresenceState{
+		Active: collector.ClientPresence{},
+		LastSeen: collector.ClientPresence{
+			mac: now.Unix(),
+		},
+	}
+	h.fleet.mu.Unlock()
+	offline = get("/api/v1/clients?scope=local&presence=offline")
+	if offline.Total != 1 || len(offline.Clients) != 1 || offline.Clients[0].Online ||
+		offline.Clients[0].LastSeen == nil || *offline.Clients[0].LastSeen != now.Unix() {
+		t.Fatalf("retained last-seen changed active contract: %+v", offline)
+	}
+}
+
+func TestClientsExcludeAdoptedInfrastructureWithoutDeletingInventory(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	recent := now.Unix()
+	adopted := h.seedDevice("gateway-a", true, &recent)
+	pending := h.seedDevice("pending-device", false, nil)
+	bssid := "02:00:00:00:00:b5"
+	realClient := "02:00:00:00:00:c1"
+
+	h.fleet.mu.Lock()
+	h.fleet.aps = map[int64][]collector.AP{
+		adopted.ID: {{Iface: "phy0-ap0", BSSID: bssid}},
+	}
+	h.fleet.presence[adopted.ID] = activePresence(collector.ClientPresence{
+		adopted.MAC: now.Unix(), bssid: now.Unix(),
+		pending.MAC: now.Unix(), realClient: now.Unix(),
+	})
+	h.fleet.mu.Unlock()
+
+	for _, mac := range []string{adopted.MAC, bssid, pending.MAC, realClient} {
+		if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
+			MAC: mac, Scope: store.ScopeLocal,
+		}}, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients?all=1", nil)
+	var page struct {
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+		Facets  struct {
+			Presence, Connection, Scope []store.Facet
+		} `json:"facets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, client := range page.Clients {
+		got[client.MAC] = true
+	}
+	if page.Total != 2 || !got[pending.MAC] || !got[realClient] ||
+		got[adopted.MAC] || got[bssid] {
+		t.Fatalf("infrastructure filter returned total=%d macs=%v", page.Total, got)
+	}
+	for name, facets := range map[string][]store.Facet{
+		"presence":   page.Facets.Presence,
+		"connection": page.Facets.Connection,
+		"scope":      page.Facets.Scope,
+	} {
+		total := 0
+		for _, facet := range facets {
+			total += facet.Count
+		}
+		if total != 2 {
+			t.Errorf("%s facets counted infrastructure: %+v", name, facets)
+		}
+	}
+
+	w = h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	var d dashboard
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.KnownDevices != 2 || d.ActiveDevices != 2 {
+		t.Fatalf("dashboard counted infrastructure: known=%d active=%d",
+			d.KnownDevices, d.ActiveDevices)
+	}
+
+	inventory, err := h.db.Clients(context.Background(), 0, 10)
+	if err != nil || len(inventory) != 4 {
+		t.Fatalf("infrastructure history was deleted: rows=%d err=%v", len(inventory), err)
 	}
 }
 
@@ -1135,7 +1767,7 @@ func TestUnauthenticatedMutationsRequireSameOrigin(t *testing.T) {
 			h := newHarness(t)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 				strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
-			req.Host = "controller.local"
+			req.Host = testSetupHost
 			req.RemoteAddr = "192.0.2.10:1"
 			req.Header.Set("Content-Type", "application/json")
 			for k, v := range tc.headers {
@@ -1150,12 +1782,303 @@ func TestUnauthenticatedMutationsRequireSameOrigin(t *testing.T) {
 	}
 }
 
+func TestOriginRequiresMatchingScheme(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost,
+		"https://controller.local/api/v1/setup", nil)
+	req.Header.Set("Origin", "http://controller.local")
+	if sameOrigin(req) {
+		t.Fatal("an HTTP page on the same host was accepted as the HTTPS origin")
+	}
+
+	req.Header.Set("Origin", "https://controller.local")
+	if !sameOrigin(req) {
+		t.Fatal("the exact HTTPS origin was rejected")
+	}
+
+	// TLS commonly terminates at a reverse proxy. The daemon already uses this
+	// header when deciding whether its session cookies need Secure, so origin
+	// validation must derive the public scheme the same way.
+	req = httptest.NewRequest(http.MethodPost,
+		"http://controller.local/api/v1/setup", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Origin", "https://controller.local")
+	if !sameOrigin(req) {
+		t.Fatal("the HTTPS origin behind a TLS-terminating proxy was rejected")
+	}
+}
+
+func TestMissingNetworksAndGroupsReturnNotFound(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	for _, tc := range []struct {
+		name, method, path string
+		body               any
+	}{
+		{"update network", http.MethodPost, "/api/v1/site/networks/999",
+			map[string]any{"name": "gone", "vlan": 9}},
+		{"delete network", http.MethodDelete, "/api/v1/site/networks/999", nil},
+		{"update group", http.MethodPost, "/api/v1/site/groups/999",
+			map[string]any{"name": "gone", "device_ids": []int64{}}},
+		{"delete group", http.MethodDelete, "/api/v1/site/groups/999", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := h.do(tc.method, tc.path, tc.body)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestNetworkDHCPCanBeConfiguredAndAnOlderClientDoesNotResetIt(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	created := h.do(http.MethodPost, "/api/v1/site/networks", map[string]any{
+		"name": "iot", "vlan": 20, "cidr": "10.0.20.1/24", "zone": "iot",
+		"enabled": true,
+		"dhcp": map[string]any{
+			"enabled": true, "start": 20, "limit": 80, "leasetime": "30m",
+		},
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	body := h.json(created)
+	id := int(body["id"].(float64))
+	dhcp := body["dhcp"].(map[string]any)
+	if dhcp["start"] != float64(20) || dhcp["leasetime"] != "30m" {
+		t.Fatalf("create response DHCP = %v", dhcp)
+	}
+
+	// The old request shape has no dhcp object. That is an omission, not a
+	// request to restore defaults during an unrelated rename.
+	updated := h.do(http.MethodPost, fmt.Sprintf("/api/v1/site/networks/%d", id), map[string]any{
+		"name": "things", "vlan": 20, "cidr": "10.0.20.1/24", "zone": "iot",
+		"enabled": true,
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update status %d: %s", updated.Code, updated.Body.String())
+	}
+	dhcp = h.json(updated)["dhcp"].(map[string]any)
+	if dhcp["start"] != float64(20) || dhcp["limit"] != float64(80) || dhcp["leasetime"] != "30m" {
+		t.Fatalf("older-client update reset DHCP: %v", dhcp)
+	}
+
+	site := h.json(h.do(http.MethodGet, "/api/v1/site", nil))
+	networks := site["networks"].([]any)
+	got := networks[0].(map[string]any)["dhcp"].(map[string]any)
+	if got["start"] != float64(20) || got["limit"] != float64(80) {
+		t.Fatalf("site response DHCP = %v", got)
+	}
+}
+
+func TestNetworkPartialUpdateMergesButIncompleteDHCPIsRejected(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	created := h.do(http.MethodPost, "/api/v1/site/networks", map[string]any{
+		"name": "iot", "vlan": 20, "cidr": "10.0.20.1/24", "zone": "iot",
+		"enabled": true,
+		"dhcp": map[string]any{
+			"enabled": true, "start": 20, "limit": 80, "leasetime": "30m",
+		},
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	id := int(h.json(created)["id"].(float64))
+
+	// saveNetwork is a partial API. Updating only DHCP must not rebuild every
+	// omitted network field as its zero value and disable the whole network.
+	updated := h.do(http.MethodPost, fmt.Sprintf("/api/v1/site/networks/%d", id), map[string]any{
+		"dhcp": map[string]any{
+			"enabled": false, "start": 20, "limit": 80, "leasetime": "30m",
+		},
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("partial update status %d: %s", updated.Code, updated.Body.String())
+	}
+	body := h.json(updated)
+	if body["name"] != "iot" || body["vlan"] != float64(20) ||
+		body["cidr"] != "10.0.20.1/24" || body["zone"] != "iot" || body["enabled"] != true {
+		t.Fatalf("partial DHCP update reset network fields: %v", body)
+	}
+
+	// An object being present is an explicit DHCP write, so every field must be
+	// present. In particular `{}` must never decode enabled to false and prune a
+	// running server.
+	bad := h.do(http.MethodPost, fmt.Sprintf("/api/v1/site/networks/%d", id), map[string]any{
+		"dhcp": map[string]any{},
+	})
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("incomplete DHCP status = %d, want 400: %s", bad.Code, bad.Body.String())
+	}
+	if msg, _ := h.json(bad)["error"].(string); !strings.Contains(msg, "must include") {
+		t.Fatalf("incomplete DHCP error = %q", msg)
+	}
+
+	site := h.json(h.do(http.MethodGet, "/api/v1/site", nil))
+	got := site["networks"].([]any)[0].(map[string]any)
+	if got["name"] != "iot" || got["enabled"] != true {
+		t.Fatalf("rejected request mutated network: %v", got)
+	}
+	dhcp := got["dhcp"].(map[string]any)
+	if dhcp["enabled"] != false || dhcp["start"] != float64(20) {
+		t.Fatalf("rejected request mutated DHCP: %v", dhcp)
+	}
+}
+
+func TestApplyParsesAChunkedRequestBody(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	p := &recordingProvisioner{}
+	h.srv.Provision = p
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/site/apply",
+		strings.NewReader(`{"operation_id":"`+testApplyOperationID+`",`+
+			`"preview_token":"pv-test","device_ids":[7],`+
+			`"acknowledge_traversal":true,"acknowledge_driver_risk":true,`+
+			`"acknowledge_cautions":true,"acknowledge_partial_fleet":true}`))
+	req.ContentLength = -1 // what net/http uses for Transfer-Encoding: chunked
+	req.TransferEncoding = []string{"chunked"}
+	req.RemoteAddr = "192.0.2.10:12345"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeader, h.csrf)
+	for _, c := range h.cookies {
+		req.AddCookie(c)
+	}
+	w := httptest.NewRecorder()
+	h.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	if p.got.OperationID != testApplyOperationID || p.got.PreviewToken != "pv-test" ||
+		len(p.got.DeviceIDs) != 1 ||
+		p.got.DeviceIDs[0] != 7 || !p.got.AcknowledgeTraversal ||
+		!p.got.AcknowledgeDriverRisk || !p.got.AcknowledgeCautions ||
+		!p.got.AcknowledgePartialFleet {
+		t.Fatalf("provisioner received %+v; the chunked body was not decoded", p.got)
+	}
+}
+
+func TestApplyRequiresAFreshPreviewBinding(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	p := &recordingProvisioner{}
+	h.srv.Provision = p
+
+	missing := h.do(http.MethodPost, "/api/v1/site/apply",
+		map[string]any{"operation_id": testApplyOperationID})
+	if missing.Code != http.StatusConflict {
+		t.Fatalf("missing token status = %d, want 409: %s", missing.Code, missing.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(missing.Body.String()), "preview again") ||
+		!strings.Contains(strings.ToLower(missing.Body.String()), "nothing was written") {
+		t.Fatalf("missing token response is not actionable: %s", missing.Body.String())
+	}
+	if got := h.json(missing)["write_state"]; got != "none" {
+		t.Fatalf("missing token write_state = %v, want none", got)
+	}
+	p.mu.Lock()
+	calls := p.applyCalls
+	p.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("missing token reached the provisioner %d time(s)", calls)
+	}
+
+	p.applyErr = ErrPreviewStale
+	stale := h.do(http.MethodPost, "/api/v1/site/apply",
+		map[string]any{"operation_id": testApplyOperationID2, "preview_token": "pv-old"})
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale token status = %d, want 409: %s", stale.Code, stale.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(stale.Body.String()), "preview again") ||
+		!strings.Contains(strings.ToLower(stale.Body.String()), "nothing was written") {
+		t.Fatalf("stale token response is not actionable: %s", stale.Body.String())
+	}
+	if got := h.json(stale)["write_state"]; got != "none" {
+		t.Fatalf("stale token write_state = %v, want none", got)
+	}
+}
+
+func TestApplySerialisesDesiredAndFleetMutations(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("old-name", false, nil)
+	release := make(chan struct{})
+	p := &recordingProvisioner{
+		applyStarted: make(chan struct{}),
+		applyRelease: release,
+	}
+	h.srv.Provision = p
+
+	applyDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		applyDone <- h.do(http.MethodPost, "/api/v1/site/apply",
+			map[string]any{"operation_id": testApplyOperationID,
+				"preview_token": "pv-current"})
+	}()
+	select {
+	case <-p.applyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("apply did not reach the provisioner")
+	}
+	if h.srv.siteMu.TryLock() {
+		h.srv.siteMu.Unlock()
+		t.Fatal("handleApply did not hold the shared mutation lock")
+	}
+
+	siteDone := make(chan *httptest.ResponseRecorder, 1)
+	renameDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		siteDone <- h.do(http.MethodPost, "/api/v1/site/name",
+			map[string]any{"name": "during-apply"})
+	}()
+	go func() {
+		renameDone <- h.do(http.MethodPost,
+			fmt.Sprintf("/api/v1/devices/%d/name", dev.ID),
+			map[string]any{"name": "during-apply"})
+	}()
+	for name, done := range map[string]<-chan *httptest.ResponseRecorder{
+		"desired-state mutation": siteDone,
+		"fleet mutation":         renameDone,
+	} {
+		select {
+		case res := <-done:
+			t.Fatalf("%s completed during apply (status %d)", name, res.Code)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	close(release)
+	if res := <-applyDone; res.Code != http.StatusOK {
+		t.Fatalf("apply status = %d: %s", res.Code, res.Body.String())
+	}
+	for name, done := range map[string]<-chan *httptest.ResponseRecorder{
+		"desired-state mutation": siteDone,
+		"fleet mutation":         renameDone,
+	} {
+		select {
+		case res := <-done:
+			if res.Code != http.StatusOK {
+				t.Fatalf("%s status = %d: %s", name, res.Code, res.Body.String())
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s stayed blocked after apply released", name)
+		}
+	}
+}
+
 // An HTML form can only send urlencoded, multipart or text/plain, so insisting
 // on JSON blocks a cross-site form post outright.
 func TestNonJSONContentTypeIsRejected(t *testing.T) {
 	h := newHarness(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 		strings.NewReader(`{"username":"admin","password":"`+testPassword+`"}`))
+	req.Host = testSetupHost
 	req.RemoteAddr = "192.0.2.10:1"
 	req.Header.Set("Content-Type", "text/plain")
 	w := httptest.NewRecorder()
@@ -1217,6 +2140,7 @@ func TestConcurrentSetupCreatesExactlyOneAdmin(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/setup",
 				strings.NewReader(fmt.Sprintf(
 					`{"username":"admin%d","password":"%s"}`, i, testPassword)))
+			req.Host = testSetupHost
 			req.RemoteAddr = "192.0.2.10:1"
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -1350,6 +2274,7 @@ func TestAdoptRefusesAnUnknownRole(t *testing.T) {
 
 	w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
 		"host": "192.0.2.1", "username": "root", "password": "x", "role": "router",
+		"acknowledge_router_changes": true,
 	})
 	if w.Code == http.StatusOK {
 		t.Fatal("an unknown role was accepted")
@@ -1378,8 +2303,10 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 	dev := h.seedDevice("ap-x", true, nil)
 	h.fleet.setDegraded(dev.ID, []collector.Degradation{
 		{Object: "luci-rpc", Method: "getWirelessDevices",
+			Status: ubus.StatusPermissionDenied, Cause: collector.CausePermission,
 			Err: "Permission denied", Permanent: true},
-		{Object: "iwinfo", Method: "survey", Err: "busy"},
+		{Object: "iwinfo", Method: "survey", Status: ubus.StatusTimeout,
+			Cause: collector.CauseTransport, Err: "timed out"},
 	})
 
 	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
@@ -1388,8 +2315,13 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 	}
 	var got struct {
 		Degraded []struct {
-			Call      string `json:"call"`
-			Err       string `json:"error"`
+			Call   string `json:"call"`
+			Err    string `json:"error"`
+			Cause  string `json:"cause"`
+			Status *struct {
+				Code int    `json:"code"`
+				Name string `json:"name"`
+			} `json:"status"`
 			Permanent bool   `json:"permanent"`
 			Costs     string `json:"costs"`
 		} `json:"degraded"`
@@ -1401,14 +2333,23 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 		t.Fatalf("degraded = %+v, want two", got.Degraded)
 	}
 	first := got.Degraded[0]
-	if first.Call != "luci-rpc.getWirelessDevices" || !first.Permanent {
+	if first.Call != "luci-rpc.getWirelessDevices" || !first.Permanent ||
+		first.Cause != "permission" {
 		t.Errorf("first degradation = %+v", first)
+	}
+	if first.Status == nil || first.Status.Code != 6 || first.Status.Name != "PERMISSION_DENIED" {
+		t.Errorf("permission status was flattened or lost: %+v", first.Status)
 	}
 	// The consequence, not just the call name. "luci-rpc.getWirelessDevices:
 	// Permission denied" tells an operator nothing about what they lost.
 	if !strings.Contains(first.Costs, "mesh") || !strings.Contains(first.Costs, "clients") {
 		t.Errorf("costs = %q; it does not say what the missing grant costs",
 			first.Costs)
+	}
+	second := got.Degraded[1]
+	if second.Cause != "transport" || second.Permanent || second.Status == nil ||
+		second.Status.Code != 7 || second.Status.Name != "TIMEOUT" {
+		t.Errorf("transient status/cause was flattened or misclassified: %+v", second)
 	}
 }
 
@@ -1562,11 +2503,11 @@ func TestClientAPAttributionIgnoresWriteOrder(t *testing.T) {
 			base := now.Truncate(5 * time.Minute).Unix()
 			onLeft := []store.RollupRow{
 				{DeviceID: left, Kind: "sta_rssi", Key: mac, TS: base, Avg: -40, Cnt: 9},
-				{DeviceID: left, Kind: "sta_retry_pct", Key: mac, TS: base, Avg: 3, Cnt: 9},
+				{DeviceID: left, Kind: "sta_retry_delta_pct", Key: mac, TS: base, Avg: 3, Cnt: 9},
 			}
 			onRight := []store.RollupRow{
 				{DeviceID: right, Kind: "sta_rssi", Key: mac, TS: base, Avg: -88, Cnt: 2},
-				{DeviceID: right, Kind: "sta_retry_pct", Key: mac, TS: base, Avg: 61, Cnt: 2},
+				{DeviceID: right, Kind: "sta_retry_delta_pct", Key: mac, TS: base, Avg: 61, Cnt: 2},
 			}
 			order := append(append([]store.RollupRow{}, onLeft...), onRight...)
 			if rightLast {
@@ -2063,6 +3004,62 @@ func TestTheFanOutCostSaysWhenItCouldNotBeDetermined(t *testing.T) {
 	}
 }
 
+// An empty ownership ledger and an unreadable one have opposite meanings at
+// the destructive un-adopt boundary. The former says there is nothing to
+// revert; the latter says the controller cannot produce a safe preview.
+func TestDeviceDetailReportsWhetherOwnedSectionsAreKnown(t *testing.T) {
+	t.Run("known empty", func(t *testing.T) {
+		h := newHarness(t)
+		h.setup()
+		dev := h.seedDevice("ap-empty-ledger", true, nil)
+
+		w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+		}
+		var detail deviceDetail
+		if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+			t.Fatal(err)
+		}
+		if !detail.OwnedSectionsKnown {
+			t.Fatal("a successful empty ownership read was reported as unknown")
+		}
+		if len(detail.OwnedSections) != 0 {
+			t.Fatalf("new device unexpectedly owns sections: %v", detail.OwnedSections)
+		}
+	})
+
+	t.Run("unreadable", func(t *testing.T) {
+		h := newHarness(t)
+		h.setup()
+		dev := h.seedDevice("ap-broken-ledger", true, nil)
+		if _, err := h.db.SQL().ExecContext(context.Background(),
+			`DROP TABLE IF EXISTS owned_sections`); err != nil {
+			t.Skipf("cannot simulate an unreadable ownership ledger: %v", err)
+		}
+
+		w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		raw, ok := body["owned_sections_known"]
+		if !ok {
+			t.Fatal("owned_sections_known was omitted, so unknown is ambiguous with an older response")
+		}
+		var known bool
+		if err := json.Unmarshal(raw, &known); err != nil {
+			t.Fatal(err)
+		}
+		if known {
+			t.Fatal("an unreadable ownership ledger was reported as known")
+		}
+	})
+}
+
 // The section name comes from the device's own reply and is printed into
 // commands an operator is told to run as root. Anything that is not a UCI
 // identifier did not come from a healthy device.
@@ -2177,20 +3174,27 @@ func TestClientsNoteNamesTheActualReasonTheRadioColumnsAreEmpty(t *testing.T) {
 			"an empty assoclist and changes nothing: %q", none)
 	}
 
-	// Clients ARE on our radios, so the focused tier really is the reason.
+	// Clients ARE on our radios. Baseline polling already answers association,
+	// AP and signal; only TX retries may honestly point to the focused tier.
 	some := note(func(h *harness, id int64) {
 		four := 4
 		h.fleet.clients = map[int64]*int{id: &four}
 	})
 	if !strings.Contains(some, "focused poll tier") {
-		t.Errorf("with associated stations the note should name the poll tier: %q", some)
+		t.Errorf("with associated stations the note should name the retry tier: %q", some)
+	}
+	for _, falseClaim := range []string{"which access point", "along with its signal"} {
+		if strings.Contains(some, falseClaim) {
+			t.Errorf("the note still assigns baseline data to the focused tier (%s): %q",
+				falseClaim, some)
+		}
 	}
 
 	// And no poll has said, which is neither of the above.
 	unknown := note(func(h *harness, id int64) {
 		h.fleet.clients = map[int64]*int{}
 	})
-	if !strings.Contains(unknown, "no poll has reported") {
+	if !strings.Contains(unknown, "could not determine") {
 		t.Errorf("with no poll data the note was %q", unknown)
 	}
 }
@@ -2221,11 +3225,11 @@ func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
 	}
 	// No rollups at all — nothing has ever run a focused poll here.
 	sig := -50
-	h.fleet.stations = map[int64]map[string]collector.LiveStation{
+	h.fleet.stations = map[int64]collector.LiveStationSet{
 		// Upper case on purpose: iwinfo.assoclist returns upper and
 		// hostapd.get_clients returns lower for the same station on the same
 		// device, and the clients table stores lower.
-		dev.ID: {"04:2E:C1:6D:F4:0D": {Iface: "phy0-ap0", Signal: &sig}},
+		dev.ID: {"04:2E:C1:6D:F4:0D": {{Iface: "phy0-ap0", Signal: &sig}}},
 	}
 
 	w := h.do(http.MethodGet, "/api/v1/clients", nil)
@@ -2265,6 +3269,77 @@ func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
 	if wired.Connection != "unknown" || wired.DeviceID != nil {
 		t.Errorf("a client no radio reported was given RF data: %+v", wired)
 	}
+
+	// Filtering and facets happen in SQL before the live data is overlaid onto
+	// rows. They must receive the same association set or this phone disappears
+	// from the very filter its rendered row says it belongs to.
+	w = h.do(http.MethodGet, "/api/v1/clients?connection=wireless", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("wireless clients: %d %s", w.Code, w.Body.String())
+	}
+	var filtered struct {
+		Clients []clientView `json:"clients"`
+		Total   int          `json:"total"`
+		Facets  struct {
+			Connection []store.Facet `json:"connection"`
+		} `json:"facets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &filtered); err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 1 || len(filtered.Clients) != 1 ||
+		filtered.Clients[0].MAC != phone.MAC ||
+		filtered.Clients[0].Connection != "wireless" {
+		t.Fatalf("live station and wireless filter disagree: %+v", filtered)
+	}
+	counts := map[string]int{}
+	for _, f := range filtered.Facets.Connection {
+		counts[f.Value] = f.Count
+	}
+	if counts["wireless"] != 1 || counts["unknown"] != 1 {
+		t.Errorf("connection facets ignore live associations: %v", counts)
+	}
+}
+
+func TestClientsDoNotChooseAnAPFromCompetingFleetAssociations(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Now()
+	h.srv.Now = func() time.Time { return now }
+	first := h.seedDevice("first-ap", true, nil)
+	second := h.seedDevice("second-ap", true, nil)
+	const mac = "04:2e:c1:6d:f4:0d"
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
+		MAC: mac, Name: "roaming-phone", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	strong, weak := -41, -73
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		first.ID:  {mac: {{Iface: "phy0-ap0", Signal: &strong}}},
+		second.ID: {mac: {{Iface: "phy1-ap0", Signal: &weak}}},
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/clients", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Clients []clientView `json:"clients"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Clients) != 1 {
+		t.Fatalf("clients=%+v", response.Clients)
+	}
+	client := response.Clients[0]
+	if client.Connection != "wireless" || !client.AssociationAmbiguous {
+		t.Fatalf("competing association was not explicit: %+v", client)
+	}
+	if client.DeviceID != nil || client.Signal != nil {
+		t.Fatalf("iteration selected an AP or RSSI: %+v", client)
+	}
 }
 
 // A station hostapd lists without an RSSI is associated and unmeasured. Zero
@@ -2280,8 +3355,8 @@ func TestAssociatedWithoutAnRSSIReportsNoSignalRatherThanZero(t *testing.T) {
 	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
-	h.fleet.stations = map[int64]map[string]collector.LiveStation{
-		dev.ID: {"04:2e:c1:6d:f4:0d": {Iface: "phy0-ap0"}}, // Signal nil
+	h.fleet.stations = map[int64]collector.LiveStationSet{
+		dev.ID: {"04:2e:c1:6d:f4:0d": {{Iface: "phy0-ap0"}}}, // Signal nil
 	}
 	w := h.do(http.MethodGet, "/api/v1/clients", nil)
 	var resp struct {

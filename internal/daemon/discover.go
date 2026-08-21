@@ -83,7 +83,7 @@ func (d *Daemon) Scan(ctx context.Context, req api.ScanRequest) (*api.ScanResult
 	}
 
 	d.Log.Info("discovery scan", "swept", res.Swept, "answered", res.Answered,
-		"found", len(res.Found), "ms", res.ElapsedMS)
+		"found", len(res.Found), "network_failures", len(res.Failures), "ms", res.ElapsedMS)
 	return out, nil
 }
 
@@ -99,6 +99,7 @@ func annotate(res *discovery.Result, known map[string]*store.Device) *api.ScanRe
 		Answered:  res.Answered,
 		Networks:  res.Networks,
 		Skipped:   res.Skipped,
+		Failures:  res.Failures,
 		ElapsedMS: res.ElapsedMS,
 		Found:     make([]api.DiscoveredDevice, 0, len(res.Found)),
 	}

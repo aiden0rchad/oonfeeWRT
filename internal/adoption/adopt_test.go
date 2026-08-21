@@ -104,14 +104,18 @@ type fakeBoot struct {
 	// vacuously.
 	mirror *ubus.Client
 
-	acl       map[string][]byte
-	login     string
-	passHash  string
-	groups    []string
-	installed bool
-	failACL   error
-	failLogin error
-	closed    bool
+	acl                  map[string][]byte
+	login                string
+	passHash             string
+	groups               []string
+	installed            bool
+	failACL              error
+	failLogin            error
+	failRemoveACL        error
+	failRemoveFootprint  error
+	removeACLCalls       int
+	removeFootprintCalls int
+	closed               bool
 }
 
 func newBoot() *fakeBoot { return &fakeBoot{acl: map[string][]byte{}} }
@@ -151,7 +155,20 @@ func (b *fakeBoot) CreateLogin(_ context.Context, user, passHash string, groups 
 	return nil
 }
 
+func (b *fakeBoot) RemoveACL(_ context.Context, aclPath string) error {
+	b.removeACLCalls++
+	if b.failRemoveACL != nil {
+		return b.failRemoveACL
+	}
+	delete(b.acl, aclPath)
+	return nil
+}
+
 func (b *fakeBoot) RemoveFootprint(ctx context.Context, aclPath, user string) error {
+	b.removeFootprintCalls++
+	if b.failRemoveFootprint != nil {
+		return b.failRemoveFootprint
+	}
 	delete(b.acl, aclPath)
 	if b.login == user {
 		b.login, b.passHash, b.groups = "", "", nil
@@ -256,10 +273,203 @@ func TestAdoptVerifiesTheCredentialItCreated(t *testing.T) {
 	})
 
 	a := testAdopter()
-	if _, err := a.Adopt(ctx, op, newBootFor(op)); err == nil {
+	boot := newBootFor(op)
+	if _, err := a.Adopt(ctx, op, boot); err == nil {
 		t.Fatal("Adopt should fail when the new credential cannot log in")
 	} else if !strings.Contains(err.Error(), "does not work") {
 		t.Fatalf("error should name the verification failure, got: %v", err)
+	}
+	if len(boot.acl) != 0 || boot.login != "" || boot.removeFootprintCalls != 1 {
+		t.Fatalf("failed controller login left a footprint: acl=%v login=%q cleanup=%d",
+			boot.acl, boot.login, boot.removeFootprintCalls)
+	}
+}
+
+func TestAdoptCreateLoginFailureRollsBackOnlyTheACL(t *testing.T) {
+	op := operatorClient(t)
+	primary := errors.New("create login fault")
+	boot := newBoot()
+	boot.login = DefaultUser
+	boot.passHash = "foreign-state-must-remain"
+	boot.failLogin = primary
+
+	_, err := testAdopter().Adopt(context.Background(), op, boot)
+	if !errors.Is(err, primary) {
+		t.Fatalf("create-login failure was not preserved: %v", err)
+	}
+	if boot.removeACLCalls != 1 || boot.removeFootprintCalls != 0 {
+		t.Fatalf("cleanup calls: ACL=%d footprint=%d, want ACL only",
+			boot.removeACLCalls, boot.removeFootprintCalls)
+	}
+	if len(boot.acl) != 0 {
+		t.Fatalf("ACL remains after rollback: %v", boot.acl)
+	}
+	if boot.login != DefaultUser || boot.passHash != "foreign-state-must-remain" {
+		t.Fatalf("create-login failure removed pre-existing login state: login=%q hash=%q",
+			boot.login, boot.passHash)
+	}
+}
+
+func TestAdoptFreshSessionFailureRollsBackTheFootprint(t *testing.T) {
+	ctx := context.Background()
+	op := operatorClient(t)
+	if err := op.Call(ctx, "__test", "reject_login",
+		map[string]any{"usernames": []string{"root"}}, nil); err != nil {
+		t.Skipf("mock does not support login fault injection: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = op.Call(ctx, "__test", "reject_login",
+			map[string]any{"usernames": []string{}}, nil)
+	})
+
+	boot := newBootFor(op)
+	_, err := testAdopter().Adopt(ctx, op, boot)
+	if err == nil || !strings.Contains(err.Error(), "cannot open a session to verify") {
+		t.Fatalf("fresh-session failure was not preserved: %v", err)
+	}
+	if len(boot.acl) != 0 || boot.login != "" || boot.removeFootprintCalls != 1 {
+		t.Fatalf("fresh-session failure left a footprint: acl=%v login=%q cleanup=%d",
+			boot.acl, boot.login, boot.removeFootprintCalls)
+	}
+}
+
+func TestAdoptReverifiesIdentityOnTheNewControllerSession(t *testing.T) {
+	ctx := context.Background()
+	op := operatorClient(t)
+	a := testAdopter()
+	called := false
+	a.VerifyController = func(_ context.Context, controller *ubus.Client) error {
+		called = true
+		if controller.Session() == op.Session() {
+			return errors.New("identity check received the operator session")
+		}
+		// This call is accepted only after CreateLogin mirrored the new scoped
+		// credential into rpcd, so the callback cannot have run before proof.
+		return controller.Call(ctx, "system", "board", nil, nil)
+	}
+	if _, err := a.Adopt(ctx, op, newBootFor(op)); err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if !called {
+		t.Fatal("controller identity verification never ran")
+	}
+}
+
+func TestAdoptStopsWhenControllerIdentityChanges(t *testing.T) {
+	ctx := context.Background()
+	op := operatorClient(t)
+	a := testAdopter()
+	a.VerifyController = func(context.Context, *ubus.Client) error {
+		return errors.New("MAC changed")
+	}
+	boot := newBootFor(op)
+	if _, err := a.Adopt(ctx, op, boot); err == nil {
+		t.Fatal("identity mismatch was accepted")
+	} else if !strings.Contains(err.Error(), "controller identity verification failed") ||
+		!strings.Contains(err.Error(), "MAC changed") {
+		t.Fatalf("identity failure lost its cause: %v", err)
+	}
+	if len(boot.acl) != 0 || boot.login != "" || boot.removeFootprintCalls != 1 {
+		t.Fatalf("identity failure left a footprint: acl=%v login=%q cleanup=%d",
+			boot.acl, boot.login, boot.removeFootprintCalls)
+	}
+}
+
+func TestAdoptCapabilityProbeFailureRollsBackAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	op := operatorClient(t)
+	a := testAdopter()
+	a.VerifyController = func(context.Context, *ubus.Client) error {
+		cancel()
+		return nil
+	}
+	boot := newBootFor(op)
+
+	_, err := a.Adopt(ctx, op, boot)
+	if err == nil || !strings.Contains(err.Error(), "capability probe") ||
+		!errors.Is(err, context.Canceled) {
+		t.Fatalf("capability-probe failure was not preserved: %v", err)
+	}
+	if len(boot.acl) != 0 || boot.login != "" || boot.removeFootprintCalls != 1 {
+		t.Fatalf("capability failure left a footprint: acl=%v login=%q cleanup=%d",
+			boot.acl, boot.login, boot.removeFootprintCalls)
+	}
+}
+
+func TestAdoptRollbackFailureReportsSafeResidueAndRemedy(t *testing.T) {
+	ctx := context.Background()
+	op := operatorClient(t)
+	const password = "controller-example-placeholder"
+	primary := errors.New("identity changed")
+	cleanup := errors.New("cleanup channel failed")
+	a := testAdopter()
+	a.NewPassword = func() (string, error) { return password, nil }
+	a.VerifyController = func(context.Context, *ubus.Client) error { return primary }
+	boot := newBootFor(op)
+	boot.failRemoveFootprint = cleanup
+	t.Cleanup(func() {
+		boot.failRemoveFootprint = nil
+		_ = boot.RemoveFootprint(context.Background(), DefaultACLPath, DefaultUser)
+	})
+
+	_, err := a.Adopt(ctx, op, boot)
+	var rollback *RollbackError
+	if !errors.As(err, &rollback) || !errors.Is(err, primary) ||
+		!errors.Is(rollback.Cleanup, cleanup) {
+		t.Fatalf("rollback failure lost its causes: %v", err)
+	}
+	wantResidue := []string{
+		DefaultACLPath,
+		"config login '" + DefaultUser + "' in /etc/config/rpcd",
+	}
+	if fmt.Sprint(rollback.Residue) != fmt.Sprint(wantResidue) {
+		t.Fatalf("residue = %v, want %v", rollback.Residue, wantResidue)
+	}
+	commands := strings.Join(rollback.CleanupCommands, "\n")
+	if !strings.Contains(commands, "uci -q delete rpcd."+DefaultUser) ||
+		!strings.Contains(commands, "rm -f '"+DefaultACLPath+"'") {
+		t.Fatalf("manual remedy is incomplete: %q", commands)
+	}
+	for name, secret := range map[string]string{
+		"password": password,
+		"hash":     boot.passHash,
+	} {
+		if secret != "" && (strings.Contains(err.Error(), secret) || strings.Contains(commands, secret)) {
+			t.Errorf("rollback report exposed controller %s: %q", name, err)
+		}
+	}
+}
+
+func TestAdoptACLOnlyRollbackFailureDoesNotPrescribeLoginRemoval(t *testing.T) {
+	op := operatorClient(t)
+	const password = "another-controller-example-placeholder"
+	primary := errors.New("create login failed")
+	cleanup := errors.New("ACL cleanup failed")
+	a := testAdopter()
+	a.NewPassword = func() (string, error) { return password, nil }
+	boot := newBoot()
+	boot.login = DefaultUser
+	boot.passHash = "foreign-login-hash"
+	boot.failLogin = primary
+	boot.failRemoveACL = cleanup
+
+	_, err := a.Adopt(context.Background(), op, boot)
+	var rollback *RollbackError
+	if !errors.As(err, &rollback) || !errors.Is(err, primary) {
+		t.Fatalf("rollback failure lost its primary cause: %v", err)
+	}
+	if fmt.Sprint(rollback.Residue) != fmt.Sprint([]string{DefaultACLPath}) {
+		t.Fatalf("ACL-only residue = %v", rollback.Residue)
+	}
+	commands := strings.Join(rollback.CleanupCommands, "\n")
+	if strings.Contains(commands, "uci") || strings.Contains(commands, "rpcd."+DefaultUser) {
+		t.Fatalf("ACL-only remedy would remove an unproved login: %q", commands)
+	}
+	if !strings.Contains(commands, "rm -f '"+DefaultACLPath+"'") {
+		t.Fatalf("ACL-only remedy omitted the ACL: %q", commands)
+	}
+	if strings.Contains(err.Error(), password) || strings.Contains(err.Error(), boot.passHash) {
+		t.Fatalf("ACL-only rollback report exposed a credential: %v", err)
 	}
 }
 
@@ -309,6 +519,24 @@ func TestUnadoptWithoutOperatorStopsAndReportsResidue(t *testing.T) {
 	}
 	if !strings.Contains(residue[1], "/etc/config/rpcd") {
 		t.Errorf("residue should name the rpcd login, got %q", residue[1])
+	}
+	commands := rep.CleanupCommands()
+	want := "uci -q delete rpcd.oonfeewrt\nuci commit rpcd\n" +
+		"uci -q get rpcd.oonfeewrt >/dev/null 2>&1 && echo 'ERROR: login still present' || echo 'login gone'\n" +
+		"rm -f '/usr/share/rpcd/acl.d/oonfeewrt.json'\n" +
+		"[ ! -e '/usr/share/rpcd/acl.d/oonfeewrt.json' ] && echo 'ACL gone' || echo 'ERROR: ACL still present'"
+	if got := strings.Join(commands, "\n"); got != want {
+		t.Errorf("manual cleanup recipe = %q, want %q", got, want)
+	}
+}
+
+func TestCleanupCommandsNeverPrintUnsafeRootCommands(t *testing.T) {
+	rep := &UnadoptReport{
+		User:    "oonfeewrt; reboot",
+		ACLPath: "/etc/shadow",
+	}
+	if got := rep.CleanupCommands(); len(got) != 0 {
+		t.Fatalf("unsafe internal values became root commands: %v", got)
 	}
 }
 
@@ -393,9 +621,9 @@ func TestAdoptDoesNotCreateALoginIfTheACLFails(t *testing.T) {
 	}
 }
 
-// The reverse ordering check: if the login fails, the ACL file is already there.
-// That is a residue un-adopt must still be able to describe.
-func TestAdoptReportsALoginFailureAfterTheACLLanded(t *testing.T) {
+// The reverse ordering check: a login failure happens after the ACL landed,
+// and adoption must remove only that proved write.
+func TestAdoptRollsBackTheACLWhenTheLoginFails(t *testing.T) {
 	op := operatorClient(t)
 	boot := newBoot()
 	boot.failLogin = errors.New("uci: entry not found")
@@ -407,8 +635,9 @@ func TestAdoptReportsALoginFailureAfterTheACLLanded(t *testing.T) {
 	if !strings.Contains(err.Error(), "create login") {
 		t.Errorf("the error does not name the failed step: %v", err)
 	}
-	if len(boot.acl) == 0 {
-		t.Error("the ACL should still be on the device, so un-adopt can remove it")
+	if len(boot.acl) != 0 || boot.removeACLCalls != 1 || boot.removeFootprintCalls != 0 {
+		t.Fatalf("login failure cleanup: acl=%v removeACL=%d removeFootprint=%d",
+			boot.acl, boot.removeACLCalls, boot.removeFootprintCalls)
 	}
 }
 

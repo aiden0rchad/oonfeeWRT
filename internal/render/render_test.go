@@ -93,6 +93,243 @@ func TestWLANFansOutAcrossBothBands(t *testing.T) {
 	}
 }
 
+func vlanWirelessSite() model.Site {
+	return model.Site{
+		UUID: "9d1f0c7a-2b44-4f8e-9f7a-1c2d3e4f5a6b",
+		Networks: []model.Network{{
+			ID: 2, Name: "iot", VLAN: 45, CIDR: "10.0.45.1/24",
+			Zone: "iot", Enabled: true,
+		}},
+		Groups: []model.APGroup{{ID: 1, Name: "all-aps", DeviceIDs: []int64{7}}},
+		WLANs: []model.WLAN{{
+			ID: 4, SSID: "IoT", NetworkID: 2, GroupID: 1,
+			Bands:    []model.Band{model.Band2G},
+			Security: model.Security{Mode: model.SecPSK2, Key: "test-passphrase"},
+			Enabled:  true,
+		}},
+	}
+}
+
+func vlanWirelessCaps() *capability.Registry {
+	r := dualBandCaps()
+	r.Ports = capability.Ports{
+		Bridge: "br-lan", LAN: []string{"lan1", "lan2", "lan3", "lan4"}, WAN: "wan",
+	}
+	return r
+}
+
+func TestVLANWLANUsesOwnedNetworkAttachmentOnGatewayAndAP(t *testing.T) {
+	for _, tc := range []struct {
+		name, proto string
+		role        model.Role
+	}{
+		{name: "gateway", role: model.RoleGateway, proto: "static"},
+		{name: "ap", role: model.RoleAP, proto: "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: tc.role},
+				vlanWirelessCaps(), vlanAware())
+			if err != nil || rep.HasConflicts() {
+				t.Fatalf("render: %v, conflicts=%v", err, rep.Conflicts)
+			}
+			iface, ok := sectionByName(doc, "oowrt_net_iot")
+			if !ok || iface.Values["proto"] != tc.proto || iface.Values["device"] != "br-lan.45" {
+				t.Fatalf("network attachment = %+v, want proto %s on br-lan.45", iface, tc.proto)
+			}
+			wifi, ok := sectionByName(doc, "oowrt_wlan4_radio1")
+			if !ok {
+				t.Fatal("VLAN WLAN was not rendered")
+			}
+			if got := wifi.Values["network"]; got != "oowrt_net_iot" {
+				t.Fatalf("wifi network = %q, want owned interface oowrt_net_iot", got)
+			}
+		})
+	}
+}
+
+func TestGatewayToAPRemovesOwnedAddressFromVLANAttachment(t *testing.T) {
+	existing := vlanAware()
+	existing.Configs["network"]["oowrt_net_iot"] = map[string]string{
+		".type": "interface", "proto": "static", "device": "br-lan.45",
+		"ipaddr": "10.0.45.1", "netmask": "255.255.255.0", OwnershipTag: "1",
+	}
+	existing.Configs["dhcp"] = map[string]map[string]string{
+		"oowrt_dhcp_iot": {".type": "dhcp", "interface": "oowrt_net_iot", OwnershipTag: "1"},
+	}
+	existing.Configs["firewall"] = map[string]map[string]string{
+		"oowrt_zone_iot":    {".type": "zone", OwnershipTag: "1"},
+		"oowrt_fwd_iot_wan": {".type": "forwarding", OwnershipTag: "1"},
+		"oowrt_in_iot_dhcp": {".type": "rule", OwnershipTag: "1"},
+		"oowrt_in_iot_dns":  {".type": "rule", OwnershipTag: "1"},
+		"manual_rule":       {".type": "rule", "src": "iot", "target": "ACCEPT"},
+	}
+	doc, _, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleAP},
+		vlanWirelessCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := map[string]bool{}
+	for _, op := range doc.Plan(existing).Ops {
+		if op.Config == "network" && op.Section == "oowrt_net_iot" &&
+			op.Kind == applyengine.OpDelete {
+			deleted[op.Option] = true
+		}
+	}
+	if !deleted["ipaddr"] || !deleted["netmask"] {
+		t.Fatalf("gateway address survived AP role change: deleted=%v", deleted)
+	}
+	pruned := map[string]bool{}
+	for _, op := range doc.Prune(existing) {
+		pruned[op.Config+"."+op.Section] = true
+	}
+	for _, section := range []string{
+		"dhcp.oowrt_dhcp_iot",
+		"firewall.oowrt_zone_iot",
+		"firewall.oowrt_fwd_iot_wan",
+		"firewall.oowrt_in_iot_dhcp",
+		"firewall.oowrt_in_iot_dns",
+	} {
+		if !pruned[section] {
+			t.Errorf("gateway-to-AP transition left owned L3 section %s: %v", section, pruned)
+		}
+	}
+	if pruned["firewall.manual_rule"] {
+		t.Fatal("gateway-to-AP transition pruned a foreign firewall rule")
+	}
+}
+
+func TestGatewayToAPRefusesToLeaveAForeignDHCPServerOnTheAttachment(t *testing.T) {
+	existing := vlanAware()
+	existing.Configs["network"]["oowrt_net_iot"] = map[string]string{
+		".type": "interface", "proto": "static", "device": "br-lan.45",
+		"ipaddr": "10.0.45.1", "netmask": "255.255.255.0", OwnershipTag: "1",
+	}
+	existing.Configs["dhcp"] = map[string]map[string]string{
+		// The exact controller-shaped name is still foreign without the marker.
+		// On an AP no owned replacement is desired, so addOwned cannot report it.
+		"oowrt_dhcp_iot": {
+			".type": "dhcp", "interface": "oowrt_net_iot", "start": "10", "limit": "20",
+		},
+	}
+	doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleAP},
+		vlanWirelessCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sectionsIn(doc, "dhcp")) != 0 {
+		t.Fatal("AP role rendered an owned DHCP server")
+	}
+	if len(rep.Conflicts) != 1 || rep.Conflicts[0].Config != "dhcp" ||
+		rep.Conflicts[0].Section != "oowrt_dhcp_iot" {
+		t.Fatalf("foreign DHCP server survived the gateway-to-AP transition silently: %+v",
+			rep.Conflicts)
+	}
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "dhcp" && op.Section == "oowrt_dhcp_iot" {
+			t.Fatal("role transition tried to delete a foreign DHCP section")
+		}
+	}
+}
+
+func TestDistinctNetworkLabelsCannotCollapseToOneDesiredUCISection(t *testing.T) {
+	site := model.Site{
+		UUID: "uci-name-collision",
+		Networks: []model.Network{
+			{ID: 1, Name: "guest-a", VLAN: 20, CIDR: "10.0.20.1/24", Zone: "zone-a", Enabled: true},
+			{ID: 2, Name: "guest_a", VLAN: 30, CIDR: "10.0.30.1/24", Zone: "zone-b", Enabled: true},
+		},
+	}
+	doc, rep, err := Render(site, model.Device{ID: 7, Role: model.RoleGateway},
+		vlanWirelessCaps(), vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, conflict := range rep.Conflicts {
+		if conflict.Config == "network" && conflict.Section == "oowrt_net_guest_a" &&
+			strings.Contains(conflict.Reason, "more than once") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("colliding desired UCI interface was not refused: %+v", rep.Conflicts)
+	}
+	var copies int
+	for _, section := range doc.Sections {
+		if section.Config == "network" && section.Name == "oowrt_net_guest_a" {
+			copies++
+		}
+	}
+	if copies != 1 {
+		t.Fatalf("desired document contains %d copies of network.oowrt_net_guest_a", copies)
+	}
+}
+
+func TestVLANWLANIsNotBroadcastWithoutAUsableAttachment(t *testing.T) {
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {"oowrt_wlan4_radio1": {
+			".type": "wifi-iface", "ssid": "IoT", OwnershipTag: "1",
+		}},
+	})
+	doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleAP},
+		vlanWirelessCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(sectionsIn(doc, "wireless")); got != 0 {
+		t.Fatalf("rendered %d isolated wireless sections", got)
+	}
+	joined := ""
+	for _, omission := range rep.Omissions {
+		joined += omission.Reason + "\n"
+	}
+	for _, want := range []string{"no usable interface", "isolated from the intended network"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("omissions do not explain the refused isolated BSS (%q): %s", want, joined)
+		}
+	}
+	var deletesOld bool
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "wireless" && op.Section == "oowrt_wlan4_radio1" &&
+			op.Kind == applyengine.OpDelete {
+			deletesOld = true
+		}
+	}
+	if !deletesOld {
+		t.Fatal("an old owned isolated BSS was retained after its VLAN became unusable")
+	}
+}
+
+func TestUnreadableVLANAttachmentRetainsExistingOwnedWLAN(t *testing.T) {
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"wireless": {"oowrt_wlan4_radio1": {
+			".type": "wifi-iface", "ssid": "IoT", OwnershipTag: "1",
+		}},
+	})
+	caps := vlanWirelessCaps()
+	caps.Ports = capability.Ports{} // the port probe did not answer
+	doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleAP},
+		caps, existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "wireless" && op.Section == "oowrt_wlan4_radio1" {
+			t.Fatal("an unreadable VLAN attachment pruned the existing owned WLAN")
+		}
+	}
+	if !doc.Preserved(existing, "wireless", "oowrt_wlan4_radio1") {
+		t.Fatal("retained WLAN was dropped from the ownership record")
+	}
+	joined := ""
+	for _, omission := range rep.Omissions {
+		joined += omission.Reason + "\n"
+	}
+	if !strings.Contains(joined, "existing WLAN was left in place") {
+		t.Fatalf("retention was silent: %s", joined)
+	}
+}
+
 // The cross-device guarantee: every AP must derive the SAME mobility domain,
 // independently, or fast transition simply does not happen between them.
 func TestMobilityDomainIsIdenticalAcrossDevicesAndStable(t *testing.T) {
@@ -538,7 +775,8 @@ func sectionsIn(doc Doc, config string) map[string]Section {
 	return out
 }
 
-// A gateway renders the whole stack; an AP renders only the bridge-VLAN.
+// A gateway renders the whole stack; an AP renders the bridge-VLAN plus the
+// unmanaged interface hostapd needs to join it.
 //
 // An AP that also ran DHCP on the same VLAN would put two servers on one
 // broadcast domain, which fails intermittently and is miserable to diagnose.
@@ -572,8 +810,8 @@ func TestNetworkRenderingIsRoleAware(t *testing.T) {
 		t.Error("gateway did not render a DHCP server")
 	}
 	fw := sectionsIn(gw, "firewall")
-	if len(fw) != 2 {
-		t.Errorf("gateway rendered %d firewall sections, want a zone and a forwarding", len(fw))
+	if len(fw) != 4 {
+		t.Errorf("gateway rendered %d firewall sections, want a zone, forwarding, and DHCP/DNS input rules", len(fw))
 	}
 
 	ap, _, err := Render(site, model.Device{ID: 2, Name: "ap", Role: "ap"},
@@ -585,9 +823,14 @@ func TestNetworkRenderingIsRoleAware(t *testing.T) {
 	if _, ok := apNet["oowrt_bv45"]; !ok {
 		t.Error("AP did not render the bridge-VLAN, so tagged frames cannot traverse it")
 	}
-	if len(apNet) != 1 {
-		t.Errorf("AP rendered %d network sections, want only the bridge-VLAN: %v",
+	if len(apNet) != 2 {
+		t.Errorf("AP rendered %d network sections, want the bridge-VLAN and an unmanaged attachment: %v",
 			len(apNet), apNet)
+	}
+	if iface, ok := apNet["oowrt_net_iot"]; !ok {
+		t.Error("AP did not render the network interface hostapd needs")
+	} else if iface.Values["proto"] != "none" || iface.Values["device"] != "br-lan.45" {
+		t.Errorf("AP network attachment = %v", iface.Values)
 	}
 	if n := len(sectionsIn(ap, "dhcp")); n != 0 {
 		t.Errorf("AP rendered %d DHCP sections; two servers on one broadcast "+
@@ -595,6 +838,265 @@ func TestNetworkRenderingIsRoleAware(t *testing.T) {
 	}
 	if n := len(sectionsIn(ap, "firewall")); n != 0 {
 		t.Errorf("AP rendered %d firewall sections; routing is the gateway's job", n)
+	}
+}
+
+func TestEnabledDHCPRendersRouterLocalDHCPAndDNSRules(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: "30m"}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw := sectionsIn(doc, "firewall")
+	dhcpRule, ok := fw["oowrt_in_guest_dhcp"]
+	if !ok || dhcpRule.Type != "rule" || dhcpRule.Values["src"] != "guest" ||
+		dhcpRule.Values["proto"] != "udp" || dhcpRule.Values["src_port"] != "68" ||
+		dhcpRule.Values["dest_port"] != "67" ||
+		dhcpRule.Values["target"] != "ACCEPT" || dhcpRule.Values["family"] != "ipv4" {
+		t.Fatalf("DHCP input rule = %+v", dhcpRule)
+	}
+	dnsRule, ok := fw["oowrt_in_guest_dns"]
+	if !ok || dnsRule.Type != "rule" || dnsRule.Values["src"] != "guest" ||
+		dnsRule.Values["dest_port"] != "53" || dnsRule.Values["target"] != "ACCEPT" ||
+		strings.Join(dnsRule.Lists["proto"], " ") != "tcp udp" {
+		t.Fatalf("DNS input rule = %+v", dnsRule)
+	}
+}
+
+func TestForeignInputRuleCannotSilentlyDefeatDHCPOrDNS(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		rule       map[string]string
+		conflict   bool
+	}{
+		{name: "broad reject", want: "DHCP and DNS", conflict: true,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "REJECT"}},
+		{name: "exact DHCP drop", want: "DHCP", conflict: true,
+			rule: map[string]string{".type": "rule", "src": "guest", "proto": "udp", "src_port": "68", "dest_port": "67", "target": "DROP", "family": "ipv4"}},
+		{name: "DNS range drop", want: "DNS", conflict: true,
+			rule: map[string]string{".type": "rule", "src": "*", "proto": "tcp udp", "dest_port": "50-55", "target": "DROP", "family": "any"}},
+		{name: "disabled rule", conflict: false,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "DROP", "enabled": "off"}},
+		{name: "IPv6 only", conflict: false,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "DROP", "family": "ipv6"}},
+		{name: "ICMP only", conflict: false,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "DROP", "proto": "icmp"}},
+		{name: "other TCP port", conflict: false,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "DROP", "proto": "tcp", "dest_port": "22"}},
+		{name: "DHCP source excluded", conflict: false,
+			rule: map[string]string{".type": "rule", "src": "guest", "target": "DROP", "proto": "udp", "src_port": "!68", "dest_port": "67"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: "30m"}
+			site := model.Site{UUID: "abc", Networks: []model.Network{{
+				ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+				DHCP: &dhcp, Enabled: true,
+			}}}
+			existing := vlanAware()
+			existing.Configs["firewall"] = map[string]map[string]string{"manual_input": tc.rule}
+			_, rep, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+				netCaps(), existing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.HasConflicts() != tc.conflict {
+				t.Fatalf("conflicts=%+v, want conflict=%v", rep.Conflicts, tc.conflict)
+			}
+			if tc.conflict && (len(rep.Conflicts) != 1 ||
+				!strings.Contains(rep.Conflicts[0].Reason, tc.want) ||
+				!strings.Contains(rep.Conflicts[0].Reason, "cannot be guaranteed")) {
+				t.Fatalf("conflict does not identify blocked service %q: %+v", tc.want, rep.Conflicts)
+			}
+		})
+	}
+}
+
+func TestDisablingDHCPPrunesOwnedInputRulesOnly(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: false, Start: 20, Limit: 80, LeaseTime: "30m"}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	existing := vlanAware()
+	existing.Configs["firewall"] = map[string]map[string]string{
+		"oowrt_in_guest_dhcp": {".type": "rule", OwnershipTag: "1"},
+		"oowrt_in_guest_dns":  {".type": "rule", OwnershipTag: "1"},
+		"manual_guest_rule":   {".type": "rule", "src": "guest", "target": "ACCEPT"},
+	}
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted := map[string]bool{}
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "firewall" && op.Kind == applyengine.OpDelete {
+			deleted[op.Section] = true
+		}
+	}
+	if !deleted["oowrt_in_guest_dhcp"] || !deleted["oowrt_in_guest_dns"] {
+		t.Fatalf("disabled DHCP left owned service rules: %v", deleted)
+	}
+	if deleted["manual_guest_rule"] {
+		t.Fatal("disabled DHCP deleted a foreign firewall rule")
+	}
+}
+
+func TestNetworkRendersItsConfiguredDHCPPolicy(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: " 30m "}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), vlanAware())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sectionsIn(doc, "dhcp")["oowrt_dhcp_iot"].Values
+	if got["start"] != "20" || got["limit"] != "80" || got["leasetime"] != "30m" ||
+		got["dhcpv4"] != "server" || got["networkid"] != "oowrt_net_iot" {
+		t.Fatalf("rendered DHCP = %v", got)
+	}
+}
+
+func TestTurningDHCPServerOffRemovesTheOwnedSection(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: false, Start: 100, Limit: 150, LeaseTime: "12h"}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	existing := NewExisting(map[string]map[string]map[string]string{
+		"network": {"their_bv1": {".type": "bridge-vlan", "device": "br-lan", "vlan": "1"}},
+		"dhcp": {"oowrt_dhcp_iot": {
+			".type": "dhcp", OwnershipTag: "1", "interface": "oowrt_net_iot",
+		}},
+	})
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sectionsIn(doc, "dhcp"); len(got) != 0 {
+		t.Fatalf("disabled DHCP rendered sections: %v", got)
+	}
+	var removed bool
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "dhcp" && op.Section == "oowrt_dhcp_iot" && op.Kind == applyengine.OpDelete {
+			removed = true
+		}
+	}
+	if !removed {
+		t.Fatal("turning DHCP off left the previously owned server running")
+	}
+}
+
+func TestEnabledDHCPRemovesStaleRangeModifiers(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 80, LeaseTime: "30m"}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	existing := vlanAware()
+	existing.Configs["dhcp"] = map[string]map[string]string{
+		"oowrt_dhcp_iot": {
+			".type": "dhcp", OwnershipTag: "1", "interface": "oowrt_net_iot",
+			"start": "20", "limit": "80", "leasetime": "30m", "ignore": "1",
+			"netmask": "255.255.0.0", "instance": "legacy", "dynamicdhcp": "0", "force": "1", "tag": "legacy",
+		},
+	}
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := map[string]bool{"ignore": false, "netmask": false, "instance": false, "dynamicdhcp": false, "force": false, "tag": false}
+	for _, op := range doc.Plan(existing).Ops {
+		if op.Kind == applyengine.OpDelete && op.Config == "dhcp" &&
+			op.Section == "oowrt_dhcp_iot" {
+			if _, ok := removed[op.Option]; ok {
+				removed[op.Option] = true
+			}
+		}
+	}
+	for option, found := range removed {
+		if !found {
+			t.Errorf("DHCP is enabled but stale %s was left on the device", option)
+		}
+	}
+}
+
+func TestForeignDHCPOnAManagedInterfaceBlocksTheDevice(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enable", false: "disable"}[enabled], func(t *testing.T) {
+			dhcp := model.DHCPConfig{Enabled: enabled, Start: 20, Limit: 80, LeaseTime: "30m"}
+			site := model.Site{UUID: "abc", Networks: []model.Network{{
+				ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "guest",
+				DHCP: &dhcp, Enabled: true,
+			}}}
+			existing := vlanAware()
+			existing.Configs["dhcp"] = map[string]map[string]string{
+				"manual_pool": {
+					".type": "dhcp", "interface": "oowrt_net_iot",
+					"start": "150", "limit": "20", "leasetime": "1h",
+				},
+			}
+			doc, rep, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+				netCaps(), existing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !rep.HasConflicts() || len(rep.Conflicts) != 1 ||
+				rep.Conflicts[0].Section != "manual_pool" {
+				t.Fatalf("foreign DHCP collision was not blocked: %+v", rep.Conflicts)
+			}
+			for _, op := range doc.Prune(existing) {
+				if op.Config == "dhcp" && op.Section == "manual_pool" {
+					t.Fatal("foreign DHCP section was scheduled for deletion")
+				}
+			}
+		})
+	}
+}
+
+func TestDHCPPoolOutsideSubnetBlocksRenderBeforeADevicePlan(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: true, Start: 100, Limit: 150, LeaseTime: "12h"}
+	site := model.Site{UUID: "abc", Networks: []model.Network{{
+		ID: 1, Name: "small", VLAN: 45, CIDR: "10.7.45.1/25", Zone: "guest",
+		DHCP: &dhcp, Enabled: true,
+	}}}
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+		netCaps(), vlanAware())
+	if err == nil || !strings.Contains(err.Error(), "do not fit") {
+		t.Fatalf("error = %v, want an out-of-subnet DHCP refusal", err)
+	}
+	if len(doc.Sections) != 0 {
+		t.Fatalf("an invalid site produced a partial device document: %+v", doc.Sections)
+	}
+}
+
+func TestInvalidNetworkAddressBlocksRenderBeforePrune(t *testing.T) {
+	dhcp := model.DHCPConfig{Enabled: false, Start: 100, Limit: 150, LeaseTime: "12h"}
+	for _, cidr := range []string{"10.7.45.1", "10.7.45.0/24", "10.7.45.255/24"} {
+		t.Run(cidr, func(t *testing.T) {
+			site := model.Site{UUID: "abc", Networks: []model.Network{{
+				ID: 1, Name: "iot", VLAN: 45, CIDR: cidr, Zone: "guest",
+				DHCP: &dhcp, Enabled: true,
+			}}}
+			doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+				netCaps(), vlanAware())
+			if err == nil {
+				t.Fatalf("invalid gateway %q produced a device document", cidr)
+			}
+			if len(doc.Sections) != 0 {
+				t.Fatalf("invalid gateway %q produced partial sections: %+v", cidr, doc.Sections)
+			}
+		})
 	}
 }
 
@@ -616,6 +1118,79 @@ func TestBridgeVLANTagsEveryPort(t *testing.T) {
 	}
 	if bv.Values["device"] != "br-lan" || bv.Values["vlan"] != "45" {
 		t.Errorf("bridge-vlan = %v", bv.Values)
+	}
+}
+
+func TestBridgeVLANExplicitlyRepairsLocalMembership(t *testing.T) {
+	existing := vlanAware()
+	existing.Configs["network"]["oowrt_bv45"] = map[string]string{
+		".type": "bridge-vlan", "device": "br-lan", "vlan": "45", "local": "0",
+		"ports": "lan1:t lan2:t lan3:t lan4:t", ListsKey: "ports", OwnershipTag: "1",
+	}
+	doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleGateway},
+		vlanWirelessCaps(), existing)
+	if err != nil || rep.HasConflicts() {
+		t.Fatalf("render: %v, conflicts=%+v", err, rep.Conflicts)
+	}
+	bv, ok := sectionByName(doc, "oowrt_bv45")
+	if !ok || bv.Values["local"] != "1" {
+		t.Fatalf("bridge VLAN does not explicitly require local membership: %+v", bv)
+	}
+	var repaired bool
+	for _, op := range doc.Plan(existing).Ops {
+		if op.Config == "network" && op.Section == "oowrt_bv45" &&
+			op.Kind == applyengine.OpSet && op.Values["local"] == "1" {
+			repaired = true
+		}
+	}
+	if !repaired {
+		t.Fatal("owned bridge VLAN with local=0 produced no correction operation")
+	}
+}
+
+func TestForeignBridgeVLANWithSameBridgeAndVIDBlocksRender(t *testing.T) {
+	existing := vlanAware()
+	existing.Configs["network"]["manual_iot_vlan"] = map[string]string{
+		".type": "bridge-vlan", "device": "br-lan", "vlan": "045", "local": "0",
+		// netifd has no disabled gate for bridge-vlan sections; this unknown
+		// option does not make the duplicate inert.
+		"ports": "lan1:t", "disabled": "1",
+	}
+	doc, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleGateway},
+		vlanWirelessCaps(), existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Conflicts) != 1 || rep.Conflicts[0].Config != "network" ||
+		rep.Conflicts[0].Section != "manual_iot_vlan" ||
+		!strings.Contains(rep.Conflicts[0].Reason, "bridge and VLAN") {
+		t.Fatalf("semantic bridge-VLAN collision was not refused: %+v", rep.Conflicts)
+	}
+	for _, op := range doc.Prune(existing) {
+		if op.Config == "network" && op.Section == "manual_iot_vlan" {
+			t.Fatal("renderer tried to delete the foreign bridge-VLAN")
+		}
+	}
+}
+
+func TestForeignBridgeVLANOnAnotherSemanticKeyIsIrrelevant(t *testing.T) {
+	for _, tc := range []struct{ device, vlan string }{
+		{device: "br-lan", vlan: "46"},
+		{device: "br-iot", vlan: "45"},
+	} {
+		existing := vlanAware()
+		existing.Configs["network"]["manual_other_vlan"] = map[string]string{
+			".type": "bridge-vlan", "device": tc.device, "vlan": tc.vlan,
+		}
+		_, rep, err := Render(vlanWirelessSite(), model.Device{ID: 7, Role: model.RoleGateway},
+			vlanWirelessCaps(), existing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.HasConflicts() {
+			t.Errorf("foreign bridge VLAN %s/%s blocked unrelated br-lan/45: %+v",
+				tc.device, tc.vlan, rep.Conflicts)
+		}
 	}
 }
 
@@ -890,14 +1465,14 @@ func TestASwitchIsSentNoWLANsEvenWithRadios(t *testing.T) {
 	// rather than indexed: the network omissions come first and are unrelated.
 	var msg string
 	for _, om := range rep.Omissions {
-		if strings.Contains(om.Reason, "role") {
+		if strings.Contains(om.Reason, "selected functions") {
 			msg = om.Reason
 		}
 	}
 	if msg == "" {
-		t.Fatalf("no omission explains the role: %+v", rep.Omissions)
+		t.Fatalf("no omission explains the selected functions: %+v", rep.Omissions)
 	}
-	for _, want := range []string{"switch", "role", "AP group"} {
+	for _, want := range []string{"switch", "AP function", "AP group"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the omission %q does not mention %q", msg, want)
 		}

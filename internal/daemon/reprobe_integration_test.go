@@ -474,7 +474,9 @@ func TestIntegrationMeshAppliesToRealHardware(t *testing.T) {
 			t.Errorf("could not remove the mesh from the model: %v", err)
 			return
 		}
-		res, err := d.ApplySite(context.Background(), api.ApplyRequest{})
+		cleanupCtx := context.Background()
+		res, err := d.ApplySite(cleanupCtx,
+			boundApplyRequest(t, d, cleanupCtx, api.ApplyRequest{}))
 		if err != nil {
 			t.Errorf("cleanup apply: %v", err)
 			return
@@ -528,7 +530,7 @@ func TestIntegrationMeshAppliesToRealHardware(t *testing.T) {
 		return
 	}
 
-	res, err := d.ApplySite(ctx, api.ApplyRequest{})
+	res, err := d.ApplySite(ctx, api.ApplyRequest{PreviewToken: prev.PreviewToken})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}

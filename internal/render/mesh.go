@@ -39,7 +39,7 @@ func renderMesh(m model.Mesh, net model.Network, radio string,
 		"device":  radio,
 		"mode":    "mesh",
 		"mesh_id": m.MeshID,
-		"network": net.Name,
+		"network": networkAttachmentName(net),
 		// Forwarding between peers is what makes a mesh a mesh rather than a
 		// set of nodes that can each see the gateway. Off by default in some
 		// builds, so it is set explicitly.

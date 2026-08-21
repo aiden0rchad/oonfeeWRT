@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -43,6 +44,11 @@ type Adopter struct {
 	// NewPassword generates the controller credential. Defaults to 24 random
 	// bytes, base64url-encoded.
 	NewPassword func() (string, error)
+	// VerifyController runs after the newly created controller credential has
+	// authenticated and before its capabilities are accepted. The daemon uses it
+	// to prove that the endpoint still reports the MAC identified before SSH made
+	// any changes.
+	VerifyController func(context.Context, *ubus.Client) error
 	// Now is injectable for tests.
 	Now func() time.Time
 }
@@ -62,6 +68,59 @@ type Result struct {
 	// is the one moment we see it with no prior expectation.
 	HostKeyFP string
 	Caps      *capability.Registry
+}
+
+// RollbackError preserves the adoption failure while reporting the exact
+// controller-owned footprint that may remain when automatic cleanup also
+// fails. CleanupCommands contains idempotent stock-OpenWrt commands and never
+// contains the generated controller credential.
+type RollbackError struct {
+	Primary         error
+	Cleanup         error
+	Residue         []string
+	CleanupCommands []string
+}
+
+func (e *RollbackError) Error() string {
+	return fmt.Sprintf("%v; automatic rollback failed: %v; "+
+		"controller-owned residue may remain: %s; manual cleanup over SSH: %s",
+		e.Primary, e.Cleanup, strings.Join(e.Residue, ", "),
+		strings.Join(e.CleanupCommands, " ; "))
+}
+
+// Unwrap keeps errors.Is/errors.As focused on the failure that caused
+// adoption to abort; cleanup failure is additional recovery information.
+func (e *RollbackError) Unwrap() error { return e.Primary }
+
+const adoptionRollbackTimeout = 30 * time.Second
+
+func rollbackAdoption(ctx context.Context, boot Bootstrap, aclPath, user string,
+	loginCreated bool, primary error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoptionRollbackTimeout)
+	defer cancel()
+
+	var cleanupErr error
+	if loginCreated {
+		cleanupErr = boot.RemoveFootprint(cleanupCtx, aclPath, user)
+	} else {
+		cleanupErr = boot.RemoveACL(cleanupCtx, aclPath)
+	}
+	if cleanupErr == nil {
+		return primary
+	}
+
+	// A cleanup transport failure cannot prove which command, if any, landed.
+	// Report the complete known controller-owned set as possible residue and
+	// give idempotent commands that are safe whether each item exists or not.
+	rep := &UnadoptReport{
+		ACLPath: aclPath, User: user,
+		ACLRemoved: false, LoginRemoved: !loginCreated,
+	}
+	return &RollbackError{
+		Primary: primary, Cleanup: cleanupErr,
+		Residue:         append([]string(nil), rep.Residue()...),
+		CleanupCommands: append([]string(nil), rep.CleanupCommands()...),
+	}
 }
 
 // Adopt runs the whole flow, then verifies the controller credential it created
@@ -113,7 +172,8 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 
 	// 4. Create the login.
 	if err := boot.CreateLogin(ctx, user, hashed, groups); err != nil {
-		return nil, fmt.Errorf("adoption: create login %q: %w", user, err)
+		primary := fmt.Errorf("adoption: create login %q: %w", user, err)
+		return nil, rollbackAdoption(ctx, boot, aclPath, user, false, primary)
 	}
 
 	// 5. Prove it. An adoption that reports success without checking the
@@ -121,12 +181,20 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 	//    unreachable.
 	verified, err := operator.FreshSession(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("adoption: cannot open a session to verify: %w", err)
+		primary := fmt.Errorf("adoption: cannot open a session to verify: %w", err)
+		return nil, rollbackAdoption(ctx, boot, aclPath, user, true, primary)
 	}
 	defer verified.Close()
 	if err := verified.Login(ctx, user, password); err != nil {
-		return nil, fmt.Errorf("adoption: the credential we just created does "+
+		primary := fmt.Errorf("adoption: the credential we just created does "+
 			"not work: %w", err)
+		return nil, rollbackAdoption(ctx, boot, aclPath, user, true, primary)
+	}
+	if a.VerifyController != nil {
+		if err := a.VerifyController(ctx, verified); err != nil {
+			primary := fmt.Errorf("adoption: controller identity verification failed: %w", err)
+			return nil, rollbackAdoption(ctx, boot, aclPath, user, true, primary)
+		}
 	}
 
 	// 6. Probe LAST, and on the CONTROLLER's session rather than the operator's.
@@ -145,7 +213,8 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 	// file was already on disk, which root's `list read '*'` expanded over.
 	caps, err := capability.Probe(ctx, verified)
 	if err != nil {
-		return nil, fmt.Errorf("adoption: capability probe: %w", err)
+		primary := fmt.Errorf("adoption: capability probe: %w", err)
+		return nil, rollbackAdoption(ctx, boot, aclPath, user, true, primary)
 	}
 
 	return &Result{
@@ -190,31 +259,75 @@ func (a *Adopter) writeLogin(ctx context.Context, c *ubus.Client, user, hashed s
 // config with no section-level scoping, so "delete just our own login" is not
 // expressible as a grant.
 //
-// operator may be nil, in which case phase 1 runs and ErrOperatorRequired is
-// returned — the caller should then prompt and call again. That is the honest
-// degradation: a device whose admin password is lost keeps a visible, documented
-// residue rather than a silently half-removed one.
-func (a *Adopter) Unadopt(ctx context.Context, controller *ubus.Client, boot Bootstrap, owned []Section) (*UnadoptReport, error) {
-	rep := &UnadoptReport{ACLPath: a.aclPath(), User: a.user()}
+// boot may be nil, in which case phase 1 runs and ErrOperatorRequired is
+// returned — the caller should then prompt and call again. controller may not
+// be nil: without it no phase-1 result is proven, so phase 2 must not run.
+type configCaller interface {
+	Call(ctx context.Context, object, method string, args, out any) error
+}
+
+func (a *Adopter) Unadopt(ctx context.Context, controller configCaller, boot Bootstrap, owned []Section) (*UnadoptReport, error) {
+	rep := &UnadoptReport{
+		ACLPath: a.aclPath(), User: a.user(), FootprintRemains: true,
+		ConfigRemains: append([]Section(nil), owned...),
+	}
 
 	// ---- phase 1: give the user's config back ----
-	if controller != nil {
-		for _, s := range owned {
+	//
+	// A missing controller session is not an empty phase: it means no deletion
+	// was proved. Removing the login and ACL after that would strand every
+	// managed section on the router while deleting the only credential and
+	// ownership ledger that can reconcile it.
+	if controller == nil {
+		if len(owned) > 0 {
+			rep.Errors = append(rep.Errors, ErrControllerRequired)
+			return rep, ErrControllerRequired
+		}
+		// An empty, successfully read ownership ledger is proof that phase 1
+		// has no work. Requiring a dead controller credential in this case would
+		// block clean SSH removal of the login and ACL for no safety benefit.
+		rep.ConfigRevertComplete = true
+	}
+	for _, cfg := range distinctConfigs(owned) {
+		group := sectionsInConfig(owned, cfg)
+		staged := true
+		for _, s := range group {
 			err := controller.Call(ctx, "uci", "delete", map[string]any{
 				"config": s.Config, "section": s.Section}, nil)
 			if err != nil && !isMissing(err) {
 				rep.Errors = append(rep.Errors,
 					fmt.Errorf("revert %s.%s: %w", s.Config, s.Section, err))
-				continue
+				staged = false
 			}
-			rep.Reverted = append(rep.Reverted, s)
 		}
-		for _, cfg := range distinctConfigs(owned) {
-			if err := controller.Call(ctx, "uci", "commit",
+		if !staged {
+			// Successful deletes in this config are only session-local so far.
+			// Discard them rather than committing a partial hand-back.
+			if err := controller.Call(ctx, "uci", "revert",
 				map[string]any{"config": cfg}, nil); err != nil {
-				rep.Errors = append(rep.Errors, fmt.Errorf("commit %s: %w", cfg, err))
+				rep.Errors = append(rep.Errors,
+					fmt.Errorf("discard partial revert of %s: %w", cfg, err))
 			}
+			return rep, fmt.Errorf("adoption: could not revert every owned %s section", cfg)
 		}
+		if err := controller.Call(ctx, "uci", "commit",
+			map[string]any{"config": cfg}, nil); err != nil {
+			rep.Errors = append(rep.Errors, fmt.Errorf("commit %s: %w", cfg, err))
+			// A failed response does not prove whether the commit landed. Clear
+			// any session-local delta, keep the sections in ConfigRemains, and
+			// preserve the controller footprint so a retry can determine it.
+			if rerr := controller.Call(ctx, "uci", "revert",
+				map[string]any{"config": cfg}, nil); rerr != nil {
+				rep.Errors = append(rep.Errors,
+					fmt.Errorf("discard uncommitted revert of %s: %w", cfg, rerr))
+			}
+			return rep, fmt.Errorf("adoption: could not prove the revert of %s committed", cfg)
+		}
+		rep.Reverted = append(rep.Reverted, group...)
+		rep.ConfigRemains = removeSections(rep.ConfigRemains, cfg)
+	}
+	if controller != nil {
+		rep.ConfigRevertComplete = true
 	}
 
 	// ---- phase 2: remove the footprint ----
@@ -225,7 +338,6 @@ func (a *Adopter) Unadopt(ctx context.Context, controller *ubus.Client, boot Boo
 	// never left with a live credential pointing at access-groups that no
 	// longer exist.
 	if boot == nil {
-		rep.FootprintRemains = true
 		return rep, ErrOperatorRequired
 	}
 	if err := boot.RemoveFootprint(ctx, a.aclPath(), a.user()); err != nil {
@@ -256,19 +368,24 @@ type Section struct {
 // UnadoptReport says exactly what was and was not removed, so the UI can show
 // the residue instead of claiming a clean exit.
 type UnadoptReport struct {
-	Reverted         []Section
-	LoginRemoved     bool
-	ACLRemoved       bool
-	FootprintRemains bool
-	ACLPath          string
-	User             string
-	Errors           []error
+	Reverted             []Section
+	ConfigRemains        []Section
+	ConfigRevertComplete bool
+	LoginRemoved         bool
+	ACLRemoved           bool
+	FootprintRemains     bool
+	ACLPath              string
+	User                 string
+	Errors               []error
 }
 
 // Residue describes what is still on the device, for the fallback screen shown
 // when the operator credential is unavailable.
 func (r *UnadoptReport) Residue() []string {
 	var out []string
+	for _, s := range r.ConfigRemains {
+		out = append(out, fmt.Sprintf("config section %s.%s", s.Config, s.Section))
+	}
 	if !r.ACLRemoved {
 		out = append(out, r.ACLPath)
 	}
@@ -277,6 +394,56 @@ func (r *UnadoptReport) Residue() []string {
 	}
 	return out
 }
+
+// CleanupCommands returns the exact stock-OpenWrt commands an operator can run
+// over SSH for the footprint that remains. Values are validated before being
+// placed in shell text; an unexpected internal value is omitted rather than
+// turned into a root command.
+func (r *UnadoptReport) CleanupCommands() []string {
+	var out []string
+	for _, cfg := range distinctConfigs(r.ConfigRemains) {
+		if !identifier.MatchString(cfg) {
+			continue
+		}
+		var verified []Section
+		for _, s := range sectionsInConfig(r.ConfigRemains, cfg) {
+			if !identifier.MatchString(s.Section) {
+				continue
+			}
+			out = append(out, "uci -q delete "+cfg+"."+s.Section)
+			verified = append(verified, s)
+		}
+		if len(verified) == 0 {
+			continue
+		}
+		out = append(out, "uci commit "+cfg)
+		for _, s := range verified {
+			ref := cfg + "." + s.Section
+			out = append(out, "uci -q get "+ref+" >/dev/null 2>&1 && echo 'ERROR: "+
+				ref+" still present' || echo '"+ref+" gone'")
+		}
+	}
+	if !r.LoginRemoved && identifier.MatchString(r.User) {
+		out = append(out,
+			"uci -q delete rpcd."+r.User,
+			"uci commit rpcd",
+			"uci -q get rpcd."+r.User+" >/dev/null 2>&1 && echo 'ERROR: login still present' || echo 'login gone'",
+		)
+	}
+	if !r.ACLRemoved && safePath(r.ACLPath) {
+		quoted := shellQuote(r.ACLPath)
+		out = append(out,
+			"rm -f "+quoted,
+			"[ ! -e "+quoted+" ] && echo 'ACL gone' || echo 'ERROR: ACL still present'",
+		)
+	}
+	return out
+}
+
+// ErrControllerRequired means phase 1 could not start. It is deliberately
+// distinct from ErrOperatorRequired: supplying an SSH password cannot repair a
+// controller session that cannot prove the managed configuration was removed.
+var ErrControllerRequired = errors.New("adoption: the controller credential could not be used, so managed configuration was not reverted")
 
 func writeFile(ctx context.Context, c *ubus.Client, path string, data []byte) error {
 	// rpcd's file.write takes base64 when told to; that avoids any question of
@@ -306,6 +473,26 @@ func distinctConfigs(secs []Section) []string {
 		if !seen[s.Config] {
 			seen[s.Config] = true
 			out = append(out, s.Config)
+		}
+	}
+	return out
+}
+
+func sectionsInConfig(secs []Section, config string) []Section {
+	var out []Section
+	for _, s := range secs {
+		if s.Config == config {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func removeSections(secs []Section, config string) []Section {
+	out := secs[:0]
+	for _, s := range secs {
+		if s.Config != config {
+			out = append(out, s)
 		}
 	}
 	return out

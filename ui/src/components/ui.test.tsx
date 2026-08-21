@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { DataGrid, FilterRail, Pager, Stat, Unknown, useColumnPrefs } from './ui'
+import { useState } from 'react'
+import { DataGrid, FilterRail, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
 import { axisLabels, fmt, widenTo } from './Chart'
 
@@ -42,6 +43,58 @@ const columns: Column<Row>[] = [
 ]
 
 const noPrefs: ColumnPrefs = { hidden: [], order: [] }
+
+describe('SlideOver', () => {
+  it('keeps keyboard focus inside, preserves it across renders, and restores the opener', () => {
+    function Example() {
+      const [open, setOpen] = useState(false)
+      const [checked, setChecked] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open panel</button>
+          {open && (
+            <SlideOver title="Policy details" onClose={() => setOpen(false)}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => setChecked(event.target.checked)}
+                />
+                Destination
+              </label>
+              <button>Last action</button>
+            </SlideOver>
+          )}
+        </>
+      )
+    }
+
+    render(<Example />)
+    const opener = screen.getByText('Open panel')
+    opener.focus()
+    fireEvent.click(opener)
+
+    const dialog = screen.getByRole('dialog', { name: 'Policy details' })
+    const close = within(dialog).getByRole('button', { name: 'Close' })
+    const checkbox = within(dialog).getByRole('checkbox')
+    const last = within(dialog).getByText('Last action')
+    expect(document.activeElement).toBe(close)
+
+    last.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(last)
+
+    checkbox.focus()
+    fireEvent.click(checkbox)
+    expect(document.activeElement).toBe(checkbox)
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+})
 
 function headers(): string[] {
   return screen
@@ -173,16 +226,18 @@ describe('DataGrid', () => {
       />,
     )
     const [nameTh, idTh] = screen.getAllByRole('columnheader')
-    fireEvent.dragStart(nameTh)
+    fireEvent.dragStart(nameTh, {
+      dataTransfer: { effectAllowed: '', setData: vi.fn() },
+    })
     fireEvent.drop(idTh)
-    fireEvent.click(idTh) // some browsers emit this after a drop
+    fireEvent.click(within(idTh).getByRole('button')) // some browsers emit this after a drop
 
     expect(onPrefsChange).toHaveBeenCalledTimes(1)
     // No sort indicator anywhere: the click was swallowed.
     expect(headers().join(' ')).not.toMatch(/[↑↓]/)
   })
 
-  it('still sorts on an ordinary header click', () => {
+  it('sorts through a native keyboard button and reports the direction', () => {
     render(
       <DataGrid
         rows={rows}
@@ -192,15 +247,68 @@ describe('DataGrid', () => {
         onPrefsChange={() => {}}
       />,
     )
-    // By role, not by text: after the first click the header reads "ID ↑", so
-    // a text lookup finds it once and then cannot.
     const idHeader = () => screen.getAllByRole('columnheader')[1]
-    fireEvent.click(idHeader())
+    const idButton = () => within(idHeader()).getByRole('button')
+    expect(idHeader().getAttribute('aria-sort')).toBe('none')
+    fireEvent.click(idButton())
     expect(bodyRows()[0].textContent).toContain('alpha')
-    fireEvent.click(idHeader())
+    expect(idHeader().getAttribute('aria-sort')).toBe('ascending')
+    fireEvent.click(idButton())
     expect(bodyRows()[0].textContent).toContain('gamma')
-    // The direction has to be visible, or a sorted grid looks unsorted.
+    expect(idHeader().getAttribute('aria-sort')).toBe('descending')
     expect(idHeader().textContent).toMatch(/↓/)
+  })
+
+  it('opens an actionable row from Enter or Space without stealing child controls', () => {
+    const open = vi.fn()
+    const child = vi.fn()
+    const interactive: Column<Row>[] = [
+      columns[0],
+      {
+        key: 'action',
+        header: 'Action',
+        render: () => <button onClick={child}>Child action</button>,
+      },
+    ]
+    render(
+      <DataGrid
+        rows={[rows[0]]}
+        columns={interactive}
+        rowKey={(row) => row.id}
+        onRowClick={open}
+      />,
+    )
+    const row = bodyRows()[0]
+    expect(row.tabIndex).toBe(0)
+
+    row.focus()
+    fireEvent.keyDown(row, { key: 'Enter' })
+    fireEvent.keyDown(row, { key: ' ' })
+    expect(open).toHaveBeenCalledTimes(2)
+
+    const button = within(row).getByRole('button', { name: 'Child action' })
+    fireEvent.click(button)
+    fireEvent.keyDown(button, { key: 'Enter' })
+    expect(child).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledTimes(2)
+  })
+
+  it('optionally names the table and exposes total row positions', () => {
+    render(
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        rowKey={(row) => row.id}
+        tableLabel="Inventory devices"
+        totalRows={1000}
+        rowOffset={40}
+      />,
+    )
+    const table = screen.getByRole('table', { name: 'Inventory devices' })
+    expect(table.getAttribute('aria-rowcount')).toBe('1001')
+    expect(bodyRows().map((row) => row.getAttribute('aria-rowindex'))).toEqual([
+      '42', '43', '44',
+    ])
   })
 
   // UI-SPEC §7: an unknown value and a zero are different claims, and a grid
@@ -208,9 +316,9 @@ describe('DataGrid', () => {
   it('distinguishes an unknown value from a zero', () => {
     render(<DataGrid rows={rows} columns={columns} rowKey={(r) => r.id} />)
     const [, beta, gamma] = bodyRows()
-    expect(within(beta).getByTitle('never measured')).toBeTruthy()
+    expect(within(beta).getByRole('button', { name: 'Unknown: never measured' })).toBeTruthy()
     expect(gamma.textContent).toContain('0')
-    expect(within(gamma).queryByTitle('never measured')).toBeNull()
+    expect(within(gamma).queryByRole('button', { name: /Unknown/ })).toBeNull()
   })
 
   it('shows the empty message rather than an empty table', () => {
@@ -268,6 +376,55 @@ describe('FilterRail', () => {
       />,
     )
     expect(screen.getByText(/rows loaded here/)).toBeTruthy()
+  })
+
+  it('labels each option group and exposes its selected option', () => {
+    render(
+      <FilterRail
+        counted="all"
+        groups={[
+          {
+            label: 'Presence',
+            options: [{ value: 'online', count: 3 }],
+            selected: 'online',
+            onChange: () => {},
+          },
+          {
+            label: 'Connection',
+            options: [{ value: 'wireless', count: 2 }],
+            selected: '',
+            onChange: () => {},
+          },
+        ]}
+      />,
+    )
+    const presence = screen.getByRole('group', { name: 'Presence' })
+    const connection = screen.getByRole('group', { name: 'Connection' })
+    expect(within(presence).getByRole('button', { name: /online/i }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(presence).getByRole('button', { name: /All/i }).getAttribute('aria-pressed')).toBe('false')
+    expect(within(connection).getByRole('button', { name: /All/i }).getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('Unknown', () => {
+  it('exposes the reason to assistive technology and on focus or click', () => {
+    render(<Unknown why="the source did not answer" />)
+    const trigger = screen.getByRole('button', {
+      name: 'Unknown: the source did not answer',
+    })
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.focus(trigger)
+    expect(screen.getByRole('tooltip').textContent).toBe('the source did not answer')
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.keyDown(trigger, { key: 'Escape' })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('tooltip').textContent).toBe('the source did not answer')
+    fireEvent.blur(trigger)
+    expect(screen.queryByRole('tooltip')).toBeNull()
   })
 })
 

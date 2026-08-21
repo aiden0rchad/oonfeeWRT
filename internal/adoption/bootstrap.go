@@ -35,6 +35,11 @@ type Bootstrap interface {
 	// a crypt hash — rpcd rejects a plaintext password outright.
 	CreateLogin(ctx context.Context, user, passHash string, groups []string) error
 
+	// RemoveACL removes only the ACL file. Adoption uses this when login
+	// creation fails: removing a login whose creation was not proved could
+	// delete pre-existing state that does not belong to the controller.
+	RemoveACL(ctx context.Context, aclPath string) error
+
 	// RemoveFootprint deletes the login and the ACL file. Used by un-adopt.
 	RemoveFootprint(ctx context.Context, aclPath, user string) error
 

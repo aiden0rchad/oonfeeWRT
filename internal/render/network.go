@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -30,12 +31,13 @@ import (
 // # Role-aware subsetting
 //
 // A gateway renders the whole stack: the VLAN, an addressed interface, a DHCP
-// server and a firewall zone with its forwarding rule. An AP renders only the
-// bridge-VLAN, so tagged frames traverse it to the gateway that actually routes
-// them. An AP that also ran a DHCP server on the same VLAN would produce two
-// servers answering the same broadcast, which fails intermittently and is
-// miserable to diagnose — so the subsetting is by role and tested, not an
-// if-cascade that happens to work on one topology.
+// server and a firewall zone with its forwarding rule. An AP renders the
+// bridge-VLAN plus an unmanaged interface so hostapd can attach to it; the
+// gateway remains the only device that addresses or serves the network. An AP
+// that also ran a DHCP server on the same VLAN would produce two servers
+// answering the same broadcast, which fails intermittently and is miserable to
+// diagnose — so the subsetting is by role and tested, not an if-cascade that
+// happens to work on one topology.
 
 // bridgeIsVLANAware reports whether the device's bridge already has VLAN
 // filtering configured by its operator.
@@ -108,6 +110,7 @@ func vlanPrerequisite(bridge string) string {
 type zoneMember struct {
 	zone  string // as the operator typed it
 	iface string // our interface section name
+	dhcp  bool   // this interface needs router-local DHCP and DNS access
 }
 
 // renderNetwork produces the sections for one network on one device.
@@ -207,23 +210,42 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		Config: "network", Type: "bridge-vlan",
 		Name: fmt.Sprintf("%s_bv%d", NamePrefix, n.VLAN),
 		Values: map[string]string{
-			"device":     ports.Bridge,
-			"vlan":       itoa(n.VLAN),
+			"device": ports.Bridge,
+			"vlan":   itoa(n.VLAN),
+			// The br-lan.<VID> interface and hostapd attachment both require
+			// membership on the bridge itself. netifd defaults this on, but an
+			// owned stale `local 0` would otherwise compare equal and strand the
+			// BSS from the CPU side of the VLAN.
+			"local":      "1",
 			OwnershipTag: "1",
 		},
 		// A list, not a joined string — see Section.Lists.
 		Lists: map[string][]string{"ports": tagged},
 	})
 
-	if !dev.Role.Routes() {
-		// An AP stops here. The VLAN exists on its bridge so tagged frames pass
-		// through to the gateway; addressing, DHCP and firewalling are the
-		// gateway's job and doing them twice is worse than not doing them.
+	functions := dev.EffectiveFunctions()
+	ifaceName := netIfaceName(n.Name)
+	if !functions.Routes() {
+		// An AP still needs a UCI network interface for hostapd to attach its BSS
+		// to the VLAN. A bridge-vlan alone carries tagged wired frames, but a
+		// wifi-iface referencing a network name that does not exist comes up
+		// isolated from that bridge. It is deliberately unmanaged: addressing,
+		// DHCP and firewalling remain the gateway's job.
+		if functions.Wireless() {
+			out = append(out, Section{
+				Config: "network", Type: "interface", Name: ifaceName,
+				Values: map[string]string{
+					"proto":      "none",
+					"device":     fmt.Sprintf("%s.%d", ports.Bridge, n.VLAN),
+					OwnershipTag: "1",
+				},
+				Manages: []string{"ipaddr", "netmask"},
+			})
+		}
 		return out, omissions, none
 	}
 
 	// The addressed interface.
-	ifaceName := netIfaceName(n.Name)
 	ipaddr, netmask, ok := splitCIDR(n.CIDR)
 	if !ok {
 		omissions = append(omissions, Omission{
@@ -247,27 +269,106 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			"netmask":    netmask,
 			OwnershipTag: "1",
 		},
+		Manages: []string{"ipaddr", "netmask"},
 	})
 
-	// DHCP. The range is derived from the prefix rather than configured,
-	// because a range that does not fit the subnet is a mistake nobody catches
-	// until a client fails to get a lease.
-	out = append(out, Section{
-		Config: "dhcp", Type: "dhcp", Name: fmt.Sprintf("%s_dhcp_%s", NamePrefix, safe(n.Name)),
-		Values: map[string]string{
-			"interface":  ifaceName,
-			"start":      "100",
-			"limit":      "150",
-			"leasetime":  "12h",
-			OwnershipTag: "1",
-		},
-	})
+	// DHCP is part of the site model rather than a renderer constant. Legacy
+	// rows still resolve to the historical 100/150/12h defaults through
+	// EffectiveDHCP, so merely upgrading does not create a device diff.
+	dhcp := n.EffectiveDHCP()
+	if dhcp.Enabled {
+		out = append(out, Section{
+			Config: "dhcp", Type: "dhcp", Name: fmt.Sprintf("%s_dhcp_%s", NamePrefix, safe(n.Name)),
+			Values: map[string]string{
+				"interface":  ifaceName,
+				"start":      itoa(dhcp.Start),
+				"limit":      itoa(dhcp.Limit),
+				"leasetime":  strings.TrimSpace(dhcp.LeaseTime),
+				"dhcpv4":     "server",
+				"networkid":  ifaceName,
+				OwnershipTag: "1",
+			},
+			// These optional inputs can disable, re-scope, or change the generated
+			// IPv4 range and must not survive on an exact-owned pool.
+			Manages: []string{"instance", "ignore", "networkid", "netmask", "force", "options", "dhcp_option", "dhcp_option_force",
+				"dynamicdhcp", "dynamicdhcpv4", "dynamicdhcpv6", "dhcpv4", "dhcpv6", "ra", "ra_management", "tag"},
+		})
+	}
 
 	zone := n.Zone
 	if zone == "" {
 		zone = n.Name
 	}
-	return out, omissions, zoneMember{zone: zone, iface: ifaceName}
+	return out, omissions, zoneMember{zone: zone, iface: ifaceName, dhcp: dhcp.Enabled}
+}
+
+// foreignBridgeVLANConflicts catches two differently named UCI sections that
+// claim the same netifd object. A bridge VLAN is identified by bridge and VID,
+// not by its section name; writing a second one would make port and local
+// membership depend on config iteration order.
+func foreignBridgeVLANConflicts(want Section, existing Existing) []Conflict {
+	wantVID, err := strconv.Atoi(strings.TrimSpace(want.Values["vlan"]))
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(existing.In("network")))
+	for name := range existing.In("network") {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []Conflict
+	for _, name := range names {
+		vals := existing.In("network")[name]
+		if name == want.Name || vals[OwnershipTag] == "1" ||
+			vals[".type"] != "bridge-vlan" || vals["device"] != want.Values["device"] {
+			continue
+		}
+		vid, err := strconv.Atoi(strings.TrimSpace(vals["vlan"]))
+		if err != nil || vid != wantVID {
+			continue
+		}
+		out = append(out, Conflict{
+			Config: "network", Section: name,
+			Reason: fmt.Sprintf("bridge VLAN section %s already claims %s VLAN %d without "+
+				"oonfeeWRT's ownership marker. OpenWrt identifies this object by bridge and "+
+				"VLAN, not by UCI section name, so adding %s would create two competing port "+
+				"and local-membership definitions. Remove the duplicate, choose another VLAN, "+
+				"or add `option %s '1'` only if that section really belongs to this controller",
+				name, want.Values["device"], wantVID, want.Name, OwnershipTag),
+		})
+	}
+	return out
+}
+
+// foreignDHCPConflicts finds semantic collisions, not just section-name
+// collisions. Two differently named DHCP sections targeting one interface are
+// still two claims on the same pool; when DHCP is disabled, the foreign section
+// also means deleting ours cannot guarantee the requested off state.
+func foreignDHCPConflicts(n model.Network, iface string, wantsOwnedPool bool, existing Existing) []Conflict {
+	ours := fmt.Sprintf("%s_dhcp_%s", NamePrefix, safe(n.Name))
+	var names []string
+	for name, vals := range existing.In("dhcp") {
+		if vals[".type"] != "dhcp" || vals["interface"] != iface || vals[OwnershipTag] == "1" {
+			continue
+		}
+		// addOwned reports this exact-name collision when the section is wanted.
+		if wantsOwnedPool && name == ours {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]Conflict, 0, len(names))
+	for _, name := range names {
+		out = append(out, Conflict{
+			Config: "dhcp", Section: name,
+			Reason: fmt.Sprintf("DHCP section %s already targets managed interface %s without "+
+				"oonfeeWRT's ownership marker, so the requested DHCP state cannot be guaranteed "+
+				"without overwriting human-owned config. Remove or retarget that section, or add "+
+				"`option %s '1'` if it really belongs to this controller", name, iface, OwnershipTag),
+		})
+	}
+	return out
 }
 
 // renderZones turns every network's zone claim into firewall sections.
@@ -275,7 +376,11 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 // One section per zone rather than per network, because that is what a zone
 // is. The networks in it are a UCI *list* — see Section.Lists — which is also
 // the only way two networks can share one.
-func renderZones(members []zoneMember, existing Existing) ([]Section, []Conflict) {
+func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Existing) ([]Section, []Conflict) {
+	policyBySource := make(map[string][]string, len(policies))
+	for _, p := range policies {
+		policyBySource[p.Name] = model.CanonicalZoneDestinations(p.ForwardTo)
+	}
 	var order []string
 	byName := map[string][]zoneMember{}
 	for _, m := range members {
@@ -319,6 +424,23 @@ func renderZones(members []zoneMember, existing Existing) ([]Section, []Conflict
 			})
 			continue
 		}
+		source := distinct[0]
+		needsDHCP := false
+		for _, member := range group {
+			needsDHCP = needsDHCP || member.dhcp
+		}
+		forwardTo, ok := policyBySource[source]
+		if !ok {
+			// renderZones is kept safe for direct package callers too. The site
+			// contract normally supplies this through EffectiveZonePolicies.
+			forwardTo = []string{"wan"}
+		}
+		conflicts = append(conflicts,
+			foreignFirewallPolicyConflicts(existing, source, forwardTo)...)
+		if needsDHCP {
+			conflicts = append(conflicts,
+				foreignRouterServiceConflicts(existing, source)...)
+		}
 
 		// A zone the device already has and we did not write. Same ownership
 		// rule as everywhere else, applied to the namespace fw4 actually keys
@@ -348,7 +470,7 @@ func renderZones(members []zoneMember, existing Existing) ([]Section, []Conflict
 		}
 		sort.Strings(ifaces) // deterministic diffs
 
-		section := safe(distinct[0])
+		section := safe(source)
 		out = append(out, Section{
 			Config: "firewall", Type: "zone",
 			Name: fmt.Sprintf("%s_zone_%s", NamePrefix, section),
@@ -366,19 +488,300 @@ func renderZones(members []zoneMember, existing Existing) ([]Section, []Conflict
 			},
 			// A list, not a joined string — see Section.Lists. It is also what
 			// lets one zone hold more than one network.
-			Lists: map[string][]string{"network": ifaces},
+			Lists:   map[string][]string{"network": ifaces},
+			Manages: []string{"enabled", "family"},
 		})
-		out = append(out, Section{
-			Config: "firewall", Type: "forwarding",
-			Name: fmt.Sprintf("%s_fwd_%s_wan", NamePrefix, section),
-			Values: map[string]string{
-				"src":        fw,
-				"dest":       "wan",
-				OwnershipTag: "1",
-			},
-		})
+		if needsDHCP {
+			// The zone rejects router-local input by default. Without these two
+			// narrow exceptions dnsmasq can be running with the exact desired
+			// pool while clients receive neither a lease nor the DNS service that
+			// lease advertises. They are owned and disappear when the last pool in
+			// this zone is disabled.
+			out = append(out,
+				Section{
+					Config: "firewall", Type: "rule",
+					Name: fmt.Sprintf("%s_in_%s_dhcp", NamePrefix, section),
+					Values: map[string]string{
+						"name":       fmt.Sprintf("oonfeeWRT %s DHCP", source),
+						"src":        fw,
+						"proto":      "udp",
+						"src_port":   "68",
+						"dest_port":  "67",
+						"target":     "ACCEPT",
+						"family":     "ipv4",
+						OwnershipTag: "1",
+					},
+					Manages: []string{"enabled"},
+				},
+				Section{
+					Config: "firewall", Type: "rule",
+					Name: fmt.Sprintf("%s_in_%s_dns", NamePrefix, section),
+					Values: map[string]string{
+						"name":       fmt.Sprintf("oonfeeWRT %s DNS", source),
+						"src":        fw,
+						"dest_port":  "53",
+						"target":     "ACCEPT",
+						"family":     "ipv4",
+						OwnershipTag: "1",
+					},
+					Lists:   map[string][]string{"proto": {"tcp", "udp"}},
+					Manages: []string{"enabled"},
+				},
+			)
+		}
+		for _, dest := range forwardTo {
+			out = append(out, Section{
+				Config: "firewall", Type: "forwarding",
+				Name: fmt.Sprintf("%s_fwd_%s_%s", NamePrefix, section, safe(dest)),
+				Values: map[string]string{
+					"src":        fw,
+					"dest":       fwZoneName(dest),
+					OwnershipTag: "1",
+				},
+				Manages: []string{"enabled", "family"},
+			})
+		}
 	}
 	return out, conflicts
+}
+
+// foreignRouterServiceConflicts reports human-owned input rules that can reject
+// the DHCP/DNS traffic opened below. fw4 uses terminating verdicts in rule
+// order; because the renderer neither owns nor reorders foreign sections,
+// coexistence cannot prove that clients can reach the service.
+func foreignRouterServiceConflicts(existing Existing, source string) []Conflict {
+	src := fwZoneName(source)
+	sections := existing.In("firewall")
+	names := make([]string, 0, len(sections))
+	for name := range sections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []Conflict
+	for _, name := range names {
+		vals := sections[name]
+		if vals[".type"] != "rule" || vals[OwnershipTag] == "1" ||
+			uciOptionFalse(vals["enabled"]) || vals["dest"] != "" ||
+			!foreignSourceCouldMatch(vals["src"], src) ||
+			!familyCouldMatchIPv4(vals["family"]) {
+			continue
+		}
+		target := strings.ToUpper(strings.TrimSpace(vals["target"]))
+		if target != "DROP" && target != "REJECT" {
+			continue
+		}
+		var services []string
+		if protocolCouldMatch(vals["proto"], "udp") &&
+			portCouldMatch(vals["src_port"], 68) && portCouldMatch(vals["dest_port"], 67) {
+			services = append(services, "DHCP")
+		}
+		if (protocolCouldMatch(vals["proto"], "tcp") ||
+			protocolCouldMatch(vals["proto"], "udp")) && portCouldMatch(vals["dest_port"], 53) {
+			services = append(services, "DNS")
+		}
+		if len(services) == 0 {
+			continue
+		}
+		out = append(out, Conflict{
+			Config: "firewall", Section: name,
+			Reason: fmt.Sprintf("foreign firewall rule %s can %s %s client traffic from "+
+				"zone %q before oonfeeWRT's router-service allow rules, so DHCP/DNS client "+
+				"access cannot be guaranteed. oonfeeWRT will not reorder or delete a "+
+				"human-owned rule; disable, remove, or narrow it before applying",
+				name, strings.ToLower(target), strings.Join(services, " and "), src),
+		})
+	}
+	return out
+}
+
+func familyCouldMatchIPv4(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "any" || value == "all" || value == "*" || value == "inet" {
+		return true
+	}
+	if strings.Contains(value, "4") {
+		return true
+	}
+	if strings.Contains(value, "6") {
+		return false
+	}
+	return true // unknown syntax is not evidence that the rule is disjoint
+}
+
+func protocolCouldMatch(value, want string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 {
+		fields = []string{"tcpudp"} // fw4's rule default
+	}
+	positive, matched, excluded := false, false, false
+	for _, field := range fields {
+		invert := strings.HasPrefix(field, "!")
+		field = strings.TrimPrefix(field, "!")
+		var matches, known bool
+		switch field {
+		case "all", "any", "*":
+			matches, known = true, true
+		case "tcpudp":
+			matches, known = want == "tcp" || want == "udp", true
+		case "6":
+			matches, known = want == "tcp", true
+		case "17":
+			matches, known = want == "udp", true
+		case "tcp", "udp", "icmp", "icmpv6", "esp", "ah", "gre":
+			matches, known = field == want, true
+		default:
+			return true // unknown syntax is not evidence of disjointness
+		}
+		if !known {
+			return true
+		}
+		if invert {
+			excluded = excluded || matches
+		} else {
+			positive = true
+			matched = matched || matches
+		}
+	}
+	return !excluded && (!positive || matched)
+}
+
+func portCouldMatch(value string, want int) bool {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) == 0 {
+		return true
+	}
+	positive, matched, excluded := false, false, false
+	for _, field := range fields {
+		invert := strings.HasPrefix(field, "!")
+		field = strings.TrimPrefix(field, "!")
+		parts := strings.FieldsFunc(field, func(r rune) bool { return r == '-' || r == ':' })
+		if len(parts) < 1 || len(parts) > 2 {
+			return true
+		}
+		lo, err := strconv.Atoi(parts[0])
+		if err != nil || lo < 0 || lo > 65535 {
+			return true
+		}
+		hi := lo
+		if len(parts) == 2 {
+			hi, err = strconv.Atoi(parts[1])
+			if err != nil || hi < lo || hi > 65535 {
+				return true
+			}
+		}
+		contains := want >= lo && want <= hi
+		if invert {
+			excluded = excluded || contains
+		} else {
+			positive = true
+			matched = matched || contains
+		}
+	}
+	return !excluded && (!positive || matched)
+}
+
+func uciOptionFalse(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "0", "off", "false", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func uciOptionTrue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "on", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func foreignSourceCouldMatch(value, want string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false // fw4 compiles a source-less config rule into an output chain
+	}
+	if value == "*" || value == want {
+		return true
+	}
+	if strings.ContainsAny(value, "!{},;\"'") || len(strings.Fields(value)) != 1 {
+		return true
+	}
+	return false
+}
+
+// foreignFirewallPolicyConflicts reports human-owned UCI that defeats a matrix
+// claim. fw4 evaluates rules and DNAT accepts in a source's forward chain, so
+// checking only config forwarding would let the UI say Block All while a
+// foreign ACCEPT still passes traffic. Conversely, a REJECT/DROP rule can make
+// an owned forwarding fall short of Allow All.
+//
+// This can only reason about UCI sections. Custom nftables includes remain an
+// observability limitation and must not be described as verified policy.
+func foreignFirewallPolicyConflicts(existing Existing, source string, forwardTo []string) []Conflict {
+	allowed := map[string]bool{}
+	for _, dest := range forwardTo {
+		allowed[fwZoneName(dest)] = true
+	}
+	src := fwZoneName(source)
+	sections := existing.In("firewall")
+	names := make([]string, 0, len(sections))
+	for name := range sections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []Conflict
+	for _, name := range names {
+		vals := sections[name]
+		if vals[OwnershipTag] == "1" || uciOptionFalse(vals["enabled"]) {
+			continue
+		}
+		kind := vals[".type"]
+		ruleSource, dest := vals["src"], vals["dest"]
+		if !foreignSourceCouldMatch(ruleSource, src) {
+			continue
+		}
+		target := strings.ToUpper(strings.TrimSpace(vals["target"]))
+		// OpenWrt ignores redirect.dest for DNAT. With dest_ip, fw4 accepts the
+		// translated flow in forward_<src> before the zone verdict, and it can
+		// land in a foreign or otherwise unmodeled zone. No selection in this
+		// matrix can therefore prove that human-owned DNAT harmless. An explicit
+		// REDIRECT, or DNAT without dest_ip, is router-local and does not
+		// contradict an inter-zone forwarding claim.
+		if kind == "redirect" && (target == "" || target == "DNAT") &&
+			strings.TrimSpace(vals["dest_ip"]) != "" {
+			out = append(out, Conflict{
+				Config: "firewall", Section: name,
+				Reason: fmt.Sprintf("foreign firewall redirect %s DNAT-accepts forwarded traffic from source %q before the zone verdict; OpenWrt ignores its `dest` option for DNAT, so the zone-matrix claim cannot be guaranteed. oonfeeWRT will not edit human-owned firewall policy; remove or narrow that section, or mark it with `option %s '1'` only if it belongs to this controller",
+					name, ruleSource, OwnershipTag),
+			})
+			continue
+		}
+		if dest == "" {
+			continue
+		}
+		destAllowed := allowed[dest] || (dest == "*" && len(allowed) > 0)
+		destOmitted := !allowed[dest] || dest == "*"
+		var claim string
+		switch {
+		case kind == "forwarding" && destOmitted:
+			claim = "allows an omitted destination"
+		case kind == "rule" && target == "ACCEPT" && destOmitted:
+			claim = "has target ACCEPT for an omitted destination"
+		case kind == "rule" && (target == "REJECT" || target == "DROP") && destAllowed:
+			claim = "can reject traffic to an allowed destination"
+		default:
+			continue
+		}
+		out = append(out, Conflict{
+			Config: "firewall", Section: name,
+			Reason: fmt.Sprintf("foreign firewall %s %s for source %q and destination %q, so the zone-matrix claim cannot be guaranteed. oonfeeWRT will not edit human-owned firewall policy; remove or narrow that section, change the matrix edge to match it, or mark the section with `option %s '1'` only if it belongs to this controller",
+				name, claim, ruleSource, dest, OwnershipTag),
+		})
+	}
+	return out
 }
 
 // foreignZone finds a firewall zone with this name that we do not own.
@@ -424,6 +827,16 @@ func netIfaceName(name string) string {
 	return fmt.Sprintf("%s_net_%s", NamePrefix, safe(name))
 }
 
+// networkAttachmentName is the UCI network hostapd/netifd must join. VLAN 1
+// is the operator's existing network; routed/tagged VLANs use our owned
+// interface section on both gateways and APs.
+func networkAttachmentName(n model.Network) string {
+	if n.VLAN <= 1 {
+		return n.Name
+	}
+	return netIfaceName(n.Name)
+}
+
 // maxZoneName is fw4's limit on a firewall zone name. It applies to the zone's
 // NAME, which is what fw4 reads — not to UCI section names, which have no such
 // limit.
@@ -437,7 +850,7 @@ func netIfaceName(name string) string {
 // preview reported no omission and no conflict. The cap was there to STOP two
 // zones colliding past it, and applied to section names it produced exactly
 // the collision it was guarding against.
-const maxZoneName = 11
+const maxZoneName = model.FirewallZoneMaxLen
 
 // safe reduces a human's name to something UCI accepts as a section name:
 // letters, digits and underscores.
@@ -471,11 +884,7 @@ func safe(s string) string {
 // rather than discovered there — and because it can make two distinct names
 // one, renderZones checks for that and refuses rather than merging.
 func fwZoneName(s string) string {
-	out := safe(s)
-	if len(out) > maxZoneName {
-		out = out[:maxZoneName]
-	}
-	return out
+	return model.FirewallZoneName(s)
 }
 
 // splitCIDR turns "10.7.45.1/24" into an address and a dotted netmask, which is

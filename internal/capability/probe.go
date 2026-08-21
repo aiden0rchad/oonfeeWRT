@@ -27,6 +27,7 @@ func Probe(ctx context.Context, c *ubus.Client) (*Registry, error) {
 	probeBatching(ctx, c, r)
 	probeSwitchAndFirewall(ctx, c, r)
 	probeRadios(ctx, c, r)
+	probeRadioScanAccess(ctx, c, r)
 	probePreflight(ctx, c, r)
 	probeAccounting(ctx, c, r)
 	probeMesh(ctx, c, r)
@@ -35,10 +36,36 @@ func Probe(ctx context.Context, c *ubus.Client) (*Registry, error) {
 	return r, nil
 }
 
+// probeRadioScanAccess proves only that the scoped credential may invoke the
+// existing read-only iwinfo RPC. Calling the method here would be a disruptive
+// capability test: a serving radio leaves its channel while scanning.
+func probeRadioScanAccess(ctx context.Context, c *ubus.Client, r *Registry) {
+	var answer struct {
+		Access bool `json:"access"`
+	}
+	err := c.Call(ctx, "session", "access", map[string]any{
+		"ubus_rpc_session": c.Session(),
+		"scope":            "ubus",
+		"object":           "iwinfo",
+		"function":         "scan",
+	}, &answer)
+	if err != nil || !answer.Access {
+		r.Set(FeatRadioScan, NotObservable)
+		if err != nil {
+			r.Note("explicit RF scan access could not be checked without running a scan (%v)", err)
+		} else {
+			r.Note("the controller credential is not authorized for iwinfo.scan; explicit RF scans are unavailable until the device ACL is refreshed")
+		}
+		return
+	}
+	r.Set(FeatRadioScan, Present)
+}
+
 func probeBoard(ctx context.Context, c *ubus.Client, r *Registry) error {
 	var b struct {
 		Model      string `json:"model"`
 		BoardName  string `json:"board_name"`
+		System     string `json:"system"`
 		Kernel     string `json:"kernel"`
 		RootFSType string `json:"rootfs_type"`
 		Release    struct {
@@ -50,7 +77,7 @@ func probeBoard(ctx context.Context, c *ubus.Client, r *Registry) error {
 		return err
 	}
 	r.Board = Board{
-		Model: b.Model, BoardName: b.BoardName, Kernel: b.Kernel,
+		Model: b.Model, BoardName: b.BoardName, System: b.System, Kernel: b.Kernel,
 		Target: b.Release.Target, Release: b.Release.Description,
 		RootFSType: b.RootFSType,
 	}
@@ -93,11 +120,12 @@ func probePorts(ctx context.Context, c *ubus.Client, r *Registry) {
 	}
 }
 
-// classify maps a target to a DEVICE-BUDGET class. Marketing names are useless
-// here — "AX3000" spans both MT7621 (class C) and MT7981 (class B) — so this
-// keys on the SoC target only.
+// classify maps actual silicon to a DEVICE-BUDGET class. Marketing names are
+// useless here — "AX3000" spans both MT7621 (class C) and MT7981 (class B).
+// Generic targets need the system SoC string before they can be classified.
 func classify(b Board) Class {
 	t := strings.ToLower(b.Target)
+	s := strings.ToLower(b.System)
 	switch {
 	case strings.HasPrefix(t, "mvebu"):
 		return ClassA
@@ -105,6 +133,11 @@ func classify(b Board) Class {
 		strings.Contains(t, "mediatek/filogic"):
 		return ClassB
 	case strings.Contains(t, "ramips/mt7621"), strings.Contains(t, "mt7621"):
+		return ClassC
+	case strings.Contains(s, "qca956x"):
+		// Measured on the Archer C6 v2: nominal 128 MB RAM, 6.4 MB free
+		// overlay, and the two-minute budget harness passed at the shipped
+		// 1/min idle and 6/min focused rates with zero flash writes.
 		return ClassC
 	}
 	return ClassUnknown
@@ -167,34 +200,115 @@ func batchVerdict(n int, err0, err1 error) State {
 	return Absent
 }
 
-// probeSwitchAndFirewall uses sources that need no filesystem grant.
-//
-// DSA comes from luci-rpc.getNetworkDevices, which the poll already fetches and
-// which tags user ports devtype "dsa". The /sys route looks narrower but is
-// not: rpcd canonicalises paths, so a /sys/class/net/* grant never matches
-// (those are symlinks into /sys/devices), and widening it to /sys/devices/*
-// hands over a subtree because '*' crosses '/'.
+type commandResult struct {
+	Code   int    `json:"code"`
+	Stdout string `json:"stdout"`
+}
+
+// commandCapability runs one exact read-only command granted by the ACL.
+// A denied call is a reach problem; a command that ran and found nothing is a
+// device answer. Keeping those separate is the capability model's core rule.
+func commandCapability(ctx context.Context, c *ubus.Client, command string,
+	params []string, accepts func(string) bool) State {
+	var out commandResult
+	err := c.Call(ctx, "file", "exec", map[string]any{
+		"command": command, "params": params,
+	}, &out)
+	switch {
+	case err == nil && out.Code == 0 && accepts(out.Stdout):
+		return Present
+	case err == nil, isNotFound(err):
+		return Absent
+	case isDenied(err):
+		return NotObservable
+	default:
+		return NotObservable
+	}
+}
+
+func anyOutput(string) bool { return true }
+
+func switchPortState(dsa, legacy State) State {
+	if dsa == Present || legacy == Present {
+		return Present
+	}
+	if dsa == Absent && legacy == Absent {
+		return Absent
+	}
+	return NotObservable
+}
+
+func bridgeFDBState(ctx context.Context, c *ubus.Client, bridges []string) State {
+	if len(bridges) == 0 {
+		return NotObservable
+	}
+	var states []State
+	for _, bridge := range bridges {
+		states = append(states,
+			commandCapability(ctx, c, "/usr/sbin/brctl", []string{"showmacs", bridge}, anyOutput))
+	}
+	states = append(states,
+		commandCapability(ctx, c, "/usr/sbin/bridge", []string{"-j", "fdb", "show"}, anyOutput))
+	for _, s := range states {
+		if s == Present {
+			return Present
+		}
+	}
+	for _, s := range states {
+		if s == NotObservable {
+			return NotObservable
+		}
+	}
+	return Absent
+}
+
+// probeSwitchAndFirewall prefers native ubus data, then narrowly scoped stock
+// utilities. DSA comes from luci-rpc.getNetworkDevices. Older OpenWrt targets
+// often ship BusyBox brctl and swconfig even when iproute2 bridge and ethtool
+// are absent; using those built-ins preserves topology and read-only port
+// observability without installing packages.
 func probeSwitchAndFirewall(ctx context.Context, c *ubus.Client, r *Registry) {
 	var devs map[string]struct {
 		DevType string `json:"devtype"`
 		Parent  string `json:"parent"`
 	}
+	dsa := NotObservable
 	if err := c.Call(ctx, "luci-rpc", "getNetworkDevices", nil, &devs); err != nil {
-		r.Set(FeatDSA, NotObservable)
 		r.Note("DSA undetermined: luci-rpc.getNetworkDevices denied (%v). "+
-			"The Ports screen stays hidden while this is unknown, because a "+
-			"port map the controller cannot verify is worse than none. "+
+			"DSA-only configuration stays hidden while this is unknown. "+
 			"Re-adopt the device so its access-control file is rewritten — the "+
 			"one the controller ships grants luci-rpc — then re-probe", err)
 	} else {
-		found := Absent
-		for _, d := range devs {
+		dsa = Absent
+		for name, d := range devs {
 			if d.DevType == "dsa" {
-				found = Present
-				break
+				dsa = Present
+			}
+			if d.DevType == "bridge" {
+				r.Ports.BridgeDevices = append(r.Ports.BridgeDevices, name)
 			}
 		}
-		r.Set(FeatDSA, found)
+		sort.Strings(r.Ports.BridgeDevices)
+	}
+	r.Set(FeatDSA, dsa)
+
+	legacy := commandCapability(ctx, c, "/sbin/swconfig", []string{"list"},
+		func(stdout string) bool { return strings.Contains(stdout, "Found:") })
+	r.Set(FeatSwitchPorts, switchPortState(dsa, legacy))
+	if legacy == Present {
+		r.Note("legacy swconfig switch detected; read-only port state and counters " +
+			"are available without installing ethtool or converting the device to DSA")
+	}
+
+	fdbBridges := r.Ports.BridgeDevices
+	if len(fdbBridges) == 0 && r.Ports.Bridge != "" {
+		fdbBridges = []string{r.Ports.Bridge}
+	}
+	fdb := bridgeFDBState(ctx, c, fdbBridges)
+	r.Set(FeatBridgeFDB, fdb)
+	if fdb == Present {
+		r.Note("bridge forwarding database available through a stock utility; " +
+			"LLDP can enrich topology later but is not required for MAC-to-port evidence")
 	}
 
 	// firewall4 via the one nft command the ACL already grants. An exec that is
@@ -414,10 +528,16 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		r.Set(FeatSurvey, NotObservable)
 		r.Set(FeatAirtimeSplit, NotObservable)
 		r.Set(FeatHostapdControl, NotObservable)
-		r.Note("radios undetermined: iwinfo.devices denied (%v). "+
-			"No WLAN can be rendered for this device until its radios can be "+
-			"listed. Re-adopt it so its access-control file is rewritten — the "+
-			"one the controller ships grants iwinfo — then re-probe", err)
+		if isDenied(err) {
+			r.Note("radios undetermined: iwinfo.devices was refused (%v). "+
+				"No WLAN can be rendered until the radios can be listed. Re-adopt "+
+				"the device so the controller ACL is refreshed, then re-probe", err)
+		} else {
+			r.Note("radios undetermined: iwinfo.devices failed (%v). No WLAN can "+
+				"be rendered until the radios can be listed. This was not identified "+
+				"as an access-control refusal; check device reachability and its log, "+
+				"then re-probe", err)
+		}
 		return
 	}
 
@@ -691,10 +811,36 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			"re-probe while there is traffic to settle it")
 	}
 	r.Set(FeatAirtimeSplit, splitOK)
-	if splitOK != Present {
-		r.Note("interference and the airtime split are gated off: this driver " +
-			"does not supply usable rx_time/tx_time. Channel utilization " +
-			"(busy/active) is still available.")
+	switch splitOK {
+	case Absent:
+		note := "interference and the airtime split are gated off: this driver " +
+			"does not supply usable rx_time/tx_time."
+		switch surveyOK {
+		case Present:
+			note += " Channel utilization (busy/active) is still available."
+		case Absent:
+			note += " Channel utilization is unavailable from this driver too."
+		default:
+			note += " Whether channel utilization is available could not be determined."
+		}
+		r.Note("%s", note)
+	case NotObservable:
+		note := "interference and the airtime split are gated off because usable " +
+			"rx_time/tx_time could not be determined. This is not evidence that " +
+			"the driver lacks them."
+		if split.refused {
+			note += " The survey call was refused. Re-adopt the device so the " +
+				"controller ACL is refreshed, then re-probe."
+		}
+		switch surveyOK {
+		case Present:
+			note += " Channel utilization (busy/active) is still available."
+		case Absent:
+			note += " Channel utilization is unavailable from this driver."
+		default:
+			note += " Channel utilization is also undetermined."
+		}
+		r.Note("%s", note)
 	}
 }
 

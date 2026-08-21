@@ -45,6 +45,31 @@ const (
 	KindStaRx    Kind = "sta_rx_bps"    // bytes/sec, keyed by station MAC
 	KindStaTx    Kind = "sta_tx_bps"    // bytes/sec, keyed by station MAC
 	KindStaRetry Kind = "sta_retry_pct" // TX retries as a percentage of TX packets
+
+	// Phase 4 quality series. Counter-derived ratios are deltas over one
+	// observation interval; wifi-v1 is a fixed-arity score and is absent unless
+	// every required input is known. It is never reweighted around a missing
+	// component, which keeps scores comparable across devices and time.
+	KindStaRetryDelta       Kind = "sta_retry_delta_pct"
+	KindStaTXFailDelta      Kind = "sta_tx_fail_delta_pct"
+	KindStaExperienceWiFiV1 Kind = "sta_experience_wifi_v1"
+
+	// Radio series are keyed by the stable UCI wifi-device section (radio0,
+	// radio1, ...), never a runtime phy/interface name.
+	KindRadioUtilization  Kind = "radio_utilization_pct"
+	KindRadioInterference Kind = "radio_interference_pct"
+	KindRadioRXAirtime    Kind = "radio_rx_airtime_pct"
+	KindRadioTXAirtime    Kind = "radio_tx_airtime_pct"
+	KindRadioNoise        Kind = "radio_noise_dbm"
+	KindRadioRetryDelta   Kind = "radio_retry_delta_pct"
+	KindRadioTXFailDelta  Kind = "radio_tx_fail_delta_pct"
+	KindRadioSignalAvg    Kind = "radio_signal_avg_dbm"
+
+	// Site-wide WAN health. Key is empty; the selected gateway is provenance in
+	// the sample/query response rather than an interface-name identity.
+	KindSiteWANLatency Kind = "site_wan_latency_ms"
+	KindSiteWANLoss    Kind = "site_wan_loss_pct"
+	KindSiteWANUp      Kind = "site_wan_up"
 )
 
 // IsRate reports a series derived from a counter difference rather than read
@@ -134,6 +159,7 @@ type Store struct {
 	series   map[SeriesKey]*ring
 	counters map[SeriesKey]*counterState
 	ratios   map[SeriesKey]*ratioState
+	quality  map[stationQualityKey]stationQualityState
 	reboots  map[int64]*rebootState
 }
 
@@ -144,6 +170,7 @@ func New(opts Options) *Store {
 		series:   map[SeriesKey]*ring{},
 		counters: map[SeriesKey]*counterState{},
 		ratios:   map[SeriesKey]*ratioState{},
+		quality:  map[stationQualityKey]stationQualityState{},
 		reboots:  map[int64]*rebootState{},
 	}
 }
@@ -176,6 +203,22 @@ func (s *Store) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.series)
+}
+
+// ForgetDevice removes every in-memory sample and derivation baseline owned by
+// a device. SQLite may reuse an INTEGER PRIMARY KEY after un-adoption; keeping
+// any state under that number would attach the removed router's history to the
+// next router that receives it.
+func (s *Store) ForgetDevice(deviceID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.series {
+		if k.DeviceID == deviceID {
+			delete(s.series, k)
+		}
+	}
+	s.forgetCounters(deviceID)
+	delete(s.reboots, deviceID)
 }
 
 // Flush drains every window that has completely elapsed and returns the

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -105,6 +106,62 @@ func TestOpenOrCreateReportsWhichItDid(t *testing.T) {
 	defer k2.Close()
 	if created {
 		t.Fatal("second OpenOrCreate reported it created the keyring")
+	}
+}
+
+func TestConcurrentOpenOrCreatePublishesOneRecoverableKeyring(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	passphrase := []byte("placeholder concurrent passphrase")
+	const workers = 12
+	start := make(chan struct{})
+	type result struct {
+		keeper  *Keeper
+		created bool
+		err     error
+	}
+	results := make(chan result, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			keeper, created, err := OpenOrCreate(path, passphrase, cheap)
+			results <- result{keeper: keeper, created: created, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var keepers []*Keeper
+	created := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent OpenOrCreate: %v", result.err)
+		}
+		keepers = append(keepers, result.keeper)
+		if result.created {
+			created++
+		}
+	}
+	defer func() {
+		for _, keeper := range keepers {
+			keeper.Close()
+		}
+	}()
+	if created != 1 {
+		t.Fatalf("created count=%d, want exactly one", created)
+	}
+	blob, err := keepers[0].Seal([]byte("fixture"), []byte("concurrent-keyring-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, keeper := range keepers[1:] {
+		plain, err := keeper.Unseal(blob, []byte("concurrent-keyring-test"))
+		if err != nil || string(plain) != "fixture" {
+			t.Fatal("concurrent caller retained a non-winning data key")
+		}
+		clear(plain)
 	}
 }
 
@@ -215,6 +272,75 @@ func TestNoncesAreFresh(t *testing.T) {
 	}
 }
 
+func TestHMACSHA256IsStableAndDomainSeparated(t *testing.T) {
+	k, path := newKeeper(t, "pass")
+	first, err := k.HMACSHA256("preview-token/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatalf("HMACSHA256: %v", err)
+	}
+	same, err := k.HMACSHA256("preview-token/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatalf("second HMACSHA256: %v", err)
+	}
+	if !bytes.Equal(first, same) {
+		t.Fatal("equal domain and message produced different digests")
+	}
+	changed, err := k.HMACSHA256("preview-token/v1", []byte("changed state"))
+	if err != nil {
+		t.Fatalf("changed HMACSHA256: %v", err)
+	}
+	if bytes.Equal(first, changed) {
+		t.Fatal("a changed message produced the same digest")
+	}
+	otherDomain, err := k.HMACSHA256("another-purpose/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatalf("domain-separated HMACSHA256: %v", err)
+	}
+	if bytes.Equal(first, otherDomain) {
+		t.Fatal("equal messages in different domains produced the same digest")
+	}
+
+	// The digest is tied to the keyring's DEK, not this Keeper instance.
+	if err := k.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, []byte("pass"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer reopened.Close()
+	afterRestart, err := reopened.HMACSHA256("preview-token/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatalf("HMACSHA256 after reopen: %v", err)
+	}
+	if !bytes.Equal(first, afterRestart) {
+		t.Fatal("reopening the same keyring changed its digest")
+	}
+}
+
+func TestHMACSHA256DiffersAcrossDataKeys(t *testing.T) {
+	a, _ := newKeeper(t, "same passphrase")
+	b, _ := newKeeper(t, "same passphrase")
+	aDigest, err := a.HMACSHA256("preview-token/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bDigest, err := b.HMACSHA256("preview-token/v1", []byte("bound state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(aDigest, bDigest) {
+		t.Fatal("independent data keys produced the same digest")
+	}
+}
+
+func TestHMACSHA256RejectsEmptyDomain(t *testing.T) {
+	k, _ := newKeeper(t, "pass")
+	if _, err := k.HMACSHA256("", []byte("message")); err == nil {
+		t.Fatal("HMACSHA256 accepted an empty domain")
+	}
+}
+
 // The whole reason for the two-level hierarchy: changing the passphrase must
 // not require re-sealing anything.
 func TestChangePassphraseLeavesSealedValuesReadable(t *testing.T) {
@@ -286,6 +412,9 @@ func TestClosedKeeperRefusesWork(t *testing.T) {
 	}
 	if _, err := k.Unseal(blob, nil); !errors.Is(err, ErrClosed) {
 		t.Errorf("Unseal after Close: got %v, want ErrClosed", err)
+	}
+	if _, err := k.HMACSHA256("test/v1", []byte("x")); !errors.Is(err, ErrClosed) {
+		t.Errorf("HMACSHA256 after Close: got %v, want ErrClosed", err)
 	}
 	if err := k.ChangePassphrase([]byte("new"), cheap); !errors.Is(err, ErrClosed) {
 		t.Errorf("ChangePassphrase after Close: got %v, want ErrClosed", err)
@@ -410,6 +539,11 @@ func TestReadPassphraseFile(t *testing.T) {
 		if err := os.WriteFile(p, []byte("hunter2"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// The test runner may use a restrictive umask; force the unsafe mode
+		// that this case is intended to exercise.
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := ReadPassphraseFile(p); err == nil {
 			t.Fatal("accepted a world-readable passphrase file")
 		}
@@ -484,6 +618,10 @@ func TestConcurrentUse(t *testing.T) {
 					return
 				}
 				if _, err := k.Seal([]byte("x"), nil); err != nil {
+					done <- err
+					return
+				}
+				if _, err := k.HMACSHA256("concurrent-test/v1", []byte("x")); err != nil {
 					done <- err
 					return
 				}

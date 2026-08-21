@@ -36,7 +36,7 @@ func renderUplink(u model.Uplink, w model.WLAN, net model.Network, radio string,
 		"device":  radio,
 		"mode":    "sta",
 		"ssid":    w.SSID,
-		"network": net.Name,
+		"network": networkAttachmentName(net),
 		// The whole feature. Without 4-address framing this is an ordinary
 		// client: the device itself gets on the network and nothing behind it
 		// does, so the wired ports an operator put it there for stay dark.

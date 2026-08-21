@@ -32,11 +32,10 @@ const adoptTimeout = 90 * time.Second
 // error. What persists is the scoped login adoption creates, sealed under the
 // device's MAC.
 //
-// The ordering matters and is adoption's, not ours: probe while we still hold
-// the operator credential (it reaches things the controller login deliberately
-// cannot), then write the ACL, then the login, then verify the login works. A
-// device that ends up in the inventory unreachable is worse than one that never
-// got added.
+// The ordering matters and is adoption's, not ours: sign in with the operator
+// credential, open the bootstrap channel, install the ACL and controller login,
+// verify that scoped login, then probe through it. A device that ends up in the
+// inventory unreachable is worse than one that never got added.
 func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, adoptTimeout)
 	defer cancel()
@@ -49,11 +48,21 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	if err != nil {
 		return nil, err
 	}
+	functions, err := model.ParseDeviceFunctions(req.Functions, role)
+	if err != nil {
+		return nil, err
+	}
+	req.Role = string(functions.PrimaryRole())
+	req.Functions = functions.Strings()
 
 	https := req.Scheme == "https"
-	host := req.Host
-	if req.Port > 0 && !(https && req.Port == 443) && !(!https && req.Port == 80) {
-		host = net.JoinHostPort(req.Host, strconv.Itoa(req.Port))
+	endpoint, err := d.resolveWorkflowEndpoint(ctx, req.Host)
+	if err != nil {
+		return nil, err
+	}
+	host, err := endpoint.httpAuthority(req.Port, https)
+	if err != nil {
+		return nil, err
 	}
 
 	// One address is one device, checked before the device is touched at all.
@@ -71,16 +80,11 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	// from the device. Refusing after opening SSH and minting a session would
 	// be a write-shaped conversation with a router we were never going to
 	// adopt.
-	if others, err := d.Store.Devices(ctx); err == nil {
-		for _, o := range others {
-			if o.Host == req.Host && o.Adopted() {
-				return nil, fmt.Errorf("%s is already adopted as %q (%s). One "+
-					"address is one device: un-adopt %q first, or correct the "+
-					"address if two devices really are involved",
-					req.Host, o.Name, o.MAC, o.Name)
-			}
-		}
+	releaseAdoption, err := d.beginAdoption(ctx, endpoint.inventoryHost(https), functions)
+	if err != nil {
+		return nil, err
 	}
+	defer releaseAdoption()
 
 	operator := ubus.New(ubus.Options{Host: host, HTTPS: https, Timeout: 30 * time.Second})
 	defer operator.Close()
@@ -93,18 +97,14 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	// changed so a device that cannot be bootstrapped is refused rather than
 	// half-adopted.
 	boot, err := adoption.DialSSH(ctx, adoption.SSHOptions{
-		Host:       req.Host,
+		Host:       endpoint.sshAddress(),
 		Username:   req.Username,
 		Password:   req.Password,
 		PrivateKey: []byte(req.PrivateKey),
 		Timeout:    30 * time.Second,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w\n\nAdoption needs SSH once, to install the "+
-			"access-control file and the controller's login. Neither can be done "+
-			"over ubus: stock OpenWrt refuses both even to root, which is what "+
-			"stops a compromised web session widening its own permissions. "+
-			"Everything after adoption uses ubus alone", err)
+		return nil, sshBootstrapFailure(err)
 	}
 	defer boot.Close()
 
@@ -132,7 +132,20 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 			mac, existing.Name)
 	}
 
-	a := &adoption.Adopter{ACL: deploy.ACL}
+	a := &adoption.Adopter{
+		ACL: deploy.ACL,
+		VerifyController: func(verifyCtx context.Context, controller *ubus.Client) error {
+			verifiedMAC, err := deviceMAC(verifyCtx, controller)
+			if err != nil {
+				return fmt.Errorf("could not re-read the device identity: %w", err)
+			}
+			if verifiedMAC != mac {
+				return fmt.Errorf("the endpoint changed identity from %s to %s during adoption; "+
+					"the device was not added to inventory", mac, verifiedMAC)
+			}
+			return nil
+		},
+	}
 	res, err := a.Adopt(ctx, operator, boot)
 	if err != nil {
 		return nil, err
@@ -160,9 +173,11 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	}
 
 	now := time.Now().Unix()
+	inventoryHost := endpoint.inventoryHost(https && res.CertFP != "")
 	dev := &store.Device{
-		MAC: mac, Host: req.Host, Port: req.Port, Name: name,
-		Role: string(role), CertFP: res.CertFP, HostKeyFP: res.HostKeyFP,
+		MAC: mac, Host: inventoryHost, Port: effectiveDevicePort(req.Port, https), Name: name,
+		Role: req.Role, Functions: req.Functions,
+		CertFP: res.CertFP, HostKeyFP: res.HostKeyFP,
 		AdoptedAt: &now, CredEnc: blob,
 		Class: string(res.Caps.Class), CapsJSON: string(caps),
 		FWRelease: res.Caps.Board.Release,
@@ -170,10 +185,9 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	if https {
 		dev.Scheme = "https"
 	}
-	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+	if err := d.registerDevice(ctx, dev); err != nil {
 		return nil, fmt.Errorf("adopted %s but could not record it: %w", mac, err)
 	}
-	d.Track(dev)
 	// A new AP knows about no neighbours, and every existing AP knows nothing
 	// about it. Both are fixed by the same cycle, and waiting up to fifteen
 	// minutes for the periodic one would leave the fleet advertising 802.11k
@@ -185,15 +199,17 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	_ = d.Store.LogEvent(ctx, store.Event{
 		DeviceID: &id, Category: "audit", Severity: "info", Event: "device.adopted",
 		Detail: map[string]any{
-			"mac": mac, "host": req.Host, "model": res.Caps.Board.Model,
+			"mac": mac, "host": inventoryHost, "model": res.Caps.Board.Model,
 			"class": string(res.Caps.Class), "login": res.Credential.Username,
+			"functions": req.Functions,
 		},
 	})
-	d.Log.Info("adopted device", "mac", mac, "host", req.Host,
+	d.Log.Info("adopted device", "mac", mac, "host", inventoryHost,
 		"model", res.Caps.Board.Model, "class", res.Caps.Class)
 
 	out := &api.AdoptResult{
 		DeviceID: dev.ID, MAC: mac, Name: name,
+		Role: dev.Role, Functions: append([]string(nil), dev.Functions...),
 		Model: res.Caps.Board.Model, Class: string(res.Caps.Class),
 		Firmware: res.Caps.Board.Release, CertFP: res.CertFP,
 		// The pin that was just recorded, so an operator standing at the device
@@ -222,13 +238,10 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	// adopted as an access point that renders nothing, with no error to explain
 	// it, is the likeliest disappointment when the point is repurposing
 	// hardware nobody has catalogued.
-	out.Warnings = append(out.Warnings, roleFit(role, res.Caps)...)
+	out.Warnings = append(out.Warnings, functionFit(functions, res.Caps)...)
 	if noPassword {
-		out.Warnings = append(out.Warnings, fmt.Sprintf(
-			"%s accepts ANY password for %q, so it has no password set for that "+
-				"account. Anyone who can reach it can administer it. The controller's "+
-				"own login is password-protected regardless, but this should be fixed "+
-				"on the device.", req.Host, req.Username))
+		out.Warnings = append(out.Warnings,
+			passwordlessAccountWarning(req.Host, req.Username))
 		d.Log.Warn("adopted a device that accepts any password",
 			"mac", mac, "host", req.Host, "user", req.Username)
 		_ = d.Store.LogEvent(ctx, store.Event{
@@ -238,6 +251,32 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		})
 	}
 	return out, nil
+}
+
+func sshBootstrapFailure(err error) error {
+	return fmt.Errorf("%w\n\nAdoption needs SSH once, to install the "+
+		"access-control file and the controller's login. Neither can be done "+
+		"over ubus: stock OpenWrt refuses both even to root, which is what "+
+		"stops a compromised web session widening its own permissions. Check "+
+		"that Dropbear is running and reachable on port 22. If SSH password "+
+		"authentication is disabled, paste an SSH private key in the optional "+
+		"field; the device password is still required for the ubus sign-in. "+
+		"Everything after adoption uses ubus alone", err)
+}
+
+func passwordlessAccountWarning(host, user string) string {
+	target := shellCommandArg(user + "@" + host)
+	return fmt.Sprintf(
+		"%s accepts ANY password for %q, so it has no password set for that "+
+			"account. Anyone who can reach it can administer it. Fix it now: run "+
+			"`ssh -t %s passwd`, or in LuCI open System → Administration → Router "+
+			"Password. The controller's own login is password-protected regardless. "+
+			"The controller will not change /etc/shadow or set this device password "+
+			"for you.", host, user, target)
+}
+
+func shellCommandArg(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 // acceptsAnyPassword reports that the device authenticates a account with a
@@ -267,21 +306,41 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 	ctx, cancel := context.WithTimeout(ctx, adoptTimeout)
 	defer cancel()
 
+	release, err := d.deviceOps.acquire(ctx, req.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	// Read everything only after admission. An apply that won the gate may have
+	// changed the final ownership set; this operation must clean that set, not a
+	// snapshot captured while the apply was still running.
 	dev, err := d.Store.DeviceByID(ctx, req.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	owned, err := d.ownedSections(ctx, dev.ID)
 	if err != nil {
 		return nil, err
 	}
 	out := &api.UnadoptResult{}
 
-	// Stop polling first, so nothing re-opens a session while we take it apart.
-	d.Untrack(dev.ID)
+	// Freeze the existing poller rather than removing it. A failed or partial
+	// un-adopt keeps the same device identity, along with every WebSocket focus
+	// lease attached to that poller. Removing and re-adding it would leave those
+	// subscriptions pointing at a stopped poller until the browser reconnects.
+	resumePolling := func() {}
+	if collector := d.collectorRef(); collector != nil {
+		resumePolling = collector.Quiesce(dev.ID)
+	}
+	defer resumePolling()
 
 	var controller *ubus.Client
 	if dev.Adopted() {
 		if c, err := d.Connect(ctx, dev); err == nil {
 			controller = c
 			defer c.Close()
-		} else {
+		} else if len(owned) > 0 {
 			out.Errors = append(out.Errors,
 				fmt.Sprintf("could not sign in with the controller credential: %v", err))
 		}
@@ -301,7 +360,10 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 	// makes this an unpinned first use for them too; the successful dial below
 	// records what it saw so the NEXT one is checked.
 	var boot adoption.Bootstrap
-	if req.Username != "" {
+	// Do not even open the phase-2 channel when phase 1 has no controller
+	// session. In particular, an SSH credential cannot turn an unproved config
+	// hand-back into a safe footprint removal.
+	if (controller != nil || len(owned) == 0) && req.Username != "" {
 		b, err := adoption.DialSSH(ctx, adoption.SSHOptions{
 			Host: dev.Host, Username: req.Username, Password: req.Password,
 			PrivateKey: []byte(req.PrivateKey), HostKeyFP: dev.HostKeyFP,
@@ -345,18 +407,27 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 		}
 	}
 
-	owned, err := d.ownedSections(ctx, dev.ID)
-	if err != nil {
-		return nil, err
-	}
 	a := &adoption.Adopter{ACL: deploy.ACL}
-	rep, uerr := a.Unadopt(ctx, controller, boot, owned)
+	var rep *adoption.UnadoptReport
+	var uerr error
+	if controller == nil {
+		// A typed nil *ubus.Client becomes a non-nil interface and would panic
+		// on the first Call. Pass an actual nil to preserve the phase-1 state.
+		rep, uerr = a.Unadopt(ctx, nil, boot, owned)
+	} else {
+		rep, uerr = a.Unadopt(ctx, controller, boot, owned)
+	}
 	if rep != nil {
 		out.RevertedSections = len(rep.Reverted)
+		out.ConfigRevertComplete = rep.ConfigRevertComplete
+		for _, s := range rep.ConfigRemains {
+			out.ConfigRemains = append(out.ConfigRemains, s.Config+"."+s.Section)
+		}
 		out.LoginRemoved = rep.LoginRemoved
 		out.ACLRemoved = rep.ACLRemoved
 		out.FootprintRemains = rep.FootprintRemains
 		out.Residue = rep.Residue()
+		out.CleanupCommands = rep.CleanupCommands()
 		for _, e := range rep.Errors {
 			out.Errors = append(out.Errors, e.Error())
 		}
@@ -377,24 +448,26 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 	}
 
 	// Clean, or the caller accepted the residue.
-	if (rep != nil && !rep.FootprintRemains) || req.Force {
-		// Logged BEFORE the row is deleted: the event carries a device_id with a
-		// foreign key, and writing it afterwards would either fail or reference
-		// a device nobody can look up.
+	if (rep != nil && rep.ConfigRevertComplete && !rep.FootprintRemains) || req.Force {
+		// Logged before deletion so it is initially attributed to the exact row.
+		// deleteDevice then detaches the reusable integer id while the detail's
+		// stable MAC keeps the historical identity.
 		id := dev.ID
 		_ = d.Store.LogEvent(ctx, store.Event{
 			DeviceID: &id, Category: "audit", Severity: "info",
 			Event: "device.unadopted",
 			Detail: map[string]any{
 				"mac": dev.MAC, "footprint_remains": out.FootprintRemains,
-				"reverted_sections": out.RevertedSections, "forced": req.Force,
+				"config_revert_complete": out.ConfigRevertComplete,
+				"config_remains":         len(out.ConfigRemains),
+				"reverted_sections":      out.RevertedSections, "forced": req.Force,
 			},
 		})
 		if err := d.deleteDevice(ctx, dev.ID); err != nil {
 			return out, err
 		}
 		out.Removed = true
-		if out.FootprintRemains {
+		if out.FootprintRemains || len(out.ConfigRemains) > 0 {
 			// Forced. The inventory row was the only record of what is still on
 			// that device, and it has just been deleted — so this warning and
 			// the residue in the response are the last copy of it.
@@ -411,7 +484,8 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 		// is no unreachable device left to make the cycle incomplete.
 		d.nudgeNeighbours()
 	}
-	if uerr != nil && !errors.Is(uerr, adoption.ErrOperatorRequired) {
+	if uerr != nil && !errors.Is(uerr, adoption.ErrOperatorRequired) &&
+		!(req.Force && out.Removed) {
 		return out, uerr
 	}
 	return out, nil
@@ -421,7 +495,7 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 // those and nothing else.
 func (d *Daemon) ownedSections(ctx context.Context, deviceID int64) ([]adoption.Section, error) {
 	rows, err := d.Store.SQL().QueryContext(ctx,
-		`SELECT config, section FROM owned_sections WHERE device_id=?`, deviceID)
+		`SELECT config, section FROM owned_sections WHERE device_id=? ORDER BY config, section`, deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: list owned sections: %w", err)
 	}
@@ -440,13 +514,62 @@ func (d *Daemon) ownedSections(ctx context.Context, deviceID int64) ([]adoption.
 // deleteDevice removes the inventory row and everything keyed to it.
 //
 // The series cascade takes care of itself; the rollup tables carry no foreign
-// key, so their orphans are collected explicitly. Untrack already does that,
-// but this runs after the row is gone, which is the only point at which the
-// rows are actually orphaned.
+// key, so their orphans are collected explicitly after the row is gone.
 func (d *Daemon) deleteDevice(ctx context.Context, id int64) error {
-	if _, err := d.Store.SQL().ExecContext(ctx, `DELETE FROM devices WHERE id=?`, id); err != nil {
+	collector := d.collectorRef()
+	resumePolling := func() {}
+	if collector != nil {
+		// This is an emission boundary for direct callers too. Unadopt already
+		// quiesces during remote cleanup; nesting is reference-counted.
+		resumePolling = collector.Quiesce(id)
+	}
+	defer resumePolling()
+
+	d.telemetryLifecycle.Lock()
+	defer d.telemetryLifecycle.Unlock()
+	tx, err := d.Store.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("daemon: begin device %d deletion: %w", id, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var deviceMAC string
+	if err := tx.QueryRowContext(ctx, `SELECT mac FROM devices WHERE id=?`, id).Scan(&deviceMAC); err != nil {
+		return fmt.Errorf("daemon: load device %d identity for deletion: %w", id, err)
+	}
+	parsedMAC, err := net.ParseMAC(deviceMAC)
+	if err != nil {
+		return fmt.Errorf("daemon: parse device %d identity for deletion: %w", id, err)
+	}
+	closedAt := time.Now().UnixMilli()
+	deviceNode := "device:" + parsedMAC.String()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE topology_edges
+   SET valid_to=CASE WHEN last_seen>? THEN last_seen ELSE ? END
+ WHERE valid_to IS NULL AND (child_node=? OR parent_node=? OR parent_device_id=?)`,
+		closedAt, closedAt, deviceNode, deviceNode, id); err != nil {
+		return fmt.Errorf("daemon: close device %d topology history: %w", id, err)
+	}
+	// Events intentionally survive un-adoption, but devices use a reusable
+	// INTEGER PRIMARY KEY. Detach the historical provenance before deleting the
+	// row so a later device cannot inherit an old router's log/audit history.
+	if _, err := tx.ExecContext(ctx, `UPDATE events SET device_id=NULL WHERE device_id=?`, id); err != nil {
+		return fmt.Errorf("daemon: detach device %d event history: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE id=?`, id); err != nil {
 		return fmt.Errorf("daemon: delete device %d: %w", id, err)
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("daemon: commit device %d deletion: %w", id, err)
+	}
+	if collector != nil {
+		collector.Remove(id)
+	}
+	// Keep the current gate entry: un-adopt still holds it and queued callers
+	// retain its pointer. Bumping its generation makes every waiter that joined
+	// before this identity boundary fail after admission, while operations that
+	// begin against a later device using the same ID get the new generation.
+	d.deviceOps.invalidate(id)
+	d.purgeDeviceStateLocked(id)
 	// Drop the ownership claims with the device. ForgetOwned exists for exactly
 	// this and was never called from anywhere, so every un-adopted device left
 	// its claims behind forever.

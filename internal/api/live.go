@@ -68,8 +68,6 @@ type liveConn struct {
 	mu sync.Mutex
 	// subs maps a subscribed device to the function that releases its focus.
 	subs map[int64]func()
-	// allEvents is set when this connection wants the event stream.
-	allEvents bool
 
 	dropped atomic.Int64
 	closed  atomic.Bool
@@ -140,8 +138,18 @@ func (h *Hub) serve(ctx context.Context, ws *websocket.Conn) {
 		ws.CloseNow()
 	}()
 
-	go c.writeLoop(ctx)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		c.writeLoop(ctx)
+		// A write timeout or failed ping means the connection is dead even when
+		// the peer never sends another frame. Wake the reader so it cannot keep
+		// the connection and its focused poll subscriptions alive indefinitely.
+		cancel()
+	}()
 	c.readLoop(ctx)
+	cancel()
+	<-writerDone
 }
 
 // readLoop handles subscriptions until the peer goes away.
@@ -192,11 +200,6 @@ func (c *liveConn) subscribe(m wsMessage) {
 		c.mu.Unlock()
 		c.push(map[string]any{"type": "subscribed", "topic": m.Topic,
 			"device_id": m.DeviceID})
-	case "events":
-		c.mu.Lock()
-		c.allEvents = true
-		c.mu.Unlock()
-		c.push(map[string]any{"type": "subscribed", "topic": m.Topic})
 	default:
 		c.push(map[string]any{"type": "error", "error": "unknown topic"})
 	}
@@ -212,10 +215,6 @@ func (c *liveConn) unsubscribe(m wsMessage) {
 		if release != nil {
 			release()
 		}
-	case "events":
-		c.mu.Lock()
-		c.allEvents = false
-		c.mu.Unlock()
 	}
 }
 
@@ -296,8 +295,10 @@ func (h *Hub) Publish(deviceID int64, msg any) {
 	}
 }
 
-// PublishEvent sends an event to whoever subscribed to the event stream.
-func (h *Hub) PublishEvent(msg any) {
+// ForgetDevice removes subscriptions bound to a reusable inventory ID. A
+// browser that was watching the removed router must not silently begin
+// receiving a different router's snapshots if SQLite assigns it the same ID.
+func (h *Hub) ForgetDevice(deviceID int64) {
 	h.mu.Lock()
 	conns := make([]*liveConn, 0, len(h.conns))
 	for c := range h.conns {
@@ -307,10 +308,11 @@ func (h *Hub) PublishEvent(msg any) {
 
 	for _, c := range conns {
 		c.mu.Lock()
-		wants := c.allEvents
+		release := c.subs[deviceID]
+		delete(c.subs, deviceID)
 		c.mu.Unlock()
-		if wants {
-			c.push(msg)
+		if release != nil {
+			release()
 		}
 	}
 }

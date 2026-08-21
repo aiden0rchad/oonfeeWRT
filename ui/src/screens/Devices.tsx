@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type {
-  Broadcast, CapEffect, Device, DeviceDetail, OverheadReport, Point,
-  ReprobeResult, Series,
+  Broadcast, CapEffect, Degradation, Device, DeviceDetail, OverheadReport, Point,
+  ReprobeResult, Series, DeviceFunction,
 } from '../lib/api'
 import {
   Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
@@ -42,6 +42,12 @@ export function Devices({
       sortBy: (d) => d.status,
     },
     { key: 'name', header: 'Name', render: (d) => d.name || d.mac, sortBy: (d) => d.name },
+    {
+      key: 'functions',
+      header: 'Functions',
+      render: (d) => functionNames(deviceFunctions(d)),
+      sortBy: (d) => deviceFunctions(d).join(','),
+    },
     { key: 'host', header: 'Address', render: (d) => d.host, sortBy: (d) => d.host },
     {
       key: 'class',
@@ -78,12 +84,15 @@ export function Devices({
 
   return (
     <>
+      <h1 style={{ margin: '0 0 14px', fontSize: 20 }}>Devices</h1>
       <Card
         title={`Devices (${devices.length})`}
         actions={onAdopt && <Button onClick={onAdopt}>Adopt a device</Button>}
         pad={false}
       >
         <DataGrid
+          tableLabel="Managed devices"
+          totalRows={devices.length}
           rows={devices}
           columns={columns}
           rowKey={(d) => d.mac}
@@ -97,6 +106,7 @@ export function Devices({
         <DeviceDetailPanel
           id={openID}
           onClose={() => setOpenID(null)}
+          onChanged={() => onChanged?.()}
           onRemoved={() => {
             setOpenID(null)
             onChanged?.()
@@ -116,13 +126,15 @@ export function Devices({
  * cleanup, and a focus that had to be explicitly released would pin a router at
  * the fast rate forever.
  */
-function DeviceDetailPanel({
+export function DeviceDetailPanel({
   id,
   onClose,
+  onChanged,
   onRemoved,
 }: {
   id: number
   onClose: () => void
+  onChanged: () => void
   onRemoved: () => void
 }) {
   const [removing, setRemoving] = useState(false)
@@ -131,6 +143,8 @@ function DeviceDetailPanel({
   const [overhead, setOverhead] = useState<OverheadReport | null>(null)
   const [stats, setStats] = useState<LiveStats | null>(null)
   const [err, setErr] = useState('')
+  const [seriesErr, setSeriesErr] = useState('')
+  const loadGeneration = useRef(0)
 
   // Provenance per INTERFACE, not per SSID.
   //
@@ -146,26 +160,43 @@ function DeviceDetailPanel({
   // rewrites the capability record, and leaving the panel showing the previous
   // one is how "I pressed re-probe and nothing happened" happens.
   const load = useCallback(async () => {
-    try {
-      const [d, s] = await Promise.all([api.device(id), api.deviceSeries(id)])
-      // Cleared on success. Without this one dropped request replaced the whole
-      // panel with a critical banner forever: the 30s refresh kept succeeding
-      // and setting detail, but `err` was checked first and nothing ever reset
-      // it, so the panel went on reporting a failure from minutes ago about a
-      // controller that was answering fine.
+    const generation = ++loadGeneration.current
+    const [detailResult, seriesResult] = await Promise.allSettled([
+      api.device(id),
+      api.deviceSeries(id),
+    ])
+    if (generation !== loadGeneration.current) return
+    if (detailResult.status === 'fulfilled') {
       setErr('')
-      setDetail(d)
-      setSeries(s.series)
+      setDetail(detailResult.value)
       // Not fatal: a device in the inventory but not yet polled has no
       // overhead to report, which is a real state rather than zero cost.
       api.overhead(id).then(setOverhead).catch(() => {})
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+    } else {
+      setErr(detailResult.reason instanceof Error ? detailResult.reason.message : String(detailResult.reason))
+    }
+    if (seriesResult.status === 'fulfilled') {
+      setSeries(seriesResult.value.series)
+      setSeriesErr('')
+    } else {
+      setSeriesErr(seriesResult.reason instanceof Error ? seriesResult.reason.message : String(seriesResult.reason))
     }
   }, [id])
 
+  const refresh = useCallback(async () => {
+    await load()
+    onChanged()
+  }, [load, onChanged])
+
   useEffect(() => {
     let alive = true
+    loadGeneration.current++
+    setDetail(null)
+    setSeries({})
+    setOverhead(null)
+    setStats(null)
+    setErr('')
+    setSeriesErr('')
     load()
 
     // Watching the device IS the focus. The server reference-counts it on the
@@ -188,8 +219,26 @@ function DeviceDetailPanel({
       off()
       unwatch()
       clearInterval(refresh)
+      loadGeneration.current++
     }
   }, [id, load])
+
+  // A WebSocket frame is a timestamped observation, not a permanent lease on
+  // the word "live". If the socket or controller disappears, fall back to the
+  // durable device state rather than showing old stations as associated now.
+  useEffect(() => {
+    if (!stats) return
+    const now = Date.now()
+    const delay = (stats.ts + 30) * 1000 - now
+    if (delay <= 0 || stats.ts * 1000 > now + 30_000) {
+      setStats(null)
+      return
+    }
+    const timer = window.setTimeout(() => {
+      setStats((current) => current === stats ? null : current)
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [stats])
 
   // Only when there is nothing to show. A panel that has loaded keeps its
   // content and carries the error above it — the rule App, Logs and Clients all
@@ -198,7 +247,7 @@ function DeviceDetailPanel({
   if (err && !detail) {
     return (
       <SlideOver title="Device" onClose={onClose}>
-        <Banner tone="critical">{err}</Banner>
+        <div role="alert"><Banner tone="critical">{err}</Banner></div>
       </SlideOver>
     )
   }
@@ -211,6 +260,32 @@ function DeviceDetailPanel({
   }
 
   const quirks = detail.capabilities?.Quirks ?? []
+  const degradations = detail.degraded ?? []
+  const standingDegradations = degradations.filter((g) =>
+    g.permanent && ['permission', 'unsupported', 'device'].includes(g.cause),
+  )
+  const currentPollFailures = degradations.filter((g) =>
+    !standingDegradations.includes(g),
+  )
+  const degradationRow = (g: Degradation) => (
+    <div
+      key={g.call}
+      style={{
+        fontSize: 11,
+        color: 'var(--text-secondary)',
+        borderLeft: `2px solid ${standingDegradations.includes(g) ? 'var(--warning)' : 'var(--critical)'}`,
+        paddingLeft: 8,
+      }}
+    >
+      <code style={{ color: 'var(--text-primary)' }}>{g.call}</code>{' '}
+      — {g.error}
+      <div style={{ color: 'var(--text-muted)' }}>
+        Cause: {g.cause || 'unknown'}
+        {g.status && ` · ubus ${g.status.name} (${g.status.code})`}
+      </div>
+      {g.costs && <div>{g.costs}</div>}
+    </div>
+  )
   const wanKey =
     detail.interfaces.find((i) => i === 'wan') ??
     detail.interfaces.find((i) => i.startsWith('eth')) ??
@@ -239,12 +314,18 @@ function DeviceDetailPanel({
           one that worked.
         </Banner>
       )}
+      {seriesErr && (
+        <Banner tone="warning">
+          Metric catalog refresh failed ({seriesErr}). Core device facts remain
+          available; charts use the last catalog that loaded successfully.
+        </Banner>
+      )}
       <div style={{ display: 'grid', gap: 6 }}>
         <Prop label="Status">
           <Status value={detail.status} />
         </Prop>
         <Prop label="Name">
-          <DeviceName detail={detail} onRenamed={load} />
+          <DeviceName detail={detail} onRenamed={refresh} />
         </Prop>
         <Prop label="Address">{detail.host}</Prop>
         <Prop label="MAC">{detail.mac}</Prop>
@@ -253,6 +334,12 @@ function DeviceDetailPanel({
         </Prop>
         <Prop label="Class">
           <DeviceClass cls={detail.class} target={detail.capabilities?.Board?.Target} />
+        </Prop>
+        <Prop label="Functions">
+          {functionNames(deviceFunctions(detail))}
+          {!detail.functions && (
+            <span title="derived from this older row's legacy role"> · legacy</span>
+          )}
         </Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
@@ -361,7 +448,13 @@ function DeviceDetailPanel({
             {stats.stations.map((st) => (
               <div key={st.mac} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
                 <span style={{ color: 'var(--text-secondary)' }}>{st.mac}</span>
-                <span className="num">{st.signal} dBm</span>
+                <span className="num">
+                  {st.signal === null ? (
+                    <Unknown why="this station did not report signal" />
+                  ) : (
+                    `${st.signal} dBm`
+                  )}
+                </span>
               </div>
             ))}
           </div>
@@ -464,37 +557,41 @@ function DeviceDetailPanel({
         />
       )}
 
-      {detail.degraded && detail.degraded.length > 0 && (
+      {degradations.length > 0 && (
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
             What the controller cannot read here
           </div>
-          <div style={{ display: 'grid', gap: 6 }}>
-            {detail.degraded.map((g) => (
-              <div
-                key={g.call}
-                style={{
-                  fontSize: 11,
-                  color: 'var(--text-secondary)',
-                  borderLeft: `2px solid ${g.permanent ? 'var(--warning)' : 'var(--border-strong)'}`,
-                  paddingLeft: 8,
-                }}
-              >
-                <code style={{ color: 'var(--text-primary)' }}>{g.call}</code>{' '}
-                — {g.error}
-                {g.costs && <div>{g.costs}</div>}
+          {standingDegradations.length > 0 && (
+            <div style={{ display: 'grid', gap: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>
+                Permission or device limits
               </div>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-            These are standing limits of this device's access-control file or
-            driver, not failures. Polling works; these particular answers are
-            unavailable, and each line says what that costs.
-          </div>
+              {standingDegradations.map(degradationRow)}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                These are standing limits: retrying the same call will not fix
+                an ACL refusal or an operation the firmware or driver does not
+                provide. Each line says what remains unavailable.
+              </div>
+            </div>
+          )}
+          {currentPollFailures.length > 0 && (
+            <div style={{ display: 'grid', gap: 6, marginTop: standingDegradations.length ? 10 : 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>Current poll failures</div>
+              {currentPollFailures.map(degradationRow)}
+              <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                These failures describe the latest poll, not a confirmed
+                hardware or permission limit. The controller will try again;
+                do not treat the missing values as proof that the device lacks
+                the feature.
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      <Reprobe deviceID={id} onProbed={load} />
+      <ACLRefresh deviceID={id} onUpdated={refresh} />
+      <Reprobe deviceID={id} onProbed={refresh} />
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
         <Button onClick={() => setRemoving(true)}>Remove from controller</Button>
@@ -538,6 +635,26 @@ function DeviceDetailPanel({
   )
 }
 
+/** Older inventory rows carry one role. Preserve their historical behavior
+ * while presenting the same additive model as newly adopted devices. */
+function deviceFunctions(device: Pick<Device, 'functions' | 'role'>): DeviceFunction[] {
+  if (device.functions !== undefined) return device.functions
+  if (device.role === 'gateway') return ['gateway', 'ap', 'switch']
+  if (device.role === 'ap') return ['ap', 'switch']
+  if (device.role === 'switch') return ['switch']
+  return []
+}
+
+function functionNames(functions: DeviceFunction[]): string {
+  if (functions.length === 0) return 'None — invalid record'
+  const labels: Record<DeviceFunction, string> = {
+    gateway: 'Gateway',
+    ap: 'AP',
+    switch: 'Switch',
+  }
+  return functions.map((item) => labels[item]).join(' · ')
+}
+
 /**
  * What the controller costs this device.
  *
@@ -569,12 +686,16 @@ function ManagementOverhead({
   const budget = o.tier === 'focused' ? 6 : 1
   const overBudget = o.polls_per_minute > budget * 1.05
   const [saving, setSaving] = useState(false)
+  const [saveErr, setSaveErr] = useState('')
 
   async function setInterval(seconds: number) {
     setSaving(true)
+    setSaveErr('')
     try {
       await api.setPollInterval(deviceID, seconds)
       onChanged()
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
     }
@@ -640,7 +761,11 @@ function ManagementOverhead({
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
           Poll this device less often
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div
+          role="group"
+          aria-label="Poll this device less often"
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}
+        >
           {[
             { label: 'Default (60s)', s: 0 },
             { label: '2 min', s: 120 },
@@ -650,6 +775,7 @@ function ManagementOverhead({
             <button
               key={opt.s}
               disabled={saving}
+              aria-pressed={report.poll_interval_s === opt.s}
               onClick={() => setInterval(opt.s)}
               style={{
                 fontSize: 11,
@@ -668,9 +794,14 @@ function ManagementOverhead({
             </button>
           ))}
         </div>
+        {saveErr && (
+          <div role="alert" style={{ marginTop: 6 }}>
+            <Banner tone="critical">Poll interval was not changed: {saveErr}</Banner>
+          </div>
+        )}
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-          {report.poll_interval_note} Charts get coarser as the interval grows,
-          and a device can be down for up to one interval before it is noticed.
+          {report.poll_interval_note} Charts get coarser as the interval grows;
+          the online/offline window scales with the effective interval.
         </div>
       </div>
 
@@ -754,28 +885,46 @@ function ChartBlock({
   emptyNote?: string
   minSpan?: number
 }) {
-  const [data, setData] = useState<Series | null>(null)
+  const [loaded, setLoaded] = useState<{
+    data: Series
+    range: 1 | 24 | 168
+    window: [number, number]
+  } | null>(null)
   const [range, setRange] = useState<1 | 24 | 168>(1)
-  const [window, setWindow] = useState<[number, number] | undefined>()
+  const [loadErr, setLoadErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  const loadGeneration = useRef(0)
 
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current
+    const requestedRange = range
     const now = Math.floor(Date.now() / 1000)
-    const from = now - range * 3600
-    setWindow([from, now])
+    const from = now - requestedRange * 3600
+    setLoading(true)
     try {
-      setData(await api.stats(kind, deviceID, seriesKey, from, now))
-    } catch {
-      setData(null)
+      const data = await api.stats(kind, deviceID, seriesKey, from, now)
+      if (generation !== loadGeneration.current) return
+      setLoaded({ data, range: requestedRange, window: [from, now] })
+      setLoadErr('')
+    } catch (e) {
+      if (generation !== loadGeneration.current) return
+      setLoadErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false)
     }
   }, [kind, deviceID, seriesKey, range])
 
   useEffect(() => {
     load()
     const t = setInterval(load, 30_000)
-    return () => clearInterval(t)
+    return () => {
+      clearInterval(t)
+      loadGeneration.current++
+    }
   }, [load])
 
-  const points: Point[] = data?.points ?? []
+  const points: Point[] = loaded?.data.points ?? []
+  const rangeLabel = (value: 1 | 24 | 168) => value === 1 ? '1 hour' : value === 24 ? '1 day' : '1 week'
   return (
     <div>
       <div
@@ -792,10 +941,11 @@ function ChartBlock({
             the resolution footnote, which is the same kind of fact about the
             series. */}
         <span style={{ fontSize: 12, fontWeight: 600 }}>{title}</span>
-        <span style={{ display: 'flex', gap: 4 }}>
+        <span role="group" aria-label={`${title} time range`} style={{ display: 'flex', gap: 4 }}>
           {([1, 24, 168] as const).map((h) => (
             <button
               key={h}
+              aria-pressed={range === h}
               onClick={() => setRange(h)}
               style={{
                 fontSize: 11,
@@ -812,14 +962,21 @@ function ChartBlock({
           ))}
         </span>
       </div>
+      {(loading || loadErr) && (
+        <div role={loadErr ? 'alert' : 'status'} style={{ fontSize: 11, color: loadErr ? 'var(--warning)' : 'var(--text-muted)', marginBottom: 5 }}>
+          {loadErr
+            ? `Could not refresh ${rangeLabel(range)} data: ${loadErr}.${loaded ? ` Showing the last successful ${rangeLabel(loaded.range)} response.` : ''}`
+            : `Loading ${rangeLabel(range)} data…${loaded && loaded.range !== range ? ` Showing ${rangeLabel(loaded.range)} until it arrives.` : ''}`}
+        </div>
+      )}
       <TimeChart
         points={points}
         label={title}
         format={format}
         colour={colour}
         height={140}
-        resolution={data?.resolution}
-        window={window}
+        resolution={loaded?.data.resolution}
+        window={loaded?.window}
         note={note}
         emptyNote={emptyNote}
         minSpan={minSpan}
@@ -829,6 +986,117 @@ function ChartBlock({
 }
 
 export { duration, Button }
+
+function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [username, setUsername] = useState('root')
+  const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
+  const [acknowledged, setAcknowledged] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+
+  const run = async () => {
+    if (!acknowledged) return
+    setBusy(true)
+    setError('')
+    setMessage('')
+    try {
+      const result = await api.refreshACL(deviceID, {
+        username, password, private_key: privateKey || undefined,
+        acknowledge_router_changes: true,
+      })
+      setMessage(
+        `Optional oonfeeWRT controller capability installed and verified. ${result.features.length} capabilities are observable.`,
+      )
+      onUpdated()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setPassword('')
+      setPrivateKey('')
+      setAcknowledged(false)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <Button onClick={() => {
+        if (open) {
+          setPassword('')
+          setPrivateKey('')
+        }
+        setOpen(!open)
+        setAcknowledged(false)
+      }}>
+        {open ? 'Cancel capability installation' : 'Install optional oonfeeWRT capability'}
+      </Button>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+        This optional oonfeeWRT controller capability installation installs or replaces one rpcd
+        ACL JSON file on the router:{' '}
+        <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It adds controller access to supported
+        topology, radio channel/scan, OpenWrt log, and fixed-target WAN ICMP observations. It
+        installs no package, binary, daemon, service, or firmware. Leave it off or cancel to keep
+        the router unchanged; observations blocked by the current ACL remain explicit gaps.
+      </div>
+      {open && (
+        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            Device administrator username
+            <input
+              value={username}
+              autoComplete="off"
+              onChange={(event) => setUsername(event.target.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            Device administrator password
+            <input
+              type="password"
+              value={password}
+              autoComplete="off"
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            SSH private key (optional)
+            <textarea
+              value={privateKey}
+              autoComplete="off"
+              spellCheck={false}
+              rows={4}
+              onChange={(event) => setPrivateKey(event.target.value)}
+            />
+          </label>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Credentials are used for this one SSH request only. The password and private key are
+            never stored.
+          </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'start', fontSize: 11 }}>
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              disabled={busy}
+              onChange={(event) => setAcknowledged(event.target.checked)}
+            />
+            I understand that accepting installs or replaces the controller&apos;s single rpcd ACL
+            JSON file and adds the optional observation capability described above.
+          </label>
+          <Button
+            disabled={busy || username.trim() === '' || !acknowledged}
+            onClick={() => void run()}
+          >
+            {busy ? 'Installing capability…' : 'Install controller capability and verify'}
+          </Button>
+        </div>
+      )}
+      {error && <div role="alert" style={{ marginTop: 8 }}><Banner tone="critical">{error}</Banner></div>}
+      {message && <div style={{ marginTop: 8 }}><Banner tone="accent">{message}</Banner></div>}
+    </div>
+  )
+}
 
 /**
  * Re-probe this device's capabilities.
@@ -877,7 +1145,7 @@ function Reprobe({ deviceID, onProbed }: { deviceID: number; onProbed: () => voi
       </div>
 
       {err && (
-        <div style={{ marginTop: 8 }}>
+        <div role="alert" style={{ marginTop: 8 }}>
           <Banner tone="critical">{err}</Banner>
         </div>
       )}
@@ -1097,6 +1365,7 @@ function TakeoverBriefBlock({
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <input
+              aria-label={`Reason for leaving ${b.ssid || b.section || 'this network'} unmanaged`}
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="e.g. guest network a flatmate maintains by hand"
@@ -1125,7 +1394,7 @@ function TakeoverBriefBlock({
             </Button>
           </div>
           {noteErr && (
-            <div style={{ color: 'var(--critical, #d05a5a)' }}>
+            <div role="alert" style={{ color: 'var(--critical, #d05a5a)' }}>
               The note was not saved: {noteErr}
             </div>
           )}
@@ -1179,6 +1448,7 @@ function DeviceName({
       <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
         {detail.name || detail.mac}
         <Button
+          aria-label={`Rename ${detail.name || detail.mac}`}
           onClick={() => {
             setDraft(detail.name)
             setErr('')
@@ -1194,6 +1464,7 @@ function DeviceName({
     <span style={{ display: 'grid', gap: 4 }}>
       <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
         <input
+          aria-label={`New name for ${detail.name || detail.mac}`}
           value={draft}
           autoFocus
           onChange={(e) => setDraft(e.target.value)}
@@ -1221,7 +1492,7 @@ function DeviceName({
       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         Leave it empty to go back to the name the device reports for itself.
       </span>
-      {err && <span style={{ fontSize: 11, color: 'var(--critical)' }}>{err}</span>}
+      {err && <span role="alert" style={{ fontSize: 11, color: 'var(--critical)' }}>{err}</span>}
     </span>
   )
 }

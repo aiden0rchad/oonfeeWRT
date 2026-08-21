@@ -2,16 +2,31 @@ package daemon
 
 import (
 	"context"
-	"github.com/aiden0rchad/oonfeewrt/internal/render"
-	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
+	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
+	"github.com/aiden0rchad/oonfeewrt/internal/render"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
+
+func boundApplyRequest(t testing.TB, d *Daemon, ctx context.Context,
+	req api.ApplyRequest) api.ApplyRequest {
+	t.Helper()
+	preview, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatalf("preview before apply: %v", err)
+	}
+	req.PreviewToken = preview.PreviewToken
+	return req
+}
 
 // The gateway applies last.
 //
@@ -162,6 +177,24 @@ func TestPreviewReportsAnUnreachableDeviceAsARow(t *testing.T) {
 	}
 }
 
+func TestPreviewBlocksCorruptGatewayFunctionsBeforeDeviceContact(t *testing.T) {
+	dev := &store.Device{
+		ID: 9, Name: "corrupt-gateway", Host: "127.0.0.1", Port: 1,
+		Role: "gateway", Functions: []string{},
+		FunctionError: "stored device functions are invalid",
+	}
+	p := (&Daemon{}).previewDevice(context.Background(), model.Site{}, dev)
+	if p.Error == "" {
+		t.Fatal("corrupt function set reached planning")
+	}
+	if p.Role != "gateway" || p.Functions == nil || len(p.Functions) != 0 {
+		t.Fatalf("preview widened/relabeled corrupt row: role=%q functions=%v", p.Role, p.Functions)
+	}
+	if len(p.Changes) != 0 {
+		t.Fatalf("corrupt function set produced changes: %+v", p.Changes)
+	}
+}
+
 // A change to network or firewall config needs an explicit acknowledgment.
 //
 // Those configs carry the path the controller reaches the device through. The
@@ -195,6 +228,91 @@ func TestTraversalDetection(t *testing.T) {
 	if touchesTraversal(dhcp) {
 		t.Error("a dhcp-only change was flagged; the controller reaches devices " +
 			"by address, not by lease")
+	}
+}
+
+func TestConvergedApplyRepairsOwnedLedger(t *testing.T) {
+	ctx := context.Background()
+	addr := startMock(t)
+	d := openDaemon(t)
+	dev := seedAP(t, d, "60:38:e0:00:0c:01", "ap-one", addr, capability.Present)
+
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Radios = []capability.Radio{{
+		Device: "wlan1", Phy: "phy1", Frequency: 2437,
+		Hardware: "Generic MAC80211",
+	}}
+	if err := d.Store.SetCapabilities(ctx, dev.ID, caps, string(capability.ClassA)); err != nil {
+		t.Fatal(err)
+	}
+	network := &model.Network{
+		Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Zone: "lan", Enabled: true,
+	}
+	if err := d.Store.SaveNetwork(ctx, network); err != nil {
+		t.Fatal(err)
+	}
+	group := &model.APGroup{Name: "all", DeviceIDs: []int64{dev.ID}}
+	if err := d.Store.SaveGroup(ctx, group); err != nil {
+		t.Fatal(err)
+	}
+	wlan := &model.WLAN{
+		SSID: "owned-ledger-test", NetworkID: network.ID, GroupID: group.ID,
+		Bands: []model.Band{model.Band2G}, Security: model.Security{
+			Mode: model.SecPSK2, Key: "test-passphrase",
+		}, Enabled: true,
+	}
+	if err := d.Store.SaveWLAN(ctx, wlan); err != nil {
+		t.Fatal(err)
+	}
+	site, err := d.Store.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Put the desired section on the mock once, bypassing daemon.applyDevice's
+	// runtime health gate. The second call below is the path under test: the
+	// device is already converged, but its durable ownership ledger is missing.
+	c, err := d.Connect(ctx, dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := reconcile.New(d.Store)
+	plan, err := r.PlanDevice(ctx, c, site,
+		model.Device{ID: dev.ID, Name: dev.Name, Role: model.RoleAP}, caps)
+	if err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	if plan.Empty() || plan.Blocked() {
+		c.Close()
+		t.Fatalf("fixture did not produce an applicable plan: empty=%v blocked=%v",
+			plan.Empty(), plan.Blocked())
+	}
+	if _, err := r.Apply(ctx, c, dev.ID, plan, nil); err != nil {
+		c.Close()
+		t.Fatal(err)
+	}
+	c.Close()
+	if _, err := d.Store.SQL().ExecContext(ctx,
+		`DELETE FROM owned_sections WHERE device_id=?`, dev.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	dev, err = d.Store.DeviceByID(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := d.applyDevice(ctx, site, dev, false)
+	if got.Outcome != string(applyengine.Applied) || got.Changes != 0 {
+		t.Fatalf("converged apply = %+v, want applied with zero device changes", got)
+	}
+	owned, err := d.Store.OwnedSections(ctx, dev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(owned) == 0 {
+		t.Fatal("converged apply left the ownership ledger empty; un-adopt would not clean up the controller's section")
 	}
 }
 
@@ -319,5 +437,139 @@ func TestHealthCheckVerifiesARenamedSSIDStopped(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "this change removed") {
 		t.Errorf("the failure blames the wrong thing: %v", err)
+	}
+}
+
+func TestFleetApplyStopsAfterAppliedDeviceOwnershipLedgerFailure(t *testing.T) {
+	ctx := context.Background()
+	d := openDaemon(t)
+	d.Config.ApplyDrain = applyengine.MinApplyBudget() + 5*time.Second
+	first := seedAP(t, d, "60:38:e0:00:0d:01", "ap-one", startMock(t), capability.Present)
+	second := seedAP(t, d, "60:38:e0:00:0d:02", "ap-two", startMock(t), capability.Present)
+
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Radios = []capability.Radio{{
+		Device: "wlan1", Phy: "phy1", Frequency: 2437,
+		Hardware: "Generic MAC80211",
+	}}
+	for _, dev := range []*store.Device{first, second} {
+		if err := d.Store.SetCapabilities(ctx, dev.ID, caps, string(capability.ClassA)); err != nil {
+			t.Fatal(err)
+		}
+		// Keep the mock's runtime OpenWrt SSID for the health check, but remove
+		// its foreign UCI section so the controller can create its own section
+		// with that SSID without an ownership conflict.
+		c, err := d.Connect(ctx, dev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Call(ctx, "uci", "delete", map[string]any{
+			"config": "wireless", "section": "default_radio0",
+		}, nil); err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		if err := c.Call(ctx, "uci", "commit", map[string]any{"config": "wireless"}, nil); err != nil {
+			c.Close()
+			t.Fatal(err)
+		}
+		c.Close()
+	}
+
+	network := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	if err := d.Store.SaveNetwork(ctx, network); err != nil {
+		t.Fatal(err)
+	}
+	group := &model.APGroup{Name: "all", DeviceIDs: []int64{first.ID, second.ID}}
+	if err := d.Store.SaveGroup(ctx, group); err != nil {
+		t.Fatal(err)
+	}
+	wlan := &model.WLAN{
+		SSID: "OpenWrt", NetworkID: network.ID, GroupID: group.ID,
+		Bands: []model.Band{model.Band2G}, Security: model.Security{
+			Mode: model.SecPSK2, Key: "test-passphrase",
+		}, Enabled: true,
+	}
+	if err := d.Store.SaveWLAN(ctx, wlan); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Devices) != 2 || len(preview.Devices[0].Changes) == 0 ||
+		len(preview.Devices[1].Changes) == 0 {
+		t.Fatalf("fixture preview = %+v", preview.Devices)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx, fmt.Sprintf(`CREATE TRIGGER reject_first_ownership
+		BEFORE INSERT ON owned_sections WHEN NEW.device_id = %d BEGIN
+			SELECT RAISE(ABORT, 'synthetic fleet ownership ledger failure');
+		END`, first.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := d.ApplySite(ctx, api.ApplyRequest{PreviewToken: preview.PreviewToken})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Devices) != 1 || !result.Aborted || result.AbortedAfter != first.Name {
+		t.Fatalf("fleet result = %+v", result)
+	}
+	got := result.Devices[0]
+	if got.DeviceID != first.ID || got.Outcome != "error" || got.Changes == 0 ||
+		!strings.Contains(got.Reason, "device outcome was applied") ||
+		!strings.Contains(got.Reason, "ownership recording failed") ||
+		!strings.Contains(got.Reason, "synthetic fleet ownership ledger failure") {
+		t.Fatalf("first device result = %+v", got)
+	}
+
+	ownedOnDevice := func(dev *store.Device) int {
+		t.Helper()
+		c, err := d.Connect(ctx, dev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		var out struct {
+			Values map[string]map[string]any `json:"values"`
+		}
+		if err := c.Call(ctx, "uci", "get", map[string]any{"config": "wireless"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, values := range out.Values {
+			if fmt.Sprint(values[render.OwnershipTag]) == "1" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := ownedOnDevice(first); n == 0 {
+		t.Fatal("the first router was not configured before its ownership ledger failed")
+	}
+	if n := ownedOnDevice(second); n != 0 {
+		t.Fatalf("later router has %d controller sections; fleet apply did not abort", n)
+	}
+	if owned, err := d.Store.OwnedSections(ctx, first.ID); err != nil || len(owned) != 0 {
+		t.Fatalf("failed ledger contains %+v, err=%v", owned, err)
+	}
+
+	events, err := d.Store.DeviceEvents(ctx, first.ID, "config.apply", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Severity != "error" ||
+		!strings.Contains(string(fmt.Appendf(nil, "%s", events[0].Detail)),
+			"synthetic fleet ownership ledger failure") {
+		t.Fatalf("first-device audit = %+v", events)
+	}
+	secondEvents, err := d.Store.DeviceEvents(ctx, second.ID, "config.apply", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondEvents) != 0 {
+		t.Fatalf("later device was applied/audited after abort: %+v", secondEvents)
 	}
 }

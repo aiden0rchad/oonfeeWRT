@@ -92,7 +92,7 @@ func (c *Client) sendChunk(ctx context.Context, calls []Invocation, payload []by
 	needsRelogin := false
 	for i := range resps {
 		status, data, err := decodeFrame(calls[i].Object, calls[i].Method, &resps[i])
-		results[i] = Result{Status: status, Data: data}
+		results[i] = Result{Status: status}
 		switch {
 		case err != nil:
 			results[i].Err = err
@@ -103,13 +103,29 @@ func (c *Client) sendChunk(ctx context.Context, calls []Invocation, payload []by
 		case status != StatusOK:
 			results[i].Err = &StatusError{
 				Object: calls[i].Object, Method: calls[i].Method, Status: status}
+		default:
+			// Error payloads are device-controlled and may reflect the request's
+			// session token. Only successful results are data-bearing.
+			results[i].Data = data
 		}
 	}
 
-	// A dead session denies every call in the batch at once. Re-login once and
-	// resend, mirroring Call's policy — but never inside a confirm window,
-	// where a token refresh guarantees the device reverts.
-	if needsRelogin && allDenied(results) {
+	// If only part of the batch was denied, another call proved this session is
+	// live. Those denials are ACL gaps without spending a re-login to prove it.
+	// A dead session denies every call at once; only that case needs recovery.
+	allWereDenied := needsRelogin && allDenied(results)
+	if needsRelogin && !allWereDenied {
+		for i := range results {
+			var d *DeniedError
+			if errors.As(results[i].Err, &d) {
+				d.Retried = true
+			}
+		}
+	}
+
+	// Re-login once and resend, mirroring Call's policy — but never inside a
+	// confirm window, where a token refresh guarantees the device reverts.
+	if allWereDenied {
 		c.mu.Lock()
 		inWindow := c.confirmWindow
 		user, pass := c.user, c.pass
@@ -154,10 +170,12 @@ func (c *Client) resendChunk(ctx context.Context, calls []Invocation, payload []
 	results := make([]Result, len(calls))
 	for i := range resps {
 		status, data, err := decodeFrame(calls[i].Object, calls[i].Method, &resps[i])
-		results[i] = Result{Status: status, Data: data, Err: err}
+		results[i] = Result{Status: status, Err: err}
 		if err == nil && status != StatusOK {
 			results[i].Err = &StatusError{
 				Object: calls[i].Object, Method: calls[i].Method, Status: status}
+		} else if err == nil {
+			results[i].Data = data
 		}
 		var d *DeniedError
 		if errors.As(results[i].Err, &d) {
@@ -185,5 +203,9 @@ func (r Result) Decode(out any) error {
 	if len(r.Data) == 0 {
 		return nil
 	}
-	return json.Unmarshal(r.Data, out)
+	if err := json.Unmarshal(r.Data, out); err != nil {
+		return &ProtocolError{Code: 0,
+			Message: "decode batch payload: " + jsonDiagnostic(err)}
+	}
+	return nil
 }

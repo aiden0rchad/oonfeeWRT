@@ -16,9 +16,8 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
 	_ "modernc.org/sqlite"
@@ -26,9 +25,10 @@ import (
 
 func main() {
 	ctx := context.Background()
-	db, err := store.Open(ctx, "sqlite", os.Args[1])
+	handle, err := toolstore.OpenWritable(ctx, os.Args[1])
 	must(err)
-	defer db.Close()
+	defer handle.Close()
+	db := handle.DB
 	host := os.Args[2]
 
 	site, err := db.Site(ctx)
@@ -47,8 +47,7 @@ func main() {
 		defer c.Close()
 
 		r := reconcile.New(db)
-		plan, err := r.PlanDevice(ctx, c, site,
-			model.Device{ID: d.ID, Name: d.Name, Role: model.RoleOf(d.Role)}, &caps)
+		plan, err := r.PlanDevice(ctx, c, site, d.ModelDevice(), &caps)
 		must(err)
 		if plan.Blocked() {
 			fmt.Println("BLOCKED:", plan.Report.Conflicts[0].Reason)

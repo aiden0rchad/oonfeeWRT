@@ -62,21 +62,44 @@ func TestQuirksDeduplicate(t *testing.T) {
 	}
 }
 
-// Marketing names are ambiguous: "AX3000" spans MT7621 (class C, which sets the
-// budget) and MT7981 (class B). Classification must key on the SoC target.
-func TestClassifyKeysOnTargetNotMarketing(t *testing.T) {
+// Marketing names are ambiguous: classification keys on the target or the
+// actual SoC string, never the product name. ath79/generic alone says too
+// little; QCA956X is classified because that exact silicon was measured.
+func TestClassifyKeysOnSiliconNotMarketing(t *testing.T) {
 	cases := []struct {
-		target string
-		want   Class
+		name  string
+		board Board
+		want  Class
 	}{
-		{"mvebu/cortexa9", ClassA},
-		{"mediatek/filogic", ClassB},
-		{"ramips/mt7621", ClassC},
-		{"ath79/generic", ClassUnknown},
+		{"mvebu", Board{Target: "mvebu/cortexa9"}, ClassA},
+		{"filogic", Board{Target: "mediatek/filogic"}, ClassB},
+		{"mt7621", Board{Target: "ramips/mt7621"}, ClassC},
+		{"generic ath79", Board{Target: "ath79/generic"}, ClassUnknown},
+		{"measured QCA956X", Board{Target: "ath79/generic", System: "Qualcomm Atheros QCA956X ver 1 rev 0"}, ClassC},
 	}
 	for _, tc := range cases {
-		if got := classify(Board{Target: tc.target}); got != tc.want {
-			t.Errorf("classify(%q) = %s, want %s", tc.target, got, tc.want)
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classify(tc.board); got != tc.want {
+				t.Errorf("classify(%+v) = %s, want %s", tc.board, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSwitchPortCapabilityUsesDSAOrLegacySwitch(t *testing.T) {
+	cases := []struct {
+		dsa, legacy, want State
+	}{
+		{Present, Absent, Present},
+		{Absent, Present, Present},
+		{Absent, Absent, Absent},
+		{NotObservable, Absent, NotObservable},
+		{Absent, NotObservable, NotObservable},
+	}
+	for _, tc := range cases {
+		if got := switchPortState(tc.dsa, tc.legacy); got != tc.want {
+			t.Errorf("switchPortState(%s, %s) = %s, want %s",
+				tc.dsa, tc.legacy, got, tc.want)
 		}
 	}
 }

@@ -36,11 +36,15 @@ type Drift struct {
 	Config  string
 	Section string
 	Option  string
-	Ours    string // what we last applied
-	Theirs  string // what is there now
+	Ours    string // what we last applied; redacted for sensitive options
+	Theirs  string // what is there now; redacted for sensitive options
 }
 
 func (d Drift) String() string {
+	if IsSensitiveOption(d.Option) {
+		return fmt.Sprintf("%s.%s.%s: device value differs from what we applied (values redacted)",
+			d.Config, d.Section, d.Option)
+	}
 	return fmt.Sprintf("%s.%s.%s: we applied %q, device has %q",
 		d.Config, d.Section, d.Option, d.Ours, d.Theirs)
 }
@@ -195,6 +199,9 @@ func (r *Reconciler) PlanDevice(ctx context.Context, c *ubus.Client, site model.
 	if err != nil {
 		return nil, err
 	}
+	if conflict := explicitFirewallPolicyConflict(ctx, c, site, dev, existing); conflict != nil {
+		report.Conflicts = append(report.Conflicts, *conflict)
+	}
 
 	p := &DevicePlan{Device: dev, Doc: doc, Report: report, Existing: existing}
 	// What we actually applied last time, so drift can be told apart from a
@@ -295,10 +302,7 @@ func detectDrift(doc render.Doc, existing render.Existing, appliedHash map[strin
 			have, present := current[k]
 			switch {
 			case present && have != ours[k]:
-				out = append(out, Drift{
-					Config: s.Config, Section: s.Name, Option: k,
-					Ours: ours[k], Theirs: have,
-				})
+				out = append(out, newDrift(s.Config, s.Name, k, ours[k], have))
 			case !present && hadHash:
 				// The option is GONE. Only claimed when we have a recorded
 				// hash for this section and it still matches what we would
@@ -306,10 +310,7 @@ func detectDrift(doc render.Doc, existing render.Existing, appliedHash map[strin
 				// this, and it has since been removed". Without a recorded
 				// hash we cannot tell a deletion from an option this version
 				// of the renderer has only just started writing.
-				out = append(out, Drift{
-					Config: s.Config, Section: s.Name, Option: k,
-					Ours: ours[k], Theirs: "",
-				})
+				out = append(out, newDrift(s.Config, s.Name, k, ours[k], ""))
 			}
 		}
 	}
@@ -332,6 +333,22 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 			len(p.Report.Conflicts), p.Report.Conflicts[0].Reason)
 	}
 	if p.Empty() {
+		// "UCI already matches" is not runtime proof. A prior reload may have
+		// left an interface, DHCP server, BSS, bridge-isolation flag, firewall,
+		// route or fixed lease absent even though the committed UCI is exact.
+		// The no-write path cannot revert anything, but it must fail rather than
+		// call that state Applied or record ownership as healthy.
+		if runtimeHealth := composeManagedRuntimeHealth(p, health); runtimeHealth != nil {
+			if healthErr := runtimeHealth(ctx, c); healthErr != nil {
+				applyErr := fmt.Errorf("reconcile: no configuration was written; managed runtime proof failed: %w", healthErr)
+				res := applyengine.Result{
+					Reason:    "no configuration was written; desired managed state is not loaded in runtime",
+					HealthErr: healthErr,
+				}
+				r.logOutcome(ctx, deviceID, p, res, applyErr)
+				return res, applyErr
+			}
+		}
 		// Nothing to write, and possibly a great deal to remember.
 		//
 		// A device can already carry our sections while the store knows
@@ -344,26 +361,26 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 		// up — the same hole the carry-forward closed on the applying path,
 		// reached from the other side. Observed on the reference fleet after
 		// exactly that sequence.
-		if err := r.recordOwned(ctx, deviceID, p); err != nil {
-			return applyengine.Result{}, err
+		res := applyengine.Result{Outcome: applyengine.Applied,
+			Reason: "already matches the site model; nothing to do"}
+		err := r.recordOwned(ctx, deviceID, p)
+		if err != nil {
+			res.Reason = fmt.Sprintf("device outcome was applied, but controller ownership recording failed: %v", err)
 		}
-		return applyengine.Result{Outcome: applyengine.Applied,
-			Reason: "already matches the site model; nothing to do"}, nil
+		r.logOutcome(ctx, deviceID, p, res, err)
+		return res, err
 	}
 
+	health = composeManagedRuntimeHealth(p, health)
 	res, err := r.Engine.Apply(ctx, c, p.Plan, health)
+	if err == nil && res.Outcome == applyengine.Applied {
+		if ownedErr := r.recordOwned(ctx, deviceID, p); ownedErr != nil {
+			err = ownedErr
+			res.Reason = fmt.Sprintf("device outcome was applied, but controller ownership recording failed: %v", ownedErr)
+		}
+	}
 	r.logOutcome(ctx, deviceID, p, res, err)
-	if err != nil {
-		return res, err
-	}
-	if res.Outcome != applyengine.Applied {
-		return res, nil
-	}
-
-	if err := r.recordOwned(ctx, deviceID, p); err != nil {
-		return res, err
-	}
-	return res, nil
+	return res, err
 }
 
 // recordOwned makes the ownership record match what is on the device.

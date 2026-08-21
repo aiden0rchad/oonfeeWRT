@@ -68,6 +68,11 @@ func (s *Server) handleReprobe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// A successful probe replaces the capability record used to render plans.
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
 	res, err := s.Reprobe.Reprobe(r.Context(), id)
 	switch {
 	case errors.Is(err, ErrReprobeBusy):

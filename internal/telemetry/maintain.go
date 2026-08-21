@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -31,6 +32,11 @@ type Maintainer struct {
 
 	// Now is injectable so tests do not have to wait five minutes.
 	Now func() time.Time
+
+	// Lifecycle serialises the sample-drain/database-write pair with inventory
+	// deletion and its in-memory purge. Without one lock around both halves, a
+	// drained row can cross an un-adoption boundary and meet a reused device ID.
+	Lifecycle sync.Locker
 }
 
 // NewMaintainer wires one up with the shipped retention policy.
@@ -47,11 +53,10 @@ func NewMaintainer(db *store.DB, samples *Store, log *slog.Logger) *Maintainer {
 	}
 }
 
-// Run ticks until the context is cancelled, then performs one final flush.
-//
-// The final flush matters: without it, up to five minutes of samples are lost
-// every time the controller restarts, and a fleet that gets updated weekly would
-// have a visible notch in every graph.
+// Run ticks until the context is cancelled, then performs one final flush of
+// every completed window. The window still in progress stays in memory and is
+// discarded with the process: persisting it under the canonical bucket key
+// would let the next process overwrite it with a different partial aggregate.
 func (m *Maintainer) Run(ctx context.Context) {
 	t := time.NewTicker(m.Interval)
 	defer t.Stop()
@@ -76,28 +81,9 @@ func (m *Maintainer) Tick(ctx context.Context) { m.tick(ctx, false) }
 
 func (m *Maintainer) tick(ctx context.Context, final bool) {
 	now := m.now()
-
-	// On shutdown, flush the window that is still filling. Normally a partial
-	// window is left alone so a later tick can complete it, but there is no
-	// later tick — and a partial average with an honest sample count beats a
-	// hole in the series.
-	at := now
+	rows := m.flush(ctx, now)
 	if final {
-		at = now.Add(m.window())
-	}
-
-	rows := m.Samples.Flush(at)
-	if len(rows) > 0 {
-		if err := m.Store.WriteRollups(ctx, toStoreRows(rows)); err != nil {
-			// Do not retry here. The samples are already drained from the ring,
-			// so a retry would have nothing to write; what matters is that the
-			// loss is visible rather than silent.
-			m.Log.Error("could not write telemetry rollups; this window is lost",
-				"rows", len(rows), "err", err)
-		}
-	}
-	if final {
-		m.Log.Info("final telemetry flush", "rows", len(rows))
+		m.Log.Info("final completed telemetry flush", "rows", len(rows))
 		return
 	}
 
@@ -118,19 +104,34 @@ func (m *Maintainer) tick(ctx context.Context, final bool) {
 	} else if n > 0 {
 		m.Log.Debug("forgot inactive clients", "count", n)
 	}
-	if res.FiveMinute+res.Hourly+res.Events > 0 {
+	if res.FiveMinute+res.Hourly+res.Events+res.Topology+res.RadioScans > 0 {
 		m.Log.Debug("pruned telemetry", "rollup_5m", res.FiveMinute,
-			"rollup_1h", res.Hourly, "events", res.Events)
+			"rollup_1h", res.Hourly, "events", res.Events,
+			"topology_intervals", res.Topology, "radio_scans", res.RadioScans)
 	}
 	if m.AfterTick != nil {
 		m.AfterTick()
 	}
 }
 
-// window is the ROLLUP period, which belongs to the sample store — not the tick
-// interval, which belongs here. Deriving it means the two cannot drift apart:
-// a tick shorter than the window is harmless (most ticks flush nothing), but a
-// final flush offset by the wrong amount would drop the last window entirely.
+func (m *Maintainer) flush(ctx context.Context, at time.Time) []Rollup {
+	if m.Lifecycle != nil {
+		m.Lifecycle.Lock()
+		defer m.Lifecycle.Unlock()
+	}
+	rows := m.Samples.Flush(at)
+	if len(rows) > 0 {
+		if err := m.Store.WriteRollups(ctx, toStoreRows(rows)); err != nil {
+			// Do not retry here. The samples are already drained from the ring,
+			// so a retry would have nothing to write; what matters is that the
+			// loss is visible rather than silent.
+			m.Log.Error("could not write telemetry rollups; this window is lost",
+				"rows", len(rows), "err", err)
+		}
+	}
+	return rows
+}
+
 // DefaultClientTTL keeps a client for 30 days after it was last seen, which is
 // long enough to recognise a laptop returning from a holiday and short enough
 // that randomised MACs do not accumulate forever.
@@ -142,13 +143,6 @@ func (m *Maintainer) ClientRetention() time.Duration {
 		return m.ClientTTL
 	}
 	return DefaultClientTTL
-}
-
-func (m *Maintainer) window() time.Duration {
-	if m.Samples != nil {
-		return m.Samples.Window()
-	}
-	return DefaultWindow
 }
 
 func (m *Maintainer) now() time.Time {

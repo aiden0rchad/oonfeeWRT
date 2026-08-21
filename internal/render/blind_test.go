@@ -139,10 +139,18 @@ func TestRefusedRadioListDoesNotClaimTheRadioIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var precise bool
 	for _, o := range rep.Omissions {
-		if strings.Contains(o.Reason, "device has no") {
+		if strings.Contains(o.Reason, "radio list could not be read") {
+			precise = true
+		}
+		if strings.Contains(o.Reason, "device has no") ||
+			strings.Contains(o.Reason, "no radio on this device matches") {
 			t.Errorf("claimed absence from a refused call: %q", o.Reason)
 		}
+	}
+	if !precise {
+		t.Error("the precise unreadable-radio explanation was lost")
 	}
 	// Absence is still stated plainly when it is actually known.
 	_, rep, err = Render(wirelessSite(), model.Device{ID: 1, Role: model.RoleAP},
@@ -631,31 +639,23 @@ func TestUnreadableMessagesSayWhatToDoAboutIt(t *testing.T) {
 	says(t, collect(rep), "gap in what the controller can see")
 }
 
-// A malformed address must show a good one, not describe the format.
-func TestABadAddressIsShownAGoodOne(t *testing.T) {
+// A malformed address must stop before an empty L3 document reaches Prune.
+// Otherwise a typo in an existing network deletes its interface, DHCP server
+// and firewall zone while retaining only the bridge VLAN.
+func TestABadAddressBlocksRender(t *testing.T) {
 	caps := capability.NewRegistry()
 	caps.Ports = capability.Ports{Bridge: "br-lan", LAN: []string{"lan1"}}
 	site := gatewaySite()
 	site.Networks[0].CIDR = "10.0.20.1"
-	_, rep, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
+	doc, _, err := Render(site, model.Device{ID: 1, Role: model.RoleGateway},
 		caps, vlanAware())
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("a malformed CIDR produced a device document")
 	}
-	var found bool
-	for _, o := range rep.Omissions {
-		if !strings.Contains(o.Reason, "no usable address") {
-			continue
-		}
-		found = true
-		if !strings.Contains(o.Reason, "/24") {
-			t.Errorf("no example of a good address: %q", o.Reason)
-		}
-		if !strings.Contains(o.Reason, "get no lease") {
-			t.Errorf("does not say what goes wrong for a client: %q", o.Reason)
-		}
+	if !strings.Contains(strings.ToLower(err.Error()), "cidr") {
+		t.Errorf("error does not say how the address must be written: %v", err)
 	}
-	if !found {
-		t.Fatal("a malformed CIDR produced no omission")
+	if len(doc.Sections) != 0 {
+		t.Fatalf("malformed CIDR produced partial sections: %+v", doc.Sections)
 	}
 }

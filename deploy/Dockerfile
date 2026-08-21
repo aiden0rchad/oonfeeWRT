@@ -24,16 +24,18 @@ RUN npm run build
 # GOOS/GOARCH below, which is what decision D3 (CGO off) buys us. Leaving this
 # unpinned would emulate the whole toolchain and make TARGETOS/TARGETARCH a
 # no-op, since they would just restate the emulated platform.
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /src/ui/dist ./ui/dist
 # CGO off (decision D3) → fully static, works FROM scratch on any arch.
-ARG TARGETOS TARGETARCH
+ARG TARGETOS TARGETARCH VERSION=dev
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w" -o /oonfeewrtd ./cmd/oonfeewrtd
+    go build -trimpath -buildvcs=false \
+      -ldflags "-s -w -buildid= -X main.version=$VERSION" \
+      -o /oonfeewrtd ./cmd/oonfeewrtd
 # Materialised here so the scratch stage can COPY them in with an owner —
 # see the /data note below.
 RUN mkdir -p /emptydirs/data /emptydirs/tmp
@@ -64,5 +66,5 @@ USER 65532:65532
 VOLUME ["/data"]
 ENV OONFEE_DATA_DIR=/data \
     OONFEE_LISTEN=:8080
-EXPOSE 8080 8443
+EXPOSE 8080
 ENTRYPOINT ["/oonfeewrtd"]

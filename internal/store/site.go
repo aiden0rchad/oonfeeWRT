@@ -1,12 +1,15 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -41,6 +44,15 @@ func (db *DB) Site(ctx context.Context) (model.Site, error) {
 	}
 
 	if s.Networks, err = db.networks(ctx); err != nil {
+		return model.Site{}, err
+	}
+	if s.Zones, err = db.zonePolicies(ctx); err != nil {
+		return model.Site{}, err
+	}
+	if s.Policies, err = db.policies(ctx); err != nil {
+		return model.Site{}, err
+	}
+	if s.PolicyClients, err = db.policyClients(ctx); err != nil {
 		return model.Site{}, err
 	}
 	if s.Groups, err = db.groups(ctx); err != nil {
@@ -163,7 +175,7 @@ func (db *DB) SetSiteName(ctx context.Context, name string) error {
 
 func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT id, name, vlan, cidr, zone, enabled FROM networks ORDER BY id`)
+		`SELECT id, name, vlan, cidr, zone, dhcp_json, enabled FROM networks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list networks: %w", err)
 	}
@@ -171,16 +183,173 @@ func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 	out := []model.Network{}
 	for rows.Next() {
 		var n model.Network
-		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone, &n.Enabled); err != nil {
+		var rawDHCP string
+		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone,
+			&rawDHCP, &n.Enabled); err != nil {
 			return nil, err
 		}
+		dhcp := model.DefaultDHCPConfig()
+		if err := json.Unmarshal([]byte(rawDHCP), &dhcp); err != nil {
+			return nil, fmt.Errorf("store: decode DHCP for network %d: %w", n.ID, err)
+		}
+		n.DHCP = &dhcp
+		n.LegacyDHCPDefaults = isLegacyDHCPJSON(rawDHCP)
 		out = append(out, n)
 	}
 	return out, rows.Err()
 }
 
+// zonePolicies loads only explicit rows. The model supplies the legacy
+// source -> wan default for active zones with no row.
+//
+// Policy is security state, so its JSON is decoded strictly: repairing a
+// missing or misspelled forwarding list to an empty/default value would turn
+// unreadable access control into a different access control without consent.
+func (db *DB) zonePolicies(ctx context.Context) ([]model.ZonePolicy, error) {
+	rows, err := db.sql.QueryContext(ctx,
+		`SELECT name, policy_json FROM zones ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list zone policies: %w", err)
+	}
+	defer rows.Close()
+	out := []model.ZonePolicy{}
+	for rows.Next() {
+		var name, raw string
+		if err := rows.Scan(&name, &raw); err != nil {
+			return nil, err
+		}
+		var stored struct {
+			ForwardTo *[]string `json:"forward_to"`
+		}
+		dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&stored); err != nil {
+			return nil, fmt.Errorf("store: zone policy %q has unreadable policy: %w", name, err)
+		}
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			return nil, fmt.Errorf("store: zone policy %q has unreadable policy: trailing JSON", name)
+		}
+		if stored.ForwardTo == nil {
+			return nil, fmt.Errorf("store: zone policy %q has unreadable policy: forward_to must be an array", name)
+		}
+		for _, dest := range *stored.ForwardTo {
+			if strings.TrimSpace(dest) == "" {
+				return nil, fmt.Errorf("store: zone policy %q has unreadable policy: forward_to must contain nonblank strings", name)
+			}
+		}
+		out = append(out, model.ZonePolicy{
+			Name: name, ForwardTo: model.CanonicalZoneDestinations(*stored.ForwardTo), Explicit: true,
+		})
+	}
+	return out, rows.Err()
+}
+
+// SaveZonePolicy creates or replaces one explicit directional forwarding
+// policy. An empty destination list is meaningful and is therefore persisted.
+func (db *DB) SaveZonePolicy(ctx context.Context, p *model.ZonePolicy) error {
+	db.siteMu.Lock()
+	defer db.siteMu.Unlock()
+	if p == nil {
+		return fmt.Errorf("store: a zone policy is required")
+	}
+	p.ForwardTo = model.CanonicalZoneDestinations(p.ForwardTo)
+	p.Explicit = true
+	site, err := db.Site(ctx)
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i := range site.Zones {
+		if site.Zones[i].Name == p.Name {
+			site.Zones[i] = *p
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		site.Zones = append(site.Zones, *p)
+	}
+	if errs := site.ValidateZonePolicies(); len(errs) > 0 {
+		return fmt.Errorf("store: invalid zone policy: %w", errs[0])
+	}
+	raw, err := json.Marshal(struct {
+		ForwardTo []string `json:"forward_to"`
+	}{ForwardTo: p.ForwardTo})
+	if err != nil {
+		return fmt.Errorf("store: encode zone policy %q: %w", p.Name, err)
+	}
+	_, err = db.sql.ExecContext(ctx,
+		`INSERT INTO zones (name, policy_json) VALUES (?, ?)
+		 ON CONFLICT(name) DO UPDATE SET policy_json=excluded.policy_json`,
+		p.Name, string(raw))
+	if err != nil {
+		return fmt.Errorf("store: save zone policy %q: %w", p.Name, err)
+	}
+	return nil
+}
+
+// DeleteZonePolicy removes the explicit row, restoring the legacy source ->
+// wan default for that active zone.
+func (db *DB) DeleteZonePolicy(ctx context.Context, name string) error {
+	db.siteMu.Lock()
+	defer db.siteMu.Unlock()
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM zones WHERE name=?`, name)
+	if err != nil {
+		return fmt.Errorf("store: reset zone policy %q: %w", name, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ensureNetworkChangeSafe validates the actual fw4 identifiers and rejects an
+// edit that would make a saved source or destination disappear. A policy must
+// be changed explicitly; silently dropping it during a network rename could
+// widen or narrow access.
+func (db *DB) ensureNetworkChangeSafe(ctx context.Context, replacement *model.Network, deleting int) error {
+	site, err := db.Site(ctx)
+	if err != nil {
+		return err
+	}
+	found := false
+	networks := make([]model.Network, 0, len(site.Networks)+1)
+	for _, current := range site.Networks {
+		if deleting != 0 && current.ID == deleting {
+			found = true
+			continue
+		}
+		if replacement != nil && current.ID == replacement.ID {
+			networks = append(networks, *replacement)
+			found = true
+			continue
+		}
+		networks = append(networks, current)
+	}
+	if replacement != nil && replacement.ID == 0 {
+		networks = append(networks, *replacement)
+		found = true
+	}
+	if !found {
+		return ErrNotFound
+	}
+	site.Networks = networks
+	if errs := site.ValidateZoneNames(); len(errs) > 0 {
+		return fmt.Errorf("store: invalid network zone: %v", errs[0])
+	}
+	if errs := site.ValidateZonePolicies(); len(errs) > 0 {
+		return fmt.Errorf("store: network change would orphan directional zone policy: %v; update or reset that zone policy first", errs[0])
+	}
+	if errs := site.ValidatePolicies(); len(errs) > 0 {
+		return fmt.Errorf("store: network change would invalidate policy: %v; update or remove that policy first", errs[0])
+	}
+	return nil
+}
+
 // SaveNetwork inserts or updates a network. A zero ID inserts.
 func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
+	db.siteMu.Lock()
+	defer db.siteMu.Unlock()
 	if strings.TrimSpace(n.Name) == "" {
 		return fmt.Errorf("store: a network needs a name")
 	}
@@ -200,21 +369,78 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 	if n.Zone == "" {
 		n.Zone = n.Name
 	}
+	if err := db.ensureNetworkChangeSafe(ctx, n, 0); err != nil {
+		return err
+	}
 	if n.ID == 0 {
+		dhcp := n.EffectiveDHCP()
+		rawDHCP, err := json.Marshal(dhcp)
+		if err != nil {
+			return fmt.Errorf("store: encode DHCP for network %q: %w", n.Name, err)
+		}
 		res, err := db.sql.ExecContext(ctx,
-			`INSERT INTO networks (name, vlan, cidr, zone, enabled) VALUES (?,?,?,?,?)`,
-			n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled)
+			`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, enabled)
+			 VALUES (?,?,?,?,?,?)`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), n.Enabled)
 		if err != nil {
 			return fmt.Errorf("store: create network: %w", err)
 		}
 		id, _ := res.LastInsertId()
 		n.ID = int(id)
+		n.DHCP = &dhcp
+		n.LegacyDHCPDefaults = false
 		return nil
 	}
-	_, err := db.sql.ExecContext(ctx,
-		`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, enabled=? WHERE id=?`,
-		n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled, n.ID)
-	return err
+	var (
+		res sql.Result
+		err error
+	)
+	if n.DHCP == nil {
+		// An older client does not know about the DHCP object. Preserve the
+		// stored policy on an unrelated rename/zone edit instead of silently
+		// resetting it to defaults.
+		res, err = db.sql.ExecContext(ctx,
+			`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, enabled=? WHERE id=?`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled, n.ID)
+	} else {
+		rawDHCP, encErr := json.Marshal(n.DHCP)
+		if encErr != nil {
+			return fmt.Errorf("store: encode DHCP for network %q: %w", n.Name, encErr)
+		}
+		res, err = db.sql.ExecContext(ctx,
+			`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, dhcp_json=?, enabled=?
+			 WHERE id=?`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), n.Enabled, n.ID)
+	}
+	if err != nil {
+		return err
+	}
+	if changed, err := res.RowsAffected(); err != nil {
+		return err
+	} else if changed == 0 {
+		return ErrNotFound
+	}
+	if n.DHCP == nil {
+		var rawDHCP string
+		if err := db.sql.QueryRowContext(ctx,
+			`SELECT dhcp_json FROM networks WHERE id=?`, n.ID).Scan(&rawDHCP); err != nil {
+			return err
+		}
+		dhcp := model.DefaultDHCPConfig()
+		if err := json.Unmarshal([]byte(rawDHCP), &dhcp); err != nil {
+			return fmt.Errorf("store: decode DHCP for network %d: %w", n.ID, err)
+		}
+		n.DHCP = &dhcp
+		n.LegacyDHCPDefaults = isLegacyDHCPJSON(rawDHCP)
+	} else {
+		n.LegacyDHCPDefaults = false
+	}
+	return nil
+}
+
+func isLegacyDHCPJSON(raw string) bool {
+	var fields map[string]json.RawMessage
+	return json.Unmarshal([]byte(raw), &fields) == nil && fields != nil && len(fields) == 0
 }
 
 // DeleteNetwork removes a network, refusing while a WLAN still points at it.
@@ -223,6 +449,8 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 // WLAN referencing a deleted network renders nothing and reports no reason,
 // which is exactly the silent-gap failure this project keeps finding.
 func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
+	db.siteMu.Lock()
+	defer db.siteMu.Unlock()
 	var n int
 	if err := db.sql.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM wlans WHERE network_id=?`, id).Scan(&n); err != nil {
@@ -232,8 +460,19 @@ func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
 		return fmt.Errorf("store: %d WLAN(s) still use this network; "+
 			"move or delete them first", n)
 	}
-	_, err := db.sql.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, id)
-	return err
+	if err := db.ensureNetworkChangeSafe(ctx, nil, id); err != nil {
+		return err
+	}
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if changed, err := res.RowsAffected(); err != nil {
+		return err
+	} else if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ---- AP groups ----
@@ -298,9 +537,15 @@ func (db *DB) SaveGroup(ctx context.Context, g *model.APGroup) error {
 		id, _ := res.LastInsertId()
 		g.ID = int(id)
 	} else {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE ap_groups SET name=? WHERE id=?`, g.Name, g.ID); err != nil {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE ap_groups SET name=? WHERE id=?`, g.Name, g.ID)
+		if err != nil {
 			return err
+		}
+		if changed, err := res.RowsAffected(); err != nil {
+			return err
+		} else if changed == 0 {
+			return ErrNotFound
 		}
 	}
 	// Replace membership wholesale. A diff would be cheaper and would also have
@@ -335,8 +580,16 @@ func (db *DB) DeleteGroup(ctx context.Context, id int) error {
 		return fmt.Errorf("store: %d WLAN(s) still target this group; "+
 			"move or delete them first", n)
 	}
-	_, err := db.sql.ExecContext(ctx, `DELETE FROM ap_groups WHERE id=?`, id)
-	return err
+	res, err := db.sql.ExecContext(ctx, `DELETE FROM ap_groups WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if changed, err := res.RowsAffected(); err != nil {
+		return err
+	} else if changed == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ---- WLANs ----
@@ -344,7 +597,7 @@ func (db *DB) DeleteGroup(ctx context.Context, id int) error {
 func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
 	rows, err := db.sql.QueryContext(ctx,
 		`SELECT id, ssid, network_id, group_id, bands, security_json,
-		        roaming_json, options_json, enabled
+		        security_key_enc, roaming_json, options_json, enabled
 		   FROM wlans ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list WLANs: %w", err)
@@ -354,16 +607,23 @@ func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
 	for rows.Next() {
 		var w model.WLAN
 		var bands, sec, roam, opts string
+		var keyEnc []byte
 		if err := rows.Scan(&w.ID, &w.SSID, &w.NetworkID, &w.GroupID, &bands,
-			&sec, &roam, &opts, &w.Enabled); err != nil {
+			&sec, &keyEnc, &roam, &opts, &w.Enabled); err != nil {
 			return nil, err
 		}
 		w.Bands = parseBands(bands)
 		// A row whose JSON will not parse must not silently become a WLAN with
 		// open security. Refuse the whole load instead: a site model that is
 		// partly guessed is worse than one that will not open.
-		if err := json.Unmarshal([]byte(sec), &w.Security); err != nil {
+		var security storedSecurity
+		if err := json.Unmarshal([]byte(sec), &security); err != nil {
 			return nil, fmt.Errorf("store: WLAN %d has unreadable security: %w", w.ID, err)
+		}
+		w.Security.Mode, w.Security.PMF = security.Mode, security.PMF
+		w.Security.Key, err = db.openText(keyEnc, wlanKeyAAD(w.ID), fmt.Sprintf("WLAN %d key", w.ID))
+		if err != nil {
+			return nil, err
 		}
 		if err := json.Unmarshal([]byte(roam), &w.Roaming); err != nil {
 			return nil, fmt.Errorf("store: WLAN %d has unreadable roaming: %w", w.ID, err)
@@ -390,7 +650,10 @@ func (db *DB) SaveWLAN(ctx context.Context, w *model.WLAN) error {
 	if strings.TrimSpace(w.SSID) == "" {
 		return fmt.Errorf("store: a WLAN needs an SSID")
 	}
-	sec, err := json.Marshal(w.Security)
+	if !w.Security.Mode.NeedsKey() {
+		w.Security.Key = ""
+	}
+	sec, err := json.Marshal(storedSecurity{Mode: w.Security.Mode, PMF: w.Security.PMF})
 	if err != nil {
 		return err
 	}
@@ -403,12 +666,17 @@ func (db *DB) SaveWLAN(ctx context.Context, w *model.WLAN) error {
 		return err
 	}
 	bands := formatBands(w.Bands)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin WLAN save: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
 
 	if w.ID == 0 {
-		res, err := db.sql.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx,
 			`INSERT INTO wlans (ssid, network_id, group_id, bands, security_json,
-			                    roaming_json, options_json, enabled)
-			 VALUES (?,?,?,?,?,?,?,?)`,
+			                    security_key_enc, roaming_json, options_json, enabled)
+			 VALUES (?,?,?,?,?,NULL,?,?,?)`,
 			w.SSID, w.NetworkID, w.GroupID, bands, string(sec),
 			string(roam), string(opts), w.Enabled)
 		if err != nil {
@@ -416,38 +684,56 @@ func (db *DB) SaveWLAN(ctx context.Context, w *model.WLAN) error {
 		}
 		id, _ := res.LastInsertId()
 		w.ID = int(id)
-		return nil
+		if w.Security.Key != "" {
+			sealed, err := db.sealText(w.Security.Key, wlanKeyAAD(w.ID))
+			if err != nil {
+				return fmt.Errorf("store: seal WLAN %d key: %w", w.ID, err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE wlans SET security_key_enc=? WHERE id=?`, sealed, w.ID); err != nil {
+				return fmt.Errorf("store: store WLAN %d key: %w", w.ID, err)
+			}
+		}
+		return tx.Commit()
 	}
 
-	if w.Security.Key == "" {
-		// Carry the stored key forward. json_set would be neater but this stays
-		// in Go's type system, where the shape of Security is checked.
-		var prev string
-		if err := db.sql.QueryRowContext(ctx,
-			`SELECT security_json FROM wlans WHERE id=?`, w.ID).Scan(&prev); err != nil {
-			if err == sql.ErrNoRows {
-				return ErrNotFound
-			}
-			return err
-		}
-		var old model.Security
-		if err := json.Unmarshal([]byte(prev), &old); err == nil && old.Key != "" {
-			w.Security.Key = old.Key
-			if sec, err = json.Marshal(w.Security); err != nil {
+	var keyEnc []byte
+	if w.Security.Mode.NeedsKey() {
+		if w.Security.Key == "" {
+			if err := tx.QueryRowContext(ctx,
+				`SELECT security_key_enc FROM wlans WHERE id=?`, w.ID).Scan(&keyEnc); err != nil {
+				if err == sql.ErrNoRows {
+					return ErrNotFound
+				}
 				return err
 			}
+			w.Security.Key, err = db.openText(keyEnc, wlanKeyAAD(w.ID), fmt.Sprintf("WLAN %d key", w.ID))
+			if err != nil {
+				return err
+			}
+		} else {
+			keyEnc, err = db.sealText(w.Security.Key, wlanKeyAAD(w.ID))
+			if err != nil {
+				return fmt.Errorf("store: seal WLAN %d key: %w", w.ID, err)
+			}
 		}
+	} else {
+		// Switching to Open or OWE also erases any dormant old passphrase.
+		w.Security.Key = ""
 	}
-	res, err := db.sql.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`UPDATE wlans SET ssid=?, network_id=?, group_id=?, bands=?, security_json=?,
-		                  roaming_json=?, options_json=?, enabled=? WHERE id=?`,
-		w.SSID, w.NetworkID, w.GroupID, bands, string(sec),
+		                  security_key_enc=?, roaming_json=?, options_json=?, enabled=? WHERE id=?`,
+		w.SSID, w.NetworkID, w.GroupID, bands, string(sec), nullableBlob(keyEnc),
 		string(roam), string(opts), w.Enabled, w.ID)
 	if err != nil {
 		return fmt.Errorf("store: update WLAN %d: %w", w.ID, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit WLAN %d: %w", w.ID, err)
 	}
 	return nil
 }
@@ -507,7 +793,7 @@ func formatBands(bs []model.Band) string {
 
 func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
 	rows, err := db.sql.QueryContext(ctx,
-		`SELECT id, mesh_id, network_id, group_id, band, key, enabled
+		`SELECT id, mesh_id, network_id, group_id, band, key_enc, enabled
 		   FROM meshes ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list meshes: %w", err)
@@ -517,8 +803,13 @@ func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
 	for rows.Next() {
 		var m model.Mesh
 		var band string
+		var keyEnc []byte
 		if err := rows.Scan(&m.ID, &m.MeshID, &m.NetworkID, &m.GroupID,
-			&band, &m.Key, &m.Enabled); err != nil {
+			&band, &keyEnc, &m.Enabled); err != nil {
+			return nil, err
+		}
+		m.Key, err = db.openText(keyEnc, meshKeyAAD(m.ID), fmt.Sprintf("mesh %d key", m.ID))
+		if err != nil {
 			return nil, err
 		}
 		m.Band = model.Band(band)
@@ -534,43 +825,86 @@ func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
 // mesh and wrote it back would otherwise silently convert an encrypted mesh
 // into an open one — and an open mesh is joinable by anyone in radio range.
 func (db *DB) SaveMesh(ctx context.Context, m *model.Mesh) error {
+	return db.SaveMeshWithOptions(ctx, m, SaveMeshOptions{})
+}
+
+// SaveMeshOptions separates an omitted write-only key (preserve) from an
+// explicit request to make the mesh open (erase). An empty string cannot carry
+// both meanings safely.
+type SaveMeshOptions struct {
+	ClearKey bool
+}
+
+// SaveMeshWithOptions inserts or updates a mesh with explicit key semantics.
+func (db *DB) SaveMeshWithOptions(ctx context.Context, m *model.Mesh, options SaveMeshOptions) error {
 	if strings.TrimSpace(m.MeshID) == "" {
 		return fmt.Errorf("store: a mesh needs a mesh ID")
 	}
+	if options.ClearKey && m.Key != "" {
+		return errors.New("store: mesh key and ClearKey are mutually exclusive")
+	}
+	if options.ClearKey {
+		m.Key = ""
+	}
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: begin mesh save: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
 	if m.ID == 0 {
-		res, err := db.sql.ExecContext(ctx,
-			`INSERT INTO meshes (mesh_id, network_id, group_id, band, key, enabled)
-			 VALUES (?,?,?,?,?,?)`,
-			m.MeshID, m.NetworkID, m.GroupID, string(m.Band), m.Key, m.Enabled)
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO meshes (mesh_id, network_id, group_id, band, key, key_enc, enabled)
+			 VALUES (?,?,?,?, '', NULL, ?)`,
+			m.MeshID, m.NetworkID, m.GroupID, string(m.Band), m.Enabled)
 		if err != nil {
 			return fmt.Errorf("store: create mesh: %w", err)
 		}
 		id, _ := res.LastInsertId()
 		m.ID = int(id)
-		return nil
+		if m.Key != "" {
+			sealed, err := db.sealText(m.Key, meshKeyAAD(m.ID))
+			if err != nil {
+				return fmt.Errorf("store: seal mesh %d key: %w", m.ID, err)
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE meshes SET key_enc=? WHERE id=?`, sealed, m.ID); err != nil {
+				return fmt.Errorf("store: store mesh %d key: %w", m.ID, err)
+			}
+		}
+		return tx.Commit()
 	}
-	if m.Key == "" {
-		var prev string
-		if err := db.sql.QueryRowContext(ctx,
-			`SELECT key FROM meshes WHERE id=?`, m.ID).Scan(&prev); err != nil {
+	var keyEnc []byte
+	if options.ClearKey {
+		keyEnc = nil
+	} else if m.Key == "" {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT key_enc FROM meshes WHERE id=?`, m.ID).Scan(&keyEnc); err != nil {
 			if err == sql.ErrNoRows {
 				return ErrNotFound
 			}
 			return err
 		}
-		m.Key = prev
+		m.Key, err = db.openText(keyEnc, meshKeyAAD(m.ID), fmt.Sprintf("mesh %d key", m.ID))
+		if err != nil {
+			return err
+		}
+	} else {
+		keyEnc, err = db.sealText(m.Key, meshKeyAAD(m.ID))
+		if err != nil {
+			return fmt.Errorf("store: seal mesh %d key: %w", m.ID, err)
+		}
 	}
-	res, err := db.sql.ExecContext(ctx,
-		`UPDATE meshes SET mesh_id=?, network_id=?, group_id=?, band=?, key=?,
+	res, err := tx.ExecContext(ctx,
+		`UPDATE meshes SET mesh_id=?, network_id=?, group_id=?, band=?, key='', key_enc=?,
 		                   enabled=? WHERE id=?`,
-		m.MeshID, m.NetworkID, m.GroupID, string(m.Band), m.Key, m.Enabled, m.ID)
+		m.MeshID, m.NetworkID, m.GroupID, string(m.Band), nullableBlob(keyEnc), m.Enabled, m.ID)
 	if err != nil {
 		return fmt.Errorf("store: update mesh %d: %w", m.ID, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // DeleteMesh removes a mesh backhaul.

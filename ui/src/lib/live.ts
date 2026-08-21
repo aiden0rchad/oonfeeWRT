@@ -33,9 +33,10 @@ export interface LiveStats {
   stations: {
     mac: string
     iface: string
-    signal: number
-    rx_kbit: number
-    tx_kbit: number
+    /** null when the driver omitted the focused assoclist field. */
+    signal: number | null
+    rx_kbit: number | null
+    tx_kbit: number | null
     connected_seconds: number
   }[]
 }
@@ -45,8 +46,7 @@ type Handler = (msg: LiveStats | Record<string, unknown>) => void
 export class Live {
   private ws: WebSocket | null = null
   private handlers = new Set<Handler>()
-  private devices = new Set<number>()
-  private events = false
+  private devices = new Map<number, number>()
   private retry = 0
   private timer: number | null = null
   private closed = false
@@ -56,6 +56,10 @@ export class Live {
 
   connect() {
     if (this.ws) return
+	if (this.timer !== null) {
+	  window.clearTimeout(this.timer)
+	  this.timer = null
+	}
     // Connecting is an explicit intent to be open, so it clears a previous
     // close. Without this, the App's "close when signed out" effect — which
     // runs once on mount, before the session has loaded — latched the channel
@@ -67,14 +71,15 @@ export class Live {
     this.ws = ws
 
     ws.onopen = () => {
+	  if (this.ws !== ws) return
       this.retry = 0
       this.onState?.(true)
       // Re-subscribe on reconnect. The server treats a repeat subscribe as a
       // no-op, so this cannot stack focus a client could never release.
-      for (const id of this.devices) this.sendRaw({ type: 'subscribe', topic: 'device.stats', device_id: id })
-      if (this.events) this.sendRaw({ type: 'subscribe', topic: 'events' })
+      for (const id of this.devices.keys()) this.sendRaw({ type: 'subscribe', topic: 'device.stats', device_id: id })
     }
     ws.onmessage = (e) => {
+	  if (this.ws !== ws) return
       try {
         const msg = JSON.parse(e.data)
         this.handlers.forEach((h) => h(msg))
@@ -83,11 +88,14 @@ export class Live {
       }
     }
     ws.onclose = () => {
+	  if (this.ws !== ws) return
       this.ws = null
       this.onState?.(false)
       this.scheduleReconnect()
     }
-    ws.onerror = () => ws.close()
+	ws.onerror = () => {
+	  if (this.ws === ws) ws.close()
+	}
   }
 
   private scheduleReconnect() {
@@ -112,24 +120,22 @@ export class Live {
     // and when it broke the symptom was a panel that silently never updated
     // while the server was pushing correctly.
     this.connect()
-    this.devices.add(deviceID)
-    this.sendRaw({ type: 'subscribe', topic: 'device.stats', device_id: deviceID })
+    const previous = this.devices.get(deviceID) ?? 0
+    this.devices.set(deviceID, previous + 1)
+    if (previous === 0) {
+      this.sendRaw({ type: 'subscribe', topic: 'device.stats', device_id: deviceID })
+    }
     let released = false
     return () => {
       if (released) return
       released = true
-      this.devices.delete(deviceID)
-      this.sendRaw({ type: 'unsubscribe', topic: 'device.stats', device_id: deviceID })
-    }
-  }
-
-  watchEvents(): () => void {
-    this.connect()
-    this.events = true
-    this.sendRaw({ type: 'subscribe', topic: 'events' })
-    return () => {
-      this.events = false
-      this.sendRaw({ type: 'unsubscribe', topic: 'events' })
+      const remaining = (this.devices.get(deviceID) ?? 1) - 1
+      if (remaining > 0) {
+        this.devices.set(deviceID, remaining)
+      } else {
+        this.devices.delete(deviceID)
+        this.sendRaw({ type: 'unsubscribe', topic: 'device.stats', device_id: deviceID })
+      }
     }
   }
 
@@ -140,9 +146,14 @@ export class Live {
 
   close() {
     this.closed = true
-    if (this.timer !== null) window.clearTimeout(this.timer)
-    this.ws?.close()
+	if (this.timer !== null) {
+	  window.clearTimeout(this.timer)
+	  this.timer = null
+	}
+	const ws = this.ws
     this.ws = null
+	ws?.close()
+	this.onState?.(false)
   }
 }
 

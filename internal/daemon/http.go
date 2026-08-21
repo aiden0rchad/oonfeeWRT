@@ -6,6 +6,7 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/radio"
 )
 
 // routes builds the HTTP surface: the health endpoint the orchestrator polls,
@@ -15,6 +16,7 @@ func (d *Daemon) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", d.healthz)
 
 	d.api = api.New(d.Store, fleetAdapter{d}, d, d.Log)
+	d.api.Keys = d.Keys
 	// Set rather than passed to New: discovery is optional to the API — it
 	// serves the fleet perfectly well without one — and growing the constructor
 	// for every optional collaborator is how a constructor becomes a config
@@ -33,6 +35,7 @@ func (d *Daemon) routes() http.Handler {
 	d.api.LastNeighbours = d.LastNeighbourRun
 	d.api.MeshHealth = d.MeshHealthReport
 	d.api.OnAir = d.OnAirReport
+	d.api.RadioScan = d
 	// Lets a poll-interval change take effect immediately: the collector holds
 	// the interval in its target, so the row alone would not move until restart.
 	d.api.Retrack = func(id int64) {
@@ -46,7 +49,16 @@ func (d *Daemon) routes() http.Handler {
 	}
 	mux.Handle("/api/v1/", d.api.Routes())
 	d.mountUI(mux)
-	return mux
+	return securityHeaders(mux)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // fleetAdapter exposes the collector to the API without handing it the whole
@@ -93,12 +105,32 @@ func (f fleetAdapter) IfaceModes(deviceID int64) (map[string]string, bool) {
 	return c.IfaceModes(deviceID)
 }
 
+func (f fleetAdapter) Radios(deviceID int64) ([]radio.LiveState, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return nil, false
+	}
+	return c.Radios(deviceID)
+}
+
+func (f fleetAdapter) RadioStatus(deviceID int64) (radio.CollectionStatus, bool) {
+	c := f.d.collectorRef()
+	if c == nil {
+		return radio.CollectionStatus{}, false
+	}
+	return c.RadioStatus(deviceID)
+}
+
 func (f fleetAdapter) LiveClients(deviceID int64) (int, bool) {
 	return f.d.liveClients(deviceID)
 }
 
-func (f fleetAdapter) LiveStations(deviceID int64) (map[string]collector.LiveStation, bool) {
+func (f fleetAdapter) LiveStations(deviceID int64) (collector.LiveStationSet, bool) {
 	return f.d.liveStations(deviceID)
+}
+
+func (f fleetAdapter) LivePresence(deviceID int64) (collector.ClientPresenceState, bool) {
+	return f.d.livePresence(deviceID)
 }
 
 func (f fleetAdapter) Degraded(deviceID int64) ([]collector.Degradation, bool) {

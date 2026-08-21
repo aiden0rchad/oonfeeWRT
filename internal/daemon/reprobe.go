@@ -11,7 +11,6 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -82,6 +81,19 @@ func (g *reprobeGate) leave(id int64) {
 	delete(g.running, id)
 }
 
+func (g *reprobeGate) forget(id int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.last, id)
+	// A correctly sequenced deletion holds deviceOps, so no probe can still be
+	// running here. Keep a true entry if a direct test/support caller used
+	// Untrack without that gate; allowing a second probe would be less safe than
+	// retaining this one in-flight marker until leave removes it.
+	if !g.running[id] {
+		delete(g.running, id)
+	}
+}
+
 // Reprobe re-interrogates one adopted device and records what changed.
 //
 // It replaces the stored registry whatever the diff says. The registry is a
@@ -93,6 +105,20 @@ func (d *Daemon) Reprobe(ctx context.Context, deviceID int64) (*api.ReprobeResul
 }
 
 func (d *Daemon) reprobe(ctx context.Context, deviceID int64, auto bool) (*api.ReprobeResult, error) {
+	if !d.reprobes.enter(deviceID, auto, time.Now(), reprobeMinInterval) {
+		return nil, errReprobeBusy
+	}
+	defer d.reprobes.leave(deviceID)
+
+	// Capabilities and firmware are provisioning inputs. Share the destructive
+	// per-device gate with apply and un-adopt so a probe cannot replace them
+	// between a bound re-plan and its write. Reload after admission because the
+	// row may have changed while this probe waited.
+	release, err := d.deviceOps.acquire(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	dev, err := d.Store.DeviceByID(ctx, deviceID)
 	if err != nil {
 		return nil, err
@@ -101,10 +127,6 @@ func (d *Daemon) reprobe(ctx context.Context, deviceID int64, auto bool) (*api.R
 		return nil, fmt.Errorf("daemon: %s is not adopted, so there is no "+
 			"credential to probe it with", dev.Name)
 	}
-	if !d.reprobes.enter(deviceID, auto, time.Now(), reprobeMinInterval) {
-		return nil, errReprobeBusy
-	}
-	defer d.reprobes.leave(deviceID)
 
 	// The previous record, decoded before anything is overwritten. A device
 	// with no readable record is not an error here — that is the first probe,
@@ -153,12 +175,20 @@ func (d *Daemon) reprobe(ctx context.Context, deviceID int64, auto bool) (*api.R
 		d.Log.Debug("could not record firmware after a probe",
 			"device", dev.MAC, "err", err)
 	}
+	// The collector target carries capability gates. Replace it from the stored
+	// row now so a re-probe takes effect without a controller restart.
+	if fresh, err := d.Store.DeviceByID(ctx, deviceID); err != nil {
+		d.Log.Warn("could not refresh collector target after a probe",
+			"device", dev.MAC, "err", err)
+	} else {
+		d.Track(fresh)
+	}
 
 	changes := capability.Diff(before, after)
 	res := &api.ReprobeResult{
 		DeviceID: deviceID, Name: dev.Name, Summary: after.Summary(),
 		Changes: changes, Registry: after, Unchanged: len(changes) == 0,
-		RoleFit: roleFit(model.RoleOf(dev.Role), after),
+		RoleFit: functionFit(deviceFunctions(dev), after),
 	}
 
 	d.logReprobe(ctx, dev, res, auto)

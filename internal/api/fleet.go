@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
 )
@@ -20,17 +21,19 @@ import (
 // real states that a zero would misreport — the first as the epoch, the second
 // as a class the device may not be in.
 type deviceView struct {
-	ID        int64   `json:"id"`
-	MAC       string  `json:"mac"`
-	Name      string  `json:"name"`
-	Host      string  `json:"host"`
-	Role      string  `json:"role"`
-	Adopted   bool    `json:"adopted"`
-	AdoptedAt *int64  `json:"adopted_at"`
-	Class     *string `json:"class"`
-	FWRelease string  `json:"firmware"`
-	LastSeen  *int64  `json:"last_seen"`
-	PollState string  `json:"poll_state"`
+	ID            int64    `json:"id"`
+	MAC           string   `json:"mac"`
+	Name          string   `json:"name"`
+	Host          string   `json:"host"`
+	Role          string   `json:"role"`
+	Functions     []string `json:"functions"`
+	FunctionError string   `json:"function_error,omitempty"`
+	Adopted       bool     `json:"adopted"`
+	AdoptedAt     *int64   `json:"adopted_at"`
+	Class         *string  `json:"class"`
+	FWRelease     string   `json:"firmware"`
+	LastSeen      *int64   `json:"last_seen"`
+	PollState     string   `json:"poll_state"`
 
 	// Status is derived here rather than stored, so it cannot go stale: a device
 	// is only "online" relative to the moment someone asks.
@@ -43,15 +46,46 @@ type deviceView struct {
 	Quiesced bool   `json:"quiesced,omitempty"`
 }
 
-// offlineAfter is how long without a poll makes a device offline. Two baseline
-// intervals plus slack: one missed poll is a blip, and marking a device down for
-// a single dropped request would make the list flicker.
-const offlineAfter = 150 * time.Second
+const (
+	defaultDeviceBaseline = time.Minute
+	offlineSlack          = 30 * time.Second
+	maxPollInterval       = 15 * time.Minute
+)
+
+// deviceOfflineAfter follows the full-poll schedule: two effective intervals
+// plus slack. A configured or evidence-widened healthy target must not be
+// labelled offline merely because the fixed 150-second default elapsed.
+func (s *Server) deviceOfflineAfter(d *store.Device) time.Duration {
+	interval := defaultDeviceBaseline
+	configuredSeconds := max(0, min(d.PollInterval, int(maxPollInterval/time.Second)))
+	if configured := time.Duration(configuredSeconds) * time.Second; configured > interval {
+		interval = configured
+	}
+	if s.Fleet != nil {
+		if overhead, ok := s.Fleet.Overhead(d.ID); ok {
+			actual := overhead.Interval
+			if actual <= 0 && overhead.IntervalSeconds > 0 {
+				actual = time.Duration(overhead.IntervalSeconds * float64(time.Second))
+			}
+			if actual > interval {
+				interval = actual
+			}
+		}
+	}
+	return 2*interval + offlineSlack
+}
 
 func (s *Server) viewDevice(d *store.Device, now time.Time) deviceView {
+	functions := model.DeviceFunctionsOf(d.Functions, d.Role)
+	role := functions.PrimaryRole()
+	if d.Functions != nil && len(functions) == 0 {
+		role = model.RoleOf(d.Role)
+	}
 	v := deviceView{
-		ID: d.ID, MAC: d.MAC, Name: d.Name, Host: d.Host, Role: d.Role,
-		Adopted: d.Adopted(), AdoptedAt: d.AdoptedAt,
+		ID: d.ID, MAC: d.MAC, Name: d.Name, Host: d.Host,
+		Role: string(role), Functions: functions.Strings(),
+		FunctionError: d.FunctionError,
+		Adopted:       d.Adopted(), AdoptedAt: d.AdoptedAt,
 		FWRelease: d.FWRelease, LastSeen: d.LastSeen, PollState: d.PollState,
 	}
 	if d.Class != "" {
@@ -63,7 +97,7 @@ func (s *Server) viewDevice(d *store.Device, now time.Time) deviceView {
 		v.Status = "pending"
 	case d.LastSeen == nil:
 		v.Status = "unknown" // adopted but never successfully polled
-	case now.Sub(time.Unix(*d.LastSeen, 0)) > offlineAfter:
+	case now.Sub(time.Unix(*d.LastSeen, 0)) > s.deviceOfflineAfter(d):
 		v.Status = "offline"
 	default:
 		v.Status = "online"
@@ -107,11 +141,9 @@ type deviceDetail struct {
 	Radios     []string `json:"radios"`
 	Stations   []string `json:"stations"`
 
-	// Degraded is what the last poll could not read on this device, and what
-	// each gap costs. A standing property of the device's ACL or driver rather
-	// than an event — which is exactly why it needs somewhere to be READ. A
-	// limitation the controller knows about and never shows is one an operator
-	// discovers from a number being quietly wrong.
+	// Degraded is what the last poll could not read on this device, why, and what
+	// each gap costs. Permanent ACL/driver limitations and failures of the latest
+	// exchange are both retained so the UI can prescribe different responses.
 	Degraded []degradation `json:"degraded,omitempty"`
 
 	// Broadcasting is every SSID this device is actually putting on the air,
@@ -135,7 +167,8 @@ type deviceDetail struct {
 	// rollback-armed, unlike an apply — and it told the operator a NUMBER, and
 	// only afterwards. The safer operation had a full preview and a
 	// confirmation; this one had neither.
-	OwnedSections []string `json:"owned_sections,omitempty"`
+	OwnedSections      []string `json:"owned_sections,omitempty"`
+	OwnedSectionsKnown bool     `json:"owned_sections_known"`
 }
 
 // Provenance is who wrote the UCI section behind one BSS.
@@ -185,12 +218,23 @@ type broadcastView struct {
 // degradation is one call the poll could not use, with the consequence spelled
 // out rather than left as an object and method name.
 type degradation struct {
-	Call string `json:"call"`
-	Err  string `json:"error"`
-	// Permanent marks a refusal retrying cannot fix — an ACL gap rather than a
-	// device that was busy. The two need different responses from a human.
+	Call  string `json:"call"`
+	Err   string `json:"error"`
+	Cause string `json:"cause"`
+	// Status is present only when the device returned a ubus result code. An ACL
+	// denial at the JSON-RPC layer and a local decode failure have no ubus status,
+	// and inventing OK for either would reverse what happened.
+	Status *degradationStatus `json:"status,omitempty"`
+	// Permanent says retrying the same exchange cannot help. Cause still decides
+	// whether that is a device limitation or, for example, a controller-side
+	// protocol failure.
 	Permanent bool   `json:"permanent"`
 	Costs     string `json:"costs,omitempty"`
+}
+
+type degradationStatus struct {
+	Code int    `json:"code"`
+	Name string `json:"name"`
 }
 
 // degradationCost explains what a missing call takes away.
@@ -231,12 +275,21 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	if s.Fleet != nil {
 		if degs, ok := s.Fleet.Degraded(id); ok {
 			for _, g := range degs {
-				detail.Degraded = append(detail.Degraded, degradation{
+				cause := string(g.Cause)
+				if cause == "" {
+					cause = "unknown"
+				}
+				out := degradation{
 					Call:      g.Object + "." + g.Method,
 					Err:       g.Err,
+					Cause:     cause,
 					Permanent: g.Permanent,
 					Costs:     degradationCost(g.Object, g.Method),
-				})
+				}
+				if g.Status != 0 {
+					out.Status = &degradationStatus{Code: int(g.Status), Name: g.Status.String()}
+				}
+				detail.Degraded = append(detail.Degraded, out)
 			}
 		}
 	}
@@ -254,14 +307,15 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	if owned, err := s.Store.OwnedSections(ctx, id); err == nil {
+		detail.OwnedSectionsKnown = true
 		for _, o := range owned {
 			detail.OwnedSections = append(detail.OwnedSections, o.Config+"."+o.Section)
 		}
 		sort.Strings(detail.OwnedSections)
 	} else {
-		// Left empty and logged. The un-adopt panel says outright when the list
-		// could not be read rather than showing an empty one, which would read
-		// as "this controller wrote nothing here".
+		// Keep OwnedSectionsKnown false. An omitted list alone is ambiguous in
+		// JSON: it can mean either "known empty" or "could not read". Un-adopt
+		// must never turn the latter into a reassuring destructive preview.
 		s.Log.Warn("could not list owned sections for the device detail",
 			"device", id, "err", err)
 	}
@@ -353,7 +407,13 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 		telemetry.KindIfaceRx, telemetry.KindIfaceTx,
 		telemetry.KindAPClients, telemetry.KindAPAirtime, telemetry.KindChanBusy,
 		telemetry.KindStaRSSI, telemetry.KindStaRx, telemetry.KindStaTx,
-		telemetry.KindStaRetry,
+		telemetry.KindStaRetryDelta, telemetry.KindStaTXFailDelta,
+		telemetry.KindStaExperienceWiFiV1,
+		telemetry.KindRadioUtilization, telemetry.KindRadioInterference,
+		telemetry.KindRadioRXAirtime, telemetry.KindRadioTXAirtime,
+		telemetry.KindRadioNoise, telemetry.KindRadioRetryDelta,
+		telemetry.KindRadioTXFailDelta, telemetry.KindRadioSignalAvg,
+		telemetry.KindSiteWANLatency, telemetry.KindSiteWANLoss, telemetry.KindSiteWANUp,
 	}
 	out := map[string][]string{}
 	for _, k := range kinds {
@@ -413,7 +473,14 @@ func knownKind(k string) bool {
 		telemetry.KindIfaceRx, telemetry.KindIfaceTx,
 		telemetry.KindAPClients, telemetry.KindAPAirtime, telemetry.KindChanBusy,
 		telemetry.KindStaRSSI, telemetry.KindStaRx, telemetry.KindStaTx,
-		telemetry.KindStaRetry:
+		telemetry.KindStaRetry, telemetry.KindStaRetryDelta,
+		telemetry.KindStaTXFailDelta, telemetry.KindStaExperienceWiFiV1,
+		telemetry.KindRadioUtilization, telemetry.KindRadioInterference,
+		telemetry.KindRadioRXAirtime, telemetry.KindRadioTXAirtime,
+		telemetry.KindRadioNoise, telemetry.KindRadioRetryDelta,
+		telemetry.KindRadioTXFailDelta, telemetry.KindRadioSignalAvg,
+		telemetry.KindSiteWANLatency, telemetry.KindSiteWANLoss,
+		telemetry.KindSiteWANUp:
 		return true
 	}
 	return false
@@ -478,6 +545,7 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 	if handleStoreErr(w, err, "device") {
 		return
 	}
+	pollInterval := max(0, min(dev.PollInterval, int(maxPollInterval/time.Second)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"overhead": o,
 		// DEVICE-BUDGET §7's remaining two fields.
@@ -490,10 +558,12 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 		"packages_note": "the controller installs no packages. Its entire " +
 			"device-side footprint is one ACL file and one login, both listed " +
 			"by un-adopt",
-		"poll_interval_s": dev.PollInterval,
+		"poll_interval_s": pollInterval,
 		"poll_interval_note": "0 uses the controller default. An override can " +
 			"only make polling less frequent — a per-device knob that could " +
-			"raise the rate would turn the budget into a suggestion",
+			"raise the rate would turn the budget into a suggestion. Full-state " +
+			"polls are capped at 15 minutes; lightweight router-log coverage " +
+			"continues once a minute",
 	})
 }
 
@@ -513,11 +583,9 @@ func (s *Server) handlePollInterval(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	// An hour is already far past useful; beyond it a device would be reported
-	// offline for most of the time it is fine.
-	if req.Seconds < 0 || req.Seconds > 3600 {
+	if req.Seconds < 0 || req.Seconds > int(maxPollInterval/time.Second) {
 		writeErr(w, http.StatusBadRequest,
-			"the poll interval must be between 0 (controller default) and 3600 seconds")
+			"the poll interval must be between 0 (controller default) and 900 seconds")
 		return
 	}
 	if err := s.Store.SetPollInterval(r.Context(), id, req.Seconds); err != nil {
@@ -549,6 +617,10 @@ func (s *Server) handlePollInterval(w http.ResponseWriter, r *http.Request) {
 // then the MAC. Exactly adoption's own fallback chain, so renaming to nothing
 // puts back what adoption would have chosen.
 func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
 	id, ok := pathID(w, r, "id")
 	if !ok {
 		return
@@ -626,6 +698,11 @@ func deviceModel(dev *store.Device) string {
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100, 1, 1000)
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if scope != "" || r.URL.Query().Has("before_ts") || r.URL.Query().Has("before_id") {
+		s.handleEventsKeyset(w, r, scope, limit)
+		return
+	}
 	offset := queryInt(r, "offset", 0, 0, 1<<30)
 	category := r.URL.Query().Get("category")
 	severity := r.URL.Query().Get("severity")
@@ -659,6 +736,128 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleEventsKeyset(w http.ResponseWriter, r *http.Request, scope string, limit int) {
+	if scope != "general" && scope != "audit" {
+		writeErr(w, http.StatusBadRequest, "scope must be general or audit")
+		return
+	}
+	var before *store.EventCursor
+	beforeTS, hasTS := r.URL.Query()["before_ts"]
+	beforeID, hasID := r.URL.Query()["before_id"]
+	if hasTS != hasID || (hasTS && (len(beforeTS) != 1 || len(beforeID) != 1)) {
+		writeErr(w, http.StatusBadRequest, "before_ts and before_id must be supplied together")
+		return
+	}
+	if hasTS {
+		ts, tsErr := strconv.ParseInt(beforeTS[0], 10, 64)
+		id, idErr := strconv.ParseInt(beforeID[0], 10, 64)
+		if tsErr != nil || idErr != nil || ts < 0 || id <= 0 {
+			writeErr(w, http.StatusBadRequest, "invalid event cursor")
+			return
+		}
+		before = &store.EventCursor{TS: ts, ID: id}
+	}
+	query := store.EventQuery{
+		Scope: scope, Category: r.URL.Query().Get("category"),
+		Severity: r.URL.Query().Get("severity"), Before: before, Limit: limit + 1,
+	}
+	events, err := s.Store.QueryEventsKeyset(r.Context(), query)
+	if handleStoreErr(w, err, "events") {
+		return
+	}
+	var next *store.EventCursor
+	if len(events) > limit {
+		events = events[:limit]
+		last := events[len(events)-1]
+		next = &store.EventCursor{TS: last.TS, ID: last.ID}
+	}
+	if events == nil {
+		events = []store.Event{}
+	}
+	cats, sevs, total, err := s.Store.EventFacetsScoped(r.Context(), query)
+	if handleStoreErr(w, err, "events") {
+		return
+	}
+	coverage, err := s.eventCoverage(r.Context(), scope)
+	if handleStoreErr(w, err, "event coverage") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"events": events, "total": total, "limit": limit, "scope": scope,
+		"next_before": next,
+		"facets":      map[string]any{"category": cats, "severity": sevs},
+		"coverage":    coverage,
+	})
+}
+
+const routerLogCoverageStaleAfter = 3 * time.Minute
+const routerLogCoverageWindow = 24 * time.Hour
+
+type eventCoverage struct {
+	Complete        bool     `json:"complete"`
+	ExpectedDevices int      `json:"expected_devices"`
+	ObservedDevices int      `json:"observed_devices"`
+	Gaps            []string `json:"gaps"`
+}
+
+func (s *Server) eventCoverage(ctx context.Context, scope string) (eventCoverage, error) {
+	coverage := eventCoverage{Complete: true, Gaps: []string{}}
+	if scope != "general" {
+		return coverage, nil
+	}
+	devices, err := s.Store.Devices(ctx)
+	if err != nil {
+		return eventCoverage{}, err
+	}
+	cursors, err := s.Store.IngestCursorsBySource(ctx, "openwrt-logd")
+	if err != nil {
+		return eventCoverage{}, err
+	}
+	byDevice := make(map[int64]store.IngestCursor, len(cursors))
+	for _, cursor := range cursors {
+		byDevice[cursor.DeviceID] = cursor
+	}
+	now := s.now().UnixMilli()
+	gapCutoff := now - routerLogCoverageWindow.Milliseconds()
+	for _, device := range devices {
+		if !device.Adopted() {
+			continue
+		}
+		coverage.ExpectedDevices++
+		cursor, ok := byDevice[device.ID]
+		if !ok {
+			coverage.Complete = false
+			coverage.Gaps = append(coverage.Gaps,
+				"router log coverage has not been observed on "+deviceDisplayName(device))
+			continue
+		}
+		coverage.ObservedDevices++
+		if now-cursor.UpdatedAt > routerLogCoverageStaleAfter.Milliseconds() {
+			coverage.Complete = false
+			coverage.Gaps = append(coverage.Gaps,
+				"router log coverage is stale on "+deviceDisplayName(device))
+		}
+		if cursor.ContinuityGapAt >= gapCutoff {
+			coverage.Complete = false
+			coverage.Gaps = append(coverage.Gaps,
+				"router log continuity has a retained gap on "+deviceDisplayName(device))
+		}
+	}
+	return coverage, nil
+}
+
+func (s *Server) handleEventDetail(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	event, err := s.Store.EventByID(r.Context(), id)
+	if handleStoreErr(w, err, "event") {
+		return
+	}
+	writeJSON(w, http.StatusOK, event)
+}
+
 // dashboard is the fleet summary: counts a human reads at a glance, plus what
 // the controller is costing the devices.
 type dashboard struct {
@@ -670,15 +869,18 @@ type dashboard struct {
 		Unknown int `json:"unknown"`
 	} `json:"devices"`
 
-	// WirelessClients counts stations ASSOCIATED to the fleet's radios, from
-	// hostapd. It is nil when it cannot be totalled — if any AP's count was
-	// unreadable, summing the rest reports a dip that means "a radio did not
-	// answer". ClientsUnsure names the devices responsible.
-	WirelessClients *int     `json:"wireless_clients"`
-	ClientsUnsure   []string `json:"wireless_clients_unknown_on,omitempty"`
+	// WirelessClients is the number of online, local Client Devices rows whose
+	// current hostapd state or recent station telemetry says "wireless". The
+	// dashboard uses the grid's own database filter, including its live MAC
+	// overlay, rather than summing a second per-device counter that cannot be
+	// scoped to client rows.
+	WirelessClients         int      `json:"wireless_clients"`
+	WirelessClientsComplete bool     `json:"wireless_clients_complete"`
+	ClientsUnsure           []string `json:"wireless_clients_unknown_on,omitempty"`
 
 	// KnownDevices counts hosts on THIS network — wireless, wired and whatever
-	// else answers ARP — and ActiveDevices is those seen recently. It is a
+	// else answers ARP — and ActiveDevices is those with fresh authoritative
+	// presence evidence. It is a
 	// different question from WirelessClients and is deliberately a separate
 	// number: showing one labelled "clients" next to a grid listing the other is
 	// how a dashboard gets quietly distrusted.
@@ -709,8 +911,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	now := s.now()
 
 	var d dashboard
-	total := 0
-	known := true
 	for _, dev := range devices {
 		v := s.viewDevice(dev, now)
 		d.Devices.Total++
@@ -730,25 +930,41 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		if v.Quiesced {
 			d.Quiesced++
 		}
-		if v.Status != "online" {
-			continue
-		}
-		n, ok := s.liveClientCount(dev.ID)
-		if !ok {
-			known = false
-			d.ClientsUnsure = append(d.ClientsUnsure, dev.Name)
-			continue
-		}
-		total += n
 	}
-	if known {
-		d.WirelessClients = &total
+
+	// This is exactly the Client Devices default scope and presence with its
+	// Wireless connection filter selected. In particular, a private MAC on a
+	// managed VLAN is local when its client row says local; a raw per-AP count
+	// has no address or scope and cannot answer that question.
+	_, liveMACs, unknownOn := s.liveWirelessEvidence(devices)
+	_, liveActive := s.liveClientPresence(devices, now)
+	infrastructure := s.infrastructureMACs(devices)
+	wireless, err := s.Store.ClientsPage(ctx, store.ClientFilter{
+		SeenSince:     now.Add(-clientSeenWindow).Unix(),
+		ActiveSince:   now.Add(-clientActiveWindow).Unix(),
+		LiveActive:    liveActive,
+		WirelessKinds: wirelessKinds,
+		LiveWireless:  liveMACs,
+		ExcludeMACs:   infrastructure,
+		Presence:      "online",
+		Connection:    "wireless",
+		Scope:         store.ScopeLocal,
+		Limit:         1,
+	})
+	if handleStoreErr(w, err, "clients") {
+		return
 	}
+	d.WirelessClients = wireless.Total
+	d.ClientsUnsure = unknownOn
+	d.WirelessClientsComplete = len(unknownOn) == 0
 
 	// Counted in SQL and by scope, using the same call the client grid's filter
 	// rail uses — see store.ClientCounts for why both go through one place.
-	if counts, err := s.Store.ClientCounts(ctx, 0,
-		now.Add(-clientActiveWindow).Unix()); err == nil {
+	if counts, err := s.Store.ClientCounts(ctx, store.ClientFilter{
+		ActiveSince: now.Add(-clientActiveWindow).Unix(),
+		LiveActive:  liveActive,
+		ExcludeMACs: infrastructure,
+	}); err == nil {
 		d.KnownDevices = counts[store.ScopeLocal].Total
 		d.ActiveDevices = counts[store.ScopeLocal].Active
 		d.UpstreamDevices = counts[store.ScopeUpstream].Active
@@ -765,18 +981,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("could not count series", "err", err)
 	}
 	writeJSON(w, http.StatusOK, d)
-}
-
-// liveClientCount asks the collector what the last poll saw.
-//
-// ok=false means the count is genuinely unknown — no poll has succeeded, or the
-// call that would have counted them was refused. It never means "we have not
-// flushed yet", which is why this reads live state rather than the rollups.
-func (s *Server) liveClientCount(deviceID int64) (int, bool) {
-	if s.Fleet == nil {
-		return 0, false
-	}
-	return s.Fleet.LiveClients(deviceID)
 }
 
 // wouldAlsoBroadcast names the OTHER devices that would start transmitting a

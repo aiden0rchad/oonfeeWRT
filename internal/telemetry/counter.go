@@ -277,6 +277,11 @@ func (s *Store) expireStale(now, before int64) {
 			delete(s.ratios, k)
 		}
 	}
+	for k, st := range s.quality {
+		if st.lastTS < before {
+			delete(s.quality, k)
+		}
+	}
 	_ = now
 }
 
@@ -291,6 +296,11 @@ func (s *Store) forgetCounters(deviceID int64) {
 	for k := range s.ratios {
 		if k.DeviceID == deviceID {
 			delete(s.ratios, k)
+		}
+	}
+	for k := range s.quality {
+		if k.deviceID == deviceID {
+			delete(s.quality, k)
 		}
 	}
 }

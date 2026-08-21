@@ -75,6 +75,17 @@ func TestAMeshRendersAlongsideTheAPsNotInsteadOfThem(t *testing.T) {
 	}
 }
 
+func TestVLANMeshUsesTheOwnedNetworkAttachment(t *testing.T) {
+	section, _ := renderMesh(model.Mesh{ID: 1, MeshID: "backhaul", Band: model.Band5G,
+		Key: "a-mesh-passphrase", Enabled: true},
+		model.Network{Name: "iot", VLAN: 45, Enabled: true}, "radio0",
+		meshCaps(capability.Present))
+	if section.Values["network"] != "oowrt_net_iot" {
+		t.Fatalf("VLAN mesh network = %q, want owned attachment oowrt_net_iot",
+			section.Values["network"])
+	}
+}
+
 // SAE mandates protected management frames. Rendering one without the other
 // produces peers that refuse each other for reasons nobody enjoys debugging.
 func TestAnEncryptedMeshGetsSAEAndPMF(t *testing.T) {

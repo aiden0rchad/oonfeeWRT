@@ -24,13 +24,13 @@ func seedMeshDeps(t *testing.T, h *harness) (netID, groupID int) {
 	return n.ID, g.ID
 }
 
-// The passphrase never appears in a list.
+// The passphrase never appears in any read response.
 //
 // Sharper here than for a WLAN: an open mesh is joinable by anyone in radio
 // range, with access to the network behind it, so "is this secured" is the most
-// important thing the view carries — and the key itself must stay one explicit
-// request away, because a list response is what ends up in a screenshot.
-func TestMeshListOmitsTheKeyButSaysWhetherThereIsOne(t *testing.T) {
+// important thing the view carries. A signed-in browser can edit this metadata
+// without becoming a plaintext credential export path.
+func TestMeshReadsOmitTheKeyButSayWhetherThereIsOne(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
 	netID, groupID := seedMeshDeps(t, h)
@@ -75,16 +75,26 @@ func TestMeshListOmitsTheKeyButSaysWhetherThereIsOne(t *testing.T) {
 		t.Errorf("mesh = %+v", m)
 	}
 
-	// And the single-mesh endpoint does reveal it, deliberately as its own act.
-	w = h.do(http.MethodGet, "/api/v1/site/meshes/"+itoa(m.ID), nil)
-	var one struct {
-		Key string `json:"key"`
+	// The single-mesh endpoint is redacted too. Authentication protects the
+	// controller, but should not turn a browser response into a reusable secret.
+	for _, suffix := range []string{"", "?reveal=1"} {
+		w = h.do(http.MethodGet, "/api/v1/site/meshes/"+itoa(m.ID)+suffix, nil)
+		var one struct {
+			Key    string `json:"key"`
+			HasKey bool   `json:"has_key"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &one); err != nil {
+			t.Fatal(err)
+		}
+		if one.Key != "" || !one.HasKey || contains(w.Body.String(), "a-mesh-passphrase") {
+			t.Errorf("single-mesh response %q exposed or hid key state: %s",
+				suffix, w.Body.String())
+		}
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &one); err != nil {
-		t.Fatal(err)
-	}
-	if one.Key != "a-mesh-passphrase" {
-		t.Errorf("the reveal endpoint returned %q", one.Key)
+	h.cookies, h.csrf = nil, ""
+	w = h.do(http.MethodGet, "/api/v1/site/meshes/"+itoa(m.ID)+"?reveal=1", nil)
+	if w.Code != http.StatusUnauthorized || contains(w.Body.String(), "a-mesh-passphrase") {
+		t.Errorf("unauthenticated mesh read = %d %s, want redacted 401", w.Code, w.Body.String())
 	}
 }
 
@@ -136,6 +146,58 @@ func TestSavingAMeshWithoutAKeyKeepsItEncrypted(t *testing.T) {
 	}
 	if out.Mesh.MeshID != "backhaul-2" {
 		t.Errorf("the rename did not land: %+v", out.Mesh)
+	}
+}
+
+func TestMeshKeyCanOnlyBeClearedExplicitly(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	netID, groupID := seedMeshDeps(t, h)
+	w := h.do(http.MethodPost, "/api/v1/site/meshes", map[string]any{
+		"mesh_id": "backhaul", "network_id": netID, "group_id": groupID,
+		"band": "5g", "key": "a-mesh-passphrase", "enabled": true,
+	})
+	var saved struct {
+		Mesh struct {
+			ID int `json:"id"`
+		} `json:"mesh"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/v1/site/meshes/" + itoa(saved.Mesh.ID)
+	w = h.do(http.MethodPost, path, map[string]any{
+		"mesh_id": "backhaul", "network_id": netID, "group_id": groupID,
+		"band": "5g", "key": "replacement", "clear_key": true, "enabled": true,
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("key plus clear_key status=%d, want 400", w.Code)
+	}
+	w = h.do(http.MethodPost, path, map[string]any{
+		"mesh_id": "backhaul", "network_id": netID, "group_id": groupID,
+		"band": "5g", "clear_key": true, "enabled": true,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("explicit clear: %d %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Mesh struct {
+			HasKey bool   `json:"has_key"`
+			Key    string `json:"key"`
+		} `json:"mesh"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Mesh.HasKey || out.Mesh.Key != "" || contains(w.Body.String(), "a-mesh-passphrase") {
+		t.Fatalf("explicit clear returned or retained key state: %s", w.Body.String())
+	}
+	site, err := h.db.Site(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(site.Meshes) != 1 || !site.Meshes[0].Open() {
+		t.Fatal("explicit clear did not make the stored mesh open")
 	}
 }
 

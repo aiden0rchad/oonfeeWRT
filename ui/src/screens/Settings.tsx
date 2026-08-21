@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type React from 'react'
-import { api } from '../lib/api'
+import { ApiError, api } from '../lib/api'
 import type {
   APGroup,
+  ApplyOperation,
+  ApplyResult,
   Device,
+  DeviceFunction,
   Mesh,
   MeshHealthResult,
   Uplink,
@@ -19,6 +22,67 @@ import {
   Banner, Button, Card, DataGrid, Field, Prop, SlideOver, Toggle, Unknown,
 } from '../components/ui'
 import { ago } from '../components/Chart'
+
+const applyOperationStorageKey = 'oonfee_last_apply_operation'
+const applyOperationPollMs = 1000
+
+function retainedApplyOperationID(): string {
+  try {
+    return localStorage.getItem(applyOperationStorageKey) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function retainApplyOperationID(id: string) {
+  try {
+    localStorage.setItem(applyOperationStorageKey, id)
+  } catch {
+    // The durable server record is authoritative. Storage-disabled browsers
+    // can still recover for as long as this screen remains open.
+  }
+}
+
+function newApplyOperationID(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+function applyResultMessage(res: ApplyResult): string {
+  const ok = res.devices.filter((d) => d.outcome === 'applied').length
+  return res.aborted
+    ? `Stopped after ${res.aborted_after}: ${
+        res.devices.find((d) => d.outcome !== 'applied')?.reason ?? 'apply failed'
+      }`
+    : `Applied to ${ok} device${ok === 1 ? '' : 's'}.`
+}
+
+function applyWriteSummary(
+  operationID: string,
+  operation: ApplyOperation | null,
+  recovering: boolean,
+): string {
+  if (!operationID) {
+    return 'Nothing above has touched a device. Preview reads each one and reports what would change.'
+  }
+  if (operation && (operation.state === 'queued' || operation.state === 'running')) {
+    return `Apply operation ${operationID} is ${operation.state}. The request was accepted and its durable status above is authoritative; do not submit another Apply.`
+  }
+  if (recovering || !operation) {
+    return `Checking the durable status of Apply operation ${operationID}. Its recorded status is authoritative; do not submit another Apply while recovery is in progress.`
+  }
+
+  const writeState = operation.write_state ?? 'none'
+  const result = operation.result ? ' The recorded result above is authoritative.' : ''
+  if (writeState === 'none') {
+    return `Apply operation ${operationID} is ${operation.state}. Durable write state: none — no device write began.${result}`
+  }
+  return `Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
+}
 
 /**
  * Settings — the site model, and the flow that pushes it to hardware.
@@ -38,11 +102,18 @@ export function Settings({ devices }: { devices: Device[] }) {
   const [editing, setEditing] = useState<Partial<WLAN> | null>(null)
   const [editingMesh, setEditingMesh] = useState<Partial<Mesh> | null>(null)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const previewGeneration = useRef(0)
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
   const [applied, setApplied] = useState<string | null>(null)
   const [ackTraversal, setAckTraversal] = useState(false)
   const [ackFatal, setAckFatal] = useState(false)
+  const [ackCautions, setAckCautions] = useState(false)
+  const [operationID, setOperationID] = useState(retainedApplyOperationID)
+  const [operation, setOperation] = useState<ApplyOperation | null>(null)
+  const [recoveringOperation, setRecoveringOperation] = useState(
+    () => retainedApplyOperationID() !== '',
+  )
 
   const load = useCallback(async () => {
     try {
@@ -53,12 +124,81 @@ export function Settings({ devices }: { devices: Device[] }) {
     }
   }, [])
 
+  // Any desired-state write invalidates the whole fleet preview. Apply must
+  // never remain enabled beside a plan computed before a network, DHCP, WLAN,
+  // mesh, group, uplink, override, or zone edit.
+  const modelChanged = useCallback(async () => {
+    previewGeneration.current += 1
+    setPreview(null)
+    setBusy((current) => current === 'preview' ? '' : current)
+    setApplied(null)
+    setAckTraversal(false)
+    setAckFatal(false)
+    setAckCautions(false)
+    await load()
+  }, [load])
+
   useEffect(() => {
     load()
   }, [load])
 
+  useEffect(() => {
+    if (!recoveringOperation || !operationID) return
+    let stopped = false
+    let timer = 0
+    const poll = async () => {
+      setBusy('recover')
+      try {
+        const found = await api.applyOperation(operationID)
+        if (stopped) return
+        setOperation(found)
+        if (found.state === 'queued' || found.state === 'running') {
+          timer = window.setTimeout(poll, applyOperationPollMs)
+          return
+        }
+        setRecoveringOperation(false)
+        setBusy('')
+        setPreview(null)
+        setAckTraversal(false)
+        setAckFatal(false)
+        setAckCautions(false)
+        if (found.result) {
+          setApplied(applyResultMessage(found.result))
+        } else {
+          setApplied(null)
+        }
+        if (found.state === 'unknown') {
+          setErr(found.write_state === 'none'
+            ? `${found.error ?? 'This Apply was interrupted.'} No device write began. Preview again before applying.`
+            : `${found.error ?? 'The controller restarted before this Apply finished.'} ` +
+              `The outcome of operation ${operationID} is unknown; inspect the devices and audit log, then Preview again.`)
+        } else if (found.error) {
+          setErr(found.error)
+        } else {
+          setErr('')
+        }
+      } catch (e) {
+        if (stopped) return
+        const message = e instanceof Error ? e.message : String(e)
+        setRecoveringOperation(false)
+        setBusy('')
+        setErr(
+          `Could not recover Apply operation ${operationID}: ${message}. ` +
+          'Keep this operation ID and use Check status before retrying.',
+        )
+      }
+    }
+    void poll()
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+    }
+  }, [operationID, recoveringOperation])
+
   async function runPreview() {
+    const generation = ++previewGeneration.current
     setBusy('preview')
+    setPreview(null)
     setApplied(null)
     // Every preview re-earns both acknowledgements.
     //
@@ -69,49 +209,128 @@ export function Settings({ devices }: { devices: Device[] }) {
     // enabled Apply; a stale acknowledgement is the same defect one level down.
     setAckTraversal(false)
     setAckFatal(false)
+    setAckCautions(false)
     try {
-      setPreview(await api.preview())
+      const next = await api.preview()
+      if (generation !== previewGeneration.current) return
+      setPreview(next)
       setErr('')
     } catch (e) {
+      if (generation !== previewGeneration.current) return
+      setPreview(null)
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy('')
+      if (generation === previewGeneration.current) {
+        setBusy((current) => current === 'preview' ? '' : current)
+      }
     }
   }
 
   async function runApply() {
+    if (!preview) return
     setBusy('apply')
+    const operationID = newApplyOperationID()
+    const createdAt = Math.floor(Date.now() / 1000)
+    retainApplyOperationID(operationID)
+    setOperationID(operationID)
+    setOperation({
+      operation_id: operationID, state: 'queued', created_at: createdAt, devices: [],
+    })
+    setRecoveringOperation(false)
+    let resultMessage = ''
     try {
-      const res = await api.applySite({ acknowledge_traversal: ackTraversal })
-      const ok = res.devices.filter((d) => d.outcome === 'applied').length
-      setApplied(
-        res.aborted
-          ? `Stopped after ${res.aborted_after}: ${
-              res.devices.find((d) => d.outcome !== 'applied')?.reason ?? 'apply failed'
-            }`
-          : `Applied to ${ok} device${ok === 1 ? '' : 's'}.`,
-      )
-      // Re-preview so the screen shows the new truth rather than the plan that
-      // has just stopped being pending.
-      setPreview(await api.preview())
+      const res = await api.applySite({
+        operation_id: operationID,
+        preview_token: preview.preview_token,
+        acknowledge_traversal: ackTraversal,
+        acknowledge_driver_risk: ackFatal,
+        acknowledge_cautions: ackCautions,
+      })
+      resultMessage = applyResultMessage(res)
+      setOperation({
+        operation_id: res.operation_id ?? operationID,
+        state: res.aborted ? 'failed' : 'completed',
+        created_at: createdAt,
+        finished_at: Math.floor(Date.now() / 1000),
+        result: res,
+        write_state: res.devices.some((d) => (d.changes ?? 0) > 0) ? 'possible' : 'none',
+        devices: [],
+      })
+      setApplied(resultMessage)
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      previewGeneration.current += 1
+      setPreview(null)
+      setAckTraversal(false)
+      setAckFatal(false)
+      setAckCautions(false)
+      setApplied(null)
+      if (e instanceof ApiError && e.writeState === 'none') {
+        setOperation({
+          operation_id: operationID,
+          state: 'failed',
+          created_at: createdAt,
+          finished_at: Math.floor(Date.now() / 1000),
+          error: message,
+          write_state: 'none',
+          devices: [],
+        })
+        setErr(message)
+        setBusy('')
+      } else {
+        setErr(
+          `The Apply response was lost or incomplete. Recovering operation ${operationID}; do not retry it.`,
+        )
+        setBusy('recover')
+        setRecoveringOperation(true)
+      }
+      return
+    }
+
+    // A completed or partially aborted run invalidates both the preview and
+    // consent attached to it. Refresh separately: a failed read after a
+    // successful write must never be misreported as a failed/no-write apply.
+    setPreview(null)
+    setAckTraversal(false)
+    setAckFatal(false)
+    setAckCautions(false)
+    const generation = ++previewGeneration.current
+    try {
+      const next = await api.preview()
+      if (generation !== previewGeneration.current) return
+      setPreview(next)
       setErr('')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      if (generation !== previewGeneration.current) return
+      const message = e instanceof Error ? e.message : String(e)
+      setErr(
+        `${resultMessage} Refresh failed: ${message}. ` +
+        'Preview again before applying anything else.',
+      )
     } finally {
-      setBusy('')
+      setBusy((current) => current === 'apply' ? '' : current)
     }
   }
 
   if (!site) {
     return (
-      <div style={{ padding: 20, fontSize: 12, color: 'var(--text-secondary)' }}>
-        {err ? <Banner tone="critical">{err}</Banner> : 'Loading…'}
+      <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
+        <h1 style={{ margin: 0, fontSize: 20 }}>Settings</h1>
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          {err
+            ? <div role="alert"><Banner tone="critical">{err}</Banner></div>
+            : 'Loading…'}
+        </div>
       </div>
     )
   }
 
   const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
   const traversal = preview?.devices.filter((d) => d.touches_traversal) ?? []
+  const cautions =
+    preview?.devices.flatMap((d) =>
+      (d.cautions ?? []).map((caution) => ({ device: d.name, caution })),
+    ) ?? []
 
   // Defects that this change ASKS FOR, and that kill the radio.
   //
@@ -138,7 +357,8 @@ export function Settings({ devices }: { devices: Device[] }) {
 
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
-      {err && <Banner tone="critical">{err}</Banner>}
+      <h1 style={{ margin: 0, fontSize: 20 }}>Settings</h1>
+      {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
       {site.problems.length > 0 && (
         <Banner tone="warning">
           <strong>This configuration is not ready to apply:</strong>
@@ -209,7 +429,7 @@ export function Settings({ devices }: { devices: Device[] }) {
                 w={w}
                 site={site}
                 onEdit={() => setEditing(w)}
-                onDeleted={load}
+                onDeleted={modelChanged}
               />
             ))}
           </div>
@@ -256,19 +476,19 @@ export function Settings({ devices }: { devices: Device[] }) {
                 m={m}
                 site={site}
                 onEdit={() => setEditingMesh(m)}
-                onDeleted={load}
+                onDeleted={modelChanged}
               />
             ))}
           </div>
         )}
       </Card>
 
-      <Uplinks site={site} devices={devices} onChanged={load} />
+      <Uplinks site={site} devices={devices} onChanged={modelChanged} />
       <MeshHealth />
-      <Groups site={site} devices={devices} onChanged={load} />
+      <Groups site={site} devices={devices} onChanged={modelChanged} />
       <Neighbours site={site} />
-      <Deviations site={site} devices={devices} onChanged={load} />
-      <Networks site={site} onChanged={load} />
+      <Deviations site={site} devices={devices} onChanged={modelChanged} />
+      <Networks site={site} onChanged={modelChanged} />
 
       {/* The pending-changes flow. Preview is a read; apply is the only thing
           that writes, and it is deliberately unreachable without previewing
@@ -285,8 +505,10 @@ export function Settings({ devices }: { devices: Device[] }) {
               !preview ||
               pending === 0 ||
               (preview.site_errors?.length ?? 0) > 0 ||
+              preview.devices.some((d) => Boolean(d.error)) ||
               preview.devices.some((d) => d.blocked) ||
               (traversal.length > 0 && !ackTraversal) ||
+              (cautions.length > 0 && !ackCautions) ||
               (fatal.length > 0 && !ackFatal)
             }
             onClick={runApply}
@@ -295,12 +517,48 @@ export function Settings({ devices }: { devices: Device[] }) {
           </Button>
           {applied && <span style={{ fontSize: 12 }}>{applied}</span>}
         </div>
+        {operationID && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+              marginTop: 8, fontSize: 11, color: 'var(--text-secondary)',
+            }}
+          >
+            <strong>Apply operation</strong>
+            <code>{operationID}</code>
+            <span>
+              {recoveringOperation
+                ? 'checking status…'
+                : operation?.state ?? 'request sent'}
+            </span>
+            {!recoveringOperation && (
+              <Button onClick={() => setRecoveringOperation(true)} disabled={busy !== ''}>
+                Check status
+              </Button>
+            )}
+            {(operation?.devices?.length ?? 0) > 0 && (
+              <ul style={{ flexBasis: '100%', margin: '2px 0 0', paddingLeft: 18 }}>
+                {operation!.devices.map((device) => (
+                  <li key={`${device.ordinal}-${device.device_mac}`}>
+                    <strong>{device.device_name}</strong> — {device.state}
+                    {device.router_outcome && ` · router: ${device.router_outcome}`}
+                    {device.outcome && device.outcome !== device.router_outcome &&
+                      ` · controller: ${device.outcome}`}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-          Nothing above has touched a device. Preview reads each one and reports
-          what would change; apply is the only step that writes, and it stops at
-          the first device that fails rather than leaving the fleet half
-          converted. Every change is applied with a rollback armed — a device
-          that comes back unhealthy reverts itself.
+          {applyWriteSummary(operationID, operation, recoveringOperation)} Apply
+          is the only step that writes, and it stops at the first device that
+          fails to limit a partial rollout. Devices that already applied stay
+          changed; the result names exactly where it stopped. Every change is
+          applied with a rollback armed — a device that comes back unhealthy
+          reverts itself.
         </div>
 
         {/* IMPLEMENTATION §6's traversal acknowledgment. The rollback protects
@@ -325,6 +583,29 @@ export function Settings({ devices }: { devices: Device[] }) {
                 label="I understand — apply the network changes"
                 on={ackTraversal}
                 onChange={setAckTraversal}
+              />
+            </Banner>
+          </div>
+        )}
+
+        {cautions.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <Banner tone="warning">
+              <div>
+                This plan has behavior that the controller cannot make safe by
+                itself. Review it before writing to the fleet.
+              </div>
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
+                {cautions.map((item, i) => (
+                  <li key={`${item.device}-${i}`}>
+                    <strong>{item.device}</strong> — {item.caution}
+                  </li>
+                ))}
+              </ul>
+              <Toggle
+                label="I reviewed these cautions and want to apply"
+                on={ackCautions}
+                onChange={setAckCautions}
               />
             </Banner>
           </div>
@@ -382,8 +663,7 @@ export function Settings({ devices }: { devices: Device[] }) {
             setEditingMesh(null)
             // A saved mesh makes the previous preview stale, and a stale
             // preview is the one thing this screen must never show.
-            setPreview(null)
-            await load()
+            await modelChanged()
           }}
         />
       )}
@@ -395,12 +675,10 @@ export function Settings({ devices }: { devices: Device[] }) {
           onClose={() => setEditing(null)}
           onSaved={async () => {
             setEditing(null)
-            await load()
             // A saved WLAN makes the previous preview stale, and a stale
             // preview next to an Apply button is the one thing this screen
             // must never show.
-            setPreview(null)
-            setApplied(null)
+            await modelChanged()
           }}
         />
       )}
@@ -417,47 +695,87 @@ function WLANRow({
   w: WLAN
   site: Site
   onEdit: () => void
-  onDeleted: () => void
+  onDeleted: () => Promise<void>
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const group = site.groups.find((g) => g.id === w.group_id)
   const net = site.networks.find((n) => n.id === w.network_id)
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
         padding: '10px 14px',
         borderTop: '1px solid var(--border)',
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {w.ssid}
-          {!w.enabled && (
-            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · disabled</span>
-          )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {w.ssid}
+            {!w.enabled && (
+              <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · disabled</span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            {w.bands.join(' + ')} · {w.security_mode}
+            {w.has_key ? '' : w.security_mode !== 'none' && w.security_mode !== 'owe'
+              ? ' · no passphrase set'
+              : ''}
+            {' · '}
+            {group?.name ?? `group ${w.group_id}`} · {net?.name ?? `network ${w.network_id}`}
+            {w.roaming.ft && ' · 802.11r'}
+          </div>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-          {w.bands.join(' + ')} · {w.security_mode}
-          {w.has_key ? '' : w.security_mode !== 'none' && w.security_mode !== 'owe'
-            ? ' · no passphrase set'
-            : ''}
-          {' · '}
-          {group?.name ?? `group ${w.group_id}`} · {net?.name ?? `network ${w.network_id}`}
-          {w.roaming.ft && ' · 802.11r'}
-        </div>
+        <Button aria-label={`Edit wireless network ${w.ssid}`} disabled={deleting} onClick={onEdit}>
+          Edit
+        </Button>
+        <Button
+          aria-label={`Delete wireless network ${w.ssid}`}
+          disabled={deleting}
+          onClick={() => {
+            setDeleteError('')
+            setConfirmDelete(true)
+          }}
+        >
+          Delete
+        </Button>
       </div>
-      <Button onClick={onEdit}>Edit</Button>
-      <Button
-        onClick={async () => {
-          const res = await api.deleteWLAN(w.id)
-          alert(res.note)
-          onDeleted()
-        }}
-      >
-        Delete
-      </Button>
+      {confirmDelete && (
+        <div style={{ marginTop: 10 }}>
+          <Banner tone="warning">
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span>
+                Delete <strong>{w.ssid}</strong> from desired state? No router changes until
+                you Preview and Apply.
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  disabled={deleting}
+                  onClick={async () => {
+                    setDeleting(true)
+                    setDeleteError('')
+                    try {
+                      await api.deleteWLAN(w.id)
+                      await onDeleted()
+                    } catch (e) {
+                      setDeleteError(e instanceof Error ? e.message : String(e))
+                    } finally {
+                      setDeleting(false)
+                    }
+                  }}
+                >
+                  {deleting ? 'Deleting…' : `Delete “${w.ssid}”`}
+                </Button>
+                <Button disabled={deleting} onClick={() => setConfirmDelete(false)}>
+                  Keep “{w.ssid}”
+                </Button>
+              </div>
+            </div>
+          </Banner>
+        </div>
+      )}
+      {deleteError && <div role="alert" style={{ marginTop: 8 }}><Banner tone="critical">{deleteError}</Banner></div>}
     </div>
   )
 }
@@ -529,7 +847,7 @@ function WLANEditor({
   return (
     <Card title={w.id ? `Edit ${w.ssid}` : 'New wireless network'}>
       <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-        {err && <Banner tone="critical">{err}</Banner>}
+        {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
         <Field
           label="SSID"
@@ -707,10 +1025,15 @@ function WLANEditor({
           <Toggle label="Enabled" on={!!draft.enabled} onChange={(v) => set({ enabled: v })} />
           <Toggle label="Hide the SSID" on={!!draft.hidden} onChange={(v) => set({ hidden: v })} />
           <Toggle
-            label="Isolate clients from each other"
+            label="Isolate clients on this access point"
             on={!!draft.isolate}
             onChange={(v) => set({ isolate: v })}
           />
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', margin: '-2px 0 4px' }}>
+            Requests BSS isolation and verifies bridge-port isolation across radios
+            on one AP. Verify client behavior after applying; different APs still
+            need additional switch or bridge policy.
+          </div>
           {/* The AP half of a wireless uplink. Off unless asked for, because it
               changes what the access points accept from the air rather than
               merely what they advertise — and it is the half people forget:
@@ -746,20 +1069,55 @@ function Groups({
 }: {
   site: Site
   devices: Device[]
-  onChanged: () => void
+  onChanged: () => Promise<void>
 }) {
   const [name, setName] = useState('')
+  const [membershipOverrides, setMembershipOverrides] = useState<Record<number, number[]>>({})
+  const [membershipBusy, setMembershipBusy] = useState<Set<number>>(new Set())
+  const [membershipErrors, setMembershipErrors] = useState<Record<number, string>>({})
+  const desiredMemberships = useRef(new Map<number, number[]>())
+  const membershipQueues = useRef(new Map<number, Promise<void>>())
   const adopted = devices.filter((d) => d.adopted)
 
-  async function toggle(g: APGroup, deviceID: number) {
-    const has = g.device_ids.includes(deviceID)
-    await api.saveGroup({
-      ...g,
-      device_ids: has
-        ? g.device_ids.filter((x) => x !== deviceID)
-        : [...g.device_ids, deviceID],
+  function toggle(g: APGroup, deviceID: number) {
+    const current = desiredMemberships.current.get(g.id) ?? g.device_ids
+    const next = current.includes(deviceID)
+      ? current.filter((id) => id !== deviceID)
+      : [...current, deviceID]
+    desiredMemberships.current.set(g.id, next)
+    setMembershipOverrides((values) => ({ ...values, [g.id]: next }))
+    setMembershipBusy((values) => new Set(values).add(g.id))
+    setMembershipErrors((values) => ({ ...values, [g.id]: '' }))
+
+    const previous = membershipQueues.current.get(g.id) ?? Promise.resolve()
+    const task = previous.catch(() => undefined).then(async () => {
+      await api.saveGroup({ id: g.id, device_ids: next })
     })
-    onChanged()
+    membershipQueues.current.set(g.id, task)
+
+    void task.then(
+      () => finishMembership(g.id, task, ''),
+      (e) => finishMembership(g.id, task, e instanceof Error ? e.message : String(e)),
+    )
+  }
+
+  async function finishMembership(groupID: number, task: Promise<void>, error: string) {
+    if (membershipQueues.current.get(groupID) !== task) return
+    await onChanged()
+    if (membershipQueues.current.get(groupID) !== task) return
+    membershipQueues.current.delete(groupID)
+    desiredMemberships.current.delete(groupID)
+    setMembershipOverrides((values) => {
+      const next = { ...values }
+      delete next[groupID]
+      return next
+    })
+    setMembershipBusy((values) => {
+      const next = new Set(values)
+      next.delete(groupID)
+      return next
+    })
+    if (error) setMembershipErrors((values) => ({ ...values, [groupID]: error }))
   }
 
   return (
@@ -768,6 +1126,7 @@ function Groups({
       actions={
         <div style={{ display: 'flex', gap: 6 }}>
           <input
+            aria-label="New AP group name"
             value={name}
             placeholder="new group"
             onChange={(e) => setName(e.target.value)}
@@ -814,6 +1173,7 @@ function Groups({
                 {g.name}
                 <div style={{ flex: 1 }} />
                 <Button
+                  aria-label={`Delete AP group ${g.name}`}
                   onClick={async () => {
                     try {
                       await api.deleteGroup(g.id)
@@ -845,13 +1205,23 @@ function Groups({
                   >
                     <input
                       type="checkbox"
-                      checked={g.device_ids.includes(d.id)}
+                      checked={(membershipOverrides[g.id] ?? g.device_ids).includes(d.id)}
                       onChange={() => toggle(g, d.id)}
                     />
                     {d.name}
                   </label>
                 ))}
               </div>
+              {membershipBusy.has(g.id) && (
+                <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                  Saving membership changes…
+                </div>
+              )}
+              {membershipErrors[g.id] && (
+                <div role="alert" style={{ marginTop: 6 }}>
+                  <Banner tone="critical">{membershipErrors[g.id]}</Banner>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -964,12 +1334,28 @@ const deviceOwnedZones = ['lan', 'wan']
 // to the device, which renderZones refuses rather than silently merging.
 const maxZoneName = 11
 
+// Exactly the identifier the model and renderer give fw4. Punctuation other
+// than separators is dropped, separators become underscores, and fw4 reads at
+// most 11 characters. Validation must reason about this value: `wan!` is still
+// the device's real `wan` zone, and current fw4 rejects an identifier beginning
+// with a digit even though UCI itself accepts it.
+function firewallZoneIdentifier(zone: string): { base: string; id: string } {
+  let base = ''
+  for (const ch of zone.trim().toLowerCase()) {
+    if (/[a-z0-9]/.test(ch)) base += ch
+    else if (ch === '_' || ch === '-' || ch === ' ') base += '_'
+  }
+  base = base.replace(/^_+|_+$/g, '')
+  return { base, id: (base || 'net').slice(0, maxZoneName) }
+}
+
 // A zone name the operator can actually type, derived from the network's own
 // name — which is what a network created today defaults to.
 function suggestZone(networkName: string): string {
   const base = networkName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
-  const distinct = base && !deviceOwnedZones.includes(base) ? base : `${base || 'net'}_zone`
+  let distinct = base && !deviceOwnedZones.includes(base) ? base : `${base || 'net'}_zone`
+  if (/^[0-9]/.test(distinct)) distinct = `net_${distinct}`
   return distinct.slice(0, maxZoneName).replace(/_+$/, '') || 'guest'
 }
 
@@ -984,17 +1370,37 @@ function suggestZone(networkName: string): string {
 // all: renderNetwork returns early, that traffic being the device's own LAN.
 // Its zone is inert, so flagging it is a warning on a row nobody can act on.
 function zoneWarning(zone: string, networkName: string, vlan: number): string | null {
-  const z = zone.trim().toLowerCase()
-  if (!z || vlan <= 1) return null
+  const raw = zone.trim()
+  if (!raw || vlan <= 1) return null
+  const { base, id } = firewallZoneIdentifier(raw)
   const fix = suggestZone(networkName)
   const owned = deviceOwnedZones.map((q) => `"${q}"`).join(' or ')
-  if (deviceOwnedZones.includes(z)) {
-    return `Zone "${z}" belongs to the device, not to oonfeeWRT, and oonfeeWRT never edits config it did not write — so applying this network would be refused. To fix it: type a different name in the zone box, for example "${fix}". Any name works as long as it is not ${owned}.`
+  if (!base) {
+    return `Zone "${raw}" contains no usable letters or digits, so OpenWrt cannot create it. To fix it: type a name such as "${fix}".`
   }
-  if (z.length > maxZoneName) {
-    return `Zone "${z}" is longer than fw4 reads. Only the first ${maxZoneName} characters count, so the device sees "${z.slice(0, maxZoneName)}" — and any other zone matching that far becomes the same zone. To fix it: shorten it to ${maxZoneName} characters or fewer, for example "${fix}".`
+  if (/^[0-9]/.test(base)) {
+    return `Zone "${raw}" renders as "${id}", which starts with a digit and is rejected by current OpenWrt fw4. To fix it: start the name with a letter, for example "${fix}".`
+  }
+  if (deviceOwnedZones.includes(id)) {
+    return `Zone "${raw}" renders as "${id}", which belongs to the device, not to oonfeeWRT. Applying this network would be refused because oonfeeWRT never edits config it did not write. To fix it: type a different name, for example "${fix}". The rendered name must not be ${owned}.`
+  }
+  if (base.length > maxZoneName) {
+    return `Zone "${raw}" is longer than fw4 reads. Only the first ${maxZoneName} rendered characters count, so the device sees "${id}" — and any other zone matching that far becomes the same zone. To fix it: shorten it, for example "${fix}".`
   }
   return null
+}
+
+function zoneReassignmentWarning(
+  original: string,
+  target: string,
+  vlan: number,
+  zones: Site['zones'],
+): string | null {
+  const name = target.trim()
+  if (vlan <= 1 || !name || name === original || zones.some(
+    (zone) => zone.name === name && zone.explicit,
+  )) return null
+  return `Moving this network to zone “${name}” uses the legacy policy until you define one: Internet/WAN is allowed and every other managed zone is blocked. Review Policy Engine, then Preview before Apply.`
 }
 
 // The zone a network's firewall rules live in, editable in place.
@@ -1004,21 +1410,26 @@ function zoneWarning(zone: string, networkName: string, vlan: number): string | 
 // firewall zone named lan beside the device's own, and nothing in the UI could
 // change it. The default is the network's own name now; this is how the ones
 // created before that get fixed.
-function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }) {
+function NetworkZone({
+  n, zones, onChanged,
+}: { n: SiteNetwork; zones: Site['zones']; onChanged: () => void }) {
   const [value, setValue] = useState(n.zone)
   const [busy, setBusy] = useState(false)
   const trimmed = value.trim()
   const dirty = trimmed !== n.zone && trimmed !== ''
   const warning = zoneWarning(dirty ? trimmed : n.zone, n.name, n.vlan)
+  const policyWarning = dirty
+    ? zoneReassignmentWarning(n.zone, trimmed, n.vlan, zones)
+    : null
 
   const save = async () => {
     if (!dirty || busy) return
     setBusy(true)
     try {
-      // The whole network, not just the zone: the handler rebuilds the record
-      // from what it is sent, so a partial post would blank the VLAN and the
-      // address.
-      await api.saveNetwork({ ...n, zone: trimmed })
+      // The API merges partial updates while holding the site-mutation gate.
+      // Sending only the intended field avoids a stale editor overwriting an
+      // unrelated DHCP/address change made in another tab.
+      await api.saveNetwork({ id: n.id, zone: trimmed })
       onChanged()
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e))
@@ -1035,6 +1446,7 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
         aria-label={`Firewall zone for ${n.name}`}
         value={value}
         disabled={busy}
+        onClick={(event) => event.stopPropagation()}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter') void save()
@@ -1057,19 +1469,34 @@ function NetworkZone({ n, onChanged }: { n: SiteNetwork; onChanged: () => void }
           ⚠ needs a different zone
         </span>
       )}
+      {policyWarning && (
+        <span role="note" style={{ color: 'var(--warning)', fontSize: 11 }}>
+          {policyWarning}
+        </span>
+      )}
     </>
   )
 }
 
-// What a /nn actually gives you, derived rather than stored.
-//
-// The renderer hardcodes the DHCP pool as start 100, limit 150, lease 12h
-// (render/network.go), so these are facts about what WILL be written, not
-// settings. Shown because an operator sizing a subnet should not have to work
-// out the broadcast address in their head — and labelled read-only, because
-// inventing controls for values the model does not carry would be worse than
-// omitting them.
-function subnetFacts(cidr: string): { label: string; value: string }[] | null {
+type DHCPSettings = NonNullable<SiteNetwork['dhcp']>
+
+const DEFAULT_DHCP: DHCPSettings = {
+  enabled: true,
+  start: 100,
+  limit: 150,
+  leasetime: '12h',
+}
+
+function dhcpFor(n: SiteNetwork): DHCPSettings {
+  return n.dhcp ?? DEFAULT_DHCP
+}
+
+// What a /nn actually gives you, derived rather than stored. DHCP uses the
+// same offset/count vocabulary OpenWrt writes to /etc/config/dhcp.
+function subnetFacts(
+  cidr: string,
+  dhcp: DHCPSettings,
+): { label: string; value: string }[] | null {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr.trim())
   if (!m) return null
   const octets = [1, 2, 3, 4].map((i) => Number(m[i]))
@@ -1082,20 +1509,81 @@ function subnetFacts(cidr: string): { label: string; value: string }[] | null {
   const dot = (n: number) =>
     [24, 16, 8, 0].map((sh) => (n >>> sh) & 255).join('.')
   const usable = Math.max(0, broadcast - network - 1)
-  // The pool the renderer writes: start 100, limit 150.
-  const poolStart = network + 100
-  const poolEnd = network + 100 + 150 - 1
+  const poolStart = network + dhcp.start
+  const poolEnd = network + dhcp.start + dhcp.limit - 1
   const facts = [
     { label: 'Gateway IP', value: dot(addr) },
     { label: 'Netmask', value: dot(mask) },
     { label: 'Broadcast IP', value: dot(broadcast) },
     { label: 'Usable IPs', value: String(usable) },
   ]
-  if (poolEnd < broadcast) {
+  const gatewayOffset = addr - network
+  if (
+    dhcp.enabled && dhcp.start >= 1 && dhcp.limit >= 1 &&
+    poolEnd < broadcast &&
+    (gatewayOffset < dhcp.start || gatewayOffset > dhcp.start + dhcp.limit - 1)
+  ) {
     facts.push({ label: 'DHCP range', value: `${dot(poolStart)} – ${dot(poolEnd)}` })
-    facts.push({ label: 'Lease time', value: '12h' })
+    facts.push({ label: 'Lease time', value: dhcp.leasetime })
   }
   return facts
+}
+
+function dhcpProblem(cidr: string, dhcp: DHCPSettings): string | null {
+  if (!dhcp.enabled) return null
+  if (!Number.isInteger(dhcp.start) || dhcp.start < 1) {
+    return 'Pool start must be at least 1.'
+  }
+  if (!Number.isInteger(dhcp.limit) || dhcp.limit < 1) {
+    return 'Pool limit must be at least 1 lease.'
+  }
+  if (!/^(?:[1-9][0-9]*[smhdw]|infinite)$/.test(dhcp.leasetime.trim())) {
+    return 'Lease time must be a number followed by s, m, h, d or w, or “infinite”.'
+  }
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(cidr.trim())
+  if (!m) return null // the address field owns this diagnostic
+  const octets = [1, 2, 3, 4].map((i) => Number(m[i]))
+  const bits = Number(m[5])
+  if (octets.some((o) => o > 255) || bits < 8 || bits > 32) return null
+  if (bits > 30) return `DHCP needs usable host addresses; a /${bits} has none.`
+  const addr = octets.reduce((acc, o) => acc * 256 + o, 0)
+  const mask = (0xffffffff << (32 - bits)) >>> 0
+  const network = (addr & mask) >>> 0
+  const highest = 2 ** (32 - bits) - 2
+  const end = dhcp.start + dhcp.limit - 1
+  if (end > highest) {
+    return `Pool offsets ${dhcp.start}–${end} do not fit this /${bits}; the highest usable offset is ${highest}.`
+  }
+  const gateway = addr - network
+  if (gateway >= dhcp.start && gateway <= end) {
+    return `The pool includes this network’s gateway at offset ${gateway}.`
+  }
+  return null
+}
+
+function networkCIDRProblem(cidr: string): string | null {
+  const raw = cidr.trim()
+  if (!raw) return 'A managed VLAN needs an IPv4 gateway address in CIDR form.'
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(raw)
+  if (!m) return 'The gateway must be an IPv4 address in CIDR form.'
+  const octets = [1, 2, 3, 4].map((i) => Number(m[i]))
+  const bits = Number(m[5])
+  if (octets.some((o) => o > 255) || bits < 8 || bits > 32) {
+    return 'The gateway must be IPv4 with a prefix from /8 through /32.'
+  }
+  if (bits > 30) return null
+  const addr = octets.reduce((acc, o) => acc * 256 + o, 0) >>> 0
+  const mask = (0xffffffff << (32 - bits)) >>> 0
+  const network = (addr & mask) >>> 0
+  const offset = addr - network
+  const hosts = 2 ** (32 - bits)
+  if (offset === 0) {
+    return `${raw} is the subnet address, not a usable gateway. Choose a host address such as .1.`
+  }
+  if (offset === hosts - 1) {
+    return `${raw} is the broadcast address, not a usable gateway. Choose a host address such as .1.`
+  }
+  return null
 }
 
 // The editor for a network that already exists.
@@ -1104,20 +1592,43 @@ function subnetFacts(cidr: string): { label: string; value: string }[] | null {
 // a typo in a VLAN or an address meant deleting the row and starting again —
 // and the zone, once it defaulted to "lan", could not be corrected at all.
 function NetworkEditor({
-  n, onClose, onChanged,
-}: { n: SiteNetwork; onClose: () => void; onChanged: () => void }) {
+  n, zones, onClose, onChanged,
+}: {
+  n: SiteNetwork
+  zones: Site['zones']
+  onClose: () => void
+  onChanged: () => void
+}) {
   const [draft, setDraft] = useState({
     name: n.name, vlan: n.vlan, cidr: n.cidr ?? '', zone: n.zone,
-    enabled: n.enabled,
+    dhcp: { ...dhcpFor(n) }, enabled: n.enabled,
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const facts = subnetFacts(draft.cidr)
+  const managesDHCP = draft.vlan > 1
+  const addressWarning = draft.enabled && managesDHCP
+    ? networkCIDRProblem(draft.cidr)
+    : null
+  const facts = subnetFacts(draft.cidr, managesDHCP
+    ? draft.dhcp
+    : { ...draft.dhcp, enabled: false })
+  const dhcpWarning = draft.enabled && managesDHCP
+    ? dhcpProblem(draft.cidr, draft.dhcp)
+    : null
+  const legacyDHCPWarning = n.dhcp?.legacy_default && dhcpWarning
+    ? `This upgraded network still inherits the legacy DHCP pool. ${dhcpWarning} ` +
+      'Choose one: customize Pool start and Pool limit, or turn DHCP server off, then Save. ' +
+      'No device will be changed until you make that explicit choice.'
+    : null
   const warning = zoneWarning(draft.zone, draft.name, draft.vlan)
+  const policyWarning = zoneReassignmentWarning(
+    n.zone, draft.zone, draft.vlan, zones,
+  )
   const dirty =
     draft.name !== n.name || draft.vlan !== n.vlan ||
     (draft.cidr || '') !== (n.cidr ?? '') || draft.zone !== n.zone ||
-    draft.enabled !== n.enabled
+    draft.enabled !== n.enabled ||
+    JSON.stringify(draft.dhcp) !== JSON.stringify(dhcpFor(n))
 
   const save = async () => {
     setBusy(true)
@@ -1125,7 +1636,12 @@ function NetworkEditor({
     try {
       await api.saveNetwork({
         id: n.id, name: draft.name.trim(), vlan: draft.vlan,
-        cidr: draft.cidr.trim(), zone: draft.zone.trim(), enabled: draft.enabled,
+        cidr: draft.cidr.trim(), zone: draft.zone.trim(), dhcp: {
+          enabled: draft.dhcp.enabled,
+          start: draft.dhcp.start,
+          limit: draft.dhcp.limit,
+          leasetime: draft.dhcp.leasetime.trim(),
+        }, enabled: draft.enabled,
       })
       onChanged()
       onClose()
@@ -1139,7 +1655,7 @@ function NetworkEditor({
   return (
     <SlideOver title={n.name} onClose={onClose}>
       <div style={{ display: 'grid', gap: 14 }}>
-        {err && <Banner tone="critical">{err}</Banner>}
+        {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
         <Card title="Network">
           <div style={{ display: 'grid', gap: 8 }}>
             <Field
@@ -1161,6 +1677,11 @@ function NetworkEditor({
             {warning && (
               <div style={{ fontSize: 11, color: 'var(--warning)' }}>{warning}</div>
             )}
+            {policyWarning && (
+              <div role="note" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                {policyWarning}
+              </div>
+            )}
             <Toggle
               label="Enabled"
               on={draft.enabled}
@@ -1177,11 +1698,16 @@ function NetworkEditor({
               value={draft.cidr}
               onChange={(e) => setDraft({ ...draft, cidr: e.target.value })}
             />
-            {draft.cidr.trim() !== '' && !facts && (
-              <div style={{ fontSize: 11, color: 'var(--warning)' }}>
-                Not an IPv4 network in CIDR form, so this network would get its
-                VLAN and no addressing. To fix it: write it as address/prefix,
-                for example "10.0.{draft.vlan}.1/24".
+            {draft.cidr.trim() !== '' && !facts && addressWarning && (
+              <div role="alert" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                Saving is blocked because this is not an IPv4 network in CIDR
+                form. Write it as address/prefix, for example
+                "10.0.{draft.vlan}.1/24".
+              </div>
+            )}
+            {draft.cidr.trim() === '' && addressWarning && (
+              <div role="alert" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                {addressWarning} Saving is blocked until this is fixed.
               </div>
             )}
             {facts && (
@@ -1195,18 +1721,81 @@ function NetworkEditor({
                   </div>
                 ))}
                 <div style={{ color: 'var(--text-muted)', marginTop: 4 }}>
-                  Derived from the address. The DHCP pool and lease are fixed by
-                  the renderer and are not settings yet — a range that does not
-                  fit its subnet is a mistake nobody catches until a client
-                  fails to get a lease.
+                  Derived from the address and the DHCP settings below.
                 </div>
+              </div>
+            )}
+            {facts && addressWarning && (
+              <div role="alert" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                {addressWarning} Saving is blocked until this is fixed.
               </div>
             )}
           </div>
         </Card>
 
+        {managesDHCP ? (
+          <Card title="DHCP">
+            <div style={{ display: 'grid', gap: 8 }}>
+              <Toggle
+                label="DHCP server"
+                on={draft.dhcp.enabled}
+                onChange={(enabled) => setDraft({
+                  ...draft, dhcp: { ...draft.dhcp, enabled },
+                })}
+              />
+              <Field
+                label="Pool start"
+                type="number"
+                value={draft.dhcp.start}
+                disabled={!draft.dhcp.enabled}
+                onChange={(e) => setDraft({
+                  ...draft, dhcp: { ...draft.dhcp, start: Number(e.target.value) },
+                })}
+              />
+              <Field
+                label="Pool limit"
+                type="number"
+                value={draft.dhcp.limit}
+                disabled={!draft.dhcp.enabled}
+                onChange={(e) => setDraft({
+                  ...draft, dhcp: { ...draft.dhcp, limit: Number(e.target.value) },
+                })}
+              />
+              <Field
+                label="Lease time"
+                placeholder="12h"
+                value={draft.dhcp.leasetime}
+                disabled={!draft.dhcp.enabled}
+                onChange={(e) => setDraft({
+                  ...draft, dhcp: { ...draft.dhcp, leasetime: e.target.value },
+                })}
+              />
+              {legacyDHCPWarning ? (
+                <div role="alert" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                  {legacyDHCPWarning}
+                </div>
+              ) : dhcpWarning && (
+                <div role="alert" style={{ fontSize: 11, color: 'var(--warning)' }}>
+                  {dhcpWarning} Applying is blocked until this is fixed.
+                </div>
+              )}
+            </div>
+          </Card>
+        ) : (
+          <Card title="DHCP">
+            <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              VLAN 0 and 1 are the router’s existing management LAN. The controller
+              leaves their addressing and DHCP server untouched so adopting an AP
+              cannot take over or interrupt its management network. Configure this
+              DHCP server on the router itself.
+            </div>
+          </Card>
+        )}
+
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button disabled={!dirty || busy || !draft.name.trim()} onClick={save}>
+          <Button disabled={
+            !dirty || busy || !draft.name.trim() || !!addressWarning || !!dhcpWarning
+          } onClick={save}>
             {busy ? 'Saving…' : 'Save'}
           </Button>
           <Button onClick={onClose}>Cancel</Button>
@@ -1230,6 +1819,7 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
       {editing && (
         <NetworkEditor
           n={editing}
+          zones={site.zones ?? []}
           onClose={() => setEditing(null)}
           onChanged={onChanged}
         />
@@ -1284,7 +1874,9 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
               key: 'zone',
               header: 'Firewall zone',
               width: 240,
-              render: (n) => <NetworkZone n={n} onChanged={onChanged} />,
+              render: (n) => (
+                <NetworkZone n={n} zones={site.zones ?? []} onChanged={onChanged} />
+              ),
               sortBy: (n) => n.zone,
             },
             {
@@ -1293,7 +1885,9 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
               width: 90,
               render: (n) => (
                 <Button
-                  onClick={async () => {
+                  aria-label={`Delete network ${n.name}`}
+                  onClick={async (event) => {
+                    event.stopPropagation()
                     try {
                       await api.deleteNetwork(n.id)
                       onChanged()
@@ -1345,7 +1939,7 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
             onClick={async () => {
               await api.saveNetwork({
                 ...draft, name: draft.name.trim(),
-                zone: draft.zone.trim(), enabled: true,
+                zone: draft.zone.trim(), dhcp: { ...DEFAULT_DHCP }, enabled: true,
               })
               setDraft({ name: '', vlan: 1, cidr: '', zone: '' })
               onChanged()
@@ -1375,7 +1969,7 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
 function Preview({ p }: { p: PreviewResult }) {
   if (p.site_errors && p.site_errors.length > 0) {
     return (
-      <div style={{ marginTop: 12 }}>
+      <div role="alert" style={{ marginTop: 12 }}>
         <Banner tone="critical">
           No device was checked, because the configuration itself is not valid:
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
@@ -1393,7 +1987,9 @@ function Preview({ p }: { p: PreviewResult }) {
       <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         {p.devices.length} device{p.devices.length === 1 ? '' : 's'} checked ·{' '}
         {total} change{total === 1 ? '' : 's'} pending
-        {total === 0 && ' — every device already matches the site model'}
+        {p.devices.length === 0
+          ? ' — no adopted devices to compare or apply'
+          : total === 0 && ' — every device already matches the site model'}
       </div>
       {p.devices.map((d) => (
         <div
@@ -1409,11 +2005,11 @@ function Preview({ p }: { p: PreviewResult }) {
             {d.name}
             <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
               {' '}
-              · {d.role}
+              · {previewFunctionNames(d.functions, d.role)}
             </span>
           </div>
 
-          {d.error && <Banner tone="critical">{d.error}</Banner>}
+          {d.error && <div role="alert"><Banner tone="critical">{d.error}</Banner></div>}
 
           {d.blocked && (
             <Banner tone="critical">
@@ -1616,6 +2212,25 @@ function Preview({ p }: { p: PreviewResult }) {
   )
 }
 
+function previewFunctionNames(functions: DeviceFunction[] | undefined, role: string): string {
+  const selected = functions !== undefined
+    ? functions
+    : role === 'gateway'
+      ? ['gateway', 'ap', 'switch'] as DeviceFunction[]
+      : role === 'ap'
+        ? ['ap', 'switch'] as DeviceFunction[]
+        : role === 'switch'
+          ? ['switch'] as DeviceFunction[]
+          : []
+  if (selected.length === 0) return 'None — invalid record'
+  const labels: Record<DeviceFunction, string> = {
+    gateway: 'Gateway',
+    ap: 'AP',
+    switch: 'Switch',
+  }
+  return selected.map((item) => labels[item]).join(' · ')
+}
+
 // ---- small controls ----
 
 function Choice({
@@ -1636,13 +2251,18 @@ function Choice({
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
         {label}
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      <div
+        role="group"
+        aria-label={label}
+        style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}
+      >
         {options.map((o) => {
           const on = value.includes(o.v)
           return (
             <button
               key={o.v}
               type="button"
+              aria-pressed={on}
               onClick={() =>
                 onChange(
                   multi
@@ -1681,57 +2301,91 @@ function MeshRow({
   m: Mesh
   site: Site
   onEdit: () => void
-  onDeleted: () => void
+  onDeleted: () => Promise<void>
 }) {
-  const [busy, setBusy] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const group = site.groups.find((g) => g.id === m.group_id)
   const net = site.networks.find((n) => n.id === m.network_id)
 
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
         padding: '10px 14px',
         borderTop: '1px solid var(--border)',
       }}
     >
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          {m.mesh_id}
-          {!m.enabled && (
-            <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
-              {' '}· disabled
-            </span>
-          )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>
+            {m.mesh_id}
+            {!m.enabled && (
+              <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
+                {' '}· disabled
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            {m.band} · {group?.name ?? 'no group'} · {net?.name ?? 'no network'} ·{' '}
+            {m.has_key ? (
+              'encrypted (SAE)'
+            ) : (
+              <span style={{ color: 'var(--warning)' }}>
+                open — anyone in range can join
+              </span>
+            )}
+          </div>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-          {m.band} · {group?.name ?? 'no group'} · {net?.name ?? 'no network'} ·{' '}
-          {m.has_key ? (
-            'encrypted (SAE)'
-          ) : (
-            <span style={{ color: 'var(--warning)' }}>
-              open — anyone in range can join
-            </span>
-          )}
-        </div>
+        <Button aria-label={`Edit mesh ${m.mesh_id}`} disabled={deleting} onClick={onEdit}>
+          Edit
+        </Button>
+        <Button
+          aria-label={`Delete mesh ${m.mesh_id}`}
+          disabled={deleting}
+          onClick={() => {
+            setDeleteError('')
+            setConfirmDelete(true)
+          }}
+        >
+          Delete
+        </Button>
       </div>
-      <Button onClick={onEdit}>Edit</Button>
-      <Button
-        disabled={busy}
-        onClick={async () => {
-          setBusy(true)
-          try {
-            await api.deleteMesh(m.id)
-            onDeleted()
-          } finally {
-            setBusy(false)
-          }
-        }}
-      >
-        Delete
-      </Button>
+      {confirmDelete && (
+        <div style={{ marginTop: 10 }}>
+          <Banner tone="warning">
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span>
+                Delete <strong>{m.mesh_id}</strong> from desired state? No router changes
+                until you Preview and Apply.
+              </span>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  disabled={deleting}
+                  onClick={async () => {
+                    setDeleting(true)
+                    setDeleteError('')
+                    try {
+                      await api.deleteMesh(m.id)
+                      await onDeleted()
+                    } catch (e) {
+                      setDeleteError(e instanceof Error ? e.message : String(e))
+                    } finally {
+                      setDeleting(false)
+                    }
+                  }}
+                >
+                  {deleting ? 'Deleting…' : `Delete “${m.mesh_id}”`}
+                </Button>
+                <Button disabled={deleting} onClick={() => setConfirmDelete(false)}>
+                  Keep “{m.mesh_id}”
+                </Button>
+              </div>
+            </div>
+          </Banner>
+        </div>
+      )}
+      {deleteError && <div role="alert" style={{ marginTop: 8 }}><Banner tone="critical">{deleteError}</Banner></div>}
     </div>
   )
 }
@@ -1756,16 +2410,17 @@ function MeshEditor({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [draft, setDraft] = useState<Partial<Mesh>>({ ...m, key: '' })
+  const [draft, setDraft] = useState<Partial<Mesh>>({ ...m, key: '', clear_key: false })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
   const set = (patch: Partial<Mesh>) => setDraft((d) => ({ ...d, ...patch }))
 
   // An existing mesh keeps its stored key unless one is typed. A NEW one with
   // no key really is open, and says so rather than letting it pass unremarked.
-  const willBeOpen = m.id ? !m.has_key && !draft.key : !draft.key
+  const willBeOpen = !!draft.clear_key || (m.id ? !m.has_key && !draft.key : !draft.key)
 
   async function save() {
+    if (!(draft.mesh_id ?? '').trim()) return
     setSaving(true)
     try {
       await api.saveMesh(draft)
@@ -1780,7 +2435,7 @@ function MeshEditor({
   return (
     <Card title={m.id ? `Edit ${m.mesh_id}` : 'New mesh backhaul'}>
       <div style={{ display: 'grid', gap: 12, maxWidth: 460 }}>
-        {err && <Banner tone="critical">{err}</Banner>}
+        {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
         <Field
           label="Mesh ID"
@@ -1813,9 +2468,17 @@ function MeshEditor({
           label={m.id ? 'Passphrase (leave blank to keep the current one)' : 'Passphrase'}
           type="password"
           value={draft.key ?? ''}
+          disabled={!!draft.clear_key}
           placeholder={m.has_key ? '••••••••' : 'blank leaves the mesh open'}
-          onChange={(e) => set({ key: e.target.value })}
+          onChange={(e) => set({ key: e.target.value, clear_key: false })}
         />
+        {m.id && m.has_key && (
+          <Toggle
+            label="Remove the passphrase and make this mesh open"
+            on={!!draft.clear_key}
+            onChange={(v) => set({ clear_key: v, key: v ? '' : draft.key })}
+          />
+        )}
         {willBeOpen && (
           <Banner tone="warning">
             With no passphrase this mesh is open: any device in radio range can
@@ -1848,7 +2511,7 @@ function MeshEditor({
         </div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button kind="primary" onClick={save} disabled={saving}>
+          <Button kind="primary" onClick={save} disabled={saving || !(draft.mesh_id ?? '').trim()}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
           <Button onClick={onClose}>Cancel</Button>
@@ -1931,7 +2594,7 @@ function Neighbours({ site }: { site: Site }) {
         </Button>
       }
     >
-      {err && <Banner tone="critical">{err}</Banner>}
+      {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
         Each access point is told the BSSIDs and channels of the others carrying
@@ -2098,7 +2761,7 @@ function MeshHealth() {
     }
   }, [])
 
-  if (err) return <Card title="Backhaul health"><Banner tone="critical">{err}</Banner></Card>
+  if (err) return <Card title="Backhaul health"><div role="alert"><Banner tone="critical">{err}</Banner></div></Card>
   if (!res) return null
 
   return (
@@ -2235,7 +2898,7 @@ function Uplinks({
 
   return (
     <Card title="Wireless uplinks">
-      {err && <Banner tone="critical">{err}</Banner>}
+      {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
         A device with no cable to it can join one of your networks as a 4-address
@@ -2278,7 +2941,11 @@ function Uplinks({
                   {u.enabled ? '' : ' (disabled)'}
                 </span>
               </span>
-              <Button onClick={() => remove(u.id)} disabled={busy}>
+              <Button
+                aria-label={`Remove wireless uplink for ${nameOf(u.device_id)}`}
+                onClick={() => remove(u.id)}
+                disabled={busy}
+              >
                 Remove
               </Button>
             </div>

@@ -16,7 +16,11 @@ import { Button, Banner, Card } from '../components/ui'
  * session is created, nothing is written. That is stated on the screen, because
  * "let this thing scan my network" deserves an answer to "and do what to it?".
  */
-export function Discover({ onPick }: { onPick: (host: string) => void }) {
+export function Discover({
+  onPick,
+}: {
+  onPick: (host: string, candidate?: Discovered) => void
+}) {
   const [plan, setPlan] = useState<ScanPlan | null>(null)
   const [result, setResult] = useState<ScanResult | null>(null)
   const [busy, setBusy] = useState(false)
@@ -88,10 +92,16 @@ export function Discover({ onPick }: { onPick: (host: string) => void }) {
         )}
 
         <div>
-          <Button kind="primary" onClick={scan} disabled={busy || !plan}>
+          <Button kind="primary" onClick={scan} disabled={busy || !plan || plan.hosts === 0}>
             {busy ? 'Scanning…' : 'Scan'}
           </Button>
         </div>
+        {plan?.hosts === 0 && (
+          <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Scan is unavailable because the controller found no eligible local
+            addresses. Add the router by address below instead.
+          </div>
+        )}
 
         {result && <Results result={result} onPick={onPick} />}
       </div>
@@ -104,7 +114,7 @@ function Results({
   onPick,
 }: {
   result: ScanResult
-  onPick: (host: string) => void
+  onPick: (host: string, candidate?: Discovered) => void
 }) {
   return (
     <div style={{ display: 'grid', gap: 8 }}>
@@ -117,9 +127,15 @@ function Results({
         {result.found.length} running OpenWrt
       </div>
 
-      {result.found.length === 0 && (
+      {result.failures && result.failures.length > 0 && (
+        <NetworkFailures failures={result.failures} />
+      )}
+
+      {result.found.length === 0 && (!result.failures || result.failures.length === 0) && (
         <Banner>
-          Nothing on {result.networks.join(', ')} answered as an OpenWrt device.
+          {result.networks.length === 0
+            ? 'No addresses were eligible for scanning.'
+            : `Nothing on ${result.networks.join(', ')} answered as an OpenWrt device.`}{' '}
           If yours is on another subnet, or this controller is in a container
           that cannot see your LAN, add it by address below — that path works
           everywhere and needs no discovery.
@@ -135,7 +151,30 @@ function Results({
   )
 }
 
-function Candidate({ d, onPick }: { d: Discovered; onPick: (host: string) => void }) {
+function NetworkFailures({
+  failures,
+}: {
+  failures: NonNullable<ScanResult['failures']>
+}) {
+  const networks = failures.map((f) => f.network).join(', ')
+  const attempts = failures.reduce((sum, f) => sum + f.attempts, 0)
+  return (
+    <Banner tone="critical">
+      The controller could not route to any address on {networks}. All {attempts}{' '}
+      connection attempt{attempts === 1 ? '' : 's'} reported that the network or host
+      was unreachable. This scan does not establish whether devices are present there.
+      Check the controller host&apos;s routes and network interfaces, then scan again.
+    </Banner>
+  )
+}
+
+function Candidate({
+  d,
+  onPick,
+}: {
+  d: Discovered
+  onPick: (host: string, candidate?: Discovered) => void
+}) {
   const managed = d.known_device_id != null
   return (
     <div
@@ -165,7 +204,7 @@ function Candidate({ d, onPick }: { d: Discovered; onPick: (host: string) => voi
           already managed as <strong>{d.known_name}</strong>
         </span>
       ) : (
-        <Button onClick={() => onPick(d.host)}>Adopt this</Button>
+        <Button onClick={() => onPick(d.host, d)}>Adopt this</Button>
       )}
     </div>
   )
@@ -177,8 +216,10 @@ function Candidate({ d, onPick }: { d: Discovered; onPick: (host: string) => voi
  * Not the model, and not the firmware: stock OpenWrt refuses `system.board` to
  * an unauthenticated caller (measured), so anything claiming to know the model
  * here would be inventing it. What the endpoint does reveal is the shape of the
- * device — how many radios have an SSID up, whether it routes, whether it hands
- * out leases — which is enough to tell two routers apart in a list.
+ * public rpcd object graph — how many radios have an SSID up and whether WAN-
+ * named and DHCP-service objects exist. Those last two are hints, not proof
+ * that the device routes or hands out leases; credentialed inspection decides
+ * that.
  *
  * The caveat is dropped for a device already in the inventory, because there it
  * is simply false: the model was read at adoption and is on the row beside it.
@@ -187,13 +228,13 @@ function Candidate({ d, onPick }: { d: Discovered; onPick: (host: string) => voi
  */
 function describe(d: Discovered, managed: boolean): string {
   const parts: string[] = ['OpenWrt']
-  if (d.signals.gateway) parts.push('gateway')
+  if (d.signals.gateway) parts.push('WAN interface object')
   if (d.signals.radios > 0) {
     parts.push(`${d.signals.radios} radio${d.signals.radios === 1 ? '' : 's'} up`)
   } else if (d.signals.wireless) {
     parts.push('wireless, no SSID up')
   }
-  if (d.signals.dhcp) parts.push('DHCP server')
+  if (d.signals.dhcp) parts.push('DHCP service object')
   const shape = parts.join(' · ')
   return managed ? shape : shape + ' — model unknown until you sign in'
 }

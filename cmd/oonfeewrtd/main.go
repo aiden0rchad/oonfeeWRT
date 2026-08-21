@@ -39,22 +39,37 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	return runWithConfig(cfg, os.Args[1:])
+}
+
+// runWithConfig keeps flag handling testable. In particular, the container's
+// healthcheck path must return before daemon.Open touches the data directory,
+// keyring, passphrase file, or database.
+func runWithConfig(cfg daemon.Config, args []string) error {
+	flags := flag.NewFlagSet("oonfeewrtd", flag.ContinueOnError)
 	var (
-		showVersion = flag.Bool("version", false, "print the version and exit")
-		logLevel    = flag.String("log-level", "info", "debug|info|warn|error")
+		showVersion = flags.Bool("version", false, "print the version and exit")
+		checkHealth = flags.Bool("healthcheck", false,
+			"check the configured controller health endpoint and exit")
+		logLevel = flags.String("log-level", "info", "debug|info|warn|error")
 	)
-	flag.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir,
+	flags.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir,
 		"data directory (database and keyring); env "+daemon.EnvDataDir)
-	flag.StringVar(&cfg.Listen, "listen", cfg.Listen,
+	flags.StringVar(&cfg.Listen, "listen", cfg.Listen,
 		"HTTP bind address; env "+daemon.EnvListen)
-	flag.StringVar(&cfg.PassphraseFile, "passphrase-file", cfg.PassphraseFile,
+	flags.StringVar(&cfg.PassphraseFile, "passphrase-file", cfg.PassphraseFile,
 		"read the operator passphrase from this file instead of prompting; env "+
 			daemon.EnvPassphraseFile)
-	flag.Parse()
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 
 	if *showVersion {
 		fmt.Println(version)
 		return nil
+	}
+	if *checkHealth {
+		return healthcheck(cfg.Listen)
 	}
 	level, err := parseLevel(*logLevel)
 	if err != nil {

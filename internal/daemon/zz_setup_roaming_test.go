@@ -74,7 +74,7 @@ func TestZZSetupRoaming(t *testing.T) {
 			t.Logf("   omitted: %s", om)
 		}
 	}
-	res, err := d.ApplySite(ctx, api.ApplyRequest{})
+	res, err := d.ApplySite(ctx, api.ApplyRequest{PreviewToken: prev.PreviewToken})
 	if err != nil {
 		t.Fatal(err)
 	}

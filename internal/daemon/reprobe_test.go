@@ -432,3 +432,42 @@ func TestAnUnchangedProbeStillRecordsThatItRan(t *testing.T) {
 		t.Errorf("an unchanged probe wrote a capabilities_changed event: %+v", changed)
 	}
 }
+
+func TestAutomaticReprobeSharesThePerDeviceMutationGate(t *testing.T) {
+	addr := startMock(t)
+	d := openDaemon(t)
+	blocked := seedAP(t, d, "60:38:e0:00:15:01", "blocked", addr, capability.Present)
+	other := seedAP(t, d, "60:38:e0:00:15:02", "other", addr, capability.Present)
+
+	release, err := d.deviceOps.acquire(context.Background(), blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := d.reprobe(context.Background(), blocked.ID, true)
+		done <- result{err}
+	}()
+	waitForGateUsers(t, &d.deviceOps, blocked.ID, 2)
+	select {
+	case got := <-done:
+		t.Fatalf("automatic reprobe crossed an apply/un-adopt gate: %v", got.err)
+	default:
+	}
+
+	// The gate is per device, not a fleet-wide pause.
+	if _, err := d.reprobe(context.Background(), other.ID, true); err != nil {
+		t.Fatalf("a different device was blocked: %v", err)
+	}
+	release()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("blocked reprobe did not resume cleanly: %v", got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked reprobe did not resume")
+	}
+}

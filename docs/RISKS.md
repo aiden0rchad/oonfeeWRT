@@ -21,6 +21,22 @@ it — retrofitting retention onto a naive `INSERT` table is a rewrite. Batch
 aggressively (one composite call beats twenty small ones), stagger device polls
 across the interval, and sample only what an open screen actually needs.
 
+**Current source closure (2026-08-19):** raw samples stay in RAM and SQLite gets
+only completed 5-minute/hourly rollups. Phase-4 reads are bounded and disclose
+coverage: OpenWrt logs are 24h/50k-per-device/100k-global, controller/audit rows
+have a separate 100k cap, topology is 31d/10k, client incidents cap exact events
+and path work, and the WebSocket is a 32-frame drop-on-full `device.stats`
+channel rather than a durable log bus. `wifi-v1` is all-or-null, so a missing
+counter cannot improve a score by silently changing the denominator. These are
+source contracts pending live schema-16 validation.
+
+RF scan retention is closed at the stored/API contract: the five-minute
+maintenance transaction retains one newest terminal run per stable
+`(device_id, radio_key)`, never deletes pending/running work, and relies on the
+declared foreign key to cascade each pruned run's BSS rows. Together with the
+4,096-row decoder bound and explicit-only scan arrival, repeated scans no
+longer grow terminal history over time.
+
 ---
 
 ## 1b. Degrading the router you're supposed to be managing
@@ -117,14 +133,38 @@ Never upgrade the user's packages or firmware on our own initiative.
 
 ## 7. Security posture
 
-The controller holds admin credentials for every device on the network and, via
-`file.exec`, effectively holds root. It is the highest-value target on the LAN,
-and the ACL file is security-critical code that happens to be JSON.
+The controller holds a scoped credential for every managed device, wireless
+keys, and secret-derived ownership verifiers; its explicit `file.exec` surface
+is still privileged. It is the highest-value target on the LAN, and the ACL file
+is security-critical code that happens to be JSON.
 
-**Mitigation:** encrypted credential store; a scoped ACL rather than root; an
-explicit `file.exec` binary allow-list reviewed like code; TLS with pinned certs
-(TOFU, refuse on change); full audit log of every applied change and who applied
-it; no default password, ever; a written threat model before v1.0.
+**Mitigation:** schema 14 seals credentials, WLAN/mesh keys, and ownership
+verifiers under a random key in `keyring.json`, with record-bound AAD. A sealed
+database key check rejects a mismatched database/keyring pair before WAL, DDL,
+or mutation; migration checkpoint/VACUUM scrubs legacy plaintext before serving.
+Keyring creation is atomic/no-clobber and startup refuses a missing keyring
+beside an existing database. Backups pair a consistent SQLite snapshot with its
+matching keyring. Pre-v14 backups remain plaintext-sensitive and are never
+deleted without explicit operator confirmation.
+
+The API never reveals WLAN or mesh keys—even to an authenticated session or a
+legacy `?reveal=1` request—and reports only `has_key`. This does not replace
+transport security: use TLS outside an explicitly trusted management network,
+because browser submissions and live daemon memory are outside at-rest sealing.
+Also retain the scoped ACL rather than root, review every exact `file.exec`
+command like code, pin device TLS certificates (TOFU, refuse on change), keep a
+full audit log, ship no default password, and write the threat model before v1.0.
+
+ACL evolution uses one explicit adopted-device refresh transaction, not silent
+widening during a poll. It is opt-in, identifies the exact rpcd ACL JSON file it
+writes or replaces, and states that it installs no package, binary, daemon or
+service. Declining it leaves the router unchanged and dependent observations
+unavailable. If accepted, it proves the stored controller login and inventory
+MAC before SSH, verifies/pins the host key, replaces only the scoped ACL, then
+proves a fresh controller login/MAC/capability record. The administrator
+password/private key is not stored or returned; UCI, ownership and the scoped
+login are preserved. The 2026-08-20 live validation deliberately did not run
+this transaction.
 
 ---
 

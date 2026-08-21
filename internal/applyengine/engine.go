@@ -27,6 +27,11 @@ import (
 //     iwinfo, hostapd, or a file.exec probe.
 type HealthCheck func(ctx context.Context, verify *ubus.Client) error
 
+// stagedCleanupTimeout bounds cleanup after the caller's apply deadline is no
+// longer safe to use. uci.revert only clears this session's staged delta; it
+// does not write live configuration.
+const stagedCleanupTimeout = 15 * time.Second
+
 // Engine applies plans to one device.
 type Engine struct {
 	// ConfirmInterval is how often uci.confirm is retried inside the window.
@@ -108,10 +113,29 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	defer endWindow()
 
 	timeout := plan.timeout()
+	// Staging and its verification consume the caller's deadline. Check again
+	// at the last safe point: once uci.apply lands, the device's rollback timer
+	// runs whether this process still has enough time to confirm or verify the
+	// revert. The daemon's earlier admission check is only an optimisation.
+	//
+	// This is also the conservative arm time. The device starts its timer while
+	// servicing the RPC, so anchoring it after the response adds network/RPC
+	// latency to a window the device did not grant us.
+	armed := e.now()
+	if budgetErr := e.requireRollbackBudget(ctx, armed, timeout); budgetErr != nil {
+		endWindow()
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stagedCleanupTimeout)
+		cleanupErr := e.revertStaged(cleanupCtx, applier, plan)
+		cancel()
+		if cleanupErr != nil {
+			return res, fmt.Errorf("%w; rollback was not armed and no live configuration was written, but staged cleanup failed: %v", budgetErr, cleanupErr)
+		}
+		return res, fmt.Errorf("%w; staged changes were discarded, rollback was not armed, and no live configuration was written", budgetErr)
+	}
 	err = applier.Call(ctx, "uci", "apply", map[string]any{
 		"rollback": true, "timeout": int(timeout.Seconds()),
 	}, nil)
-	// When the DEVICE's timer started. Every later wait is measured from here.
+	// Every later wait is measured from the conservative arm time above.
 	//
 	// Both used to be anchored at "now": confirmPoll after the health check
 	// returned, and awaitRevert after confirmPoll had already spent the whole
@@ -121,7 +145,6 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	// cleanly was reported Unknown and Stranded. Anchoring at the arm time
 	// also stops the poll continuing past the point where confirm could
 	// possibly work.
-	armed := e.now()
 	if err != nil {
 		_ = e.revertStaged(ctx, applier, plan)
 		// status 6 here is NOT an authorization failure: uci.apply is globally
@@ -160,6 +183,29 @@ func (e *Engine) Apply(ctx context.Context, applier *ubus.Client, plan Plan, hea
 	e.discardStaged(ctx, applier, plan)
 	out.Started = res.Started
 	return out, nil
+}
+
+// requireRollbackBudget is the final pre-write guard. Equality is accepted:
+// with the shipped settings the exact floor is the 90-second device rollback
+// window plus 15 seconds for the revert to become observable.
+func (e *Engine) requireRollbackBudget(ctx context.Context, armed time.Time, timeout time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("applyengine: apply context ended after staging: %w", err)
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil
+	}
+	required := timeout + e.RevertGrace
+	remaining := deadline.Sub(armed)
+	if remaining >= required {
+		return nil
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	return fmt.Errorf("applyengine: insufficient rollback budget after staging: %s remains, need at least %s (%s rollback + %s revert grace)",
+		remaining.Round(time.Millisecond), required, timeout, e.RevertGrace)
 }
 
 // discardStaged clears the rejected delta from the applying session.
@@ -382,10 +428,13 @@ func (e *Engine) verifyStaged(ctx context.Context, c *ubus.Client, plan Plan) er
 }
 
 func (e *Engine) revertStaged(ctx context.Context, c *ubus.Client, plan Plan) error {
+	var errs []error
 	for _, cfg := range plan.Configs() {
-		_ = c.Call(ctx, "uci", "revert", map[string]any{"config": cfg}, nil)
+		if err := c.Call(ctx, "uci", "revert", map[string]any{"config": cfg}, nil); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", cfg, err))
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // runHealth runs the caller's check while the rollback timer is still armed.

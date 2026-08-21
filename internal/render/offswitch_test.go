@@ -67,9 +67,9 @@ func TestTurningRoamingOffReachesTheDevice(t *testing.T) {
 	}
 }
 
-// The structural guard: a flag can be turned on and off without changing which
-// options exist. Any future option added with an `if flag {` and no else breaks
-// this, which is the mistake wds documented and four siblings then made.
+// The structural guard: a flag writes both directions unless its false value
+// is unsafe and the option is explicitly managed away. bridge_isolate is that
+// exception: old wifi-scripts reject even bridge_isolate=0.
 func TestNoFlagChangesWhichOptionsExist(t *testing.T) {
 	all := func(on bool) model.Site {
 		s := testSite()
@@ -91,14 +91,25 @@ func TestNoFlagChangesWhichOptionsExist(t *testing.T) {
 		return out
 	}
 	onKeys, offKeys := keys(true), keys(false)
-	if len(onKeys) != len(offKeys) {
+	var onlyOn []string
+	offSet := map[string]bool{}
+	for _, key := range offKeys {
+		offSet[key] = true
+	}
+	for _, key := range onKeys {
+		if !offSet[key] {
+			onlyOn = append(onlyOn, key)
+		}
+	}
+	if len(onKeys) != len(offKeys)+1 || len(onlyOn) != 1 || onlyOn[0] != "bridge_isolate" {
 		t.Fatalf("turning every flag off changed which options are written.\n"+
 			" on: %v\noff: %v\nAn option that disappears is not set to off on "+
-			"the device — it keeps whatever the last apply wrote.", onKeys, offKeys)
+			"the device unless it is explicitly managed; only bridge_isolate may "+
+			"disappear because older wifi-scripts reject its false value.", onKeys, offKeys)
 	}
-	for i := range onKeys {
-		if onKeys[i] != offKeys[i] {
-			t.Errorf("option set differs at %d: %q vs %q", i, onKeys[i], offKeys[i])
+	for _, key := range onKeys {
+		if key != "bridge_isolate" && !offSet[key] {
+			t.Errorf("option %q disappeared when flags were turned off", key)
 		}
 	}
 }

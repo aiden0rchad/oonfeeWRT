@@ -45,7 +45,8 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 	ctx := context.Background()
 	rec := newRecorder()
 	c := New(rec, Options{Log: quiet()})
-	c.Add(Target{DeviceID: 1, MAC: "integration", Name: "device", Connect: realConnect(t)})
+	c.Add(Target{DeviceID: 1, MAC: "integration", Name: "device", Gateway: true,
+		Connect: realConnect(t)})
 
 	p := c.pollers[1]
 	client, err := p.dial(ctx, p.target)
@@ -78,7 +79,7 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 
 	for _, tier := range []Tier{Baseline, Focused} {
 		p.boardAt = time.Time{} // force the board read on both, to exercise it
-		snap := p.poll(ctx, client, tier, ifaces, modes)
+		snap := p.poll(ctx, client, p.target, tier, ifaces, modes)
 		if !snap.OK() {
 			t.Fatalf("%s poll failed: %v", tier, snap.Err)
 		}
@@ -96,6 +97,9 @@ func TestIntegrationPollUnderTheScopedCredential(t *testing.T) {
 		}
 		if snap.Uptime == 0 {
 			t.Error("uptime is zero")
+		}
+		if tier == Baseline && snap.WAN == nil {
+			t.Error("gateway WAN probe was unavailable under the scoped credential")
 		}
 		if len(snap.APs) != len(ifaces) {
 			t.Errorf("got %d APs for %d interfaces", len(snap.APs), len(ifaces))
@@ -164,7 +168,7 @@ func TestIntegrationBaselineIsMuchCheaperThanFocused(t *testing.T) {
 		var best time.Duration
 		for i := range 5 {
 			p.boardAt = time.Now() // steady state: no board read
-			snap := p.poll(ctx, client, tier, ifaces, modes)
+			snap := p.poll(ctx, client, p.target, tier, ifaces, modes)
 			if snap.Err != nil {
 				t.Fatalf("%s poll %d: %v", tier, i, snap.Err)
 			}

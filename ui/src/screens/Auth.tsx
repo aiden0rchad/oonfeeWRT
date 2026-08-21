@@ -55,6 +55,7 @@ export function Auth({
     >
       <form
         onSubmit={submit}
+        aria-busy={busy}
         style={{
           width: 340,
           display: 'grid',
@@ -74,7 +75,7 @@ export function Auth({
           </p>
         </div>
 
-        {err && <Banner tone="critical">{err}</Banner>}
+        {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
         <Field
           label="Username"

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import type { MouseEventHandler, ReactNode } from 'react'
 import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
 import type { ColumnPrefs } from '../lib/columns'
 
@@ -11,11 +11,13 @@ export { orderColumns, moveColumn }
  *  always ships alongside. */
 export function Status({ value }: { value: string }) {
   const colour =
-    value === 'online' || value === 'wireless'
+    value === 'measured'
+      ? 'var(--accent)'
+      : value === 'online' || value === 'wireless'
       ? 'var(--good)'
       : value === 'offline' || value === 'blocked'
         ? 'var(--critical)'
-        : value === 'pending'
+        : value === 'pending' || value === 'ambiguous'
           ? 'var(--warning)'
           : 'var(--text-muted)'
   return (
@@ -124,16 +126,22 @@ export function Button({
   kind = 'default',
   disabled,
   type = 'button',
+  'aria-label': ariaLabel,
+  'aria-pressed': ariaPressed,
 }: {
   children: ReactNode
-  onClick?: () => void
+  onClick?: MouseEventHandler<HTMLButtonElement>
   kind?: 'default' | 'primary'
   disabled?: boolean
   type?: 'button' | 'submit'
+  'aria-label'?: string
+  'aria-pressed'?: boolean
 }) {
   return (
     <button
       type={type}
+      aria-label={ariaLabel}
+      aria-pressed={ariaPressed}
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -145,8 +153,8 @@ export function Button({
         cursor: disabled ? 'default' : 'pointer',
         opacity: disabled ? 0.55 : 1,
         color: kind === 'primary' ? '#fff' : 'var(--text-primary)',
-        background: kind === 'primary' ? 'var(--accent)' : 'var(--surface-2)',
-        border: `1px solid ${kind === 'primary' ? 'var(--accent)' : 'var(--border-strong)'}`,
+        background: kind === 'primary' ? 'var(--control-accent)' : 'var(--surface-2)',
+        border: `1px solid ${kind === 'primary' ? 'var(--control-accent)' : 'var(--border-strong)'}`,
       }}
     >
       {children}
@@ -182,12 +190,68 @@ export function Field({
   )
 }
 
-/** Shown wherever a value is genuinely unknown, so an empty cell can never be
- *  mistaken for a zero. The title carries the reason. */
-export function Unknown({ why }: { why: string }) {
+export function TextAreaField({
+  label,
+  ...props
+}: { label: string } & React.ComponentPropsWithRef<'textarea'>) {
   return (
-    <span title={why} style={{ color: 'var(--text-muted)' }}>
-      —
+    <label style={{ display: 'block' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+        {label}
+      </div>
+      <textarea
+        rows={5}
+        {...props}
+        style={{
+          width: '100%',
+          padding: '8px 10px',
+          borderRadius: 6,
+          resize: 'vertical',
+          background: 'var(--surface-0)',
+          border: '1px solid var(--border-strong)',
+          color: 'var(--text-primary)',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: 12,
+        }}
+      />
+    </label>
+  )
+}
+
+/** Shown wherever a value is genuinely unknown, so an empty cell can never be
+ *  mistaken for a zero. The reason is exposed to assistive technology and by a
+ *  focus/click tooltip; `title` alone would be unreachable on touch and
+ *  unreliable from the keyboard. */
+export function Unknown({ why }: { why: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span className="unknown-value">
+      <button
+        type="button"
+        className="unknown-value-trigger"
+        title={why}
+        aria-label={`Unknown: ${why}`}
+        aria-expanded={open}
+        onClick={() => setOpen(true)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setOpen(false)
+            event.currentTarget.blur()
+          }
+        }}
+      >
+        —
+      </button>
+      {open && (
+        <span className="unknown-value-tooltip" role="tooltip">
+          {why}
+        </span>
+      )}
     </span>
   )
 }
@@ -203,8 +267,9 @@ export function Banner({
   return (
     <div
       style={{
-        border: `1px solid ${colour}`,
-        borderLeftWidth: 3,
+        borderColor: colour,
+        borderStyle: 'solid',
+        borderWidth: '1px 1px 1px 3px',
         borderRadius: 6,
         padding: '8px 12px',
         fontSize: 12,
@@ -292,6 +357,9 @@ export function DataGrid<T>({
   empty = 'Nothing to show',
   prefs,
   onPrefsChange,
+  tableLabel,
+  totalRows,
+  rowOffset = 0,
 }: {
   rows: T[]
   columns: Column<T>[]
@@ -301,6 +369,12 @@ export function DataGrid<T>({
   /** Column visibility and order. Omit to disable column customization. */
   prefs?: ColumnPrefs
   onPrefsChange?: (v: ColumnPrefs) => void
+  /** Accessible table name. Optional so existing screens keep their API. */
+  tableLabel?: string
+  /** Total data rows, excluding the one header row. */
+  totalRows?: number
+  /** Data rows preceding this page; used with totalRows for aria-rowindex. */
+  rowOffset?: number
 }) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null)
   const dragging = useRef<string | null>(null)
@@ -399,10 +473,20 @@ export function DataGrid<T>({
 
   const header = (
     <thead>
-      <tr>
+      <tr aria-rowindex={totalRows == null ? undefined : 1}>
         {shown.map((c) => (
           <th
             key={c.key}
+            scope="col"
+            aria-sort={
+              !c.sortBy
+                ? undefined
+                : sort?.key !== c.key
+                  ? 'none'
+                  : sort.dir === 1
+                    ? 'ascending'
+                    : 'descending'
+            }
             draggable={!!onPrefsChange}
             onDragStart={(e) => {
               dragging.current = c.key
@@ -423,18 +507,6 @@ export function DataGrid<T>({
             onDragEnd={() => {
               dragging.current = null
             }}
-            onClick={() => {
-              if (swallowClick.current) {
-                swallowClick.current = false
-                return
-              }
-              if (!c.sortBy) return
-              setSort((s) =>
-                s?.key === c.key
-                  ? { key: c.key, dir: s.dir === 1 ? -1 : 1 }
-                  : { key: c.key, dir: 1 },
-              )
-            }}
             title={onPrefsChange ? 'Drag to reorder' : undefined}
             style={{
               position: 'sticky',
@@ -448,13 +520,45 @@ export function DataGrid<T>({
               fontWeight: 600,
               color: 'var(--text-secondary)',
               whiteSpace: 'nowrap',
-              cursor: c.sortBy ? 'pointer' : 'default',
+              cursor: onPrefsChange ? 'grab' : 'default',
               width: c.width,
               userSelect: 'none',
             }}
           >
-            {c.header}
-            {sort?.key === c.key && (sort.dir === 1 ? ' ↑' : ' ↓')}
+            {c.sortBy ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (swallowClick.current) {
+                    swallowClick.current = false
+                    return
+                  }
+                  setSort((s) =>
+                    s?.key === c.key
+                      ? { key: c.key, dir: s.dir === 1 ? -1 : 1 }
+                      : { key: c.key, dir: 1 },
+                  )
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  margin: -4,
+                  padding: 4,
+                  border: 0,
+                  background: 'transparent',
+                  color: 'inherit',
+                  cursor: 'pointer',
+                  font: 'inherit',
+                  fontWeight: 'inherit',
+                }}
+              >
+                {c.header}
+                {sort?.key === c.key && (
+                  <span aria-hidden="true">{sort.dir === 1 ? ' ↑' : ' ↓'}</span>
+                )}
+              </button>
+            ) : c.header}
           </th>
         ))}
       </tr>
@@ -471,11 +575,31 @@ export function DataGrid<T>({
           <td colSpan={shown.length} style={{ padding: 0, border: 'none' }} />
         </tr>
       )}
-      {slice.map((row) => (
+      {slice.map((row, index) => (
         <tr
           key={rowKey(row)}
           data-row
-          onClick={() => onRowClick?.(row)}
+          tabIndex={onRowClick ? 0 : undefined}
+          aria-rowindex={
+            totalRows == null
+              ? undefined
+              : Math.max(0, rowOffset) + first + index + 2
+          }
+          onClick={(event) => {
+            if (onRowClick && !isInteractiveDescendant(event.target, event.currentTarget)) {
+              onRowClick(row)
+            }
+          }}
+          onKeyDown={(event) => {
+            if (
+              onRowClick &&
+              !isInteractiveDescendant(event.target, event.currentTarget) &&
+              (event.key === 'Enter' || event.key === ' ')
+            ) {
+              event.preventDefault()
+              onRowClick(row)
+            }
+          }}
           style={{
             cursor: onRowClick ? 'pointer' : 'default',
             borderBottom: '1px solid var(--border)',
@@ -521,6 +645,8 @@ export function DataGrid<T>({
 
   const table = (
     <table
+      aria-label={tableLabel}
+      aria-rowcount={totalRows == null ? undefined : totalRows + 1}
       style={{
         width: '100%',
         borderCollapse: 'collapse',
@@ -562,6 +688,17 @@ export function DataGrid<T>({
       </div>
     </div>
   )
+}
+
+/** A row action must not steal a click or key intended for a control in one of
+ *  its cells. This also covers controls whose visible text lives in a child
+ *  span rather than directly on the button. */
+function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
+  if (!(target instanceof Element) || target === row) return false
+  return target.closest(
+    'a[href], button, input, select, textarea, summary, [role="button"], ' +
+    '[role="link"], [contenteditable="true"]',
+  ) != null
 }
 
 /**
@@ -782,61 +919,116 @@ export function SlideOver({
   children: ReactNode
 }) {
   const ref = useRef<HTMLDivElement>(null)
+  const close = useRef(onClose)
+  const titleID = useId()
+  close.current = onClose
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const panel = ref.current
+    const candidate = document.activeElement as (Element & { focus?: () => void }) | null
+    const previous = candidate && typeof candidate.focus === 'function' ? candidate : null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const focusable = () => Array.from(panel?.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+      'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((el) => !el.hidden && el.getAttribute('aria-hidden') !== 'true')
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        close.current()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const items = focusable()
+      if (items.length === 0) {
+        e.preventDefault()
+        panel?.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      const active = document.activeElement
+      if (e.shiftKey && (active === first || !panel?.contains(active))) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (active === last || !panel?.contains(active))) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
     window.addEventListener('keydown', onKey)
-    ref.current?.focus()
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+    const items = focusable()
+    ;(items[0] ?? panel)?.focus()
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previousOverflow
+      if (previous?.isConnected) previous.focus?.()
+    }
+  }, [])
 
   return (
-    <div
-      ref={ref}
-      tabIndex={-1}
-      role="dialog"
-      aria-label={typeof title === 'string' ? title : 'Detail'}
-      style={{
-        position: 'fixed',
-        top: 40,
-        right: 0,
-        bottom: 0,
-        width: 370,
-        background: 'var(--surface-1)',
-        borderLeft: '1px solid var(--border)',
-        overflowY: 'auto',
-        zIndex: 20,
-      }}
-    >
-      <header
+    <>
+      <div
+        aria-hidden="true"
+        data-slideover-backdrop
+        onMouseDown={() => close.current()}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '12px 14px',
-          borderBottom: '1px solid var(--border)',
-          position: 'sticky',
-          top: 0,
+          position: 'fixed',
+          inset: 0,
+          zIndex: 19,
+          background: 'rgb(0 0 0 / 32%)',
+        }}
+      />
+      <div
+        ref={ref}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleID}
+        style={{
+          position: 'fixed',
+          top: 40,
+          right: 0,
+          bottom: 0,
+          width: 'min(370px, 100vw)',
           background: 'var(--surface-1)',
+          borderLeft: '1px solid var(--border)',
+          overflowY: 'auto',
+          zIndex: 20,
         }}
       >
-        <strong style={{ fontSize: 13 }}>{title}</strong>
-        <button
-          onClick={onClose}
-          aria-label="Close"
+        <header
           style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            fontSize: 18,
-            lineHeight: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 14px',
+            borderBottom: '1px solid var(--border)',
+            position: 'sticky',
+            top: 0,
+            background: 'var(--surface-1)',
           }}
         >
-          ×
-        </button>
-      </header>
-      <div style={{ padding: 14, display: 'grid', gap: 14 }}>{children}</div>
-    </div>
+          <strong id={titleID} style={{ fontSize: 13 }}>{title}</strong>
+          <button
+            onClick={() => close.current()}
+            aria-label="Close"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: 18,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </header>
+        <div style={{ padding: 14, display: 'grid', gap: 14 }}>{children}</div>
+      </div>
+    </>
   )
 }
 
@@ -876,17 +1068,26 @@ export function FilterRail({
   return (
     <Card title="Filters">
       {groups.map((g, i) => (
-        <div key={g.label} style={{ marginTop: i === 0 ? 0 : 12 }}>
-          <div
+        <fieldset
+          key={g.label}
+          style={{
+            border: 0,
+            padding: 0,
+            margin: `${i === 0 ? 0 : 12}px 0 0`,
+            minWidth: 0,
+          }}
+        >
+          <legend
             style={{
               fontSize: 11,
               fontWeight: 600,
               color: 'var(--text-secondary)',
+              padding: 0,
               marginBottom: 6,
             }}
           >
             {g.label}
-          </div>
+          </legend>
           <div style={{ display: 'grid', gap: 3 }}>
             <FilterOption
               label="All"
@@ -904,7 +1105,7 @@ export function FilterRail({
               />
             ))}
           </div>
-        </div>
+        </fieldset>
       ))}
       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 12 }}>
         {counted === 'all'
@@ -948,6 +1149,8 @@ function FilterOption({
 }) {
   return (
     <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
       style={{
         display: 'flex',
@@ -955,9 +1158,10 @@ function FilterOption({
         alignItems: 'center',
         padding: '3px 7px',
         borderRadius: 4,
-        border: 'none',
+        border: `1px solid ${active ? 'var(--selection-border)' : 'transparent'}`,
         cursor: 'pointer',
         fontSize: 12,
+        fontWeight: active ? 600 : 400,
         background: active ? 'var(--accent-soft)' : 'transparent',
         color: 'var(--text-primary)',
       }}
