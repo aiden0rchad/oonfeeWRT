@@ -2,10 +2,14 @@ package collector
 
 import (
 	"fmt"
-	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
 	"net"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/observability"
+	"github.com/aiden0rchad/oonfeewrt/internal/radio"
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -40,6 +44,17 @@ type Snapshot struct {
 	// Err is set when the poll as a whole failed — unreachable, not logged in,
 	// transport error. Every other field is then meaningless.
 	Err error
+
+	// WANOnly marks a lightweight snapshot containing a gateway probe and no
+	// full-poll state. LogOnly may be true on the same batched request. Consumers
+	// must use only the explicitly marked auxiliary payloads: repeating cached
+	// uptime, load, clients, or topology at this cadence would turn old values
+	// into new measurements.
+	WANOnly bool
+	// LogOnly marks a lightweight snapshot containing a router-log page and no
+	// full-poll state. It keeps the one-minute continuity cursor independent of a
+	// deliberately slower full baseline.
+	LogOnly bool
 
 	// Degraded lists calls that failed inside an otherwise successful poll. A
 	// snapshot with entries here is partial, not bad: one denied or unsupported
@@ -78,6 +93,35 @@ type Snapshot struct {
 	// one mesh id on two bands, so a guess would be wrong exactly where it
 	// would matter most.
 	IfaceSections map[string]string
+
+	// IfaceRadios maps runtime interfaces to stable UCI wifi-device keys. It is
+	// selectively decoded; plaintext wireless credentials never enter this map.
+	IfaceRadios map[string]string
+
+	// Radios is the cached per-radio inventory and channel list. Its identity is
+	// always the UCI wifi-device key; runtime interfaces and PHY names are only
+	// observations. RadiosKnown distinguishes a proved empty inventory from one
+	// getWirelessDevices has never successfully supplied.
+	Radios      []radio.LiveState
+	RadiosKnown bool
+	// RadiosStale means cached inventory outlived its slow refresh or its latest
+	// refresh failed. Last-known values may still be displayed, but must not
+	// select a current survey row or stable-key radio aggregation.
+	RadiosStale bool
+
+	// AirtimeSplit carries the target's persisted capability proof into
+	// telemetry. False includes absent, refused, and unknown: none may license
+	// interference or RX/TX airtime values.
+	AirtimeSplit bool
+
+	// These fields carry only this batch's radio answers into the poller's
+	// cache reconciliation. A requested key absent from radioFrequencies failed
+	// and therefore becomes unknown instead of inheriting a stale success.
+	radioInventory      []radio.InventoryRadio
+	radioInventoryAsked bool
+	radioInventoryOK    bool
+	radioFrequencyAsked map[string]bool
+	radioFrequencies    map[string][]radio.Frequency
 
 	// ConfiguredIfacesAbsent names wifi-iface sections that have a configured
 	// mode and NO interface.
@@ -136,8 +180,53 @@ type Snapshot struct {
 	// poll. APsFresh is computed from it rather than from intent — see poll().
 	apStatusOK int
 
+	// Logs are a bounded non-streaming logd page. LogsFresh is true only when
+	// the rows, boot ID and running logd PID all answered on the same poll.
+	Logs      []observability.LogEntry
+	LogEpoch  observability.LogEpoch
+	LogsFresh bool
+	logReadOK bool
+	logBootOK bool
+	logPIDOK  bool
+
+	// WAN is a completed gateway-vantage reachability probe. Nil means it was
+	// not attempted or did not produce a trustworthy result; a non-nil probe
+	// with Up=false is the distinct, measured 100%-loss state.
+	WAN *WANProbe
+
+	// Topology carries only the current poll's no-install observations. Sources
+	// explicitly distinguish an answered empty result from unavailable data.
+	Topology TopologySnapshot
+
 	Stations []Station // focused only
 	Surveys  []Survey  // focused only
+
+	// AssocAsked/AssocAnswered preserve focused-call completeness per BSS. An
+	// answered BSS may still contribute per-client facts, but a radio aggregate
+	// is valid only when every BSS asked on that radio answered.
+	AssocAsked    map[string]bool
+	AssocAnswered map[string]bool
+}
+
+type TopologySnapshot struct {
+	Cycle          bool
+	NetworkDevices []topology.NetworkDevice
+	Wireless       []topology.WirelessRadio
+	Neighbors      map[int][]topology.Neighbor
+	Bridges        []topology.BridgeObservation
+	LLDP           []topology.LLDPLink
+	Uplinks        []topology.Uplink
+	Sources        []model.TopologySourceObservation
+
+	expected map[string]int
+	answered map[string]int
+	evidence map[string]int
+	failures map[string]int
+	// failureCauses preserves why each topology source failed. The durable
+	// source state needs this distinction so a permission gap can offer an
+	// explicit opt-in without presenting decode, unsupported, or transport
+	// failures as something an ACL change can fix.
+	failureCauses map[string]map[DegradationCause]struct{}
 }
 
 // OK reports a poll that reached the device.
@@ -155,12 +244,29 @@ type Degradation struct {
 	Object string
 	Method string
 	Status ubus.Status
-	Err    string
+	// Cause is the failure domain, kept separately from the rendered error text
+	// so an API/UI can distinguish an ACL or unsupported driver operation from a
+	// malformed/transient exchange without parsing an English sentence.
+	Cause DegradationCause
+	Err   string
 
 	// Permanent marks a failure that retrying cannot fix, so a caller can stop
 	// asking rather than re-failing every interval forever.
 	Permanent bool
 }
+
+// DegradationCause identifies who can plausibly fix a failed poll call.
+type DegradationCause string
+
+const (
+	CausePermission  DegradationCause = "permission"
+	CauseUnsupported DegradationCause = "unsupported"
+	CauseDevice      DegradationCause = "device"
+	CauseTransport   DegradationCause = "transport"
+	CauseProtocol    DegradationCause = "protocol"
+	CauseDecode      DegradationCause = "decode"
+	CauseUnknown     DegradationCause = "unknown"
+)
 
 func (d Degradation) String() string {
 	return fmt.Sprintf("%s.%s: %s", d.Object, d.Method, d.Err)
@@ -208,18 +314,30 @@ func (m Memory) Used() int64 {
 // Counters, not rates. Rates are computed on the controller from two samples,
 // per DEVICE-BUDGET §4.3 — never ask the router to do arithmetic for us.
 type Interface struct {
-	Up      bool   `json:"up"`
-	Carrier bool   `json:"carrier"`
-	MTU     int    `json:"mtu"`
-	MAC     string `json:"macaddr"`
-	Stats   struct {
-		RxBytes   int64 `json:"rx_bytes"`
-		TxBytes   int64 `json:"tx_bytes"`
-		RxPackets int64 `json:"rx_packets"`
-		TxPackets int64 `json:"tx_packets"`
-		RxErrors  int64 `json:"rx_errors"`
-		TxErrors  int64 `json:"tx_errors"`
-	} `json:"statistics"`
+	Up      bool           `json:"up"`
+	Carrier bool           `json:"carrier"`
+	MTU     int            `json:"mtu"`
+	MAC     string         `json:"macaddr"`
+	Stats   InterfaceStats `json:"statistics"`
+}
+
+// InterfaceStats keeps field presence beside each counter. OpenWrt versions
+// and drivers may omit one direction; an omitted counter must not seed a zero
+// baseline that later looks like traffic or a 32-bit wrap.
+type InterfaceStats struct {
+	RxBytes   int64 `json:"rx_bytes"`
+	TxBytes   int64 `json:"tx_bytes"`
+	RxPackets int64 `json:"rx_packets"`
+	TxPackets int64 `json:"tx_packets"`
+	RxErrors  int64 `json:"rx_errors"`
+	TxErrors  int64 `json:"tx_errors"`
+
+	RxBytesKnown   bool `json:"-"`
+	TxBytesKnown   bool `json:"-"`
+	RxPacketsKnown bool `json:"-"`
+	TxPacketsKnown bool `json:"-"`
+	RxErrorsKnown  bool `json:"-"`
+	TxErrorsKnown  bool `json:"-"`
 }
 
 // Host is one thing seen on the LAN, merged from the two cheap sources.
@@ -348,6 +466,12 @@ type LiveStation struct {
 	Signal *int
 }
 
+// LiveStationSet preserves every BSS that reported a MAC. A client can appear
+// on two BSSes during a roam (or because a driver briefly reports stale
+// association state); collapsing those sightings to one map value would make
+// whichever AP happened to be iterated last look measured.
+type LiveStationSet map[string][]LiveStation
+
 // Airtime is hostapd's channel occupancy for one BSS.
 type Airtime struct {
 	Time        int64 `json:"time"`
@@ -376,6 +500,13 @@ type Station struct {
 	Thr           int64  `json:"thr"`
 	RX            Rate   `json:"rx"`
 	TX            Rate   `json:"tx"`
+
+	// PresenceKnown distinguishes a decoded zero from a field the driver did
+	// not report. Hand-built snapshots in tests predate this metadata.
+	PresenceKnown  bool `json:"-"`
+	SignalKnown    bool `json:"-"`
+	SignalAvgKnown bool `json:"-"`
+	TXQualityKnown bool `json:"-"`
 }
 
 // Rate is one direction of a station's PHY state.
@@ -391,6 +522,12 @@ type Rate struct {
 	ShortGI bool  `json:"short_gi"`
 	Retries int64 `json:"retries"`
 	Failed  int64 `json:"failed"`
+
+	BytesKnown   bool `json:"-"`
+	PacketsKnown bool `json:"-"`
+	RateKnown    bool `json:"-"`
+	RetriesKnown bool `json:"-"`
+	FailedKnown  bool `json:"-"`
 }
 
 // Survey is one channel survey sample.
@@ -430,6 +567,14 @@ type Survey struct {
 	BusyTime   int64  `json:"busy_time"`
 	RxTime     uint64 `json:"rx_time"`
 	TxTime     uint64 `json:"tx_time"`
+
+	PresenceKnown   bool `json:"-"`
+	MHzKnown        bool `json:"-"`
+	NoiseKnown      bool `json:"-"`
+	ActiveTimeKnown bool `json:"-"`
+	BusyTimeKnown   bool `json:"-"`
+	RxTimeKnown     bool `json:"-"`
+	TxTimeKnown     bool `json:"-"`
 }
 
 // NoiseDBm returns the survey noise floor in dBm.

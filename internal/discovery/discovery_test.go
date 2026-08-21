@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -65,10 +66,10 @@ func TestProbeIdentifiesRPCD(t *testing.T) {
 		t.Errorf("radios = %d, want 2", c.Signals.Radios)
 	}
 	if !c.Signals.Gateway {
-		t.Error("a device with network.interface.wan should read as a gateway")
+		t.Error("a device with network.interface.wan should retain the WAN-object compatibility hint")
 	}
 	if !c.Signals.Wireless || !c.Signals.DHCP {
-		t.Errorf("wireless=%v dhcp=%v, want both true", c.Signals.Wireless, c.Signals.DHCP)
+		t.Errorf("wireless=%v dhcp-object=%v, want both true", c.Signals.Wireless, c.Signals.DHCP)
 	}
 	if c.Signals.Objects != 10 {
 		t.Errorf("objects = %d, want 10", c.Signals.Objects)
@@ -87,6 +88,23 @@ func TestRadiosCountPHYsNotBSSes(t *testing.T) {
 	}
 	if c.Signals.Radios != 1 {
 		t.Errorf("radios = %d, want 1 — three BSSes share one PHY", c.Signals.Radios)
+	}
+}
+
+func TestDHCPCompatibilitySignalIncludesOdhcpdObject(t *testing.T) {
+	// odhcpd publishes `dhcp`, not `dnsmasq`. The compatibility boolean covers
+	// either service, so callers must use a generic label rather than naming one
+	// implementation.
+	body := `{"result":{
+	  "session":{"login":{}},"uci":{},"system":{"board":{}},
+	  "dhcp":{"ipv4leases":{},"ipv6leases":{}}}}`
+	host, port := fakeDevice(t, body, http.StatusOK)
+	c := Probe(context.Background(), host, port, "http", Options{})
+	if c.Verdict != VerdictOpenWrt {
+		t.Fatalf("verdict = %q, want %q", c.Verdict, VerdictOpenWrt)
+	}
+	if !c.Signals.DHCP {
+		t.Fatal("odhcpd's dhcp object did not set the DHCP-service compatibility signal")
 	}
 }
 
@@ -312,6 +330,70 @@ func TestSweepReportsWhatItSwept(t *testing.T) {
 	}
 	if res.Networks == nil {
 		t.Error("the result does not say which networks were swept")
+	}
+}
+
+// EHOSTUNREACH/ENETUNREACH are facts about the controller's route, not about
+// whether an address has a device on it. If every attempt in one CIDR returns
+// either error, an empty Found must not be presented as a successful empty
+// sweep. A second CIDR returning ordinary connection refusals proves failures
+// are attributed per network rather than poisoning the whole request.
+func TestSweepSeparatesUnroutableNetworksFromQuietOnes(t *testing.T) {
+	res, err := Sweep(context.Background(), Options{
+		Networks: []string{"127.0.0.0/30", "127.0.0.4/30"},
+		Ports:    []int{80},
+		dialContext: func(_ context.Context, _, address string) (net.Conn, error) {
+			host, _, splitErr := net.SplitHostPort(address)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			if host == "127.0.0.1" {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.EHOSTUNREACH}
+			}
+			if host == "127.0.0.2" {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ENETUNREACH}
+			}
+			return nil, syscall.ECONNREFUSED
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Swept != 4 || res.Answered != 0 || len(res.Found) != 0 {
+		t.Fatalf("unexpected sweep summary: %+v", res)
+	}
+	if len(res.Failures) != 1 {
+		t.Fatalf("failures = %+v, want only the unroutable CIDR", res.Failures)
+	}
+	got := res.Failures[0]
+	if got.Network != "127.0.0.0/30" || got.Reason != FailureUnreachable || got.Attempts != 2 {
+		t.Errorf("failure = %+v, want 127.0.0.0/30 unreachable after 2 attempts", got)
+	}
+}
+
+// One route error is not enough to condemn a subnet. The other address may be
+// quiet, firewalled, or absent, but its ordinary refusal proves the route can
+// be used and the sweep completed.
+func TestSweepDoesNotCallAMixedNetworkUnreachable(t *testing.T) {
+	res, err := Sweep(context.Background(), Options{
+		Networks: []string{"127.0.0.0/30"},
+		Ports:    []int{80},
+		dialContext: func(_ context.Context, _, address string) (net.Conn, error) {
+			host, _, splitErr := net.SplitHostPort(address)
+			if splitErr != nil {
+				return nil, splitErr
+			}
+			if host == "127.0.0.1" {
+				return nil, syscall.EHOSTUNREACH
+			}
+			return nil, syscall.ECONNREFUSED
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Failures) != 0 {
+		t.Errorf("a partially routable network was reported failed: %+v", res.Failures)
 	}
 }
 

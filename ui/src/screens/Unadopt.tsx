@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type { UnadoptResult } from '../lib/api'
-import { Button, Field, Banner, Card, Toggle } from '../components/ui'
+import { Button, Field, TextAreaField, Banner, Card, Toggle } from '../components/ui'
 
 /**
  * Remove the controller from a device.
@@ -51,9 +51,9 @@ export function Unadopt({
   onCancel: () => void
 }) {
   const [confirmed, setConfirmed] = useState(false)
-  // null means the list could not be read, which is NOT the same as owning no
-  // sections — the panel says so rather than showing an empty list.
-  const [sections, setSections] = useState<string[] | null>([])
+  // undefined is loading, null is unreadable, and [] is known empty. Un-adopt
+  // is not rollback-armed, so those three states must never collapse.
+  const [sections, setSections] = useState<string[] | null | undefined>()
   const [username, setUsername] = useState('root')
 
   useEffect(() => {
@@ -63,10 +63,15 @@ export function Unadopt({
     // list, which would read as "this controller wrote nothing here".
     api
       .device(deviceID)
-      .then((d) => setSections(d.owned_sections ?? []))
+      .then((d) =>
+        setSections(
+          d.owned_sections_known === true ? (d.owned_sections ?? []) : null,
+        ),
+      )
       .catch(() => setSections(null))
   }, [deviceID])
   const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<UnadoptResult | null>(null)
@@ -131,11 +136,18 @@ export function Unadopt({
     setForceOK(false)
     try {
       const res = await api.unadopt(deviceID, {
-        ...(withCredential ? { username, password } : {}),
+        ...(withCredential
+          ? {
+              username,
+              password,
+              ...(privateKey ? { private_key: privateKey } : {}),
+            }
+          : {}),
         ...(force ? { force: true } : {}),
       })
       accept(res)
       setPassword('')
+      setPrivateKey('')
       // NOT onDone() here. That unmounted the whole panel the instant a removal
       // succeeded, so the report underneath — including the residue, which is
       // the last copy of what is still on the device once the row is gone —
@@ -166,15 +178,16 @@ export function Unadopt({
   const forceBlock = (
     <Card title="If the device cannot be reached at all">
       <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px' }}>
-        Remove <strong>{deviceName}</strong> from the inventory anyway. This
-        does <strong>not</strong> touch the device: the controller's login and
-        its ACL file stay on it, and once this row is gone the controller no
-        longer holds a record of what to delete. The response will list it — it
-        is the last copy, so keep it. Use this for hardware that is gone for
+        Remove <strong>{deviceName}</strong> from the inventory anyway. The
+        controller still attempts the normal configuration and access cleanup
+        when the device is reachable. Force means the row is removed even when
+        that cleanup cannot be proved: managed configuration, the controller
+        login, or its ACL file may remain. The response is the last copy of
+        everything unproved, so keep it. Use this for hardware that is gone for
         good, that was reflashed, or whose administrator password is lost.
       </p>
       <Toggle
-        label="I understand — the controller's footprint stays on the device"
+        label="I understand — managed configuration may remain and the controller footprint stays on the device if cleanup fails"
         on={forceOK}
         onChange={setForceOK}
       />
@@ -190,13 +203,15 @@ export function Unadopt({
   )
 
   if (result) {
+    const hasConfigResidue = (result.config_remains?.length ?? 0) > 0
+    const hasAnyResidue = result.footprint_remains || hasConfigResidue
     return (
       <div style={{ display: 'grid', gap: 12 }}>
         {result.removed_from_inventory ? (
-          <Banner tone="accent">
+          <Banner tone={hasAnyResidue ? 'warning' : 'accent'}>
             <strong>{deviceName}</strong> was removed.{' '}
-            {result.footprint_remains
-              ? 'A footprint remains on the device — see below.'
+            {hasAnyResidue
+              ? 'Managed configuration or the controller footprint remains on the device — see below.'
               : 'Nothing of ours is left on it.'}
           </Banner>
         ) : result.needs_operator_credential ? (
@@ -223,7 +238,16 @@ export function Unadopt({
             <li>
               {result.reverted_sections} configuration section
               {result.reverted_sections === 1 ? '' : 's'} handed back
+              {result.config_revert_complete === true ? '; phase 1 complete' : ''}
             </li>
+            {result.config_revert_complete === false && (
+              <li>Configuration hand-back was not proved complete</li>
+            )}
+            {result.config_remains?.map((section) => (
+              <li key={section}>
+                Managed configuration still present or unproved: <code>{section}</code>
+              </li>
+            ))}
             <li>rpcd login {result.login_removed ? 'removed' : 'still present'}</li>
             <li>ACL file {result.acl_removed ? 'removed' : 'still present'}</li>
           </ul>
@@ -248,9 +272,28 @@ export function Unadopt({
                 {result.removed_from_inventory
                   ? 'Copy these before closing. The device is no longer in the ' +
                     'inventory, so this is the last time the controller can tell ' +
-                    'you what it left behind — delete them over SSH.'
-                  : 'Delete these over SSH, or supply the credential and try again.'}
+                    'you what it left behind.'
+                  : 'Clean these over SSH, or supply the credential and try again.'}
               </div>
+              {result.cleanup_commands && result.cleanup_commands.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Run as the device administrator over SSH
+                  </div>
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: 8,
+                      overflowX: 'auto',
+                      background: 'var(--bg-inset, rgba(127,127,127,0.12))',
+                      color: 'var(--text-primary)',
+                      fontSize: 11,
+                    }}
+                  >
+                    {result.cleanup_commands.join('\n')}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
           {result.errors && result.errors.length > 0 && (
@@ -298,10 +341,15 @@ export function Unadopt({
           number, once it was already done, while the safer apply path got a
           full preview and a confirmation. */}
       <Card title="What will be reverted on the device">
-        {sections === null ? (
+        {sections === undefined ? (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Reading the ownership ledger…
+          </div>
+        ) : sections === null ? (
           <div style={{ fontSize: 12, color: 'var(--warning)' }}>
             The list of sections this controller owns could not be read. That is
-            not the same as owning none — check before continuing.
+            not the same as owning none, so removal is blocked until it can be
+            read.
           </div>
         ) : sections.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -342,6 +390,18 @@ export function Unadopt({
             autoComplete="off"
             onChange={(e) => setPassword(e.target.value)}
           />
+          <TextAreaField
+            label="SSH private key (optional)"
+            value={privateKey}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+            onChange={(e) => setPrivateKey(e.target.value)}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Used only for this SSH cleanup when the device disables password
+            authentication. The password and key are never stored.
+          </div>
         </div>
       </Card>
 
@@ -357,10 +417,16 @@ export function Unadopt({
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {/* Not the primary button. The visually dominant action should not be
             the irreversible one. */}
-        <Button disabled={busy || !username || !confirmed} onClick={() => run(true)}>
+        <Button
+          disabled={busy || !username || !confirmed || !Array.isArray(sections)}
+          onClick={() => run(true)}
+        >
           {busy ? 'Removing…' : 'Remove completely'}
         </Button>
-        <Button disabled={busy || !confirmed} onClick={() => run(false)}>
+        <Button
+          disabled={busy || !confirmed || !Array.isArray(sections)}
+          onClick={() => run(false)}
+        >
           Revert config only
         </Button>
         <Button disabled={busy} onClick={onCancel}>

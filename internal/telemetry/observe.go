@@ -26,15 +26,35 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Uptime first: everything below depends on knowing whether the counters
-	// underneath it survived since the last poll.
+	gauge := func(kind Kind, key string, v float64) {
+		s.appendLocked(SeriesKey{DeviceID: dev, Kind: kind, Key: key}, ts, v)
+	}
+	observeWAN := func() {
+		if snap.WAN == nil {
+			return
+		}
+		up := 0.0
+		if snap.WAN.Up {
+			up = 1
+		}
+		gauge(KindSiteWANUp, "", up)
+		gauge(KindSiteWANLoss, "", snap.WAN.LossPct)
+		if snap.WAN.LatencyMS != nil {
+			gauge(KindSiteWANLatency, "", *snap.WAN.LatencyMS)
+		}
+	}
+	if snap.WANOnly {
+		observeWAN()
+		return
+	}
+
+	// Uptime first for full snapshots: everything below depends on knowing
+	// whether the counters underneath it survived since the last full poll.
+	// WAN-only snapshots carry no uptime and returned above, so their zero can
+	// never masquerade as a reboot and erase counter baselines.
 	rebooted := s.observeUptime(dev, snap.Uptime, ts)
 	if rebooted {
 		s.forgetCounters(dev)
-	}
-
-	gauge := func(kind Kind, key string, v float64) {
-		s.appendLocked(SeriesKey{DeviceID: dev, Kind: kind, Key: key}, ts, v)
 	}
 	rate := func(kind Kind, key string, counter uint64, recreated bool) {
 		k := SeriesKey{DeviceID: dev, Kind: kind, Key: key}
@@ -49,6 +69,7 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		gauge(KindMemUsed, "", float64(used))
 		gauge(KindMemPct, "", float64(used)*100/float64(snap.Memory.Total))
 	}
+	observeWAN()
 
 	for name, iface := range snap.Interfaces {
 		if skipInterface(name) {
@@ -58,8 +79,15 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		// and its counters started over. Tracked per interface rather than per
 		// device, because one link flapping says nothing about the others.
 		recreated := s.ifaceCameBack(dev, ts, name, iface.Up)
-		rate(KindIfaceRx, name, uint64(iface.Stats.RxBytes), recreated)
-		rate(KindIfaceTx, name, uint64(iface.Stats.TxBytes), recreated)
+		// Successful production decodes set per-direction presence. Hand-built
+		// snapshots predating that metadata have NetDevsFresh=false and retain
+		// their historical test/helper semantics.
+		if iface.Stats.RxBytesKnown || !snap.NetDevsFresh {
+			rate(KindIfaceRx, name, uint64(iface.Stats.RxBytes), recreated)
+		}
+		if iface.Stats.TxBytesKnown || !snap.NetDevsFresh {
+			rate(KindIfaceTx, name, uint64(iface.Stats.TxBytes), recreated)
+		}
 	}
 
 	for _, ap := range snap.APs {
@@ -73,20 +101,158 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		}
 	}
 
+	// Current frequency is measured by hostapd per BSS or the fresh sanitized
+	// iwinfo inventory. Survey may include off-channel rows; only a row matching
+	// current frequency may touch even the per-interface counter baseline.
+	stableMapping := snap.RadiosKnown && !snap.RadiosStale
+	radioMHz := map[string]int{}
+	ambiguousMHz := map[string]bool{}
+	ifaceMHz := map[string]int{}
+	ambiguousIfaceMHz := map[string]bool{}
+	if stableMapping {
+		for _, observed := range snap.Radios {
+			if observed.Key == "" {
+				continue
+			}
+			if observed.CurrentAmbiguous {
+				ambiguousMHz[observed.Key] = true
+				continue
+			}
+			if observed.CurrentMHz == nil || *observed.CurrentMHz <= 0 {
+				continue
+			}
+			radioMHz[observed.Key] = *observed.CurrentMHz
+			for _, iface := range observed.Interfaces {
+				if previous := ifaceMHz[iface.Name]; previous != 0 && previous != *observed.CurrentMHz {
+					ambiguousIfaceMHz[iface.Name] = true
+				}
+				ifaceMHz[iface.Name] = *observed.CurrentMHz
+			}
+		}
+		for iface, radioKey := range snap.IfaceRadios {
+			if current := radioMHz[radioKey]; current > 0 {
+				if previous := ifaceMHz[iface]; previous != 0 && previous != current {
+					ambiguousIfaceMHz[iface] = true
+				}
+				ifaceMHz[iface] = current
+			}
+		}
+	}
+	for _, ap := range snap.APs {
+		if ap.Freq <= 0 {
+			continue
+		}
+		if previous := ifaceMHz[ap.Iface]; previous != 0 && previous != ap.Freq {
+			ambiguousIfaceMHz[ap.Iface] = true
+		}
+		ifaceMHz[ap.Iface] = ap.Freq
+		if stableMapping {
+			radioKey := snap.IfaceRadios[ap.Iface]
+			if radioKey == "" {
+				continue
+			}
+			if previous := radioMHz[radioKey]; previous != 0 && previous != ap.Freq {
+				ambiguousMHz[radioKey] = true
+			}
+			radioMHz[radioKey] = ap.Freq
+		}
+	}
+	selectedIfaceSurveys := map[string]collector.Survey{}
+
 	for _, sv := range snap.Surveys {
+		requiredKnown := !sv.PresenceKnown ||
+			(sv.MHzKnown && sv.ActiveTimeKnown && sv.BusyTimeKnown)
+		if !requiredKnown || ambiguousIfaceMHz[sv.Iface] || ifaceMHz[sv.Iface] <= 0 ||
+			sv.MHz != ifaceMHz[sv.Iface] {
+			continue
+		}
+		if _, exists := selectedIfaceSurveys[sv.Iface]; exists {
+			continue
+		}
+		selectedIfaceSurveys[sv.Iface] = sv
+	}
+	for iface, sv := range selectedIfaceSurveys {
 		// Utilization is the ratio of two counter DELTAS, never of the absolute
 		// values: busy_time and active_time do not share an epoch. See
 		// Store.ratio — dividing the absolutes reads 25.9% on a radio that is
 		// really at 73.3%.
-		k := SeriesKey{DeviceID: dev, Kind: KindChanBusy, Key: sv.Iface}
+		k := SeriesKey{DeviceID: dev, Kind: KindChanBusy, Key: iface}
 		if v, ok := s.ratio(k, ts, uint64(sv.BusyTime), uint64(sv.ActiveTime), rebooted); ok {
 			s.appendLocked(k, ts, v)
 		}
-		// The noise floor is deliberately not a series. It is gated per radio by
-		// the capability probe, and on the reference device's 2.4 GHz radio it
-		// swings 40+ dB between consecutive reads from either source. Averaging
-		// that into a rollup would produce a smooth, stable, meaningless line —
-		// the most convincing kind of wrong.
+	}
+	selectedSurveys := map[string]collector.Survey{}
+	if stableMapping {
+		for _, sv := range selectedIfaceSurveys {
+			radioKey := snap.IfaceRadios[sv.Iface]
+			if radioKey == "" || ambiguousMHz[radioKey] || radioMHz[radioKey] <= 0 ||
+				sv.MHz != radioMHz[radioKey] {
+				continue
+			}
+			// Survey is per PHY but iwinfo exposes it per interface. Pick one row,
+			// deterministically, so two SSIDs do not double-weight one radio.
+			if existing, ok := selectedSurveys[radioKey]; !ok || sv.Iface < existing.Iface {
+				selectedSurveys[radioKey] = sv
+			}
+			// The noise floor is deliberately not a series. It is gated per radio by
+			// the capability probe, and on the reference device's 2.4 GHz radio it
+			// swings 40+ dB between consecutive reads from either source. Averaging
+			// that into a rollup would produce a smooth, stable, meaningless line —
+			// the most convincing kind of wrong.
+		}
+	}
+	for radioKey, survey := range selectedSurveys {
+		k := SeriesKey{DeviceID: dev, Kind: KindRadioUtilization, Key: radioKey}
+		utilization, utilizationOK := s.ratio(k, ts, uint64(survey.BusyTime), uint64(survey.ActiveTime), rebooted)
+		if utilizationOK {
+			s.appendLocked(k, ts, utilization)
+		}
+		airtimeFieldsKnown := !survey.PresenceKnown ||
+			(survey.RxTimeKnown && survey.TxTimeKnown)
+		if !snap.AirtimeSplit || !airtimeFieldsKnown {
+			continue
+		}
+		rxKey := SeriesKey{DeviceID: dev, Kind: KindRadioRXAirtime, Key: radioKey}
+		rx, rxOK := s.ratio(rxKey, ts, survey.RxTime, uint64(survey.ActiveTime), rebooted)
+		if rxOK {
+			s.appendLocked(rxKey, ts, rx)
+		}
+		txKey := SeriesKey{DeviceID: dev, Kind: KindRadioTXAirtime, Key: radioKey}
+		tx, txOK := s.ratio(txKey, ts, survey.TxTime, uint64(survey.ActiveTime), rebooted)
+		if txOK {
+			s.appendLocked(txKey, ts, tx)
+		}
+		// Interference is the part of measured busy airtime not accounted for by
+		// this radio receiving or transmitting. If the independently sampled
+		// counters disagree, omit it instead of clamping a fabricated value.
+		if utilizationOK && rxOK && txOK && utilization >= rx+tx {
+			gauge(KindRadioInterference, radioKey, utilization-rx-tx)
+		}
+	}
+
+	type radioStationAggregate struct {
+		stations, quality, valid int64
+		packets, retries, failed int64
+		signalTotal              int64
+		signalCount              int64
+	}
+	radioStations := map[string]*radioStationAggregate{}
+	radioAssocComplete := map[string]bool{}
+	assocMappingComplete := true
+	if stableMapping && snap.AssocAsked != nil {
+		for iface := range snap.AssocAsked {
+			radioKey := snap.IfaceRadios[iface]
+			if radioKey == "" {
+				assocMappingComplete = false
+				continue
+			}
+			if _, ok := radioAssocComplete[radioKey]; !ok {
+				radioAssocComplete[radioKey] = true
+			}
+			if !snap.AssocAnswered[iface] {
+				radioAssocComplete[radioKey] = false
+			}
+		}
 	}
 
 	for _, st := range snap.Stations {
@@ -94,16 +260,79 @@ func (s *Store) Observe(_ context.Context, snap collector.Snapshot) {
 		if mac == "" {
 			continue
 		}
-		gauge(KindStaRSSI, mac, float64(st.Signal))
-		rate(KindStaRx, mac, uint64(st.RX.Bytes), false)
-		rate(KindStaTx, mac, uint64(st.TX.Bytes), false)
-		if st.TX.Packets > 0 {
-			// Retries as a share of packets actually sent. The raw counter grows
-			// forever, so the ratio is the only form that means anything at a
-			// glance — and it is computed here, never on the device.
-			gauge(KindStaRetry, mac, float64(st.TX.Retries)*100/
-				float64(st.TX.Packets+st.TX.Retries))
+		signalKnown := st.SignalKnown || (!st.PresenceKnown && st.Signal != 0)
+		radioKey := ""
+		if stableMapping {
+			radioKey = snap.IfaceRadios[st.Iface]
 		}
+		var aggregate *radioStationAggregate
+		if radioKey != "" {
+			aggregate = radioStations[radioKey]
+			if aggregate == nil {
+				aggregate = &radioStationAggregate{}
+				radioStations[radioKey] = aggregate
+			}
+			aggregate.stations++
+			if signalKnown {
+				aggregate.signalTotal += int64(st.Signal)
+				aggregate.signalCount++
+			}
+		}
+		if signalKnown {
+			gauge(KindStaRSSI, mac, float64(st.Signal))
+		}
+		if st.RX.BytesKnown || !st.PresenceKnown {
+			rate(KindStaRx, mac, uint64(st.RX.Bytes), false)
+		}
+		if st.TX.BytesKnown || !st.PresenceKnown {
+			rate(KindStaTx, mac, uint64(st.TX.Bytes), false)
+		}
+		qualityKnown := st.TXQualityKnown || (!st.PresenceKnown &&
+			(st.TX.Packets != 0 || st.TX.Retries != 0 || st.TX.Failed != 0))
+		if !qualityKnown {
+			continue
+		}
+		if aggregate != nil {
+			aggregate.quality++
+		}
+		delta, ok := s.observeStationQualityCounters(dev, mac, stationQualityCounters{
+			Iface: st.Iface, ConnectedTime: st.ConnectedTime,
+			Packets: st.TX.Packets, Retries: st.TX.Retries, Failed: st.TX.Failed,
+		}, ts)
+		if ok {
+			retry := float64(delta.PacketsRetry) * 100 / float64(delta.Packets+delta.PacketsRetry)
+			failed := float64(delta.PacketsFailed) * 100 / float64(delta.Packets+delta.PacketsFailed)
+			gauge(KindStaRetryDelta, mac, retry)
+			gauge(KindStaTXFailDelta, mac, failed)
+			if experience, valid := WiFiExperienceV1(st.Signal, &retry, &failed); signalKnown && valid {
+				gauge(KindStaExperienceWiFiV1, mac, experience)
+			}
+			if aggregate != nil {
+				aggregate.valid++
+				aggregate.packets += delta.Packets
+				aggregate.retries += delta.PacketsRetry
+				aggregate.failed += delta.PacketsFailed
+			}
+		}
+	}
+	for radioKey, aggregate := range radioStations {
+		if snap.AssocAsked != nil && (!assocMappingComplete || !radioAssocComplete[radioKey]) {
+			continue
+		}
+		if aggregate.signalCount == aggregate.stations && aggregate.signalCount > 0 {
+			gauge(KindRadioSignalAvg, radioKey,
+				float64(aggregate.signalTotal)/float64(aggregate.signalCount))
+		}
+		// A partial denominator is not a radio metric. If one associated station
+		// omitted its counters, rebased, roamed, or sent no packets, omit both.
+		if aggregate.quality != aggregate.stations || aggregate.valid != aggregate.quality ||
+			aggregate.valid == 0 {
+			continue
+		}
+		gauge(KindRadioRetryDelta, radioKey,
+			float64(aggregate.retries)*100/float64(aggregate.packets+aggregate.retries))
+		gauge(KindRadioTXFailDelta, radioKey,
+			float64(aggregate.failed)*100/float64(aggregate.packets+aggregate.failed))
 	}
 }
 

@@ -164,10 +164,16 @@ export function TimeChart({
     </div>
   )
 
+  const chartSummary = points.length > 0
+    ? `${label}: ${points.length} rollup bucket${points.length === 1 ? '' : 's'} from ${new Date(points[0].ts * 1000).toLocaleString()} to ${new Date(points.at(-1)!.ts * 1000).toLocaleString()}. Latest average ${format(points.at(-1)!.avg)}; observed range ${format(Math.min(...points.map((point) => point.min)))} to ${format(Math.max(...points.map((point) => point.max)))}.`
+    : `${label}: ${emptyNote ?? 'No data yet — telemetry is written every five minutes'}.`
+
   if (points.length === 0) {
     return (
       <div>
         <div
+          role="img"
+          aria-label={chartSummary}
           style={{
             height,
             display: 'grid',
@@ -189,7 +195,7 @@ export function TimeChart({
 
   return (
     <div>
-      <div ref={host} />
+      <div ref={host} role="img" aria-label={chartSummary} />
       {footnote}
     </div>
   )

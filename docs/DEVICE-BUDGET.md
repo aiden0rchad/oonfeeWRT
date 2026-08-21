@@ -19,7 +19,7 @@ weakest class sets the budget.
 |---|---|---|---|---|---|
 | **A — Comfortable** | Linksys WRT3200ACM | Marvell Armada 385, 2× Cortex-A9 @1.6 GHz | 512 MB | 256 MB NAND | Genuinely roomy. Dual firmware partitions (see §6). `mwlwifi` driver quality is the real risk here, not resources. |
 | **B — Modern efficient** | MT7981 / Filogic 820 "AX3000" units (Cudy WR3000, GL-MT3000 class) | 2× Cortex-A53 @1.3 GHz | 256–512 MB | 32–128 MB | Good CPU, good crypto. The sweet spot. |
-| **C — Constrained** | MT7621 "AX3000" units (Archer AX53/AX55 class) | 2× MIPS 1004Kc @880 MHz | 128–256 MB | 16–128 MB | **This class sets the budget.** Weak scalar CPU, no crypto acceleration, and 16 MB flash on many SKUs leaves almost no room for added packages. |
+| **C — Constrained** | MT7621 units; QCA956X/Archer C6 v2 measured | 1–2× older MIPS cores | nominal 128–256 MB | 16–128 MB | **This class sets the budget.** Weak scalar CPU, no crypto acceleration, and 16 MB flash on many SKUs leaves almost no room for added packages. |
 
 > **"TP-Link AX3000" is ambiguous** — it spans both MT7621 (class C) and newer
 > MT7981 (class B) silicon depending on model and revision, with very different
@@ -189,19 +189,44 @@ What each screen actually costs on class C. Use this to decide what ships.
 |---|---|---|---|---|
 | Device status, firmware, uptime | 0 | `system.info`/`board` | negligible | **on** |
 | Client list, names, IPs, vendors | 1 | `luci-rpc.getHostHints` | negligible, one call | **on** |
-| Per-client RSSI / rate / retries | 0 | `iwinfo.assoclist`, or `iw station dump` | low; focused-rate only | **on (focused)** |
+| Per-client RSSI / rate / retries | 0 | native `iwinfo.assoclist`; cheap `hostapd.get_clients` enrichment | low; focused-rate only; no station-dump spawn/grant | **on (focused)** |
 | Interface throughput | 0 | `network.device` counters | negligible | **on** |
 | WiFi config read/write | 0 | `uci` | negligible | **on** |
 | Firewall / VLAN / DHCP config | 0 | `uci` | negligible | **on** |
 | Channel survey / utilization | 0 | `iwinfo.survey` (native ubus) | ~29 ms per radio, no spawn — focused loop is fine | **on** |
-| Topology / LLDP neighbours | 2 | `lldpd` | small daemon, low duty cycle | opt-in |
+| Baseline topology | 0 | stock `brctl`/`bridge` FDB + ARP + wireless associations | negligible, slow-loop read | **on** |
+| LLDP topology enrichment | 2 | `lldpd` | small daemon, low duty cycle; improves managed adjacency | opt-in |
 | Per-client bandwidth + 24h usage | 2 | `nlbwmon` | **conflicts with flow offload — see §3.3** | **off** |
 | Long-term interface totals | 2 | `vnstat` | small, but writes to disk — force `/tmp` | opt-in |
 | Band steering / roaming assist | 2 | `usteer` or `dawn` | modest, event-driven | opt-in |
 | Queue management / SQM | 2 | `sqm-scripts` (CAKE) | **significant CPU at gigabit on class C** — user's existing decision, we only expose it | opt-in |
-| Firewall event log | 0 | nftables `log` → syslog, read via `file.read` | scales with rule hit rate — rate-limit the rules | opt-in |
-| RF scan | 0 | `iw scan`, user-triggered | disrupts clients on that radio | manual only |
+| Router/hostapd event log | 0 | native `log.read`, once/minute cursor ingest | bounded ring read; does not install a tailer | **on** |
+| Firewall event enrichment | 0 | nftables rate-limited log lines when configured | scales with rule hit rate; no nflog pipeline in Phase 4 | opt-in |
+| RF scan | 0 | native `iwinfo.scan`, explicit acknowledged request | disrupts clients on that radio; 45s timeout; never scheduled | manual only |
 | **Flows / DPI / app identification** | 2 | `netifyd`, `ntopng` | **out of budget** | **unavailable on class C** |
+
+### 5.1 Phase-4 controller bounds
+
+These are memory/query/retention limits, not managed-router work to spend:
+
+| Surface | Current bound |
+|---|---|
+| raw telemetry | RAM ring only; SQLite receives one transaction of completed 5m rollups |
+| durable metric history | 5m for 14d; 1h for 396d; client query uses 5m through 7d and 1h beyond |
+| OpenWrt log events | 24h, 50,000/device, 100,000 global; decoder 4,096 rows × 4,096-byte messages |
+| controller/audit events | newest 100,000 rows, independently of router-log caps |
+| General event coverage | producer poll once/minute; stale after 3m; missing, observed-empty and retained gaps are distinct |
+| topology | source cadence 15m; current source stale after 31m; closed history/range 31d; 10,000 intervals/response |
+| client incident response | 31d range; 2,000 exact events; 64 paths and 2,048 path visits |
+| radio state/scan | 32 radios, 128 interfaces/radio, 512 frequencies and 4,096 BSS rows; newest terminal scan/radio retained, active scans preserved; suggestion ≤24h and channel plan ≤15m |
+| live WebSocket | `device.stats` only; 32 queued frames/connection, drop-on-full, 10s write, 30s ping |
+| WAN site health | once/minute, 3 ICMP packets from Gateway to fixed `1.1.1.1`; no HTTP/DNS/multi-target work |
+
+Persisted RF scan history is count-bounded by the five-minute controller
+maintenance transaction: one newest terminal run per stable radio key, with
+pending/running work preserved and child BSS rows removed by foreign-key
+cascade. The live lab has not created scans under schema 16, so this retention
+path remains source-tested rather than hardware-exercised.
 
 ---
 
@@ -228,8 +253,10 @@ NAND are luxurious by OpenWrt standards. Two other things are:
 **Class B (MT7981/Filogic).** The comfortable target. ARMv8 with crypto
 extensions makes TLS cheap, so §3.1 mostly stops mattering.
 
-**Class C (MT7621).** Everything in §3 applies at full force. Also: many SKUs
-have **16 MB flash**, which leaves single-digit megabytes free after a normal
+**Class C (constrained MIPS).** Everything in §3 applies at full force. The
+Archer C6 v2's QCA956X is now a measured member: 117 MiB usable from nominal
+128 MB RAM and 6.4 MB free overlay. Many MT7621 and ath79 SKUs likewise have
+**16 MB flash**, which leaves single-digit megabytes free after a normal
 install. The capability probe must check free `/overlay` space and simply not
 offer tier-2 packages that won't fit — refusing cleanly, with the reason shown,
 rather than attempting an install that fills the filesystem and bricks the
@@ -241,15 +268,83 @@ router.
 
 Two commitments that follow from having a budget at all:
 
-**Test it.** A benchmark harness that adopts a class-C device, runs baseline and
-focused polling for an hour, and asserts the §2 numbers. Run it per release. A
-budget nobody measures is a wish.
+**Test it.** A benchmark harness that seeds a temporary controller with an
+already-adopted class-C device, runs baseline and focused polling for an hour,
+and enforces the network and zero-flash parts of §2. CPU and RAM are reported as
+whole-device observations, not asserted as attributable controller cost: stock
+OpenWrt has no process boundary around ubus work, and whole-device jitter is
+larger than the work being measured. Run it per release. A budget nobody
+measures is a wish.
 
 > **Built, and it earned its keep on the first run.**
-> `internal/daemon/budget_integration_test.go`; `OONFEE_BUDGET_MINUTES=60` for
-> the real thing. It measures device-side state over SSH, which the controller's
-> own credential deliberately cannot reach — a harness that could only see what
-> the controller sees could not check whether the controller is lying.
+> `internal/daemon/budget_integration_test.go`; `OONFEE_BUDGET_MINUTES=60` is
+> the release gate. A value of 60 or more makes every missing prerequisite a
+> failure, never a passing skip; invalid values fail instead of falling back to
+> the two-minute developer default. The harness performs a successful
+> credentialed capability probe and rejects anything not measured as class C.
+>
+> Preferred invocation (the source database is opened with SQLite `mode=ro`
+> plus `query_only`; the source keyring is only read):
+>
+> ```sh
+> OONFEE_BUDGET_SOURCE_DATA_DIR=/absolute/path/to/controller-data \
+> OONFEE_BUDGET_DEVICE_MAC=aa:bb:cc:dd:ee:ff \
+> OONFEE_BUDGET_PASSPHRASE_FILE=/absolute/path/to/mode-600-passphrase \
+> OONFEE_BUDGET_MINUTES=60 \
+> go test -count=1 -tags=integration ./internal/daemon/ \
+>   -run '^TestBudgetHarness$' -v -timeout 90m
+> ```
+>
+> The selected row must be adopted in a current-schema controller database and
+> its scoped controller credential must open with that controller's adjacent,
+> matching `keyring.json`. The mode-0600 passphrase file is mandatory for this
+> source path. Schema-14 read-only opening verifies the database/keyring key
+> check and requires the plaintext scrub to be complete; it never migrates the
+> source. Start the controller writable first if the database is older.
+> For a throwaway lab, `OONFEE_TEST_HOST`, `OONFEE_TEST_USER`, and the explicitly
+> present `OONFEE_TEST_PASS` may replace all three source variables. That
+> fallback exposes the password through the test process environment; it is not
+> the preferred release path.
+>
+> Root SSH key access is a separate prerequisite because CPU, RAM, and overlay
+> state are intentionally outside the controller ACL. SSH is batch-only and its
+> `accept-new` host-key file lives under the test's temporary directory, not the
+> operator's `known_hosts`. The overlay must be mounted `noatime`, so hashing it
+> cannot cause the write the test is trying to detect. Run against an otherwise
+> idle class-C router with no second controller or poller competing for it.
+>
+> **Exact 60-minute pass contract:** 30 minutes idle and 30 focused, using the
+> shipped 60 s and 10 s intervals. Idle must sustain at least 0.90 successful
+> polls/min without exceeding 1.05 poll attempts/min. Focused must sustain at
+> least 5.70 successful polls/min without exceeding 6.30 total requests/min.
+> Focused raw rate must exceed idle raw rate; at most five requests across the
+> run may be outside poll batches; at least one poll must complete; and no more
+> than half of all attempts may fail. The success-rate floors are the operative
+> failure bound in a normal 60-minute run and prevent adaptive backoff from
+> passing by doing less work.
+>
+> Flash is sampled before, between, and after the two phases. Each snapshot
+> compares `/overlay/upper` path inventory, file size/mtime, content hashes
+> (`sha256sum`, or stock `cksum` fallback), used blocks, and the overlay block
+> device's cumulative write counters when `/proc/diskstats` exposes them. Any
+> endpoint delta fails. Stock OpenWrt has no persistent-write watcher: on a
+> device whose overlay has no diskstats counter, a file created and deleted
+> entirely between snapshots is not observable without installing software or
+> continuously polling over SSH. The harness does neither because both would
+> change the workload under test.
+>
+> Idle and focused CPU are logged separately from `/proc/stat`. RAM used at each
+> phase boundary is logged from `MemTotal - MemAvailable` (with the older-kernel
+> free+buffers+cache approximation). Both are labelled whole-device,
+> observational, and non-attributable; there is deliberately no noisy CPU/RAM
+> pass assertion. Output is the verbose `go test` log only—capture it with the
+> release evidence if a retained artifact is required.
+>
+> The router receives only capability/poll RPCs and root-SSH reads: no UCI
+> stage, apply, commit, package install, or persistent helper. The live source
+> database and keyring are never written. The seeded daemon, SQLite database,
+> keyring, telemetry, and SSH host-key file exist only under Go test temporary
+> directories and are removed by the test harness.
 >
 > The first run failed, on a class-A device, at **1.08 requests/min idle against
 > a ceiling of 1.0**. Two real defects:
@@ -268,8 +363,43 @@ budget nobody measures is a wish.
 > session login), observed 6.00 req/min, zero flash writes**, 21 polls with no
 > failures, ~1.3 KB per request. Device CPU 0.49% across the run, all causes.
 >
-> Class C still sets the budget and remains unmeasured — see the open items in
-> `STATUS.md`.
+> **The full 60-minute release gate passed on the QCA956X Archer C6 v2 on
+> 2026-08-18.** The earlier two-minute result remains harness bring-up evidence;
+> this is the acceptance result:
+>
+> | Phase | Cadence / request evidence | Whole-device observation |
+> |---|---|---|
+> | 30 min idle | 1.00 poll attempt/min, 1.00 successful/min; 31 raw requests = 1.03/min, including one non-poll login | 3.34% CPU; RAM +2208 KiB |
+> | 30 min focused | 5.97 polls/min; 179 raw requests | 4.31% CPU; RAM +716 KiB |
+>
+> The run completed **209 poll batches, 0 failed**; including the one idle
+> login, that is 210 raw HTTP requests and **297,321 bytes out**. These CPU/RAM
+> figures are whole-device phase observations, not attributable controller CPU.
+>
+> All three endpoint snapshots agreed on overlay path inventory, size/mtime,
+> content hashes and used blocks; cumulative block-device write counters were
+> also unchanged. Direct postcheck found no pending UCI changes, overlay usage
+> still **416/6976 KiB (used/total)**, `dnsmasq` running, both radios up and
+> `dhcp.lan.ignore=1`. No package was installed and no router write was used to
+> obtain the measurement.
+>
+> The preferred read-only source path also passed its own blast-radius check:
+> logical database and keyring hashes matched their pre-run backups. The
+> controller was subsequently migrated schema 11→12 with 2 devices/functions,
+> 4 ownership-ledger rows and 2 group memberships retained. This migration is
+> controller integrity evidence, not device workload. A consistent SQLite
+> `.backup` contained schema 12 and passed integrity; a v11 binary refused it.
+> Copying only a live WAL database's main file is not a valid backup and can
+> expose stale schema/data—use `.backup` or a clean shutdown/checkpoint.
+>
+> That schema-11→12 paragraph is historical evidence and distinct from the later
+> live schema-14 migration, which completed with the paired rehearsal,
+> key-check/scrub, byte-scan and no-router-change evidence in STATUS §5bf. For
+> schema 14 and later, pair the consistent database snapshot with the matching
+> `keyring.json`; neither the database nor passphrase recreates its random data
+> key. Pre-v14 database backups may contain plaintext WLAN/mesh keys and
+> secret-derived ownership hashes. Migration does not rewrite or delete them,
+> and cleanup requires explicit operator confirmation.
 
 **Show it.** A per-device **Management Overhead** readout in the UI: requests per
 minute, CPU percent attributable to oonfeeWRT, packages we installed, and the
@@ -313,23 +443,22 @@ current poll interval — with a control to loosen it.
 > driver rather than burning cycles. Latency and CPU load must not be used
 > interchangeably when reasoning about what we cost a device.
 >
-> The figure is reported **only for classes it was measured on**. Class C has
-> never been measured, and a class-A number shown against a class-C device
-> would be a guess in a measurement's clothing — so those devices get no figure
-> and a sentence saying why.
+> The figure is reported **only for a class with a per-poll control
+> measurement**. The short class-C harness measured the whole device, not CPU
+> milliseconds attributable to one poll, so class C correctly still gets no
+> derived figure and a sentence saying why.
 >
 > **Packages we installed.** Empty, and reported rather than omitted: "the
 > controller installs no packages" is the claim ARCHITECTURE §0 makes, and a
 > field that only appears once it is non-empty cannot be used to check it.
 >
-> **The control to loosen the interval.** Per device, 60 s to 1 hour. It can
-> only make polling *cheaper*: the collector clamps any override below the
-> controller default. That clamp is in the collector rather than in request
-> validation on purpose — this table is a promise about what the controller
-> does to a device, the harness measures the default, and a knob that could
-> raise the rate would put a device outside the budget in a way no test would
-> ever see. Verified against real hardware: an override of 5 s stores as 5 and
-> polls at 60.
+> **The control to loosen the interval.** Per device, 60 s to 15 minutes. It
+> can only make full-state polling *cheaper*: the collector clamps any nonzero
+> override below the controller default, and both API input and legacy stored
+> values are capped at 900 s so topology/radio source freshness stays usable.
+> Lightweight router-log collection still runs once a minute. The effective
+> clamp is measured in the collector rather than inferred from the stored
+> preference.
 
 UniFi never shows you this, and the reason it can afford not to is that it owns
 the hardware. We don't. Surfacing our own cost is both the honest thing to do and
@@ -350,7 +479,7 @@ polite long-running service, not about survival:
 | Image size | ≤ 40 MB | scratch/distroless base + static Go binary + embedded UI |
 | Steady-state RSS | ≤ 256 MB at 25 devices | generous; measured per release, not fought over |
 | CPU, idle fleet | ≤ 2% of one modern core | poll loops + rollup |
-| Disk | ≤ 2 GB at full 13-month retention | one volume, one SQLite file, trivially backed up |
+| Disk | ≤ 2 GB at full 13-month retention | one volume; back up live SQLite with `.backup`, not a main-file-only copy while WAL is active, and pair it with the matching keyring |
 | UI bundle | ≤ 1.5 MB gzipped | unchanged — this budget was about the *browser*, not the host |
 
 **Retention returns to full depth by default:** 5m rollups → 14 days, 1h

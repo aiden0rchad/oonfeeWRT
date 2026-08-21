@@ -20,8 +20,28 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | D3 | **Pure-Go SQLite (`modernc.org/sqlite`), `CGO_ENABLED=0`.** No cgo means the container can be `FROM scratch` and cross-arch builds are trivial. | none |
 | D4 | **Raw telemetry ring lives in RAM; only 5m/1h rollups reach SQLite**, one transaction per 5-minute flush. Retention default: 5m→14d, 1h→13mo. | the 30s-raw-persisted ladder |
 | ~~D5~~ | ~~Self-management over loopback~~ | **superseded by D7** — there is no self to manage |
-| D6 | Target UX reference is **UniFi Network 10.4** (per the user's screenshots of UniFi OS 5.1.19 / Network 10.4.57). | none |
-| D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). | D1, D5 |
+| D6 | Target UX reference originated with **UniFi Network 10.4** screenshots and tracks the current stable release; the active baseline is **Network 10.5.67** as of 2026-08-18. Copy interaction contracts and information architecture, never Ubiquiti branding or assets. | earlier fixed 10.4 target |
+| D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
+
+### Current live checkpoint (2026-08-20)
+
+The build expects schema **16**. Do not collapse its three recent compatibility
+epochs: v14 is the one-time secret-sealing/scrub boundary, v15 makes the
+cross-feature policy model authoritative, and v16 adds attested observability
+tables/columns for producer-provenanced events and cursors, topology validity
+intervals/source state, and explicit RF scans. Read-only tools require the
+current schema; neither they nor an older daemon may silently accept newer
+intent.
+
+The lab database has been promoted to schema 16. The initial signed-in pass
+exercised Phase 4 under both routers' older ACLs. That checkpoint was superseded
+when the operator explicitly acknowledged ACL refresh for both routers at
+15:16 and 15:17. Subsequent polls persisted OpenWrt-log and topology-source
+observations from both routers plus fixed-`1.1.1.1` ICMP observations from the
+Gateway. Historical source coverage remains unavailable because it is not
+stored. The refresh implementation installs no package, binary, daemon or
+service; without before/after package-inventory hashes, the live proof makes no
+claim that package inventory was unchanged.
 
 ---
 
@@ -29,12 +49,12 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Language | Go ≥ 1.23 | static binary in a scratch container, goroutine-per-device polling |
+| Language | Go ≥ 1.25; toolchain pinned to Go 1.26.6 | static binary in a scratch container, goroutine-per-device polling; patch pin matches the verified container build |
 | SQLite driver | `modernc.org/sqlite` | pure Go (D3) |
 | HTTP router | stdlib `net/http` (1.22+ pattern mux) | zero deps, auditable |
 | WebSocket | `github.com/coder/websocket` | maintained, minimal |
 | Secrets | `golang.org/x/crypto`: argon2id KDF + chacha20poly1305 | credential store |
-| UI | Svelte 5 + Vite, static build, embedded via `embed.FS` | smallest bundles of the mainstream options; 1.5 MB gz budget |
+| UI | React 19 + TypeScript + Vite, static build, embedded via `embed.FS` | current implementation; 1.5 MB gz budget |
 | Charts | uPlot | fastest at dense time-series; matches UI-SPEC |
 | Tables | TanStack Table (core) + virtual scrolling | Clients/Logs grids |
 | Topology | d3 (`d3-hierarchy` tree layout + manual SVG) | UniFi's topology is a tidy tree |
@@ -70,8 +90,8 @@ oonfeewrt/
 │   ├── topology/                 # LLDP/fdb/ARP/assoc → graph inference
 │   ├── api/                      # REST handlers + WS hub (§8)
 │   └── secrets/                  # encrypted credential store
-├── ui/                           # Svelte app (built → embedded)
-│   └── src/{lib,routes,stores}/
+├── ui/                           # React app (built → embedded)
+│   └── src/{components,lib,screens}/
 ├── tools/
 │   ├── probe.py                  # hardware validation (exists)
 │   ├── mock_ubus.py              # dev-harness device simulator (exists)
@@ -109,7 +129,8 @@ CREATE TABLE devices (
   cert_fp      TEXT,                     -- sha256 of DER, TOFU-pinned
   host_key_fp  TEXT,                     -- SSH host key, TOFU-pinned (v9)
   name         TEXT NOT NULL,
-  role         TEXT NOT NULL DEFAULT 'ap',     -- 'gateway'|'ap'|'switch'
+  role         TEXT NOT NULL DEFAULT 'ap',     -- legacy deterministic primary label
+  functions_json TEXT NOT NULL DEFAULT '["ap","switch"]', -- authoritative responsibilities (v11)
   adopted_at   INTEGER,                  -- unix; NULL = pending
   cred_enc     BLOB,                     -- chacha20poly1305(username:password)
   class        TEXT,                     -- 'A'|'B'|'C' per DEVICE-BUDGET
@@ -141,14 +162,24 @@ CREATE TABLE wlans (
   network_id INTEGER NOT NULL REFERENCES networks(id),
   group_id INTEGER NOT NULL REFERENCES ap_groups(id),
   bands TEXT NOT NULL DEFAULT '2g,5g',   -- csv subset of 2g,5g,6g
-  security_json TEXT NOT NULL,           -- {mode:'sae-mixed'|'sae'|'psk2'|'owe'|'none', key, pmf:'optional'|'required'}
+  security_json TEXT NOT NULL,           -- non-secret {mode,pmf} only (v14)
+  security_key_enc BLOB,                 -- sealed PSK, AAD-bound to WLAN id (v14)
   roaming_json TEXT NOT NULL DEFAULT '{}', -- {ft:bool, ft_over_ds:bool, kv:bool}
   options_json TEXT NOT NULL DEFAULT '{}', -- {hidden,isolate,maxassoc,schedule,...}
   enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE meshes (
+  id INTEGER PRIMARY KEY, mesh_id TEXT NOT NULL,
+  network_id INTEGER NOT NULL REFERENCES networks(id),
+  group_id INTEGER NOT NULL REFERENCES ap_groups(id),
+  band TEXT NOT NULL,
+  key TEXT NOT NULL DEFAULT '',           -- legacy v7 column; empty from v14
+  key_enc BLOB,                           -- sealed SAE key, AAD-bound to mesh id (v14)
+  enabled INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE zones (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,   -- Internal/Guest/DMZ/External/VPN
-  policy_json TEXT NOT NULL DEFAULT '{}' -- default input/output/forward
+  policy_json TEXT NOT NULL DEFAULT '{}' -- schema 12 explicit {"forward_to":[...]}
 );
 CREATE TABLE fw_rules (
   id INTEGER PRIMARY KEY, sort INTEGER NOT NULL,
@@ -165,9 +196,15 @@ CREATE TABLE device_overrides (       -- explicit per-device deviations
 CREATE TABLE owned_sections (          -- ownership tags, mirrored from device
   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   config TEXT NOT NULL, section TEXT NOT NULL,
-  rendered_hash TEXT NOT NULL,         -- sha256 of canonical rendered values
+  rendered_hash TEXT NOT NULL,         -- legacy clear verifier; empty from v14
+  rendered_hash_enc BLOB,              -- sealed canonical hash, row-bound (v14)
   applied_at INTEGER NOT NULL,
   PRIMARY KEY (device_id, config, section)
+);
+CREATE TABLE secret_state (            -- singleton database/keyring binding (v14)
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  key_check BLOB NOT NULL,
+  scrub_complete INTEGER NOT NULL DEFAULT 0 CHECK (scrub_complete IN (0,1))
 );
 CREATE TABLE changesets (
   id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL,
@@ -208,15 +245,147 @@ CREATE TABLE events (
   id INTEGER PRIMARY KEY, ts INTEGER NOT NULL,
   device_id INTEGER, category TEXT NOT NULL,  -- 'client'|'device'|'security'|'system'|'audit'
   severity TEXT NOT NULL,                     -- 'info'|'warning'|'error'
-  event TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}'
+  event TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'controller',
+  source_id TEXT, source_boot TEXT, ingested_at INTEGER,
+  client_mac TEXT, action TEXT, direction TEXT,
+  in_iface TEXT, out_iface TEXT,
+  src_ip TEXT, dst_ip TEXT, src_port INTEGER, dst_port INTEGER,
+  zone_in TEXT, zone_out TEXT, policy_id INTEGER
 );
 CREATE INDEX events_ts ON events(ts);
+CREATE UNIQUE INDEX events_source_identity
+  ON events(device_id,source,source_boot,source_id)
+  WHERE source_id IS NOT NULL AND trim(source_id) <> '';
+CREATE INDEX events_client_time ON events(client_mac,ts,id);
+CREATE INDEX events_category_time ON events(category,ts,id);
+CREATE INDEX events_severity_time ON events(severity,ts,id);
+
+CREATE TABLE ingest_cursors (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  source TEXT NOT NULL, boot_id TEXT NOT NULL,
+  cursor TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  continuity_gap_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (device_id,source)
+) WITHOUT ROWID;
+
+-- ===== topology validity history =====
+CREATE TABLE topology_edges (
+  id INTEGER PRIMARY KEY,
+  child_node TEXT NOT NULL, child_mac TEXT,
+  parent_node TEXT NOT NULL,
+  parent_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+  parent_port TEXT, medium TEXT NOT NULL, confidence TEXT NOT NULL,
+  valid_from INTEGER NOT NULL, valid_to INTEGER, last_seen INTEGER NOT NULL,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  ambiguity_json TEXT NOT NULL DEFAULT '[]',
+  CHECK (valid_to IS NULL OR valid_to >= valid_from),
+  CHECK (last_seen >= valid_from),
+  CHECK (valid_to IS NULL OR last_seen <= valid_to)
+);
+CREATE INDEX topology_edges_active ON topology_edges(child_node,valid_to,last_seen);
+CREATE INDEX topology_edges_replay ON topology_edges(valid_from,valid_to);
+
+CREATE TABLE topology_source_states (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  source TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('unknown','empty','observed','error')),
+  reason TEXT NOT NULL DEFAULT '', observed_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id,source)
+) WITHOUT ROWID;
+
+-- ===== explicit RF scans =====
+CREATE TABLE radio_scans (
+  id INTEGER PRIMARY KEY,
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  radio_key TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('pending','running','completed','failed')),
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  CHECK (finished_at IS NULL OR finished_at >= started_at)
+);
+CREATE INDEX radio_scans_radio_time
+  ON radio_scans(device_id,radio_key,started_at,id);
+CREATE TABLE radio_scan_bss (
+  scan_id INTEGER NOT NULL REFERENCES radio_scans(id) ON DELETE CASCADE,
+  bssid TEXT NOT NULL, ssid TEXT NOT NULL,
+  mhz INTEGER NOT NULL, channel INTEGER NOT NULL, signal INTEGER, width INTEGER,
+  PRIMARY KEY (scan_id,bssid,mhz)
+) WITHOUT ROWID;
 ```
 
-Maintenance tick (every 5 min, one transaction): flush RAM ring → `rollup_5m`;
-fold aged 5m → `rollup_1h`; prune both per retention config; prune `events`
-beyond 100k rows. This single-transaction shape is what keeps NAND writes inside
-the DEVICE-BUDGET §8 cap — do not "improve" it into per-sample inserts.
+Migration 11 adds and backfills `functions_json` in one transaction. Existing
+`gateway` rows become `["gateway","ap","switch"]`, `ap` (and the historical
+safe default) becomes `["ap","switch"]`, and `switch` becomes `["switch"]`.
+The migrated live v10 database passed `PRAGMA integrity_check`; malformed or
+present-empty function JSON remains visible as an invalid device state and is
+never widened from `role`.
+
+Migration 12 is deliberately DDL-empty and still mandatory. `zones` and
+`policy_json` existed from v1, but older binaries ignored the rows and always
+rendered source→`wan`; allowing a v11 process to open a database containing an
+explicit block or inter-zone edge would silently weaken policy. A v11 binary
+therefore refuses a consistent v12 database. Back up a live WAL database with
+SQLite `.backup` (or a clean shutdown/checkpoint), never by copying the main
+file alone, and preserve the matching `keyring.json`; the latter was measured
+producing an apparently valid but stale schema-11 artifact while the
+authoritative WAL held schema 12.
+
+In schema 12, persisted policy must decode to exactly a non-null string array.
+A missing row is the effective legacy `forward_to:["wan"]`; an explicit empty
+array means no modeled forwarding. Malformed/trailing/null content fails the
+site load instead of being repaired into an allow.
+
+Migration 13 adds `apply_operations` plus ordered
+`apply_operation_devices`. The parent stores a caller-generated lowercase UUID,
+a controller-keyed request digest, actor snapshot, state, timestamps, redacted
+result/error, HTTP status and the conservative `none|possible` write boundary.
+Child rows snapshot device identity and record each queued/applying/terminal
+outcome so later un-adoption cannot erase the receipt. Neither preview tokens,
+rendered secrets nor raw UCI plans enter durable state.
+
+Migration 14 is the one-time controller-secret migration. It requires the
+unlocked controller keyring, verifies that keyring against every existing sealed
+device credential when such evidence exists, and performs the logical rewrite
+under the migration lock: WLAN keys leave `security_json` for
+`security_key_enc`, mesh `key` values move to `key_enc`, and ownership
+`rendered_hash` values move to `rendered_hash_enc`. Every ciphertext is bound by
+AAD to its record identity. The same transaction writes a sealed database key
+check, records schema 14, and leaves `scrub_complete=0`.
+
+After commit, startup performs checkpoint → `VACUUM` → checkpoint, sets the
+scrub marker, and checkpoints again before the HTTP server can start. This
+physical scrub is idempotent after interruption and removes legacy plaintext
+from free pages and WAL, not only from live rows. Every subsequent v14 open
+verifies the database key check before enabling WAL or mutating the file. A
+wrong/missing keyring, malformed key check, newer schema, or incomplete scrub on
+a read-only open fails closed; a writable v14 controller resumes an incomplete
+scrub.
+
+Treat the database and `keyring.json` as a paired backup. Use SQLite `.backup`
+while live or a clean shutdown/checkpoint, and copy the matching keyring. A
+passphrase alone cannot recreate its random data key. Pre-v14 backups retain
+plaintext WLAN/mesh keys and secret-derived ownership hashes even after the live
+database is scrubbed; migration does not delete those artifacts. Protect them
+as secrets, keep recovery material until the migrated pair is verified, and
+never delete an old backup without explicit operator confirmation.
+
+Migration 15 is DDL-empty but semantic: v14 binaries ignore `fw_rules` and
+client policy intent while rendering, so they must refuse a store whose
+firewall/NAT/route/client model is authoritative. Migration 16 adds the event,
+cursor, topology and scan shape above. Startup attests every column in order,
+the partial-unique source index predicate, required indexes/foreign keys,
+WITHOUT-ROWID and CHECK clauses before accepting a v16 marker; `IF NOT EXISTS`
+is never mistaken for validation.
+
+Maintenance runs every 5 minutes. The RAM-ring flush writes its completed
+`rollup_5m` rows in one transaction; hourly folding is count-weighted and never
+overwrites a fuller hour with a pruned partial; then retention pruning runs.
+Defaults are 5m→14d, 1h→396d, OpenWrt events→24h plus 50k/device and 100k
+global, non-OpenWrt events→100k, and closed topology intervals→31d. Active
+topology intervals do not expire. Terminal RF scans are capped to the newest
+run per `(device_id,radio_key)`; pending/running rows are excluded and pruned
+parents cascade to `radio_scan_bss`. Do not regress to per-sample inserts or
+unbounded scan history.
 
 ---
 
@@ -317,7 +486,8 @@ Rules encoded here:
 
 ### Worked example 2 — network + zone
 
-Network `iot` VLAN 45, `10.7.45.1/24`, zone `Guest`, DHCP on:
+Network `iot` VLAN 45, `10.7.45.1/24`, zone `Guest`, DHCP on with configured
+pool start `100`, lease count `149` and lease time `12h`:
 
 ```
 # /etc/config/network (staged)
@@ -327,13 +497,34 @@ uci.add {config:"network", type:"interface", name:"oowrt_net_iot", values:{proto
 uci.add {config:"dhcp", type:"dhcp", name:"oowrt_dhcp_iot", values:{interface:"oowrt_net_iot", start:"100", limit:"149", leasetime:"12h", oonfeewrt:"1"}}
 # /etc/config/firewall
 uci.add {config:"firewall", type:"zone", name:"oowrt_zone_guest", values:{name:"guest", input:"REJECT", output:"ACCEPT", forward:"REJECT", network:["oowrt_net_iot"], oonfeewrt:"1"}}
+uci.add {config:"firewall", type:"rule", name:"oowrt_in_guest_dhcp", values:{name:"oonfeeWRT Guest DHCP", src:"guest", proto:"udp", src_port:"68", dest_port:"67", target:"ACCEPT", family:"ipv4", oonfeewrt:"1"}}
+uci.add {config:"firewall", type:"rule", name:"oowrt_in_guest_dns", values:{name:"oonfeeWRT Guest DNS", src:"guest", proto:["tcp","udp"], dest_port:"53", target:"ACCEPT", family:"ipv4", oonfeewrt:"1"}}
 uci.add {config:"firewall", type:"forwarding", name:"oowrt_fwd_guest_wan", values:{src:"guest", dest:"wan", oonfeewrt:"1"}}
 ```
 
-Gateway renders all of it; an AP renders only the bridge-VLAN + an unmanaged
-`interface` stanza so tagged traffic bridges through. The render function takes
-the device *role* and *port map* from capabilities and emits the right subset —
-this role-aware subsetting is a first-class tested behavior, not an if-cascade.
+The forwarding shown is the effective schema-12 legacy default because Guest
+has no explicit policy row. `forward_to:[]` emits none; e.g.
+`forward_to:["cameras","wan"]` emits two owned directed sections and says
+nothing about initiation in the reverse direction. Zone and forwarding
+sections manage/remove stale `enabled` and `family` options so an old
+`enabled=0` or restricted family cannot make the UI's effective state false.
+They never edit foreign firewall sections. Active foreign forwardings,
+overlapping `ACCEPT`/`REJECT`/`DROP` forwarding rules, and DNAT redirects with a
+real `dest_ip` become deterministic conflicts when they defeat a matrix claim;
+disabled sections and router-local redirects do not. Active foreign firewall
+includes and reachable non-fw4 nftables policy block explicit matrix intent;
+unreadable or malformed runtime nftables state fails closed.
+
+The renderer keys each responsibility independently. Gateway emits addressing,
+DHCP and firewall/routing; AP emits WLAN/mesh/on-air state; Switch enables the
+switch-specific fit, monitoring and topology surfaces but does not claim that
+arbitrary port/VLAN writes are safe. Gateway-only therefore emits no WLAN, and
+AP-only/Switch-only emit no L3 stack. Every valid device still receives the
+minimum L2 bridge/VLAN plumbing needed to carry its selected responsibilities,
+because the capability record cannot safely identify a selective uplink port.
+An explicit empty or corrupt function set aborts before any desired section is
+produced. Legacy rows alone expand `role` through the schema-11 compatibility
+map.
 
 ### Diffing
 
@@ -347,25 +538,36 @@ before apply and the exact staged-call list the apply engine executes. The
 
 ## 6. The apply engine (`internal/applyengine`)
 
-One state machine instance per (changeset × device). Devices execute serially
-in dependency order; **any device the controller's own management traffic
-traverses to reach other devices (typically the gateway) applies last**; first
-failure aborts the remaining queue.
+One state machine instance per bound preview plan × device. Before any of these
+machines starts, Apply rebuilds a full-fleet preview and constant-time verifies
+the opaque keyed token returned by Preview. It rejects the whole run for a site
+error, device plan error/conflict, missing traversal/driver/caution
+acknowledgment, or an intentionally narrowed fleet without
+`acknowledge_partial_fleet`. The token binds site intent, adopted device state,
+ownership rows and plans—including secret-bearing inputs without exposing a
+secret-derived verifier to the browser.
+
+Devices execute serially
+in dependency order; **a device with the Gateway function applies last**
+because the controller's management traffic may traverse it to reach the rest;
+first failure aborts the remaining queue. Immediately before its write, each
+device is locked, reloaded and replanned, and the site/fleet/ledger/plan
+fingerprints are compared again.
 
 ```
-IDLE → RENDER → PREFLIGHT → STAGE → APPLY → CONFIRM_POLL → HEALTH → CONFIRMED
+IDLE → RENDER → PREFLIGHT → STAGE → APPLY → HEALTH → CONFIRM_POLL → CONFIRMED
                     │           │       │         │            │
                     └conflict   └err    └err      └timeout─────┴─fail→ AWAIT_REVERT → VERIFY_REVERTED → FAILED
 ```
 
 | State | Action | Exit |
 |---|---|---|
-| RENDER | render + diff; empty diff → skip device | PREFLIGHT |
+| RENDER | render + diff; an empty diff writes nothing but still runs every applicable runtime health check before it may report Applied | PREFLIGHT or no-write Applied |
 | PREFLIGHT | quiesce collector for device; check session; **detect a foreign dirty delta by listing `/tmp/.uci` and treating any entry with `size > 0` as a config with unsaved LuCI/SSH edits** → abort with "unsaved changes on device". **`uci.changes` cannot do this** — see the note below. If the change touches the path the controller manages this device through, require the UI's explicit traversal acknowledgment flag | STAGE |
 | STAGE | issue staged `uci.add/set/delete` batch; verify with `uci.changes` that the delta matches the plan exactly | APPLY |
 | APPLY | `uci.apply {rollback:true, timeout:T}` — T = 90 s default, per-device override from caps. **Status 0 means "applied", never "healthy": an apply that killed dnsmasq still returns 0** | HEALTH |
-| HEALTH | **runs before confirm, while the rollback timer is still armed** — if it fails, do nothing and let the device revert itself. Expected interfaces up (`network.interface dump`), expected SSIDs present via `iwinfo` + `hostapd.<iface> get_status` (**not** `network.wireless status` — unreachable via rpcd, see §14), gateway reachable if role=ap. Read all of it on a **fresh session**: the applying session's staged delta masks a revert | CONFIRM_POLL |
-| CONFIRM_POLL | poll `uci.confirm` every 3 s **on the applying session token** — reconnecting the socket is fine, re-authenticating is fatal, and a token refresh here is an unrecoverable abort. Stop on success or T expiry | CONFIRMED (write `owned_sections`, audit, resume collector) |
+| HEALTH | **runs before confirm, while the rollback timer is still armed** — if it fails, do nothing and let the device revert itself. Runtime/non-UCI checks cover expected interfaces; exact dnsmasq ranges/hosts; each desired wireless section mapped through `luci-rpc.getWirelessDevices`, its hostapd SSID/status, and `brport/isolated=1` for isolated BSSes; exact nftables zone/device/edge/service/policy state; static routes in netifd and the kernel; and the upstream gateway on non-Gateway devices. A no-write Apply runs the same applicable checks without a rollback boundary and reports failure rather than calling missing runtime state Applied. Same-BSS isolation and on-air truth remain behavioral/second-radio acceptance checks. A login during the window may return the applying token; mark that helper shared and never destroy it | CONFIRM_POLL |
+| CONFIRM_POLL | poll `uci.confirm` every 3 s **on the applying session token** — reconnecting the socket is fine, re-authenticating is fatal, and a token refresh here is an unrecoverable abort. Stop on success or T expiry | CONFIRMED (record `owned_sections`, then audit/return, then resume collector) |
 | AWAIT_REVERT | confirm never landed: wait T + grace (15 s), touching nothing | VERIFY_REVERTED |
 | VERIFY_REVERTED | **log in afresh** (the applying session's staged delta masks a revert) and compare against the pre-apply snapshot. **Do not assume the device reverted** — if rpcd restarted inside the window the timer was lost and the change is permanent. If the change is still present, reverse it by applying the previous model. Emit an event either way | FAILED |
 
@@ -392,9 +594,19 @@ the engine simply declines to confirm and the device reverts itself, which is
 why the gate is worth the extra round trip. Reversing a *confirmed* change is
 the expensive path and only arises when health degrades after confirmation: the
 engine then renders and applies the previous model (a normal apply of the old
-state), never by hand-editing. "Apply without rollback" exists as a separately-authorized flag
-for changes that legitimately sever the management path (re-addressing the
-management network on the host) and is logged as such in the audit record.
+state), never by hand-editing. Traversal-sensitive changes require a separate
+acknowledgment but remain rollback-protected; there is no unsafe
+apply-without-rollback path.
+
+The fleet run is detached from request cancellation once admitted and has one
+outer `ApplyDrain` deadline. Nested device runs inherit that deadline rather
+than buying another full budget, and a device does not start unless enough time
+remains for a complete rollback-confirm cycle. Shutdown waits for tracked
+applies. Per-device `Quiesce` first waits for any running collector cycle
+through sink emission; release wakes an immediate poll. A confirmed or
+already-matching result is not logged/returned as clean success until ownership
+recording succeeds. Ledger failure preserves the device outcome in the reason,
+writes an error audit and aborts later devices.
 
 ---
 
@@ -418,9 +630,19 @@ Focused mode is reference-counted by the WS hub: `Acquire(deviceID)` on
 subscribe, `Release` on unsubscribe/disconnect; the transition is logged as a
 poll_state change so the Management Overhead panel can show it.
 
-Derived metrics computed at flush time on the controller (never on-device):
-experience score per client (formula + default weights from ARCHITECTURE §5,
-weights in config), interference/airtime pct from survey deltas.
+`Quiesce(deviceID)` is stronger than a flag: after incrementing the quiesce
+count it waits on the poller's cycle lock, so a cycle that already started must
+finish its sink emission before the call returns. Release is idempotent and
+wakes the poller immediately. On the first hard poll failure, close the cached
+transport but retain its rpcd session; the next tick redials on a repaired host
+route. Only repeated failure drops the session and reauthenticates.
+
+Derived metrics are computed on the controller, never on-device. `wifi-v1` is
+fixed—not operator-weighted—and is emitted only when one station observation
+has RSSI plus valid retry and TX-failure counter deltas. Its rollup is durable;
+raw samples are not. Radio utilization is a survey-counter delta. RX/TX airtime
+and interference are emitted only when the capability registry says those
+counters are usable.
 
 ---
 
@@ -430,33 +652,154 @@ REST base `/api/v1`, session-cookie auth (single admin user in v1;
 `HttpOnly; SameSite=Strict; Secure` when TLS). Login rate-limited. All mutating
 endpoints require header `X-Oonfee-CSRF` matching a per-session token.
 
-Endpoint table is ARCHITECTURE §9; implementation notes and the two examples a
-builder gets wrong without samples:
+WLAN and mesh keys are write-only request fields. Authenticated list, detail,
+and save responses expose `has_key` but never plaintext; event responses contain
+no key, and legacy `?reveal=1` requests remain redacted. An omitted/empty key on
+an update preserves the sealed value; an explicit keyless security mode (or mesh
+`clear_key:true`) erases it. TLS remains the transport boundary for newly
+submitted keys and session cookies—at-rest sealing does not protect browser
+traffic or the daemon's live memory.
 
-`GET /api/v1/changes` → the pending changeset (rendered diff, per device):
+Endpoint table is ARCHITECTURE §9. The current desired-state/policy contract:
+
+`GET /api/v1/site` includes effective directional policy:
 ```json
-{"changeset": {"id": 41, "status": "pending", "devices": [
-  {"device_id": 7, "name": "attic-ap", "items": [
-    {"op": "add", "config": "wireless", "section": "oowrt_wlan3_radio0",
-     "summary": "Broadcast 'Home' (5 GHz)", "values": {"…": "…"}}],
-   "warnings": ["applies via the interface being changed — confirm traversal"]}]}}
+{"zones":[
+  {"name":"cameras","forward_to":[],"explicit":true},
+  {"name":"guest","forward_to":["wan"],"explicit":false}
+]}
 ```
 
-`POST /api/v1/changes/apply` body `{"changeset_id":41,"ack_traversal":[7]}` →
-`202` + apply progress streamed on the WS as `apply.state` messages.
+`POST /api/v1/site/zones/{name}` accepts
+`{"forward_to":["cameras","wan"]}`. The field must be a non-null array;
+names must be exact active managed destinations or `wan`. `DELETE` removes the
+explicit row and returns the effective `forward_to:["wan"], explicit:false`;
+deleting a source without an explicit row is 404.
+
+`GET /api/v1/site/preview` returns the redacted fleet diff and
+`preview_token`. Apply is synchronous at the HTTP surface but execution is
+detached from request cancellation after admission:
+
+```json
+{"operation_id":"2a0552f3-f901-4bb1-96a5-8c2ba2de773e",
+ "preview_token":"pv1_<opaque>",
+ "device_ids":[7],
+ "acknowledge_traversal":true,
+ "acknowledge_driver_risk":true,
+ "acknowledge_cautions":true,
+ "acknowledge_partial_fleet":true}
+```
+
+`device_ids` omitted means the complete adopted fleet. The UI does not request
+a partial fleet. The lowercase UUID idempotently binds one request; reusing it
+with different input is rejected, while replaying the same request returns its
+current/terminal receipt instead of repeating device writes. Missing/stale
+preview token is 409; other full-fleet preflight refusals are 400. Errors carry
+`write_state:"none"` only while no device write boundary was crossed; otherwise
+the durable parent/device receipts retain `possible`. A completed response is
+`{"operation_id":"...","devices":[...],"aborted":bool,"aborted_after":"..."}`.
+`GET /api/v1/site/apply/{operation_id}` returns the durable status/result, and
+running idempotent replays return 202 plus `Retry-After`. The live §5be browser
+reload recovered a failed/reverted fleet run through this path.
 
 WS `/api/v1/live`, JSON messages:
 ```json
 → {"type":"subscribe","topic":"device.stats","device_id":7}
-→ {"type":"subscribe","topic":"apply","changeset_id":41}
 ← {"type":"stats","device_id":7,"ts":1753500000,
    "series":[{"kind":"sta_rssi","key":"aa:bb:…","v":-52.0}, …]}   // batched per tick
-← {"type":"apply.state","changeset_id":41,"device_id":7,"state":"CONFIRM_POLL","detail":"…"}
-← {"type":"event","category":"client","event":"wifi.roam","detail":{…}}
 ```
-Server batches stats per tick (one frame per device per focused interval), and
-drops to a slower cadence automatically if the client stops reading (backpressure
-via send-buffer high-water mark; never unbounded queues).
+`device.stats` is the only accepted topic. The per-connection queue is 32
+frames; enqueue drops when full, one write is bounded to 10 seconds, and a
+30-second ping detects dead peers. It never blocks the collector, grows a
+queue, invents an event topic or changes the poll cadence to hide a slow
+browser. Durable events/logs remain paginated REST.
+
+Phase-4 REST contracts:
+
+- `GET /events?scope=general|audit` uses `(ts,id)` keyset pagination, 1–1000
+  rows, database-wide facets and explicit General coverage. A router producer
+  is stale after 3 minutes; coverage distinguishes unobserved, observed-empty
+  and retained gaps over the 24-hour log window. Producer continuity follows
+  logd's u32 IDs; exact `source_time_ms` is retained in detail, while the public
+  event timestamp remains legacy whole-second resolution.
+- `GET /topology[?at=ms]` and `/topology/history?from=ms&to=ms` expose stable
+  node refs and half-open intervals. History/range is 31 days, one response is
+  10,000 intervals, current source state is stale after 31 minutes, and
+  historical source coverage is explicitly unavailable.
+- `GET /clients/{mac}/observability?from=ms&to=ms` accepts at most 31 days and
+  returns only complete stored buckets: 5-minute up to 7 days, hourly beyond.
+  It caps exact events at 2,000, path intervals at 10,000 source intervals and
+  path enumeration at 64 results/2,048 visits. Every metric carries
+  available/partial/unavailable counts and half-open gaps.
+- `GET /radios` returns stable UCI radio IDs plus source timestamps/staleness.
+  Decoders cap 32 radios, 128 interfaces, 512 frequencies and 4,096 scan BSSes.
+  Suggested channels require a completed scan ≤24h old, current radio state
+  and a channel plan ≤15m old. `POST /devices/{id}/radios/{radio}/scan` requires
+  `acknowledge_disruption:true`, has a 45-second device timeout and persists a
+  failed outcome rather than resuming after restart. The maintenance tick keeps
+  one newest terminal scan per stable radio key, preserves pending/running
+  scans and cascades BSS rows for discarded terminal runs.
+- Site WAN series come only from the adopted Gateway's once/minute three-packet
+  ICMP probe to fixed `1.1.1.1`. No HTTP probe, DNS check, configurable target
+  set or inferred ISP uptime is part of this source contract.
+- `POST /devices/{id}/refresh-acl` is the optional oonfeeWRT controller
+  capability installation for an adopted device. Its unchecked prompt says
+  that accepting installs or replaces exactly
+  `/usr/share/rpcd/acl.d/oonfeewrt.json`
+  through pinned SSH, invalidates cached access/cadences, and proves a fresh
+  login/MAC/capability record. This unlocks supported topology, radio
+  channel/scan, OpenWrt log and fixed-target WAN ICMP observations. Its
+  administrator password/private key is request-only; UCI, ownership and
+  controller credentials remain unchanged. It installs no package, binary,
+  daemon, service or firmware. Unchecked/cancelled sends no request, leaves the
+  router unchanged and keeps dependent Phase-4 sources explicit gaps.
+- `POST /devices/adopt` and `POST /devices/{id}/refresh-acl` require
+  `acknowledge_router_changes:true`. Omitted/false is rejected before the
+  Enroller, SSH or any mutation. Inspect remains read-only and needs no such
+  acknowledgment.
+
+The following additive response/request fields are safety contracts, not UI
+conveniences:
+
+- discovery responses may carry `failures:[{network,reason:"unreachable",attempts}]`;
+  the normal “nothing found” state is valid only for scanned networks without
+  such a failure;
+- device detail always carries `owned_sections_known`. Only `true` permits
+  `owned_sections`—including an empty list—to authorize an un-adopt preview;
+- adopt and un-adopt accept optional `private_key` for their one-time SSH
+  transaction. During adoption, `password` remains the required ubus
+  credential and is not replaced by the key; during un-adopt, the stored scoped
+  credential handles ubus and the supplied password/key are only for SSH
+  cleanup;
+- `POST /api/v1/devices/inspect` accepts only the device address and
+  administrator ubus credential. It performs a read-only authenticated probe
+  and returns model/class/firmware/radios/ports,
+  `functions_supported|recommended|unknown`, `switch_mode`, and nullable
+  `gateway_evidence.active_wan_default_route|lan_dhcp_enabled`. It never opens
+  SSH, bootstraps the controller, installs a package or writes inventory;
+- inspect/adopt resolves a hostname once per workflow and pins the chosen IP
+  across HTTP, SSH and verification. Plain HTTP persists that IP; HTTPS may
+  retain the name only with the observed certificate identity pin;
+- adopt accepts a non-empty subset such as
+  `functions:["gateway","ap","switch"]`. The array is canonicalized;
+  omission alone invokes the legacy `role`
+  bundle. Explicit `null`, `[]`, unknown values and corrupt stored state fail
+  closed. Responses, inventory and previews return both the canonical primary
+  `role` and authoritative `functions`;
+- the Gateway inventory check and the entire external bootstrap through device
+  row commit share a global adoption slot. A concurrent second Gateway is
+  refused before device contact; AP-only remains valid for the first device;
+- an un-adopt report may carry `cleanup_commands`, generated from validated
+  residue identifiers/paths. Preserve the structured report on non-2xx and
+  forced-removal paths instead of replacing it with a bare error;
+- normal un-adopt inventory deletion requires a proved config phase
+  (`config_revert_complete`) and no login/ACL footprint. If the controller
+  session is missing while owned sections exist, or delete/commit cannot be
+  proved, phase 2 is skipped and the row/ledger remain unless Force was
+  explicitly requested;
+- a network's `dhcp` object is `{enabled,start,limit,leasetime}`. Omission from
+  an older client preserves the stored policy; presence is a complete explicit
+  write and incomplete objects are rejected.
 
 ---
 
@@ -485,9 +828,21 @@ hand-picked subset (~60 icons), not an icon-font dependency.
 
 ## 10. Security implementation
 
-- Credential store: per-device `user:pass` sealed with chacha20poly1305; key
-  derived via argon2id from the operator passphrase at daemon start (or a
-  keyfile for unattended boot — explicit, documented tradeoff flag).
+- Secret store: controller-created per-device `user:pass`, WLAN/mesh keys, and
+  secret-derived ownership verifiers are sealed with XChaCha20-Poly1305 under a
+  random data key. Argon2id derives the key-encryption key that unwraps that
+  data key from `keyring.json`; a mode-0600 passphrase file supports unattended
+  boot as an explicit tradeoff. The device administrator password and optional
+  SSH private key supplied to adopt/un-adopt are transaction inputs only. On
+  adoption the key authenticates SSH in preference to the password, while the
+  password still authenticates ubus; on un-adopt either administrator
+  credential is used only for SSH cleanup. Neither is stored, echoed in a
+  response, or logged.
+- Keyring creation is atomic and no-clobber. Startup refuses to create a new
+  keyring beside an existing non-empty database; schema 14 also stores a sealed
+  key check so an unrelated restored database/keyring pair is rejected before
+  WAL mode, schema DDL, or any other mutation. Back up and restore the database
+  and keyring together.
 - The generated device ACL (`deploy/acl/oonfeewrt.json`) grants: `uci`, `system`
   (board/info), `file` (read/stat/list + **exec restricted to an explicit
   command list**), `iwinfo` (all read), `network.*` (status/dump), `luci-rpc`
@@ -511,14 +866,29 @@ hand-picked subset (~60 icons), not an icon-font dependency.
     so a caller may pass a bare name (`iw dev`) and still match an absolute
     grant (`/usr/sbin/iw dev`) — but a *grant* written as a bare name matches
     nothing.
-  - File paths are **canonicalised before matching**, and `*` **crosses `/`**.
+  - File paths are **canonicalised and re-authorized**, and `*` **crosses `/`**.
     Together these make file grants behave the opposite of how they read: a
     grant on `/sys/class/net/*` never fires (those entries are symlinks into
     `/sys/devices`), while widening it to `/sys/devices/*` hands over that
     entire subtree. Prefer a ubus object to a file grant wherever the data
     exists in both — DSA presence, for instance, comes from
     `luci-rpc.getNetworkDevices` (`devtype: "dsa"`), which the poll already
-    fetches, so it needs no filesystem grant at all.
+    fetches, so it needs no filesystem grant at all. Read-only legacy switch
+    and topology fallbacks use exact `swconfig list`, `swconfig dev * show`,
+    and `brctl showmacs *` grants; no arbitrary BusyBox applet or shell is
+    exposed.
+  - The second authorization is independently load-bearing. dnsmasq advertises
+    `/var/etc/dnsmasq.conf.*`, whose canonical target is
+    `/tmp/etc/dnsmasq.conf.*`. Granting only the service path made post-apply
+    DHCP health fail with `PERMISSION_DENIED` on real hardware. The ACL
+    therefore grants **read only** on both patterns and tests reject write
+    permission on either.
+  - Isolated-BSS health has the same two-path requirement. It requests
+    `/sys/class/net/*/brport/isolated` and separately grants the canonical
+    `/sys/devices/*/brport/isolated` target, read-only; tests reject write access
+    to either. A value of `1` proves same-AP cross-BSS bridge-port isolation. It
+    does not replace the two-client same-BSS acceptance test or implement
+    multi-AP L2 isolation.
 
 **Verified end to end 2026-08-13** with a real dedicated login
 (`rpcd.oonfeewrt`, SHA-512 crypt password, `list read/write 'oonfeewrt'`): the
@@ -536,17 +906,25 @@ the scoped login is refused it — verified. This is a real constraint on the
 tier-2 opt-in flow in DEVICE-BUDGET §5, not an oversight: a package's install
 scripts run as root, so `apk add *` is indistinguishable from arbitrary root
 code execution, in the one file we call the blast radius. The controller may
-therefore *detect* that `nlbwmon`/`lldpd`/`usteer` are missing and *offer* the
-install, but the install itself must be authorised with the operator credential
-rather than performed with the controller's own — the same split that
-un-adoption needs. Anything that widens the device's attack surface should cost
-an operator credential; anything that only reads or reconciles owned UCI should
+therefore *detect* that `nlbwmon`/`lldpd`/`usteer` are missing and show a
+disabled-by-default, per-feature install option, but installing requires an
+explicit selection plus the operator credential rather than the controller's
+own—the same split that un-adoption needs. Adoption, polling and validation
+never select it automatically. Anything that widens the device's attack surface
+should cost an operator credential; anything that only reads or reconciles
+owned UCI should
 not.
 - Audit: every changeset stores author, timestamp, full diff, per-device
   outcome. Every login and failed login is an event.
 - No default credentials anywhere. First run generates the admin account
-  interactively (or via one env var for containerized installs) and prints
-  nothing secret to logs.
+  interactively and prints nothing secret to logs. Administrator creation is
+  accepted only through `localhost` or a literal controller IP; DNS names are
+  allowed for login after setup but cannot claim an unconfigured controller.
+- Adoption deliberately warns rather than refuses when a device account accepts
+  any password. The warning must give both exact remedies (`ssh -t
+  'user@host' passwd` and LuCI `System → Administration → Router Password`) and
+  state that the controller will not mutate `/etc/shadow` or set the device
+  password.
 
 ---
 
@@ -567,16 +945,17 @@ Runtime contract (what `deploy/docker-compose.yml` encodes):
 
 | Aspect | Value |
 |---|---|
-| Data | single volume mounted at `/data` (SQLite, config, backups) |
+| Data | single volume mounted at `/data` (`oonfeewrt.db` plus its paired `keyring.json`; backups remain sensitive) |
 | Network | `network_mode: host` recommended (full discovery); bridge + `8080:8080` supported with add-by-IP adoption |
-| Ports | `:8080` HTTP, `:8443` TLS with generated ECDSA cert (optional) |
+| Ports | `:8080` HTTP; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
 | Config | env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value) |
 | Health | `GET /healthz` (no auth, no body beyond `ok`) wired as the compose healthcheck |
 | Upgrade | pull new image, restart; schema migrates forward on boot; downgrade = restore volume backup |
-| Backup | `POST /api/v1/system/backup` streams a consistent snapshot (SQLite `VACUUM INTO`) — also just copy the volume while stopped |
+| Backup | Today: cleanly stop/checkpoint and copy both database and keyring, or use SQLite `.backup` for the live DB and pair it with the matching keyring. The planned API must export the pair, never a database-only restore artifact. |
 
 Graceful shutdown on SIGTERM: finish (or abandon pre-APPLY) any in-flight
-changeset, flush the telemetry ring, checkpoint WAL, exit. An apply that has
+changeset, flush completed telemetry buckets, discard the in-progress RAM
+bucket rather than persist a partial canonical row, checkpoint WAL, exit. An apply that has
 reached APPLY continues to CONFIRM_POLL — never leave a device with a rollback
 timer running because the container restarted, so shutdown blocks (bounded by
 the rollback timeout) until confirm resolves one way or the other.
@@ -593,7 +972,7 @@ the rollback timeout) until confirm resolves one way or the other.
 | collector/ | simulated clock; ring→rollup correctness incl. counter wrap |
 | api/ | httptest against a seeded store |
 | end-to-end | `make check` boots mock_ubus, runs adopt→render→apply→collect→query through the real daemon |
-| hardware | `tools/probe.py` report imported as a capability fixture; the budget harness from DEVICE-BUDGET §7 run against the real WRT3200ACM per release |
+| hardware | `tools/probe.py` report imported as a capability fixture; the 60-minute budget harness from DEVICE-BUDGET §7 run against a measured class-C device per release (passed on Archer C6 v2, 2026-08-18) |
 
 `tools/mock_ubus.py` is the contract fixture: it models staged-vs-committed UCI
 state faithfully (set stages; apply commits+snapshots+arms timer; confirm
@@ -615,8 +994,12 @@ batch fallback and session-expiry replay.
 
 **M1 — Adoption + capability.** discover, login, probe, ACL write, credential
 seal, TOFU pin, un-adopt.
-*Done when:* adopt→un-adopt against the mock leaves mock state byte-identical
-to pre-adoption; capability JSON matches the fixture.
+*Done when:* inspect proves read-only/no-inventory behavior; concurrent Gateway
+adoptions contact at most one device; adopt→un-adopt against the mock leaves
+mock state byte-identical to pre-adoption; capability JSON matches the fixture;
+an unreadable ownership ledger disables both un-adopt actions; and a partial
+cleanup returns safe, exact manual commands without exposing either operator
+credential.
 
 **M2 — Apply engine.** render (examples 1+2), diff, full state machine.
 *Done when:* the deliberate-rollback integration test passes: a staged change
@@ -637,10 +1020,61 @@ config untouched) passes as an automated end-to-end test on the mock fleet.
 UI, client block/rate-limit via nftables sets.
 *Done when:* guest-VLAN-in-under-a-minute proof passes end-to-end.
 
-**M6 — Insights + topology + logs.** survey/station derived metrics,
-Radios screen, topology inference, event ingest + Logs screen.
-*Done when:* Radios shows interference/airtime for mt76 fixture radios and
-correctly *omits* them for the mwlwifi fixture radio.
+Current partial M5 state (2026-08-20): DHCP enablement, start, limit and lease
+time are configurable end to end, with legacy defaults and UI/API/model/render
+validation. Devices without Gateway do not render DHCP; VLAN 0/1 management
+addressing stays foreign; a foreign DHCP server or firewall zone blocks rather
+than being modified; and the controller never makes a flat bridge VLAN-aware.
+After the operator explicitly converted the live Gateway + AP + Switch WRT to
+management on `br-lan.1`, the browser applied the controller-owned VLAN2,
+static interface, DHCP and multi-network firewall-zone LIST forms. The C6 was a
+truthful no-op because its legacy switch is observe-only.
+
+The schema-12 directional forwarding subset is built: active managed source
+zones expose explicit `forward_to` destinations, absence preserves the legacy
+WAN-only edge, explicit empty blocks all modeled forwarding, and reverse
+initiation is independent. Model/store/API/render tests cover legacy no-diff,
+one-way inter-zone policy, block-WAN, malformed/downgrade boundaries, foreign
+forwarding/rule/DNAT conflicts and rename/orphan safety. The UI ships an
+editable Zone Matrix. Schema 15 extends the source-only Master Table with
+explicit IPv4 firewall rules, port forwards, static routes and client block,
+fixed-IP and group intent. Its partial Object Manager compiles unsaved,
+inspectable `Secure` IPv4-reject drafts for device/group/network objects and
+static routes for network objects; per-device/group routing, QoS and application
+outcomes return explicit gates. Saving a chosen draft changes desired state
+only and still requires Preview/Apply. That schema-15 expansion has source
+tests but no live proof yet. The authenticated hardware pass proved client DHCP/DNS/WAN,
+directional WAN block/restore with DHCP/DNS retained, DHCP disable, and a
+`50`–`59`/`1h` custom pool issuing `.54` for exactly 3600 seconds. A later
+same-BSS run put two physical iPhones on one isolated WRT BSS; both proved
+distinct DHCP, fixed-IP WAN, DNS plus WAN and denial to a known-live LAN HTTP
+listener. UCI held `isolate=1` and `bridge_isolate=1`, and sysfs reported
+`isolated=1`. Reciprocal raw Safari peer-IP failures had no known-live listener
+or positive control, so literal bidirectional peer data-plane isolation remains
+open. The confirmed
+cleanup removed the proof WLAN, retained the operator-created Guest VLAN3 and
+ended with a zero-change fleet plan (STATUS §5bk).
+
+**M6 — Observability + topology + logs.** Correlated client timeline,
+survey/station derived metrics, Radios screen, topology inference, event ingest
+and Logs screen.
+*Done when:* selecting an incident timestamp updates client, AP and site-health
+evidence from one query; Radios shows interference/airtime for mt76 fixture
+radios and correctly *omits* them for the mwlwifi fixture radio.
+
+Current live status (2026-08-20): the schema-16 store, producers, bounded
+REST APIs and React screens are implemented. The joined timeline is rollup-only
+and gap-aware; `wifi-v1` is fixed/all-or-null; topology preserves source
+ambiguity and validity intervals; Radios uses explicit scans and freshness;
+Logs distinguishes observed-empty from missing/stale/gapped producer coverage.
+The WebSocket remains `device.stats` only. The live lab database is schema 16.
+After explicit ACL refresh at 15:16 and 15:17, both routers supplied current
+OpenWrt-log and topology-source observations and the Gateway supplied fixed-
+target ICMP observations. Historical log/topology coverage is still
+unavailable rather than inferred; DFS and scan outcomes remain evidence-gated,
+and no disruptive scan was run. Persisted RF scan history is bounded to the
+newest terminal result per stable radio key by the normal maintenance
+transaction.
 
 Flows/DPI: not scheduled. Revisit only after M6 ships and only for capable
 hardware, per PARITY-MATRIX.
@@ -1220,6 +1654,73 @@ and `preApply`'s doc no longer claims a `found=false` entry can occur here.
 The wider point: **an empty answer from rpcd is not always an error status.**
 Any check that distinguishes "absent" by waiting for a non-zero status will
 silently never fire against this firmware.
+
+### Function inspection and clean re-adoption, measured 2026-08-18
+
+The schema-11 path was driven against both reference routers, not only the
+mock. C6 was cleanly un-adopted first and WRT second; each config phase reverted
+exactly two owned WLAN sections and proved the controller login and ACL gone.
+The fleet was then empty.
+
+Read-only Inspect measured the WRT's active WAN default route, enabled LAN DHCP
+and four DSA LAN ports, so it was adopted first as Gateway + AP + Switch. It
+measured no active WAN default route and `dhcp.lan.ignore=1` on the C6, so that
+device was adopted as AP + Switch; its legacy swconfig links remain
+`observe-only`. Both were re-added to `all-aps`, and each apply created exactly
+two WLAN sections. The next preview had 0 changes, the controller showed 2/2
+online and both radios on both devices were broadcasting.
+
+The cycle left 0 pending UCI changes and installed no package. The WRT retained
+its default route via `10.7.46.1`, DHCP `100`/`150`/`12h`, firewall hash and flat
+`lan1`–`lan4` bridge; the C6 retained DHCP ignore=1, down WAN and its active
+read-only swconfig links. SQLite ended with schema 11, 2 device rows, 4 owned
+WLAN sections and `integrity_check=ok`; the v10→v11 migration was separately
+integrity-checked.
+
+### Durable Phase-3 apply, measured 2026-08-19
+
+After an operator-owned one-time WRT conversion put management on `br-lan.1`,
+the schema-13 browser path applied the owned VLAN2 stack. Its first run
+(`2a0552f3-f901-4bb1-96a5-8c2ba2de773e`) deliberately withheld confirmation
+when dnsmasq health could not read the canonical `/tmp/etc` runtime file; all
+seven sections reverted and no ledger residue remained. Adding the second
+read-only ACL pattern fixed the observation boundary. The retry
+(`fa6bb976-1ca8-4c73-8de8-64b308b27746`) recorded C6 as a zero-change no-op and
+WRT as seven changes applied.
+
+Runtime proof covered `br-lan.2` at `192.168.2.1/24`, tagged bridge membership,
+the live dnsmasq range, firewall4 input/forward dispatch, separate TCP/UDP DNS,
+DHCP UDP 68→67, closed tails and `lan2`→`wan`. A WRT-only temporary WLAN carried
+a real Mac client; the C6 omission was explicit. Policy blocked WAN while
+preserving DHCP/DNS, then restored it. DHCP disable removed the running range;
+the custom `50`–`59`/`1h` configuration issued `.54` with a 3600-second lease.
+
+At the §5be checkpoint, the temporary WLAN, custom pool and explicit allow
+remained applied pending confirmation; the Mac did not automatically rejoin its
+saved `Management` Wi-Fi, while wired `en9` kept the controller path intact.
+That checkpoint is historical. Confirmed cleanup operation
+`d93695b8-1b31-4550-936a-320dd1cf1bc6` later retained `testvlan`, restored DHCP
+`100`/`150`/`12h`, reset `lan2` to the legacy WAN-only default, removed the
+temporary WLAN and rotated both radios' managed BSS keys on both APs. Both
+devices applied successfully, and the following Preview and `dryrun` were
+zero-change. STATUS §5be remains the gateway chronology, §5bf records the live
+schema-14 migration, and §5bg is the authoritative cleanup, runtime, client and
+post-cleanup recovery evidence.
+
+The final 2026-08-20 client pass used a separate WRT-only proof BSS. Two
+physical iPhones were simultaneously authenticated, associated and authorized
+on `phy1-ap1`, held distinct guest DHCP leases, and each loaded HTTPS from
+`1.1.1.1` and `example.com`. Each was denied access to the Mac's known-live LAN
+HTTP listener. UCI held `isolate=1` and `bridge_isolate=1`, while live
+bridge-port sysfs reported `isolated=1`. Both clients also
+reported reciprocal raw Safari failures to the other's IP, but neither peer ran
+a known-live listener and no positive control established that either target
+would answer that exact probe; those failures do not prove literal
+bidirectional peer data-plane isolation. A completed durable operation removed
+only the proof WLAN: the WRT
+pruned one wireless section, the C6 was a no-op and the final plan was
+zero-change. The operator-created and applied Guest network on VLAN 3 remains
+intentional current state.
 
 ---
 

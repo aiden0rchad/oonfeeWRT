@@ -45,6 +45,54 @@ func TestFlushAggregatesCompletedWindowsOnly(t *testing.T) {
 	}
 }
 
+func TestForgetDeviceDropsRawSamplesAndBaselinesBeforeIDReuse(t *testing.T) {
+	s := testStore()
+	old := SeriesKey{DeviceID: 7, Kind: KindLoad1}
+	other := SeriesKey{DeviceID: 8, Kind: KindLoad1}
+	s.Gauge(old, 1, 1)
+	s.Gauge(other, 1, 8)
+	s.mu.Lock()
+	s.counters[SeriesKey{DeviceID: 7, Kind: KindIfaceRx, Key: "wan"}] = &counterState{valid: true}
+	s.ratios[SeriesKey{DeviceID: 7, Kind: KindChanBusy, Key: "phy0"}] = &ratioState{valid: true}
+	s.reboots[7] = &rebootState{valid: true}
+	s.mu.Unlock()
+
+	s.ForgetDevice(7)
+	s.mu.Lock()
+	for k := range s.series {
+		if k.DeviceID == 7 {
+			t.Fatalf("series state survived device removal: %+v", k)
+		}
+	}
+	for k := range s.counters {
+		if k.DeviceID == 7 {
+			t.Fatalf("counter baseline survived device removal: %+v", k)
+		}
+	}
+	for k := range s.ratios {
+		if k.DeviceID == 7 {
+			t.Fatalf("ratio baseline survived device removal: %+v", k)
+		}
+	}
+	if s.reboots[7] != nil {
+		t.Fatal("uptime baseline survived device removal")
+	}
+	s.mu.Unlock()
+
+	// SQLite may give 7 to a different MAC immediately. Its first sample must
+	// stand alone, not be averaged with the removed router's value.
+	s.Gauge(old, 2, 99)
+	got := s.Flush(at(120))
+	if len(got) != 2 {
+		t.Fatalf("got %d rollups after ID reuse, want replacement + other device", len(got))
+	}
+	for _, row := range got {
+		if row.DeviceID == 7 && (row.Avg != 99 || row.Cnt != 1) {
+			t.Fatalf("replacement inherited removed device samples: %+v", row)
+		}
+	}
+}
+
 func TestFlushIsSortedAndAttributed(t *testing.T) {
 	s := testStore()
 	s.Gauge(SeriesKey{DeviceID: 2, Kind: KindLoad1}, 10, 1)
@@ -336,12 +384,16 @@ func TestObserveMapsAPoll(t *testing.T) {
 	}
 
 	want := map[SeriesKey]float64{
-		{DeviceID: 1, Kind: KindLoad1}:                              0.5,
-		{DeviceID: 1, Kind: KindMemUsed}:                            600,
-		{DeviceID: 1, Kind: KindMemPct}:                             60,
-		{DeviceID: 1, Kind: KindAPClients, Key: "wlan0"}:            3,
-		{DeviceID: 1, Kind: KindStaRSSI, Key: "aa:bb:cc:11:22:33"}:  -52,
-		{DeviceID: 1, Kind: KindStaRetry, Key: "aa:bb:cc:11:22:33"}: 10,
+		{DeviceID: 1, Kind: KindLoad1}:                             0.5,
+		{DeviceID: 1, Kind: KindMemUsed}:                           600,
+		{DeviceID: 1, Kind: KindMemPct}:                            60,
+		{DeviceID: 1, Kind: KindAPClients, Key: "wlan0"}:           3,
+		{DeviceID: 1, Kind: KindStaRSSI, Key: "aa:bb:cc:11:22:33"}: -52,
+	}
+	for _, kind := range []Kind{KindStaRetryDelta, KindStaTXFailDelta, KindStaExperienceWiFiV1} {
+		if _, ok := got[SeriesKey{DeviceID: 1, Kind: kind, Key: "aa:bb:cc:11:22:33"}]; ok {
+			t.Errorf("first counter sample emitted %s instead of remaining unavailable", kind)
+		}
 	}
 	for k, w := range want {
 		v, ok := got[k]
@@ -460,7 +512,8 @@ func TestChannelUtilizationUsesDeltasNotAbsolutes(t *testing.T) {
 	// The dangerous shape: absolutes that look plausible and are wrong. Here the
 	// absolute ratio is 900000/1000000 = 90%, while the deltas say 25%.
 	a := snapshot(1, 100, 1000)
-	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_000_000, BusyTime: 900_000}}
+	a.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	a.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 1_000_000, BusyTime: 900_000}}
 	s.Observe(ctx, a)
 
 	// A single reading produces nothing, exactly like any other counter.
@@ -469,7 +522,8 @@ func TestChannelUtilizationUsesDeltasNotAbsolutes(t *testing.T) {
 	}
 
 	b := snapshot(1, 160, 1060)
-	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_004_000, BusyTime: 901_000}}
+	b.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	b.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 1_004_000, BusyTime: 901_000}}
 	s.Observe(ctx, b)
 
 	rows := s.Flush(at(600))
@@ -489,13 +543,15 @@ func TestChannelUtilizationRefusesTheImpossible(t *testing.T) {
 	ctx := context.Background()
 
 	a := snapshot(1, 100, 1000)
-	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1000, BusyTime: 1000}}
+	a.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	a.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 1000, BusyTime: 1000}}
 	s.Observe(ctx, a)
 
 	// busy advancing far faster than active is the counters disagreeing, not a
 	// channel that is 500% busy.
 	b := snapshot(1, 160, 1060)
-	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 2000, BusyTime: 6000}}
+	b.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	b.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 2000, BusyTime: 6000}}
 	s.Observe(ctx, b)
 
 	if rows := s.Flush(at(600)); hasKind(rows, KindChanBusy) {
@@ -512,10 +568,12 @@ func TestChannelUtilizationClampsJitter(t *testing.T) {
 	ctx := context.Background()
 
 	a := snapshot(1, 100, 1000)
-	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1000, BusyTime: 1000}}
+	a.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	a.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 1000, BusyTime: 1000}}
 	s.Observe(ctx, a)
 	b := snapshot(1, 160, 1060)
-	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 2000, BusyTime: 2030}}
+	b.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	b.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 2000, BusyTime: 2030}}
 	s.Observe(ctx, b)
 
 	rows := s.Flush(at(600))
@@ -533,12 +591,14 @@ func TestChannelUtilizationResetsOnReboot(t *testing.T) {
 	ctx := context.Background()
 
 	a := snapshot(1, 100, 5000)
-	a.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 1_000_000, BusyTime: 500_000}}
+	a.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	a.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 1_000_000, BusyTime: 500_000}}
 	s.Observe(ctx, a)
 
 	// Rebooted: the survey counters restarted with everything else.
 	b := snapshot(1, 160, 30)
-	b.Surveys = []collector.Survey{{Iface: "wlan0", ActiveTime: 4000, BusyTime: 1000}}
+	b.APs = []collector.AP{{Iface: "wlan0", Freq: 5180}}
+	b.Surveys = []collector.Survey{{Iface: "wlan0", MHz: 5180, ActiveTime: 4000, BusyTime: 1000}}
 	s.Observe(ctx, b)
 
 	if rows := s.Flush(at(600)); hasKind(rows, KindChanBusy) {

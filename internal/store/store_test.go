@@ -10,15 +10,33 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	_ "modernc.org/sqlite" // pure-Go driver, decision D3 (CGO_ENABLED=0)
 )
 
 const driver = "sqlite"
 
+func testProtector(t *testing.T, dbPath string) *secrets.Keeper {
+	t.Helper()
+	const passphrase = "placeholder store test passphrase"
+	path := dbPath + ".keyring"
+	keeper, err := secrets.Open(path, []byte(passphrase))
+	if errors.Is(err, os.ErrNotExist) {
+		keeper, err = secrets.Create(path, []byte(passphrase),
+			secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
+	}
+	if err != nil {
+		t.Fatalf("test keyring: %v", err)
+	}
+	t.Cleanup(func() { keeper.Close() })
+	return keeper
+}
+
 func open(t *testing.T) *DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "oonfee.db")
-	db, err := Open(context.Background(), driver, path)
+	db, err := Open(context.Background(), driver, path, testProtector(t, path))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -30,7 +48,7 @@ func TestOpenAppliesSchemaAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "oonfee.db")
 
-	db, err := Open(ctx, driver, path)
+	db, err := Open(ctx, driver, path, testProtector(t, path))
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
@@ -41,10 +59,15 @@ func TestOpenAppliesSchemaAndIsIdempotent(t *testing.T) {
 	if mode != "wal" {
 		t.Errorf("journal_mode = %q, want wal — the whole write budget assumes it", mode)
 	}
+	var versionsBefore int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM schema_version`).Scan(&versionsBefore); err != nil {
+		t.Fatalf("count initial schema_version: %v", err)
+	}
 	db.Close()
 
 	// Re-opening an existing database must migrate cleanly, not double-apply.
-	db2, err := Open(ctx, driver, path)
+	db2, err := Open(ctx, driver, path, testProtector(t, path))
 	if err != nil {
 		t.Fatalf("second Open: %v", err)
 	}
@@ -54,8 +77,224 @@ func TestOpenAppliesSchemaAndIsIdempotent(t *testing.T) {
 		`SELECT COUNT(*) FROM schema_version`).Scan(&versions); err != nil {
 		t.Fatalf("count schema_version: %v", err)
 	}
-	if versions != 1 {
-		t.Errorf("schema_version should have exactly one row, got %d", versions)
+	if versions != versionsBefore {
+		t.Errorf("reopen added schema rows: before=%d after=%d", versionsBefore, versions)
+	}
+}
+
+func TestOpenReadOnlyCannotChangeTheDatabase(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"plain", "has#hash", "pct%20name", "with space"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "oonfee.db")
+			db, err := Open(ctx, driver, path, testProtector(t, path))
+			if err != nil {
+				t.Fatalf("create database: %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ro, err := OpenReadOnly(ctx, driver, path, testProtector(t, path))
+			if err != nil {
+				t.Fatalf("OpenReadOnly(%q): %v", path, err)
+			}
+			var queryOnly int
+			if err := ro.SQL().QueryRowContext(ctx, "PRAGMA query_only").Scan(&queryOnly); err != nil {
+				t.Fatal(err)
+			}
+			if queryOnly != 1 {
+				t.Errorf("query_only=%d, want 1", queryOnly)
+			}
+			if _, err := ro.SQL().ExecContext(ctx, `CREATE TABLE dryrun_must_not_write (id INTEGER)`); err == nil {
+				t.Fatal("a write through the read-only handle succeeded")
+			}
+			if err := ro.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Error("opening and querying read-only changed the database file")
+			}
+		})
+	}
+}
+
+func TestOpenReadOnlyRefusesAnOutdatedSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "oonfee.db")
+	db, err := Open(ctx, driver, path, testProtector(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE schema_version SET version=?`, schemaVersion-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if ro, err := OpenReadOnly(ctx, driver, path, testProtector(t, path)); err == nil {
+		ro.Close()
+		t.Fatal("an outdated schema was accepted without a migration")
+	}
+}
+
+func TestDHCPPolicyCreatesADowngradeBoundary(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "oonfee.db")
+	db, err := Open(ctx, driver, path, testProtector(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stand in for the last release, whose renderer ignored dhcp_json even
+	// though the column already existed.
+	if _, err := db.SQL().ExecContext(ctx, `DELETE FROM secret_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE schema_version SET version=9`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(ctx, driver, path, testProtector(t, path))
+	if err != nil {
+		t.Fatalf("migrate semantic boundary: %v", err)
+	}
+	defer db.Close()
+	var got int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT MAX(version) FROM schema_version`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != schemaVersion {
+		t.Fatalf("schema version = %d, want %d so an older binary refuses downgrade", got, schemaVersion)
+	}
+}
+
+func TestDeviceFunctionsMigrationBackfillsLegacyRoleSemantics(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "oonfee.db")
+	db, err := Open(ctx, driver, path, testProtector(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, role := range []string{"gateway", "ap", "switch", "nonsense"} {
+		if _, err := db.SQL().ExecContext(ctx, `INSERT INTO devices
+			(mac, host, name, role, functions_json) VALUES (?,?,?,?,?)`,
+			fmt.Sprintf("aa:bb:cc:dd:ee:%02d", i), "192.0.2.1", role, role, `["switch"]`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.SQL().ExecContext(ctx, `DELETE FROM secret_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE schema_version SET version=10`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = Open(ctx, driver, path, testProtector(t, path))
+	if err != nil {
+		t.Fatalf("migrate functions: %v", err)
+	}
+	defer db.Close()
+	devices, err := db.Devices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"gateway":  "gateway,ap,switch",
+		"ap":       "ap,switch",
+		"switch":   "switch",
+		"nonsense": "ap,switch",
+	}
+	for _, d := range devices {
+		if got := strings.Join(d.Functions, ","); got != want[d.Name] {
+			t.Errorf("legacy %s functions=%q, want %q", d.Name, got, want[d.Name])
+		}
+	}
+}
+
+func TestDeviceFunctionsRoundTripAndCanonicalisePrimaryRole(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	d := &Device{
+		MAC: "aa:bb:cc:dd:ee:99", Host: "192.0.2.99", Name: "combo",
+		Role: "switch", Functions: []string{"switch", "AP", "gateway", "ap"},
+	}
+	if err := db.UpsertDevice(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Role != "gateway" || strings.Join(d.Functions, ",") != "gateway,ap,switch" {
+		t.Fatalf("upsert canonicalised to role=%q functions=%v", d.Role, d.Functions)
+	}
+	got, err := db.DeviceByID(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Role != d.Role || strings.Join(got.Functions, ",") != strings.Join(d.Functions, ",") {
+		t.Fatalf("round trip got role=%q functions=%v, want role=%q functions=%v",
+			got.Role, got.Functions, d.Role, d.Functions)
+	}
+}
+
+func TestDeviceFunctionsRejectPresentEmptySelection(t *testing.T) {
+	db := open(t)
+	err := db.UpsertDevice(context.Background(), &Device{
+		MAC: "aa:bb:cc:dd:ee:98", Host: "192.0.2.98", Name: "none",
+		Functions: []string{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one") {
+		t.Fatalf("empty functions error=%v", err)
+	}
+}
+
+func TestCorruptStoredFunctionsStayVisibleButFailClosed(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	d := &Device{
+		MAC: "aa:bb:cc:dd:ee:97", Host: "192.0.2.97", Name: "corrupt",
+		Role: "gateway", Functions: []string{"gateway"},
+	}
+	if err := db.UpsertDevice(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{`[]`, `null`, `["gateway","made-up"]`, `{not-json`} {
+		if _, err := db.SQL().ExecContext(ctx,
+			`UPDATE devices SET functions_json=? WHERE id=?`, raw, d.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.DeviceByID(ctx, d.ID)
+		if err != nil {
+			t.Fatalf("corrupt row disappeared for %q: %v", raw, err)
+		}
+		if got.FunctionError == "" || got.Functions == nil || len(got.Functions) != 0 {
+			t.Fatalf("raw %q loaded as functions=%v error=%q", raw, got.Functions, got.FunctionError)
+		}
+		if got.ModelDevice().EffectiveFunctions().Routes() ||
+			got.ModelDevice().EffectiveFunctions().Wireless() {
+			t.Fatalf("raw %q widened into active functions", raw)
+		}
+		if got.ModelDevice().Role != model.RoleGateway {
+			t.Fatalf("raw %q changed canonical role to %q", raw, got.ModelDevice().Role)
+		}
 	}
 }
 
@@ -200,6 +439,16 @@ func TestEventsRoundTripNewestFirst(t *testing.T) {
 	if got[0].Event != "third" {
 		t.Errorf("newest first: got %q", got[0].Event)
 	}
+	seen := map[int64]bool{}
+	for _, event := range got {
+		if event.ID == 0 {
+			t.Fatal("event query omitted the database id used as the UI row identity")
+		}
+		if seen[event.ID] {
+			t.Fatalf("event id %d was returned twice", event.ID)
+		}
+		seen[event.ID] = true
+	}
 }
 
 func TestSetCapabilitiesStoresSnapshot(t *testing.T) {
@@ -229,7 +478,7 @@ func TestCheckpointTruncatesWAL(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "oonfee.db")
-	db, err := Open(ctx, driver, path)
+	db, err := Open(ctx, driver, path, testProtector(t, path))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -611,7 +860,8 @@ func TestClientCountsByScope(t *testing.T) {
 	db := open(t)
 	ctx := context.Background()
 
-	// now = 10000; active means seen at or after 9000.
+	// Inventory timestamps keep the rows; only explicit reachability evidence
+	// makes the first five active.
 	if err := db.UpsertClients(ctx, []SeenClient{
 		{MAC: "aa:00:00:00:00:01", IPv4: "192.168.1.5", Scope: ScopeLocal},
 		{MAC: "aa:00:00:00:00:02", IPv4: "192.168.1.6", Scope: ScopeLocal},
@@ -628,7 +878,11 @@ func TestClientCountsByScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	counts, err := db.ClientCounts(ctx, 0, 9000)
+	active := []string{
+		"aa:00:00:00:00:01", "aa:00:00:00:00:02", "aa:00:00:00:00:03",
+		"aa:00:00:00:00:04", "aa:00:00:00:00:05",
+	}
+	counts, err := db.ClientCounts(ctx, ClientFilter{LiveActive: active})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -643,7 +897,7 @@ func TestClientCountsByScope(t *testing.T) {
 	}
 
 	// seenSince bounds what is counted at all — the client list's 24h window.
-	recent, err := db.ClientCounts(ctx, 9000, 9000)
+	recent, err := db.ClientCounts(ctx, ClientFilter{SeenSince: 9000, LiveActive: active})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +923,7 @@ func TestSeriesKindKeyIndexExists(t *testing.T) {
 	}{
 		{"fresh", func(*testing.T, string) {}},
 		{"migrated from v5", func(t *testing.T, path string) {
-			db, err := Open(ctx, driver, path)
+			db, err := Open(ctx, driver, path, testProtector(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -678,7 +932,8 @@ func TestSeriesKindKeyIndexExists(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := db.SQL().ExecContext(ctx,
-				`DELETE FROM schema_version;
+				`DELETE FROM secret_state;
+				 DELETE FROM schema_version;
 				 INSERT INTO schema_version (version, applied_at) VALUES (5, 0)`); err != nil {
 				t.Fatal(err)
 			}
@@ -688,7 +943,7 @@ func TestSeriesKindKeyIndexExists(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "oonfee.db")
 			tc.prep(t, path)
-			db, err := Open(ctx, driver, path)
+			db, err := Open(ctx, driver, path, testProtector(t, path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -803,7 +1058,7 @@ func TestClientsPageFacetsExcludeTheirOwnFilter(t *testing.T) {
 	}
 
 	page, err := db.ClientsPage(ctx, ClientFilter{
-		ActiveSince: 5000, Scope: ScopeLocal, Limit: 50,
+		LiveActive: []string{"aa:00:00:00:03:01"}, Scope: ScopeLocal, Limit: 50,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -828,6 +1083,40 @@ func TestClientsPageFacetsExcludeTheirOwnFilter(t *testing.T) {
 	if presence["online"] != 1 || presence["offline"] != 1 {
 		t.Errorf("presence facet = %v, want 1 online and 1 offline among the "+
 			"local hosts — the other rails' filters must apply", presence)
+	}
+}
+
+func TestClientsPagePresenceRequiresEvidenceAndExcludesInfrastructure(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	staleHint := "aa:00:00:00:03:11"
+	liveClient := "aa:00:00:00:03:12"
+	infrastructure := "aa:00:00:00:03:13"
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: staleHint, Scope: ScopeLocal},
+		{MAC: liveClient, Scope: ScopeLocal},
+		{MAC: infrastructure, Scope: ScopeLocal},
+	}, 10_000); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := db.ClientsPage(ctx, ClientFilter{
+		Presence: "online", LiveActive: []string{liveClient, infrastructure},
+		ExcludeMACs: []string{infrastructure}, Limit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Clients) != 1 || page.Clients[0].MAC != liveClient {
+		t.Fatalf("online page=%+v", page)
+	}
+	presence := map[string]int{}
+	for _, facet := range page.Presence {
+		presence[facet.Value] = facet.Count
+	}
+	if presence["online"] != 1 || presence["offline"] != 1 {
+		t.Fatalf("presence facets=%v; fresh inventory must remain offline and infrastructure absent",
+			presence)
 	}
 }
 
@@ -937,7 +1226,7 @@ func TestClientsPageWithNoWirelessKindsCallsEverythingUnknown(t *testing.T) {
 // do scoping" rather than "none of these are yours".
 func TestClientCountsAlwaysNamesEveryScope(t *testing.T) {
 	db := open(t)
-	counts, err := db.ClientCounts(context.Background(), 0, 0)
+	counts, err := db.ClientCounts(context.Background(), ClientFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +1247,7 @@ func TestClientCountsTreatsPreMigrationRowsAsUnknown(t *testing.T) {
 		"aa:00:00:00:00:07", "old row", "192.168.1.7", 1000, 1000); err != nil {
 		t.Fatal(err)
 	}
-	counts, err := db.ClientCounts(ctx, 0, 0)
+	counts, err := db.ClientCounts(ctx, ClientFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1098,7 +1387,7 @@ func TestAwkwardDataDirectoryNamesOpenTheRightFile(t *testing.T) {
 			}
 			want := filepath.Join(dir, "oonfeewrt.db")
 
-			db, err := Open(ctx, "sqlite", want)
+			db, err := Open(ctx, "sqlite", want, testProtector(t, want))
 			if err != nil {
 				t.Fatalf("Open(%q): %v", want, err)
 			}
@@ -1137,7 +1426,7 @@ func TestAPathTheDSNCannotExpressIsRefused(t *testing.T) {
 	}
 	want := filepath.Join(dir, "oonfeewrt.db")
 
-	db, err := Open(ctx, "sqlite", want)
+	db, err := Open(ctx, "sqlite", want, testProtector(t, want))
 	if err == nil {
 		db.Close()
 		t.Fatalf("a path containing %q opened without complaint; it would have "+

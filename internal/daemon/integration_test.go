@@ -319,25 +319,25 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 
 	// The dashboard must agree with the device list.
 	var dash struct {
-		Devices         struct{ Total, Online int } `json:"devices"`
-		WirelessClients *int                        `json:"wireless_clients"`
-		UnknownOn       []string                    `json:"wireless_clients_unknown_on"`
-		KnownDevices    int                         `json:"known_devices"`
-		ActiveDevices   int                         `json:"active_devices"`
-		UpstreamDevices int                         `json:"upstream_devices"`
-		UnscopedDevices int                         `json:"unscoped_devices"`
+		Devices                 struct{ Total, Online int } `json:"devices"`
+		WirelessClients         int                         `json:"wireless_clients"`
+		WirelessClientsComplete bool                        `json:"wireless_clients_complete"`
+		UnknownOn               []string                    `json:"wireless_clients_unknown_on"`
+		KnownDevices            int                         `json:"known_devices"`
+		ActiveDevices           int                         `json:"active_devices"`
+		UpstreamDevices         int                         `json:"upstream_devices"`
+		UnscopedDevices         int                         `json:"unscoped_devices"`
 	}
 	apiGet(t, client, base+"/api/v1/dashboard", &dash)
 	if dash.Devices.Total != 1 || dash.Devices.Online != 1 {
 		t.Errorf("dashboard device counts = %+v, want 1 total / 1 online", dash.Devices)
 	}
-	// The device answered every poll above, so its client count is KNOWN. A nil
-	// here would mean the live-count path is broken — and it must be asserted,
-	// not merely logged: this block previously read a `clients` field that had
-	// been renamed, so it decoded nil forever and could never fail.
-	if dash.WirelessClients == nil {
-		t.Fatalf("wireless_clients is unknown for a device that answered every "+
-			"poll; unreadable on: %v", dash.UnknownOn)
+	// The device answered every poll above, so its row-scoped count is a complete
+	// fleet total. The numeric field remains available when coverage is partial;
+	// this flag is what licenses the dashboard to present it as the total.
+	if !dash.WirelessClientsComplete {
+		t.Fatalf("wireless client total is incomplete after successful polls; unreadable on: %v",
+			dash.UnknownOn)
 	}
 	// The client inventory comes from the baseline poll, so a live LAN has some
 	// hosts SOMEWHERE. Asserted across all three scopes rather than on the local
@@ -350,7 +350,7 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 	}
 	t.Logf("dashboard: %d device(s) online, %d wireless client(s), "+
 		"%d on this network (%d active), %d upstream, %d unplaced",
-		dash.Devices.Online, *dash.WirelessClients, dash.KnownDevices,
+		dash.Devices.Online, dash.WirelessClients, dash.KnownDevices,
 		dash.ActiveDevices, dash.UpstreamDevices, dash.UnscopedDevices)
 
 	// The dashboard headline and the client grid answer the same question and

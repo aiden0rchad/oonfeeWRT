@@ -2,6 +2,11 @@
 passphrase
 *.key
 *.pem
+keyring.json
+*.db
+*.db-*
+.env
+.env.*
 
 # Probe output: contains a full inventory of a real device
 report.json

@@ -390,6 +390,21 @@ func portChanges(old, new *Registry) []Change {
 				strings.Join(old.Ports.LAN, ","), strings.Join(new.Ports.LAN, ",")),
 		})
 	}
+	// Empty means this field was not recorded or its source was unreachable,
+	// not that the runtime has no bridges. Avoid turning a schema addition or
+	// ACL gap into an actionable topology change.
+	if len(old.Ports.BridgeDevices) > 0 && len(new.Ports.BridgeDevices) > 0 &&
+		!sameModes(old.Ports.BridgeDevices, new.Ports.BridgeDevices) {
+		out = append(out, Change{
+			Kind: "ports", Name: "runtime-bridges", Effect: EffectChanged,
+			From: strings.Join(old.Ports.BridgeDevices, ","),
+			To:   strings.Join(new.Ports.BridgeDevices, ","),
+			Detail: fmt.Sprintf("runtime bridge devices changed from [%s] to [%s]; "+
+				"topology FDB collection should be rebuilt",
+				strings.Join(old.Ports.BridgeDevices, ","),
+				strings.Join(new.Ports.BridgeDevices, ",")),
+		})
+	}
 	return out
 }
 

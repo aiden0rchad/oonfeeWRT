@@ -9,7 +9,6 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/meshlink"
-	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/render"
 )
 
@@ -126,6 +125,12 @@ func (m *meshStore) get(deviceID int64) meshFacts {
 	return m.byID[deviceID]
 }
 
+func (m *meshStore) forget(deviceID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.byID, deviceID)
+}
+
 // MeshHealth reports every configured backhaul in the site, per device.
 //
 // Reads nothing from any device: every input is either the site model, a stored
@@ -161,7 +166,7 @@ func (d *Daemon) MeshHealth(ctx context.Context) ([]meshlink.Link, error) {
 	}
 	gates := map[int64]devGate{}
 	for _, dev := range devices {
-		if !dev.Adopted() || !model.RoleOf(dev.Role).Wireless() {
+		if !dev.Adopted() || !deviceFunctions(dev).Wireless() {
 			continue
 		}
 		if caps, err := deviceCaps(dev); err == nil {

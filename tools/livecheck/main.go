@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
 	_ "modernc.org/sqlite"
@@ -16,8 +16,13 @@ import (
 
 func main() {
 	ctx := context.Background()
-	db, _ := store.Open(ctx, "sqlite", os.Args[1])
-	defer db.Close()
+	handle, err := toolstore.OpenReadOnly(ctx, os.Args[1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer handle.Close()
+	db := handle.DB
 	devs, _ := db.Devices(ctx)
 	clients, _ := db.Clients(ctx, 0, 500)
 	byMAC := map[string]string{}

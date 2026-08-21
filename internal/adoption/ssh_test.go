@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -11,6 +14,56 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+func TestVerifyACLHashRejectsMissingAndWrongDigests(t *testing.T) {
+	content := []byte(`{"oonfeewrt": true}`)
+	for _, output := range []string{"", " \n\t", strings.Repeat("0", sha256.Size*2) + "  acl.json\n"} {
+		if err := verifyACLHash(content, output); err == nil {
+			t.Fatalf("verifyACLHash accepted output %q", output)
+		}
+	}
+
+	sum := sha256.Sum256(content)
+	if err := verifyACLHash(content, hex.EncodeToString(sum[:])+"  acl.json\n"); err != nil {
+		t.Fatalf("verifyACLHash rejected the expected digest: %v", err)
+	}
+}
+
+func TestSSHRunErrorDoesNotExposeCommandOrVerifier(t *testing.T) {
+	const verifier = "$6$rounds=5000$generated-salt$generated-verifier"
+	cmd := "uci set rpcd.oonfeewrt.password='" + verifier + "' && uci commit rpcd"
+	err := sshRunError(
+		"create controller login",
+		errors.New("exit status 1: "+verifier),
+		"",
+		"+ "+cmd+"\nremote repeated "+verifier,
+		cmd,
+		[]string{verifier},
+	)
+	got := err.Error()
+	if !strings.Contains(got, "create controller login") {
+		t.Fatalf("error lost its safe operation label: %q", got)
+	}
+	for name, secret := range map[string]string{"command": cmd, "verifier": verifier} {
+		if strings.Contains(got, secret) {
+			t.Errorf("error exposed the %s: %q", name, got)
+		}
+	}
+	if !strings.Contains(got, "remote output withheld") {
+		t.Errorf("sensitive command did not suppress remote output: %q", got)
+	}
+}
+
+func TestSSHRunErrorRedactsAnEchoedCommand(t *testing.T) {
+	const cmd = "sha256sum '/usr/share/rpcd/acl.d/oonfeewrt.json'"
+	err := sshRunError("verify temporary ACL", errors.New("exit status 127"), "", "+ "+cmd, cmd, nil)
+	if strings.Contains(err.Error(), cmd) {
+		t.Fatalf("error exposed the remote command: %q", err)
+	}
+	if !strings.Contains(err.Error(), "verify temporary ACL") {
+		t.Fatalf("error lost its safe operation label: %q", err)
+	}
+}
 
 // A host that accepts TCP and never speaks SSH must not hang adoption.
 //

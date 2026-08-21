@@ -208,9 +208,11 @@ func TestSlowClientDropsRatherThanBlocking(t *testing.T) {
 func TestUnknownTopicIsReported(t *testing.T) {
 	h, base := liveHarness(t)
 	ws := dialLive(t, h, base)
-	send(t, ws, map[string]any{"type": "subscribe", "topic": "nonsense"})
-	if m := recv(t, ws); m["type"] != "error" {
-		t.Fatalf("got %v, want an error", m)
+	for _, topic := range []string{"nonsense", "events"} {
+		send(t, ws, map[string]any{"type": "subscribe", "topic": topic})
+		if m := recv(t, ws); m["type"] != "error" {
+			t.Fatalf("topic %q got %v, want an error", topic, m)
+		}
 	}
 	// Still usable afterwards.
 	send(t, ws, map[string]any{"type": "ping"})
@@ -233,5 +235,22 @@ func TestHubCloseReleasesEverything(t *testing.T) {
 	}
 	if n := h.srv.Hub.Connections(); n != 0 {
 		t.Fatalf("%d connections survived Close", n)
+	}
+}
+
+func TestHubForgetDeviceDropsReusableIDSubscription(t *testing.T) {
+	h, base := liveHarness(t)
+	dev := h.seedDevice("ap-forget-ws", true, nil)
+	ws := dialLive(t, h, base)
+	send(t, ws, map[string]any{"type": "subscribe", "topic": "device.stats",
+		"device_id": dev.ID})
+	recv(t, ws)
+	if n := h.fleet.focusCount(dev.ID); n != 1 {
+		t.Fatalf("focus count = %d before forget, want 1", n)
+	}
+
+	h.srv.Hub.ForgetDevice(dev.ID)
+	if n := h.fleet.focusCount(dev.ID); n != 0 {
+		t.Fatalf("focus count = %d after forget, want 0", n)
 	}
 }

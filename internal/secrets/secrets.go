@@ -1,16 +1,17 @@
-// Package secrets seals the per-device controller credentials that adoption
-// mints, so the controller database is not itself a list of router logins.
+// Package secrets seals controller credentials, wireless keys, and
+// secret-derived verifiers so a copied controller database does not disclose
+// reusable access material.
 //
 // The shape is a two-level key hierarchy, which is worth stating plainly
 // because it is the reason changing the operator passphrase is cheap:
 //
-//	passphrase --argon2id--> KEK --wraps--> DEK --seals--> each credential
+//	passphrase --argon2id--> KEK --wraps--> DEK --seals--> each protected value
 //
 // Credentials are sealed under a random 32-byte data key (the DEK). The DEK is
 // itself sealed under a key derived from the operator passphrase (the KEK) and
 // stored in a small keyring file beside the database. Changing the passphrase
-// re-wraps one 32-byte key; it does not touch a single credential blob, so it
-// cannot half-succeed across a fleet and leave some devices unreadable.
+// re-wraps one 32-byte key; it does not touch database ciphertexts, so it cannot
+// half-succeed across a fleet and leave only some values unreadable.
 //
 // Failing to unwrap the DEK is the passphrase check. There is no separate
 // verifier, and there should not be: a verifier is one more thing that can
@@ -18,16 +19,19 @@
 //
 // # What this does and does not protect
 //
-// It protects credentials at rest — a stolen database file, a backup, a
-// snapshot. It does not protect against an attacker who can read the daemon's
+// It protects controller secrets at rest — a stolen database file, a backup,
+// a snapshot. It does not protect against an attacker who can read the daemon's
 // memory while it runs, because the DEK is in memory the whole time by
-// necessity: the poll loop needs the credentials continuously. Claiming
+// necessity: polling and rendering need them while running. Claiming
 // otherwise would be theatre.
 package secrets
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,7 +60,7 @@ var (
 		"wrong, or the keyring file has been corrupted or truncated")
 
 	// ErrExists is returned by Create when a keyring is already present.
-	// Overwriting one destroys every credential it protects, so it is never
+	// Overwriting one destroys every protected database value, so it is never
 	// silent.
 	ErrExists = errors.New("secrets: a keyring already exists at this path")
 
@@ -171,13 +175,16 @@ func Create(path string, passphrase []byte, p Params) (*Keeper, error) {
 
 	dek := make([]byte, keyLen)
 	if _, err := rand.Read(dek); err != nil {
+		zero(dek)
 		return nil, fmt.Errorf("secrets: generate data key: %w", err)
 	}
 	kr, err := wrap(dek, passphrase, p)
 	if err != nil {
+		zero(dek)
 		return nil, err
 	}
-	if err := writeKeyring(path, kr); err != nil {
+	if err := writeNewKeyring(path, kr); err != nil {
+		zero(dek)
 		return nil, err
 	}
 	return &Keeper{path: path, dek: dek, params: p}, nil
@@ -228,10 +235,22 @@ func Open(path string, passphrase []byte) (*Keeper, error) {
 func OpenOrCreate(path string, passphrase []byte, p Params) (k *Keeper, created bool, err error) {
 	switch _, statErr := os.Stat(path); {
 	case statErr == nil:
+		if err := syncDirectory(filepath.Dir(path)); err != nil {
+			return nil, false, err
+		}
 		k, err = Open(path, passphrase)
 		return k, false, err
 	case errors.Is(statErr, os.ErrNotExist):
 		k, err = Create(path, passphrase, p)
+		if errors.Is(err, ErrExists) {
+			// Another first-run process atomically installed its keyring after
+			// our Stat. Its complete file is now the only valid winner.
+			if syncErr := syncDirectory(filepath.Dir(path)); syncErr != nil {
+				return nil, false, syncErr
+			}
+			k, err = Open(path, passphrase)
+			return k, false, err
+		}
 		return k, true, err
 	default:
 		return nil, false, fmt.Errorf("secrets: stat %s: %w", path, statErr)
@@ -269,6 +288,29 @@ func (k *Keeper) Unseal(blob, aad []byte) ([]byte, error) {
 		return nil, ErrClosed
 	}
 	return openWith(k.dek, blob, aad)
+}
+
+// HMACSHA256 returns a deterministic keyed digest for one purpose and message.
+// The purpose is length-framed under a versioned prefix, so equal messages in
+// different domains cannot share a digest. The data key never leaves Keeper.
+func (k *Keeper) HMACSHA256(domain string, message []byte) ([]byte, error) {
+	if domain == "" {
+		return nil, errors.New("secrets: HMAC domain is empty")
+	}
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+	if k.dek == nil {
+		return nil, ErrClosed
+	}
+
+	mac := hmac.New(sha256.New, k.dek)
+	_, _ = mac.Write([]byte("oonfeewrt/keyed-digest/v1"))
+	var domainLen [8]byte
+	binary.BigEndian.PutUint64(domainLen[:], uint64(len(domain)))
+	_, _ = mac.Write(domainLen[:])
+	_, _ = mac.Write([]byte(domain))
+	_, _ = mac.Write(message)
+	return mac.Sum(nil), nil
 }
 
 // ChangePassphrase re-derives the key-encryption key and rewrites the keyring.
@@ -358,6 +400,29 @@ func (k *Keeper) OpenCredential(mac string, blob []byte) (username, password str
 		return "", "", fmt.Errorf("secrets: stored credential for %s is malformed", mac)
 	}
 	return user, pass, nil
+}
+
+// VerifyCredential proves that a sealed credential belongs to this keyring and
+// device without materialising it as Go strings. Store uses this before a
+// schema migration so a wrong keyring cannot mutate an existing database.
+func (k *Keeper) VerifyCredential(mac string, blob []byte) error {
+	if mac == "" {
+		return errors.New("secrets: device MAC is required to verify a credential")
+	}
+	if len(blob) == 0 {
+		return errors.New("secrets: no sealed credential stored for this device")
+	}
+	pt, err := k.Unseal(blob, credAAD(mac))
+	if err != nil {
+		return fmt.Errorf("secrets: cannot verify the credential for %s (wrong keyring, or the record does not belong to this device): %w", mac, err)
+	}
+	defer zero(pt)
+	for _, b := range pt {
+		if b == ':' {
+			return nil
+		}
+	}
+	return fmt.Errorf("secrets: stored credential for %s is malformed", mac)
 }
 
 // credAAD normalises the MAC so that a device recorded as AA:BB:.. and looked up
@@ -494,13 +559,24 @@ func readKeyring(path string) (keyring, error) {
 	return kr, nil
 }
 
+// writeNewKeyring installs the first keyring atomically without replacing a
+// concurrent winner. Linking a fully synced same-directory temp file is the
+// portable no-clobber primitive: link fails with EEXIST instead of overwriting.
+func writeNewKeyring(path string, kr keyring) error {
+	return writeKeyringFile(path, kr, true)
+}
+
 // writeKeyring replaces the keyring atomically.
 //
-// A torn keyring is every device credential lost, so this is the one place in
-// the package that earns the full temp-file-fsync-rename-fsync dance: rename is
+// A torn keyring makes every protected database value unreadable, so this is
+// the one place in the package that earns the full temp-file-fsync-rename-fsync dance: rename is
 // atomic, but without the fsyncs a crash can leave the directory entry pointing
 // at a file whose contents never reached the disk.
 func writeKeyring(path string, kr keyring) error {
+	return writeKeyringFile(path, kr, false)
+}
+
+func writeKeyringFile(path string, kr keyring, exclusive bool) error {
 	data, err := json.MarshalIndent(kr, "", "  ")
 	if err != nil {
 		return fmt.Errorf("secrets: encode keyring: %w", err)
@@ -530,12 +606,33 @@ func writeKeyring(path string, kr keyring) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("secrets: close temp keyring: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("secrets: install keyring: %w", err)
+	if exclusive {
+		if err := os.Link(tmpName, path); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("%w: %s", ErrExists, path)
+			}
+			return fmt.Errorf("secrets: install new keyring: %w", err)
+		}
+	} else if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("secrets: replace keyring: %w", err)
 	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	if err := syncDirectory(dir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func syncDirectory(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("secrets: open keyring directory for sync: %w", err)
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return fmt.Errorf("secrets: sync keyring directory: %w", err)
+	}
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("secrets: close keyring directory after sync: %w", err)
 	}
 	return nil
 }

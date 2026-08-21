@@ -1,35 +1,60 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
-import type { AdoptResult } from '../lib/api'
-import { Button, Field, Banner, Card, Prop } from '../components/ui'
+import type {
+  AdoptResult,
+  DeviceFunction,
+  Discovered,
+  InspectResult,
+} from '../lib/api'
+import { Button, Field, TextAreaField, Banner, Card, Prop } from '../components/ui'
 import type { DeviceRole } from '../lib/api'
+import { Discover } from './Discover'
 
 /** Kept in step with internal/model/role.go, which is where the rule lives:
  *  an unrecognised role is refused by the API rather than stored. */
-const ROLES: { value: DeviceRole; describe: string }[] = [
+const FUNCTIONS: {
+  value: DeviceFunction
+  label: string
+  describe: string
+}[] = [
   {
     value: 'gateway',
+    label: 'Gateway',
     describe:
-      'Routes between networks and to the internet. Gets addressing, DHCP and firewall rules.',
+      'Manage routing, addressing, DHCP and firewall policy. Adopt this device first when it anchors the network.',
   },
   {
     value: 'ap',
+    label: 'Access point',
     describe:
-      'Publishes WLANs and passes tagged traffic through. Does not route or serve DHCP.',
+      'Manage radios and publish WLANs. This can be combined with Gateway and Switch.',
   },
   {
     value: 'switch',
+    label: 'Switch',
     describe:
-      'Passes tagged traffic only. No WLANs are sent to it even if it has radios.',
+      'Record wired switching responsibility and visibility. Per-port or managed-VLAN control depends on the hardware and its existing bridge mode.',
   },
 ]
-import { Discover } from './Discover'
+
+function primaryRole(functions: DeviceFunction[]): DeviceRole {
+  if (functions.includes('gateway')) return 'gateway'
+  if (functions.includes('ap')) return 'ap'
+  return 'switch'
+}
+
+function discoveredFunctions(d: Discovered): DeviceFunction[] {
+  const found: DeviceFunction[] = []
+  if (d.signals.wireless || d.signals.radios > 0) found.push('ap')
+  return found
+}
 
 /**
  * Bring a device under management.
  *
  * The form asks for the ROUTER's existing administrator credential, which the
- * controller uses once and never stores — it creates its own scoped login and
+ * controller uses only for read-only inspection and the one-time adoption
+ * transaction, and never stores. Adoption creates its own scoped login and
  * keeps only that. The screen says so, because "type your router password into
  * this box" deserves an explanation rather than a tooltip.
  *
@@ -43,25 +68,136 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [name, setName] = useState('')
   const [username, setUsername] = useState('root')
   const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
   const [scheme, setScheme] = useState<'http' | 'https'>('http')
-  // Defaults to an access point: the role that changes least about a device.
-  // Defaulting to gateway would hand an unlabelled router addressing, DHCP and
-  // firewall rules nobody asked for.
-  const [role, setRole] = useState<DeviceRole>('ap')
+  // Manual entry defaults to the least invasive function. Discovery may add
+  // only functions its pre-auth signals prove; switch port topology is not
+  // visible until the credentialed probe, so Switch is never guessed here.
+  const [functions, setFunctions] = useState<DeviceFunction[]>(['ap'])
+  const [recommended, setRecommended] = useState<DeviceFunction[]>([])
+  const [possibleGateway, setPossibleGateway] = useState(false)
+  const [hasAdoptedDevice, setHasAdoptedDevice] = useState<boolean | null>(null)
+  const [inspection, setInspection] = useState<InspectResult | null>(null)
+  const [inspectBusy, setInspectBusy] = useState(false)
+  const [inspectErr, setInspectErr] = useState('')
+  const [routerChangesAccepted, setRouterChangesAccepted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [result, setResult] = useState<AdoptResult | null>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
+  const inspectGeneration = useRef(0)
+
+  useEffect(() => {
+    let current = true
+    api.devices()
+      .then(({ devices }) => {
+        if (current) setHasAdoptedDevice(devices.some((d) => d.adopted))
+      })
+      // The server repeats this validation authoritatively. A failed roster
+      // read must not turn the whole form into a dead end.
+      .catch(() => {
+        if (current) setHasAdoptedDevice(null)
+      })
+    return () => {
+      current = false
+    }
+  }, [])
+
+  useEffect(() => () => {
+    inspectGeneration.current++
+  }, [])
+
+  function clearInspection() {
+    inspectGeneration.current++
+    setInspection(null)
+    setInspectErr('')
+    setInspectBusy(false)
+    setRecommended([])
+  }
+
+  function toggleFunction(value: DeviceFunction) {
+    setFunctions((current) =>
+      current.includes(value)
+        ? current.filter((f) => f !== value)
+        : FUNCTIONS.map((f) => f.value).filter(
+            (f) => f === value || current.includes(f),
+          ),
+    )
+  }
+
+  function pickDiscovered(h: string, candidate?: Discovered) {
+    setHost(h)
+    setRouterChangesAccepted(false)
+    setErr('')
+    clearInspection()
+    setPossibleGateway(false)
+    if (candidate) {
+      const next = discoveredFunctions(candidate)
+      setRecommended(next)
+      // A WAN-named object or dnsmasq is a hint, not proof: an AP may retain
+      // both while bridged. The credentialed inspection decides Gateway.
+      setPossibleGateway(candidate.signals.gateway || candidate.signals.dhcp)
+      if (next.length > 0) setFunctions(next)
+    }
+    passwordRef.current?.focus()
+  }
+
+  async function inspect() {
+    const generation = ++inspectGeneration.current
+    const request = { host, username, password, scheme }
+    setInspectErr('')
+    setInspectBusy(true)
+    try {
+      const found = await api.inspectDevice(request)
+      if (generation !== inspectGeneration.current) return
+      setInspection(found)
+      setRecommended(found.functions_recommended ?? [])
+      if (found.functions_recommended?.length > 0) {
+        setFunctions(found.functions_recommended)
+      }
+    } catch (e) {
+      if (generation !== inspectGeneration.current) return
+      const detail = e instanceof ApiError ? e.message : String(e)
+      setInspectErr(
+        `Inspection did not complete: ${detail}. You can still adopt directly; adoption performs the full probe after creating its scoped access.`,
+      )
+    } finally {
+      if (generation === inspectGeneration.current) setInspectBusy(false)
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setErr('')
+    if (!routerChangesAccepted) {
+      setErr('Confirm the required, opt-in oonfeeWRT controller capability installation before adopting this device.')
+      return
+    }
+    inspectGeneration.current++
+    setInspectBusy(false)
     setBusy(true)
     try {
-      const res = await api.adopt({ host, name, username, password, scheme, role })
+      const role = primaryRole(functions)
+      const res = await api.adopt({
+        host,
+        name,
+        username,
+        password,
+        ...(privateKey ? { private_key: privateKey } : {}),
+        scheme,
+        functions,
+        // Compatibility fallback for older rows/clients. The backend uses the
+        // same precedence when it emits a single primary role.
+        role,
+        acknowledge_router_changes: true,
+      })
       setResult(res)
-      // The password is gone from this component the moment it is not needed.
+      // The administrator credentials are gone from this component the moment
+      // they are not needed. Neither is sent back by the API or persisted.
       setPassword('')
+      setPrivateKey('')
+      setRouterChangesAccepted(false)
+      setHasAdoptedDevice(true)
       onAdopted()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e))
@@ -70,17 +206,34 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     }
   }
 
+  function adoptAnother() {
+    clearInspection()
+    setHost('')
+    setName('')
+    setUsername('root')
+    setPassword('')
+    setPrivateKey('')
+    setScheme('http')
+    setFunctions(['ap'])
+    setPossibleGateway(false)
+    setRouterChangesAccepted(false)
+    setErr('')
+    setResult(null)
+  }
+
   if (result) {
     return (
       <div style={{ display: 'grid', gap: 14, maxWidth: 620 }}>
+        <h1 style={{ margin: 0, fontSize: 20 }}>Adopt a device</h1>
         <Banner tone="accent">
           <strong>{result.name}</strong> is now managed. The controller created
-          its own login on the device; the password you typed was not stored.
+          its own scoped login and installed the oonfeeWRT controller
+          capability; the password and private key you supplied were not stored.
         </Banner>
         {result.warnings?.map((w) => (
-          <Banner key={w} tone="critical">
-            {w}
-          </Banner>
+          <div key={w} role="alert">
+            <Banner tone="critical">{w}</Banner>
+          </div>
         ))}
         <Card title="What the capability probe found">
           <div style={{ display: 'grid', gap: 6 }}>
@@ -88,6 +241,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             <Prop label="MAC">{result.mac}</Prop>
             <Prop label="Class">{result.class || '—'}</Prop>
             <Prop label="Firmware">{result.firmware || '—'}</Prop>
+            {result.functions && result.functions.length > 0 && (
+              <Prop label="Functions">{functionNames(result.functions)}</Prop>
+            )}
           </div>
           <Section title="Available" items={result.features} />
           {/* Not "missing": a check that was refused is a different state from
@@ -111,7 +267,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
           )}
         </Card>
         <div>
-          <Button onClick={() => setResult(null)}>Adopt another device</Button>
+          <Button onClick={adoptAnother}>Adopt another device</Button>
         </div>
       </div>
     )
@@ -119,37 +275,40 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
 
   return (
     <form onSubmit={submit} style={{ display: 'grid', gap: 14, maxWidth: 620 }}>
+      <h1 style={{ margin: 0, fontSize: 20 }}>Adopt a device</h1>
       {/* Above the form, not instead of it. Discovery cannot see the LAN from a
           bridged container, so add-by-address stays the path that always
           works — a scan that comes up empty must not look like a dead end. */}
       <Discover
-        onPick={(h) => {
-          setHost(h)
-          setErr('')
-          // Straight to the credential: the address came from the scan, so the
-          // only thing still missing is the one thing a scan must never ask for.
-          passwordRef.current?.focus()
-        }}
+        onPick={pickDiscovered}
       />
       <Card title="Adopt a device">
         <div style={{ display: 'grid', gap: 12 }}>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
             Enter the address of an OpenWrt device and its existing administrator
-            login. The controller uses that login <strong>once</strong> — to
-            install one ACL file and create its own scoped account — and never
-            stores it. Removing the device later asks for it again, because a
-            controller that could delete its own permissions could also widen
-            them.
+            login. The controller uses it only for read-only inspection and the
+            one-time adoption transaction, and never stores it. If you opt in,
+            adoption installs the oonfeeWRT controller capability by
+            installing or replacing one rpcd ACL JSON file and creating its own
+            scoped controller login. Adoption does not proceed without this
+            explicit acknowledgement. Removing the device later asks for the
+            administrator login again, because a controller that could delete
+            its own permissions could also widen them.
           </p>
 
-          {err && <Banner tone="critical">{err}</Banner>}
+          {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
           <Field
             label="Address"
             placeholder="192.168.1.1"
             value={host}
             autoFocus
-            onChange={(e) => setHost(e.target.value)}
+            onChange={(e) => {
+              setHost(e.target.value)
+              setRouterChangesAccepted(false)
+              clearInspection()
+              setPossibleGateway(false)
+            }}
           />
           <Field
             label="Name (optional)"
@@ -157,51 +316,20 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          {/* The role decides what the controller will and will not send to
-              this device, so it is asked at adoption rather than assumed. The
-              screen had no field for it at all, which made a gateway
-              impossible to adopt from the UI — and setting it through the API
-              was worse, because an unrecognised value was stored verbatim and
-              silently behaved as an access point. */}
-          <label style={{ display: 'block' }}>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
-              Role
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {ROLES.map((r) => (
-                <button
-                  key={r.value}
-                  type="button"
-                  title={r.describe}
-                  onClick={() => setRole(r.value)}
-                  style={{
-                    fontSize: 12,
-                    padding: '4px 10px',
-                    borderRadius: 4,
-                    cursor: 'pointer',
-                    border: '1px solid var(--border-strong)',
-                    background: role === r.value ? 'var(--accent-soft)' : 'transparent',
-                    color: 'var(--text-primary)',
-                  }}
-                >
-                  {r.value}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              {ROLES.find((r) => r.value === role)?.describe}
-            </div>
-          </label>
-          <label style={{ display: 'block' }}>
+          <div style={{ display: 'block' }}>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
               Protocol
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div role="group" aria-label="Protocol" style={{ display: 'flex', gap: 6 }}>
               {(['http', 'https'] as const).map((s) => (
                 <button
                   key={s}
                   type="button"
-                  onClick={() => setScheme(s)}
+                  aria-pressed={scheme === s}
+                  onClick={() => {
+                    setScheme(s)
+                    clearInspection()
+                  }}
                   style={{
                     fontSize: 12,
                     padding: '4px 10px',
@@ -216,29 +344,205 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                 </button>
               ))}
             </div>
-          </label>
+          </div>
           <Field
             label="Device username"
             value={username}
             autoComplete="off"
-            onChange={(e) => setUsername(e.target.value)}
+            onChange={(e) => {
+              setUsername(e.target.value)
+              clearInspection()
+            }}
           />
           <Field
-            label="Device password"
+            label="Device password (for ubus)"
             type="password"
             ref={passwordRef}
             value={password}
             autoComplete="off"
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              clearInspection()
+            }}
           />
+          <div>
+            <Button
+              type="button"
+              onClick={inspect}
+              disabled={inspectBusy || busy || !host || !username}
+            >
+              {inspectBusy ? 'Inspecting…' : 'Inspect capabilities'}
+            </Button>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+              Recommended before adoption. Uses read-only ubus calls and creates
+              no account or configuration on the router.
+            </div>
+          </div>
+          {inspectErr && <Banner>{inspectErr}</Banner>}
+          {inspection && <Inspection result={inspection} />}
 
-          <Button type="submit" kind="primary" disabled={busy || !host || !username}>
+          {hasAdoptedDevice === false && (
+            <Banner
+              tone={
+                inspection?.functions_recommended.includes('gateway') ||
+                (!inspection && possibleGateway)
+                  ? 'accent'
+                  : 'warning'
+              }
+            >
+              <strong>
+                {inspection?.functions_recommended.includes('gateway')
+                  ? 'Gateway confirmed — adopt it first.'
+                  : !inspection && possibleGateway
+                    ? 'Possible gateway found — inspect it first.'
+                    : 'Starting a new device ecosystem?'}
+              </strong>{' '}
+              {inspection?.functions_recommended.includes('gateway')
+                ? 'The authenticated probe measured its routing role. Make it the routing anchor for devices adopted afterward.'
+                : !inspection && possibleGateway
+                  ? 'The unauthenticated scan saw a WAN-named interface or DHCP service. If inspection confirms Gateway, adopt it before the devices behind it.'
+                  : 'Adopt the router that provides DHCP and routing first and select Gateway. AP-only is still valid when the gateway is intentionally managed elsewhere.'}
+            </Banner>
+          )}
+          <fieldset
+            style={{
+              border: '1px solid var(--border-strong)',
+              borderRadius: 6,
+              padding: '10px 12px 12px',
+              margin: 0,
+            }}
+          >
+            <legend style={{ fontSize: 12, color: 'var(--text-secondary)', padding: '0 4px' }}>
+              Device functions
+            </legend>
+            <div style={{ display: 'grid', gap: 10 }}>
+              {FUNCTIONS.map((item) => {
+                const isRecommended = recommended.includes(item.value)
+                const isAvailable = inspection?.functions_supported.includes(item.value)
+                const isUnknown = inspection?.functions_unknown?.includes(item.value)
+                return (
+                  <label
+                    key={item.value}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto 1fr',
+                      columnGap: 8,
+                      alignItems: 'start',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={functions.includes(item.value)}
+                      onChange={() => toggleFunction(item.value)}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>
+                        {item.label}
+                        {isRecommended && (
+                          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>
+                            {' '}· recommended
+                          </span>
+                        )}
+                        {!isRecommended && !isUnknown && isAvailable && (
+                          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>
+                            {' '}· available
+                          </span>
+                        )}
+                        {!isRecommended && isUnknown && (
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                            {' '}· not observable
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        style={{
+                          display: 'block',
+                          fontSize: 11,
+                          color: 'var(--text-muted)',
+                          marginTop: 2,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {item.describe}
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
+              Select every function this device should perform. Switch records
+              wired responsibility and visibility; it does not promise per-port
+              configuration. Unknown evidence is never treated as absent.
+            </div>
+          </fieldset>
+          <TextAreaField
+            label="SSH private key (optional)"
+            value={privateKey}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+            onChange={(e) => setPrivateKey(e.target.value)}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: -6 }}>
+            The ubus sign-in still uses the password; the SSH key does not
+            replace it. Leave the key blank when Dropbear accepts password
+            authentication, including a passwordless lab router. Supply it when
+            SSH password authentication is disabled. The key is used only for
+            the one-time SSH bootstrap. Neither credential is stored.
+          </div>
+
+          <label
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              gap: 8,
+              alignItems: 'start',
+              fontSize: 12,
+              lineHeight: 1.45,
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={routerChangesAccepted}
+              onChange={(e) => setRouterChangesAccepted(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <strong>Add the oonfeeWRT controller capability to this router?</strong>{' '}
+              If accepted, Adopt installs or replaces one rpcd ACL JSON file and
+              creates a scoped controller login. This adds oonfeeWRT access to
+              supported topology, radio channel/scan, OpenWrt log, and fixed-target
+              WAN ICMP observations. Adoption requires this acknowledged capability
+              because the controller needs its scoped login. It installs no package,
+              binary, daemon, service, or firmware. Leaving this unchecked or
+              cancelling leaves the router unchanged and keeps Adopt unavailable.
+            </span>
+          </label>
+
+          <Button
+            type="submit"
+            kind="primary"
+            disabled={
+              busy || !host || !username || functions.length === 0 ||
+              !routerChangesAccepted
+            }
+          >
             {busy ? 'Probing and adopting…' : 'Adopt'}
           </Button>
+          {functions.length === 0 && (
+            <div role="alert" style={{ fontSize: 11, color: 'var(--critical)' }}>
+              Select at least one device function.
+            </div>
+          )}
           {busy && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              Probing capabilities, installing the ACL, creating the login, then
-              verifying it works. A few seconds — the survey is deliberately
+              Installing and verifying the controller capability:
+              writing the rpcd ACL JSON file, creating the scoped login, then
+              probing capabilities. A few seconds — the survey is deliberately
               sampled twice.
             </div>
           )}
@@ -246,6 +550,96 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
       </Card>
     </form>
   )
+}
+
+function Inspection({ result }: { result: InspectResult }) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        border: '1px solid var(--accent)',
+        borderRadius: 6,
+        padding: 10,
+        display: 'grid',
+        gap: 6,
+        background: 'var(--surface-2)',
+      }}
+    >
+      <strong style={{ fontSize: 12 }}>Read-only inspection complete</strong>
+      <Prop label="Model">{result.model || '—'}</Prop>
+      <Prop label="Firmware">{result.firmware || '—'}</Prop>
+      <Prop label="Radios">{result.radio_count}</Prop>
+      <Prop label="LAN ports observed">
+        {result.lan_ports.length > 0
+          ? `${result.lan_ports.length} observed: ${result.lan_ports.join(', ')}`
+          : 'None observed'}
+      </Prop>
+      <Prop label="WAN port observed">{result.wan_port || 'None'}</Prop>
+      <Prop label="Active WAN default route">
+        {evidenceText(
+          result.gateway_evidence.active_wan_default_route,
+          'Observed — Gateway recommendation evidence',
+          'Not observed',
+        )}
+      </Prop>
+      <Prop label="LAN DHCP server">
+        {evidenceText(
+          result.gateway_evidence.lan_dhcp_enabled,
+          'Enabled — Gateway recommendation evidence',
+          'Not enabled',
+        )}
+      </Prop>
+      <Prop label="Switch capability">{switchModeText(result.switch_mode)}</Prop>
+      <Prop label="Recommended">
+        {functionNames(result.functions_recommended) || 'None automatically'}
+      </Prop>
+      {result.functions_unknown && result.functions_unknown.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          Could not determine: {functionNames(result.functions_unknown)}. You can
+          still select those functions when you know the device should provide them.
+        </div>
+      )}
+      {result.notes?.map((note) => (
+        <div key={note} style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          {note}
+        </div>
+      ))}
+      {result.unobservable && result.unobservable.length > 0 && (
+        <details style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          <summary>Inspection limits</summary>
+          <ul style={{ margin: '5px 0 0', paddingLeft: 18 }}>
+            {result.unobservable.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function functionNames(functions: DeviceFunction[]): string {
+  return functions
+    .map((value) => FUNCTIONS.find((item) => item.value === value)?.label ?? value)
+    .join(', ')
+}
+
+function evidenceText(value: boolean | null, yes: string, no: string): string {
+  if (value === true) return yes
+  if (value === false) return no
+  return 'Unknown — inspection could not determine this'
+}
+
+function switchModeText(mode: InspectResult['switch_mode']): string {
+  switch (mode) {
+    case 'dsa-conditional':
+      return 'DSA detected — managed VLAN carriage requires an existing VLAN-aware LAN bridge'
+    case 'observe-only':
+      return 'Observe only — port/FDB telemetry; no per-port or managed-VLAN configuration'
+    case 'none':
+      return 'No switch capability observed'
+    default:
+      return 'Unknown — switching evidence could not be determined'
+  }
 }
 
 function Section({

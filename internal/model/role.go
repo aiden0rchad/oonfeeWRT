@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// What a device is for.
+// Role is the legacy primary label for a device.
 //
 // # Why this is a closed vocabulary and not a string
 //
@@ -22,26 +22,18 @@ import (
 //   - "switch" was accepted and then never consulted, so a device adopted as a
 //     switch was an access point in every respect that mattered.
 //
-// A role decides what the renderer will and will not send to a device. That
-// makes it a decision, and decisions do not get to be free text.
+// New devices use DeviceFunctions as the rendering authority; Role stays on
+// the wire and in the database for older clients. Its closed vocabulary still
+// matters because it is also the deterministic primary label for a function
+// set, and legacy rows are expanded from it.
 type Role string
 
 const (
-	// RoleGateway routes. It gets the whole stack — VLAN, addressed interface,
-	// DHCP server, firewall zone and forwarding — and it applies last, because
-	// the controller's traffic to everything else goes through it.
+	// RoleGateway is the primary label for a set containing gateway.
 	RoleGateway Role = "gateway"
-	// RoleAP carries WLANs. It gets the bridge-VLAN so tagged frames traverse
-	// it, and nothing else: an AP running a second DHCP server on the same VLAN
-	// answers the same broadcasts as the gateway, which fails intermittently
-	// and is miserable to diagnose.
+	// RoleAP is the primary label for a set containing AP but not gateway.
 	RoleAP Role = "ap"
-	// RoleSwitch carries VLANs and nothing wireless.
-	//
-	// A device given this role is not offered WLANs even if it has radios and
-	// sits in an AP group. That is the point of saying so — an old router
-	// repurposed as a switch usually still has radios, and "has radios" is not
-	// "should be broadcasting".
+	// RoleSwitch is the primary label for a switch-only set.
 	RoleSwitch Role = "switch"
 )
 
@@ -69,13 +61,15 @@ func (r Role) or() Role {
 	return r
 }
 
-// Wireless reports whether this role publishes WLANs.
+// Wireless reports the bundled behavior of a legacy role. New code must ask
+// Device.EffectiveFunctions instead, because gateway no longer implies AP.
 func (r Role) Wireless() bool {
 	v := r.or()
 	return v == RoleAP || v == RoleGateway
 }
 
-// Routes reports whether this role gets addressing, DHCP and firewalling.
+// Routes reports the bundled behavior of a legacy role. New code must ask
+// Device.EffectiveFunctions instead.
 func (r Role) Routes() bool { return r.or() == RoleGateway }
 
 func (r Role) String() string { return string(r.or()) }

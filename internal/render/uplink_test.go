@@ -48,6 +48,16 @@ func TestUplinkRendersFourAddressStation(t *testing.T) {
 	}
 }
 
+func TestVLANUplinkUsesTheOwnedNetworkAttachment(t *testing.T) {
+	section, _ := renderUplink(model.Uplink{ID: 1, Band: model.Band5G},
+		uplinkWLAN(), model.Network{Name: "iot", VLAN: 45, Enabled: true}, "radio0",
+		uplinkCaps(capability.Present))
+	if section.Values["network"] != "oowrt_net_iot" {
+		t.Fatalf("VLAN uplink network = %q, want owned attachment oowrt_net_iot",
+			section.Values["network"])
+	}
+}
+
 // Credentials come from the WLAN and are never restated on the uplink. Two
 // copies of a passphrase drift, and a bridge whose key no longer matches does
 // not fail cleanly — it fails the way a client with a stale password fails.

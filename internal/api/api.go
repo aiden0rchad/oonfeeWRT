@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -72,18 +73,26 @@ type Fleet interface {
 	// written it down yet.
 	LiveClients(deviceID int64) (int, bool)
 
-	// LiveStations is which clients the last poll saw associated to a device,
-	// keyed by lower-case MAC.
+	// LiveStations is every BSS association the last poll saw on a device,
+	// grouped by lower-case MAC. Multiple observations for one MAC are retained
+	// because choosing one would invent an AP during a roam or stale driver read.
 	//
 	// From hostapd's get_clients, which runs at the BASELINE rate and already
 	// carries every MAC and its RSSI — the collector used to keep only the
 	// count. False means the read failed, never "nobody is associated".
-	LiveStations(deviceID int64) (map[string]collector.LiveStation, bool)
+	LiveStations(deviceID int64) (collector.LiveStationSet, bool)
+
+	// LivePresence is the latest authoritative reachability proof per client
+	// MAC. Inventory-only host hints and DHCP leases are never included.
+	LivePresence(deviceID int64) (collector.ClientPresenceState, bool)
 }
 
 // Server serves /api/v1.
 type Server struct {
-	Store  *store.DB
+	Store *store.DB
+	// Keys produces domain-separated request bindings. Apply idempotency
+	// records never persist a preview token or an unkeyed verifier for one.
+	Keys   *secrets.Keeper
 	Fleet  Fleet
 	Enroll Enroller
 	Scan   Scanner
@@ -111,8 +120,11 @@ type Server struct {
 	// radio scan for the others. Optional, and deliberately not on any timer:
 	// a scan takes a radio off-channel.
 	OnAir func(context.Context) (*OnAirResult, error)
-	Hub   *Hub
-	Log   *slog.Logger
+	// RadioScan runs one acknowledged, persisted RF scan. It is never called by
+	// a GET or a timer because the selected serving radio leaves its channel.
+	RadioScan RadioScanner
+	Hub       *Hub
+	Log       *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -132,6 +144,13 @@ type Server struct {
 	// dummyHash is verified against when an account does not exist, so the
 	// unknown-username path costs the same as the known one.
 	dummyHash string
+
+	// siteMu covers read/merge/write HTTP mutations. Store.siteMu protects
+	// persistence invariants, but a partial network handler reads before it
+	// writes; two such requests could otherwise each merge against stale state
+	// and silently discard the other's field.
+	siteMu   siteMutex
+	requests *requestGate
 }
 
 // New builds a Server.
@@ -144,6 +163,7 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 		sessions: newSessions(),
 		throttle: newThrottle(),
 		hashing:  make(chan struct{}, hashSlots),
+		requests: newRequestGate(),
 	}
 	srv.Hub = NewHub(fleet, log)
 	// One derivation at startup, with the shipped parameters, so that verifying
@@ -203,7 +223,9 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
 	private.HandleFunc("POST /api/v1/devices/{id}/name", s.handleRename)
 	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
+	private.HandleFunc("POST /api/v1/devices/inspect", s.handleInspect)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
+	private.HandleFunc("POST /api/v1/devices/{id}/refresh-acl", s.handleRefreshACL)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
 	// Records a DECISION about a foreign wireless section. Writes nothing to
 	// any device — the controller does not touch config it did not create.
@@ -233,9 +255,18 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/site/networks", s.handleSaveNetwork)
 	private.HandleFunc("POST /api/v1/site/networks/{id}", s.handleSaveNetwork)
 	private.HandleFunc("DELETE /api/v1/site/networks/{id}", s.handleDeleteNetwork)
+	private.HandleFunc("POST /api/v1/site/zones/{name}", s.handleSaveZonePolicy)
+	private.HandleFunc("DELETE /api/v1/site/zones/{name}", s.handleDeleteZonePolicy)
+	private.HandleFunc("GET /api/v1/site/policies", s.handlePolicies)
+	private.HandleFunc("POST /api/v1/site/policies", s.handleSavePolicy)
+	private.HandleFunc("POST /api/v1/site/policies/{id}", s.handleSavePolicy)
+	private.HandleFunc("DELETE /api/v1/site/policies/{id}", s.handleDeletePolicy)
+	private.HandleFunc("POST /api/v1/site/object-manager/compile", s.handleCompileObjects)
+	private.HandleFunc("POST /api/v1/clients/{mac}/policy", s.handleSaveClientPolicy)
 	private.HandleFunc("POST /api/v1/site/devices/{id}/override", s.handleSetOverride)
 	private.HandleFunc("GET /api/v1/site/preview", s.handlePreview)
 	private.HandleFunc("POST /api/v1/site/apply", s.handleApply)
+	private.HandleFunc("GET /api/v1/site/apply/{operation_id}", s.handleApplyOperationStatus)
 
 	private.HandleFunc("GET /api/v1/discovery", s.handleScanPlan)
 	// A POST because it makes the controller emit traffic across a subnet.
@@ -244,7 +275,13 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/discovery/scan", s.handleScan)
 	private.HandleFunc("GET /api/v1/stats/{kind}", s.handleStats)
 	private.HandleFunc("GET /api/v1/clients", s.handleClients)
+	private.HandleFunc("GET /api/v1/clients/{mac}/observability", s.handleClientObservability)
 	private.HandleFunc("GET /api/v1/events", s.handleEvents)
+	private.HandleFunc("GET /api/v1/events/{id}", s.handleEventDetail)
+	private.HandleFunc("GET /api/v1/topology", s.handleTopology)
+	private.HandleFunc("GET /api/v1/topology/history", s.handleTopologyHistory)
+	private.HandleFunc("GET /api/v1/radios", s.handleRadios)
+	private.HandleFunc("POST /api/v1/devices/{id}/radios/{radio}/scan", s.handleRadioScan)
 	private.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 	// Behind requireAuth like everything else. The upgrade is a GET, so the
 	// CSRF token does not apply — handleLive checks the Origin itself, which
@@ -252,7 +289,7 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/live", s.handleLive)
 
 	mux.Handle("/api/v1/", s.requireAuth(private))
-	return noStore(mux)
+	return noStore(s.admitRequests(mux))
 }
 
 // noStore keeps API responses out of caches. Everything here is either live
@@ -300,6 +337,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		writeErr(w, http.StatusBadRequest, "malformed request body")
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		writeErr(w, http.StatusBadRequest, "malformed request body")
 		return false
 	}

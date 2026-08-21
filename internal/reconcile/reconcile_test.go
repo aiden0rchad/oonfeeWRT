@@ -16,6 +16,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/render"
+	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
@@ -92,18 +93,31 @@ func dial(t *testing.T) *ubus.Client {
 	if err := c.Login(context.Background(), "root", "good"); err != nil {
 		t.Fatalf("login: %v", err)
 	}
+	if err := c.Call(context.Background(), "__test", "reset", nil, nil); err != nil {
+		t.Fatalf("reset mock: %v", err)
+	}
 	t.Cleanup(c.Close)
 	return c
 }
 
 func openStore(t *testing.T) *store.DB {
 	t.Helper()
-	db, err := store.Open(context.Background(), "sqlite",
-		filepath.Join(t.TempDir(), "t.db"))
+	dir := t.TempDir()
+	keeper, err := secrets.Create(filepath.Join(dir, secrets.FileName),
+		[]byte("reconcile-test-key"), secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
 	if err != nil {
+		t.Fatalf("secrets.Create: %v", err)
+	}
+	db, err := store.Open(context.Background(), "sqlite",
+		filepath.Join(dir, "t.db"), keeper)
+	if err != nil {
+		keeper.Close()
 		t.Fatalf("store.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		db.Close()
+		keeper.Close()
+	})
 	return db
 }
 
@@ -210,6 +224,76 @@ func TestApplyRecordsOwnershipOnlyAfterConfirmation(t *testing.T) {
 	for _, o := range owned {
 		if o.RenderedHash == "" || o.AppliedAt == 0 {
 			t.Errorf("ownership row is incomplete: %+v", o)
+		}
+	}
+}
+
+func TestOwnershipLedgerFailureAfterAppliedAndEmptyPlansIsTruthful(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+	s := siteWLAN(dev.ID, 10)
+
+	p, err := r.PlanDevice(ctx, c, s, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Empty() || p.Blocked() {
+		t.Fatalf("fixture plan empty=%v blocked=%v", p.Empty(), p.Blocked())
+	}
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER reject_owned_insert
+		BEFORE INSERT ON owned_sections BEGIN
+			SELECT RAISE(ABORT, 'synthetic ownership ledger failure');
+		END`); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFailure := func(label string, res applyengine.Result, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "synthetic ownership ledger failure") {
+			t.Fatalf("%s error = %v", label, err)
+		}
+		if res.Outcome != applyengine.Applied ||
+			!strings.Contains(res.Reason, "device outcome was applied") ||
+			!strings.Contains(res.Reason, "ownership recording failed") ||
+			!strings.Contains(res.Reason, "synthetic ownership ledger failure") {
+			t.Fatalf("%s result = %+v", label, res)
+		}
+	}
+
+	res, err := r.Apply(ctx, c, dev.ID, p, nil)
+	assertFailure("confirmed apply", res, err)
+
+	// The ledger failed after confirmation, not before the device write. A
+	// fresh plan sees the requested config already present and has no device
+	// operations, while the controller still has no ownership claim for it.
+	p2, err := r.PlanDevice(ctx, c, s, model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p2.Empty() {
+		t.Fatalf("router config was not applied before the ledger failure: %+v", p2.Plan.Ops)
+	}
+	if owned, err := db.OwnedSections(ctx, dev.ID); err != nil || len(owned) != 0 {
+		t.Fatalf("ownership claims = %+v, err=%v", owned, err)
+	}
+
+	res, err = r.Apply(ctx, c, dev.ID, p2, nil)
+	assertFailure("empty apply", res, err)
+
+	events, err := db.DeviceEvents(ctx, dev.ID, "config.apply", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("audit events = %+v, want both ledger failures", events)
+	}
+	for _, event := range events {
+		detail := string(fmt.Appendf(nil, "%s", event.Detail))
+		if event.Severity != "error" || !strings.Contains(detail, `"outcome":"applied"`) ||
+			!strings.Contains(detail, "synthetic ownership ledger failure") {
+			t.Errorf("untruthful ledger-failure audit: %+v", event)
 		}
 	}
 }
@@ -342,7 +426,7 @@ func TestDriftIgnoresKeysWeDoNotManage(t *testing.T) {
 
 	// A key we never set appears on the section — a device default, say.
 	if err := c.Call(ctx, "uci", "set", map[string]any{
-		"config": "wireless", "section": "oowrt_wlan13_radio1",
+		"config": "wireless", "section": "oowrt_wlan14_radio1",
 		"values": map[string]string{"some_device_default": "42"}}, nil); err != nil {
 		t.Fatalf("add foreign key: %v", err)
 	}
@@ -445,6 +529,24 @@ func TestNoOpPlanShortCircuits(t *testing.T) {
 	}
 	if !strings.Contains(res.Reason, "nothing to do") {
 		t.Errorf("the reason should say why: %q", res.Reason)
+	}
+}
+
+func TestNoOpPlanStillRunsRuntimeHealth(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+
+	runtimeErr := errors.New("managed BSS is absent")
+	ran := false
+	res, err := r.Apply(ctx, c, dev.ID, &DevicePlan{Device: model.Device{ID: dev.ID}},
+		func(context.Context, *ubus.Client) error {
+			ran = true
+			return runtimeErr
+		})
+	if !ran || !errors.Is(err, runtimeErr) || !errors.Is(res.HealthErr, runtimeErr) || res.Outcome != "" {
+		t.Fatalf("no-op runtime health: ran=%v result=%+v err=%v", ran, res, err)
 	}
 }
 

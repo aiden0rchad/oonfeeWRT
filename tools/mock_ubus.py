@@ -28,15 +28,16 @@ What it models faithfully (because the design depends on it):
     unsigned and leaves rx_time/tx_time uninitialised, so airtime is
     computable and interference is not.
 
-What it does not model: timing realism, wireless reload behavior, hostapd
-events, or multiple devices (run several instances on different ports for a
-fleet).
+What it does not model: timing realism, hostapd events, or multiple devices
+(run several instances on different ports for a fleet). Wireless apply updates
+its per-section runtime inventory immediately; product code still polls it.
 """
 
 import argparse
 import copy
 import hashlib
 import http.server
+import ipaddress
 import json
 import secrets
 import socketserver
@@ -205,6 +206,9 @@ acl_gaps = set()       # (object, method) pairs rpcd refuses to proxy at all
 rollback = {}        # {"snapshot", "staged_snapshot", "owner", "deadline"}
 survey_calls = 0     # drives the reproduced mwlwifi survey-noise instability
 info_calls = 0       # ditto for iwinfo.info, which is just as unstable
+nft_runtime_mode = "live"
+nft_runtime_snapshot = ""
+nft_lag_reads = 0
 lock = threading.RLock()
 
 
@@ -263,13 +267,17 @@ def apply_all(sid, rb, timeout):
     them all together, so a per-config apply loop would model something the
     device cannot do.
     """
+    configs = list(staged.get(sid, {}).keys())
     if rb:
         rollback["snapshot"] = copy.deepcopy(committed)
         rollback["staged_snapshot"] = copy.deepcopy(staged.get(sid, {}))
         rollback["owner"] = sid
         rollback["deadline"] = time.time() + timeout
-    for config in list(staged.get(sid, {}).keys()):
+        rollback["wireless_changed"] = "wireless" in configs
+    for config in configs:
         commit_config(sid, config)
+    if "wireless" in configs:
+        sync_wireless_runtime()
 
 
 def confirm(sid):
@@ -303,6 +311,8 @@ def rollback_watchdog():
                 if owner is not None:
                     staged[owner] = copy.deepcopy(
                         rollback.get("staged_snapshot") or {})
+                if rollback.get("wireless_changed"):
+                    sync_wireless_runtime()
                 rollback.clear()
 
 
@@ -426,12 +436,84 @@ WIRELESS_DEVICES = {
                      "wlan1", "default_radio1", "OpenWrt"),
 }
 
+INITIAL_COMMITTED = copy.deepcopy(committed)
+INITIAL_WIRELESS_DEVICES = copy.deepcopy(WIRELESS_DEVICES)
+
+
+def sync_wireless_runtime():
+    """Reflect committed wifi-iface sections in LuCI/hostapd runtime state."""
+    per_radio = {name: [] for name in WIRELESS_DEVICES}
+    for section, values in committed.get("wireless", {}).items():
+        if values.get(".type") != "wifi-iface" or values.get("disabled") == "1":
+            continue
+        radio = values.get("device")
+        if radio in per_radio:
+            per_radio[radio].append((section, values))
+
+    for radio_name, radio in WIRELESS_DEVICES.items():
+        base = INITIAL_WIRELESS_DEVICES[radio_name]
+        base_iface = base["interfaces"][0]
+        radio_index = radio_name.removeprefix("radio")
+        interfaces = []
+        for index, (section, values) in enumerate(per_radio[radio_name]):
+            iface = copy.deepcopy(base_iface)
+            ifname = f"wlan{radio_index}" + (f"-{index}" if index else "")
+            iface["ifname"] = ifname
+            iface["section"] = section
+            iface["config"].update({
+                "network": values.get("network", "").split(),
+                "device": [radio_name],
+                "mode": values.get("mode", "ap"),
+                "encryption": values.get("encryption", "none"),
+                "ssid": values.get("ssid", ""),
+            })
+            if "key" in values:
+                iface["config"]["key"] = values["key"]
+            else:
+                iface["config"].pop("key", None)
+            iface["iwinfo"]["ssid"] = values.get("ssid", "")
+            interfaces.append(iface)
+        radio["interfaces"] = interfaces
+
+
+def wireless_runtime_interface(ifname):
+    for radio in WIRELESS_DEVICES.values():
+        for iface in radio.get("interfaces", []):
+            if iface.get("ifname") == ifname:
+                return iface
+    return None
+
+
+def reset_fixture(sid):
+    """Restore mutable router state while keeping the caller authenticated."""
+    global info_calls, survey_calls, nft_runtime_mode, nft_runtime_snapshot
+    global nft_lag_reads
+    with lock:
+        sessions.intersection_update({sid})
+        committed.clear()
+        committed.update(copy.deepcopy(INITIAL_COMMITTED))
+        staged.clear()
+        dirty_configs.clear()
+        written_files.clear()
+        reject_logins.clear()
+        acl_gaps.clear()
+        rollback.clear()
+        NR_LISTS.clear()
+        WIRELESS_DEVICES.clear()
+        WIRELESS_DEVICES.update(copy.deepcopy(INITIAL_WIRELESS_DEVICES))
+        info_calls = 0
+        survey_calls = 0
+        nft_runtime_mode = "live"
+        nft_runtime_snapshot = ""
+        nft_lag_reads = 0
+
 OBJECTS = {
     "session": {"login": {}, "list": {}, "destroy": {}, "access": {}},
     "uci": {m: {} for m in ("configs", "get", "set", "add", "delete",
                             "changes", "revert", "commit", "apply",
                             "confirm", "rollback")},
     "system": {"board": {}, "info": {}, "reboot": {}},
+    "service": {"list": {}},
     "file": {"read": {}, "write": {}, "exec": {}, "list": {}, "stat": {},
              "remove": {}},
     "iwinfo": {m: {} for m in ("devices", "info", "assoclist", "freqlist",
@@ -461,7 +543,7 @@ WHICH = {"iw": "/usr/sbin/iw", "iwinfo": "/usr/bin/iwinfo",
          "df": "/bin/df", "ip": "/sbin/ip", "nft": "/usr/sbin/nft",
          "opkg": "/bin/opkg", "apk": "/usr/bin/apk",
          "ethtool": "/usr/sbin/ethtool",
-         "bridge": "/usr/sbin/bridge"}
+         "bridge": "/usr/sbin/bridge", "brctl": "/usr/sbin/brctl"}
 
 OPKG_INSTALLED = """rpcd - 2024.09.01
 rpcd-mod-file - 2024.09.01
@@ -547,14 +629,194 @@ def denied(rid):
             "error": {"code": -32002, "message": "Access denied"}}
 
 
+def nft_enabled(section):
+    return str(section.get("enabled", "1")).strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def nft_items(value):
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return str(value or "").replace(",", " ").split()
+
+
+def nft_values(value):
+    return [item.lower() for item in nft_items(value)]
+
+
+def nft_chain(name, hook=None, policy=None):
+    chain = {"family": "inet", "table": "fw4", "name": name}
+    if hook:
+        chain.update({"type": "filter", "hook": hook, "prio": 0})
+    if policy:
+        chain["policy"] = policy
+    return {"chain": chain}
+
+
+def nft_rule(chain, expr, comment=""):
+    rule = {"family": "inet", "table": "fw4", "chain": chain,
+            "expr": expr}
+    if comment:
+        rule["comment"] = comment
+    return {"rule": rule}
+
+
+def nft_jump(target):
+    return {"jump": {"target": target}}
+
+
+def nft_match(left, right, op="=="):
+    return {"match": {"op": op, "left": left, "right": right}}
+
+
+def render_nft_ruleset():
+    """Small fw4-shaped runtime derived from committed firewall UCI state."""
+    firewall = committed.get("firewall", {})
+    zones = {}
+    forwardings = []
+    rules = []
+    for _, section in sorted(firewall.items()):
+        if not nft_enabled(section):
+            continue
+        section_type = section.get(".type")
+        if section_type == "zone" and section.get("name"):
+            zones[str(section["name"])] = section
+        elif section_type == "forwarding" and section.get("src") \
+                and section.get("dest"):
+            forwardings.append((str(section["src"]), str(section["dest"])))
+        elif section_type == "rule" and section.get("src") \
+                and str(section.get("target", "")).upper() == "ACCEPT":
+            rules.append(section)
+
+    records = [
+        {"metainfo": {"version": "1.1.6"}},
+        {"table": {"family": "inet", "name": "fw4"}},
+        nft_chain("input", "input", "drop"),
+        nft_chain("forward", "forward", "drop"),
+        nft_chain("handle_reject"),
+        nft_rule("handle_reject", [{"reject": None}],
+                 "!fw4: Reject any other traffic"),
+    ]
+
+    network = committed.get("network", {})
+
+    def zone_devices(zone):
+        devices = []
+        for interface in nft_items(zone.get("network")):
+            device = network.get(interface, {}).get("device")
+            if device:
+                devices.append(str(device))
+        return sorted(set(devices))
+
+    def interface_match(devices):
+        return devices[0] if len(devices) == 1 else {"set": devices}
+
+    destinations = {"wan"}
+    destinations.update(zones)
+    destinations.update(dest for _, dest in forwardings)
+    for dest in sorted(destinations):
+        records.append(nft_chain("accept_to_" + dest))
+        devices = zone_devices(zones[dest]) if dest in zones else [
+            str(network.get("wan", {}).get("device") or "wan")]
+        records.append(nft_rule("accept_to_" + dest, [
+            nft_match({"meta": {"key": "oifname"}},
+                      interface_match(devices),
+                      "==" if len(devices) == 1 else "in"),
+            {"accept": None},
+        ],
+                                "!fw4: Accept traffic towards " + dest))
+
+    for source in sorted(zones):
+        devices = zone_devices(zones[source])
+        records.extend((nft_chain("input_" + source),
+                        nft_chain("forward_" + source),
+                        nft_chain("reject_from_" + source),
+                        nft_chain("reject_to_" + source)))
+        records.append(nft_rule("input", [
+            nft_match({"meta": {"key": "iifname"}},
+                      interface_match(devices),
+                      "==" if len(devices) == 1 else "in"),
+            nft_jump("input_" + source),
+        ], "!fw4: Handle " + source + " input traffic"))
+        records.append(nft_rule("forward", [
+            nft_match({"meta": {"key": "iifname"}},
+                      interface_match(devices),
+                      "==" if len(devices) == 1 else "in"),
+            nft_jump("forward_" + source),
+        ], "!fw4: Handle " + source + " forward traffic"))
+        for src, dest in sorted(forwardings):
+            if src == source:
+                records.append(nft_rule("forward_" + source,
+                                        [nft_jump("accept_to_" + dest)],
+                                        "!fw4: Accept " + source + " to " +
+                                        dest + " forwarding"))
+        records.append(nft_rule("forward_" + source,
+                                [nft_jump("reject_to_" + source)]))
+        records.append(nft_rule("reject_from_" + source, [
+            nft_match({"meta": {"key": "iifname"}},
+                      interface_match(devices),
+                      "==" if len(devices) == 1 else "in"),
+            nft_jump("handle_reject"),
+        ], "!fw4: Reject " + source + " input traffic"))
+        records.append(nft_rule("reject_to_" + source,
+                                [nft_match({"meta": {"key": "oifname"}},
+                                           interface_match(devices),
+                                           "==" if len(devices) == 1 else "in"),
+                                 nft_jump("handle_reject")],
+                                "!fw4: Reject " + source + " output traffic"))
+
+    for section in rules:
+        source = str(section["src"])
+        if source not in zones:
+            continue
+        protocols = nft_values(section.get("proto"))
+        for protocol in protocols:
+            expr = []
+            if str(section.get("family", "")).lower() == "ipv4":
+                expr.append(nft_match({"meta": {"key": "nfproto"}}, "ipv4"))
+            expr.append(nft_match({"meta": {"key": "l4proto"}}, protocol))
+            if section.get("src_port"):
+                expr.append(nft_match({"payload": {
+                    "protocol": protocol, "field": "sport"}},
+                    int(section["src_port"])))
+            if section.get("dest_port"):
+                expr.append(nft_match({"payload": {
+                    "protocol": protocol, "field": "dport"}},
+                    int(section["dest_port"])))
+            expr.append({"accept": None})
+            records.append(nft_rule("input_" + source, expr,
+                                    "!fw4: " + str(section.get("name", ""))))
+
+    for source in sorted(zones):
+        records.append(nft_rule("input_" + source,
+                                [nft_jump("reject_from_" + source)]))
+
+    return json.dumps({"nftables": records}, separators=(",", ":"))
+
+
 def exec_cmd(rid, cmd, params):
+    global nft_lag_reads
     def out(code, stdout):
         return ok(rid, {"code": code, "stdout": stdout, "stderr": ""})
     # rpcd resolves a command to its ABSOLUTE PATH before matching the ACL, so
     # callers legitimately pass either form. Compare on the basename.
     cmd = (cmd or "").rsplit("/", 1)[-1]
     if cmd == "nft":
-        return out(0, '{"nftables":[{"metainfo":{"version":"1.1.6"}}]}')
+        if nft_runtime_mode == "nonzero":
+            return out(1, "")
+        if nft_runtime_mode == "malformed":
+            return out(0, "{")
+        if nft_runtime_mode == "empty":
+            return out(0, '{"nftables":[{"metainfo":{"version":"1.1.6"}}]}')
+        if nft_runtime_mode == "stale" or \
+                nft_runtime_mode == "lag" and nft_lag_reads > 0:
+            if nft_runtime_mode == "lag":
+                nft_lag_reads -= 1
+            return out(0, nft_runtime_snapshot)
+        return out(0, render_nft_ruleset())
+    if cmd == "brctl" and len(params) == 2 and params[0] == "showmacs":
+        return out(0, "port no mac addr is local? ageing timer\n"
+                      "  1 aa:bb:cc:11:22:33 no 12.34\n")
     if cmd == "nlbw":
         return out(0, '{"columns":["mac","conns","rx_bytes","rx_pkts",'
                       '"tx_bytes","tx_pkts"],"data":['
@@ -591,8 +853,75 @@ def exec_cmd(rid, cmd, params):
             return out(0, "/sys/class/net/lan1/dsa\n/sys/class/net/lan2/dsa\n")
         return out(0, "")
     if cmd == "ping":
-        return out(0, "1 packets transmitted, 1 received, time 12ms\n")
+        if params != ["-q", "-c", "3", "-W", "1", "1.1.1.1"]:
+            return out(2, "")
+        return out(0, "PING 1.1.1.1 (1.1.1.1): 56 data bytes\n\n"
+                      "--- 1.1.1.1 ping statistics ---\n"
+                      "3 packets transmitted, 3 packets received, "
+                      "0% packet loss\n"
+                      "round-trip min/avg/max = 11.500/12.000/12.500 ms\n")
     return out(127, "")
+
+
+DNSMASQ_RUNTIME_CONFIG = "/var/etc/dnsmasq.conf.cfg01411c"
+
+
+def dnsmasq_runtime_config():
+    """Render the active ranges dnsmasq builds from committed UCI state.
+
+    Health checks run after uci.apply while rollback is armed. Reading staged
+    UCI here would reproduce the exact false proof the controller forbids, so
+    this derives only from committed runtime state.
+    """
+    lines = []
+    with lock:
+        networks = committed.get("network", {})
+        for _, pool in sorted(committed.get("dhcp", {}).items()):
+            if pool.get(".type") != "dhcp" or pool.get("ignore") == "1":
+                continue
+            iface = pool.get("interface")
+            network = networks.get(iface, {})
+            if network.get(".type") != "interface":
+                continue
+            try:
+                subnet = ipaddress.IPv4Network(
+                    f'{network["ipaddr"]}/{network["netmask"]}', strict=False)
+                start = int(pool.get("start", "100"))
+                limit = int(pool.get("limit", "150"))
+                first = subnet.network_address + start
+                last = first + limit - 1
+                if limit < 1 or last >= subnet.broadcast_address:
+                    continue
+            except (KeyError, ValueError, ipaddress.AddressValueError):
+                continue
+            lines.append(
+                f"dhcp-range=set:{iface},{first},{last},{subnet.netmask},"
+                f'{pool.get("leasetime", "12h")}')
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def runtime_interfaces():
+    out = []
+    with lock:
+        for name, section in sorted(committed.get("network", {}).items()):
+            if section.get(".type") != "interface":
+                continue
+            row = {"interface": name, "up": True,
+                   "proto": section.get("proto", "")}
+            if section.get("device"):
+                row["device"] = section["device"]
+            if section.get("ipaddr") and section.get("netmask"):
+                try:
+                    prefix = ipaddress.IPv4Network(
+                        f'{section["ipaddr"]}/{section["netmask"]}',
+                        strict=False).prefixlen
+                    row["ipv4-address"] = [{
+                        "address": section["ipaddr"], "mask": prefix,
+                    }]
+                except (ValueError, ipaddress.AddressValueError):
+                    row["ipv4-address"] = []
+            out.append(row)
+    return out
 
 
 def handle_one(req):
@@ -659,7 +988,9 @@ def handle_one(req):
         staged.pop(sess, None)
         return ok(rid)
     if obj == "session" and meth == "access":
-        return ok(rid, {"access": True})
+        target = (args.get("object"), args.get("function"))
+        allowed = target not in acl_gaps and (target[0], "*") not in acl_gaps
+        return ok(rid, {"access": allowed})
     if obj == "session" and meth == "list":
         return ok(rid, {"ubus_rpc_session": sess, "timeout": 300, "expires": 300})
 
@@ -682,10 +1013,23 @@ def handle_one(req):
         if meth == "exec":
             return exec_cmd(rid, args.get("command"), args.get("params", []))
         if meth == "read":
-            if args.get("path") == "/proc/stat":
+            requested_path = args.get("path", "")
+            if requested_path == "/proc/stat":
                 t = int(time.time() * 100)
                 return ok(rid, {"data": f"cpu  {t % 100000} 0 {t % 50000} "
                                         f"{t % 900000} 0 0 0 0\n"})
+            if requested_path == DNSMASQ_RUNTIME_CONFIG:
+                return ok(rid, {"data": dnsmasq_runtime_config()})
+            prefix, suffix = "/sys/class/net/", "/brport/isolated"
+            if requested_path.startswith(prefix) and requested_path.endswith(suffix):
+                ifname = requested_path[len(prefix):-len(suffix)]
+                iface = wireless_runtime_interface(ifname)
+                if iface is None:
+                    return err(rid, 4)
+                section = iface.get("section")
+                value = committed.get("wireless", {}).get(section, {}).get(
+                    "bridge_isolate", "0")
+                return ok(rid, {"data": value + "\n"})
             return err(rid, 4)
         if meth == "write":
             data = args.get("data") or ""
@@ -724,11 +1068,23 @@ def handle_one(req):
     # Test-only hook: stand in for "a human is editing in LuCI right now".
     # There is no CLI inside the mock, so tests need a way to dirty the system
     # savedir. Real devices need no such hook.
+    if obj == "__test" and meth == "reset":
+        reset_fixture(sess)
+        return ok(rid, {})
     if obj == "__test" and meth == "set_acl_gap":
         acl_gaps.clear()
         for pair in args.get("pairs") or []:
             acl_gaps.add((pair.get("object"), pair.get("method", "*")))
         return ok(rid, {"gaps": sorted(f"{o}.{m}" for o, m in acl_gaps)})
+    if obj == "__test" and meth == "set_nft_runtime":
+        global nft_runtime_mode, nft_runtime_snapshot, nft_lag_reads
+        mode = args.get("mode") or "live"
+        if mode not in ("live", "stale", "lag", "malformed", "nonzero", "empty"):
+            return err(rid, 2)
+        nft_runtime_mode = mode
+        nft_runtime_snapshot = render_nft_ruleset()
+        nft_lag_reads = max(0, int(args.get("reads") or 0))
+        return ok(rid, {"mode": mode, "lag_reads": nft_lag_reads})
     if obj == "__test" and meth == "reject_login":
         # Stands in for anything that leaves a freshly written login unusable —
         # a botched hash, a config that did not land. Adoption must notice.
@@ -836,6 +1192,15 @@ def handle_one(req):
             return ok(rid, {"results": [
                 {"channel": 36, "mhz": 5180, "restricted": False},
                 {"channel": 52, "mhz": 5260, "restricted": True}]})
+        if meth == "scan":
+            g5 = dev == "wlan0"
+            return ok(rid, {"results": [{
+                "bssid": "02:11:22:33:44:55" if g5 else "02:11:22:33:44:66",
+                "ssid": "neighbour-5g" if g5 else "neighbour-2g",
+                "channel": 36 if g5 else 6,
+                "mhz": 5180 if g5 else 2437,
+                "signal": -61,
+            }]})
         if meth == "txpowerlist":
             return ok(rid, {"results": [{"dbm": 23, "mw": 200, "active": True}]})
         if meth == "survey":
@@ -882,29 +1247,44 @@ def handle_one(req):
                 "rx_time": 13869070124637487105, "tx_time": 0}]})
         return err(rid, 8)  # NOT_SUPPORTED
 
+    if obj == "service" and meth == "list":
+        if args.get("name") not in (None, "", "dnsmasq"):
+            return ok(rid, {})
+        return ok(rid, {"dnsmasq": {"instances": {"cfg01411c": {
+            "running": True,
+            "pid": 321,
+            "command": ["/usr/sbin/dnsmasq", "-C",
+                        DNSMASQ_RUNTIME_CONFIG, "-k"],
+            "mount": {DNSMASQ_RUNTIME_CONFIG: DNSMASQ_RUNTIME_CONFIG},
+        }}}})
+
     if obj == "network.interface" and meth == "dump":
-        return ok(rid, {"interface": [
-            {"interface": "lan", "up": True, "proto": "static",
-             "device": "br-lan",
-             "ipv4-address": [{"address": "192.168.1.1", "mask": 24}]},
-            {"interface": "wan", "up": True, "proto": "dhcp",
-             "device": "wan",
-             "ipv4-address": [{"address": "203.0.113.7", "mask": 24}]}]})
+        interfaces = runtime_interfaces()
+        for row in interfaces:
+            if row["interface"] == "wan":
+                row["ipv4-address"] = [{"address": "203.0.113.7", "mask": 24}]
+        return ok(rid, {"interface": interfaces})
     if obj == "network.device" and meth == "status":
         return ok(rid, {"br-lan": {"up": True, "carrier": True, "mtu": 1500,
                                    "macaddr": "60:38:e0:aa:bb:cc",
                                    "statistics": {"rx_bytes": 123456789,
                                                   "tx_bytes": 987654321}}})
     if obj.startswith("hostapd."):
-        g5 = obj.endswith("wlan0")
+        ifname = obj.removeprefix("hostapd.")
+        iface = wireless_runtime_interface(ifname)
+        if iface is None:
+            return err(rid, 4)
+        iw = iface.get("iwinfo", {})
+        g5 = iw.get("frequency", 0) >= 5000
         if meth == "get_status":
             # `utilization` is the 802.11 BSS-Load 0-255 scale, NOT a percent —
             # 172 is ~67%. Anything rendering it as a percentage is wrong, so
             # the fixture reports it the way hardware does.
-            return ok(rid, {"phy": "phy0" if g5 else "phy1",
-                            "ssid": "OpenWrt", "bssid": "30:23:03:db:be:42",
-                            "channel": 36 if g5 else 6,
-                            "freq": 5180 if g5 else 2437,
+            return ok(rid, {"phy": iw.get("phy", "phy0" if g5 else "phy1"),
+                            "ssid": iface.get("config", {}).get("ssid", ""),
+                            "bssid": iw.get("bssid", "30:23:03:db:be:42"),
+                            "channel": iw.get("channel", 36 if g5 else 6),
+                            "freq": iw.get("frequency", 5180 if g5 else 2437),
                             "driver": "nl80211", "status": "ENABLED",
                             "airtime": {"time": 2132274, "time_busy": 1534433,
                                         "utilization": 172}})
@@ -980,6 +1360,12 @@ def handle_one(req):
         return ok(rid, {})
 
     if obj == "luci-rpc":
+        if meth == "getBoardJSON":
+            return ok(rid, {"network": {
+                "lan": {"device": "br-lan",
+                        "ports": ["lan1", "lan2", "lan3", "lan4"]},
+                "wan": {"device": "wan"},
+            }})
         if meth == "getHostHints":
             return ok(rid, {"AA:BB:CC:11:22:33":
                             {"ipaddrs": ["192.168.1.130"],

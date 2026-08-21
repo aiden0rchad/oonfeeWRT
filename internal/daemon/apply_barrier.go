@@ -19,6 +19,8 @@ type applyBarrier struct {
 	idle chan struct{} // created lazily by wait, closed when n reaches zero
 }
 
+type trackedApplyContextKey struct{}
+
 // begin registers an apply and returns the function that ends it. The returned
 // function is safe to call more than once, so it can be deferred and also called
 // on an early return path without double-counting.
@@ -100,7 +102,24 @@ func (d *Daemon) TrackApply(ctx context.Context, deviceID int64, fn func(context
 		}
 	}
 
-	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d.Config.ApplyDrain)
+	base := context.WithoutCancel(ctx)
+	var actx context.Context
+	var cancel context.CancelFunc
+	if tracked, _ := ctx.Value(trackedApplyContextKey{}).(bool); tracked {
+		// A nested per-device tracker is part of the already-counted fleet run.
+		// Keep the outer deadline; resetting ApplyDrain here would let each
+		// device silently buy a fresh full drain budget.
+		if deadline, ok := ctx.Deadline(); ok {
+			actx, cancel = context.WithDeadline(base, deadline)
+		} else {
+			actx, cancel = context.WithTimeout(base, d.Config.ApplyDrain)
+		}
+	} else {
+		// The first tracker intentionally ignores the caller's cancellation and
+		// deadline: an armed router rollback outlives an HTTP request.
+		actx, cancel = context.WithTimeout(base, d.Config.ApplyDrain)
+	}
 	defer cancel()
+	actx = context.WithValue(actx, trackedApplyContextKey{}, true)
 	return fn(actx)
 }

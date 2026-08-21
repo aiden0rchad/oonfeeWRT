@@ -66,12 +66,9 @@ const (
 	rpcErrInternal     = -32603
 )
 
-// StatusError means rpcd *proxied* the call and the object refused the target:
-// the session is valid, the method is granted, and this specific target (a uci
-// config name, a file path) is not permitted.
-//
-// This is permanent. Re-authenticating cannot change it and retrying is pure
-// latency. Measured: docs/IMPLEMENTATION.md §14.
+// StatusError means rpcd *proxied* the call and the object returned a non-zero
+// ubus status. Refusals and unsupported targets are permanent; transport-like
+// statuses describe only this exchange. Re-authenticating changes neither.
 type StatusError struct {
 	Object string
 	Method string
@@ -82,8 +79,17 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("ubus %s.%s: %s", e.Object, e.Method, e.Status)
 }
 
-// Permanent reports that no amount of retrying will help.
-func (e *StatusError) Permanent() bool { return true }
+// Permanent reports whether retrying the same target can ever help. Refusals
+// and unsupported targets are stable; timeout/connection/unknown failures are
+// observations of this exchange, not properties of the device.
+func (e *StatusError) Permanent() bool {
+	switch e.Status {
+	case StatusTimeout, StatusUnknownError, StatusConnectionFailed:
+		return false
+	default:
+		return true
+	}
+}
 
 // DeniedError means rpcd refused to proxy the call at all (JSON-RPC -32002).
 //

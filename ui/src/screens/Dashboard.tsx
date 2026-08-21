@@ -5,14 +5,14 @@ import { ago } from '../components/Chart'
 /**
  * The fleet summary.
  *
- * The client total is the interesting part: it is `null` whenever any AP's
- * count could not be read, and the UI says so rather than showing a number
- * that is quietly short. Summing the radios that answered would draw a dip
- * meaning "a radio did not reply", which reads exactly like clients leaving.
+ * "Wireless clients" is the same server-side online/local/wireless filter as
+ * Client Devices. It is intentionally not a sum of per-radio counters: those
+ * counters have no client address and therefore cannot apply network scope.
  */
 export function Dashboard({ data }: { data: DashboardData }) {
   const d = data.devices
   const events = data.recent_events ?? []
+  const wirelessUnknownOn = data.wireless_clients_unknown_on ?? []
 
   // What "Devices on the LAN" leaves out, named under the number itself.
   //
@@ -26,6 +26,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
+      <h1 style={{ margin: 0, fontSize: 20 }}>Dashboard</h1>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
         <Card>
           <Stat label="Devices online" value={`${d.online}/${d.total}`}
@@ -35,13 +36,18 @@ export function Dashboard({ data }: { data: DashboardData }) {
           <Stat
             label="Wireless clients"
             value={
-              data.wireless_clients === null ? (
-                <Unknown why="at least one access point's client count could not be read" />
-              ) : (
+              data.wireless_clients_complete ? (
                 data.wireless_clients
+              ) : (
+                <Unknown why="one or more devices did not report their current station set" />
               )
             }
-            tone={data.wireless_clients === null ? 'muted' : undefined}
+            tone={data.wireless_clients_complete ? undefined : 'muted'}
+            sub={
+              data.wireless_clients_complete
+                ? undefined
+                : `${data.wireless_clients} matching row${data.wireless_clients === 1 ? '' : 's'} identified; full total unavailable`
+            }
           />
         </Card>
         <Card>
@@ -73,27 +79,34 @@ export function Dashboard({ data }: { data: DashboardData }) {
         </Card>
       </div>
 
-      {data.wireless_clients === null && data.wireless_clients_unknown_on && (
+      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+        “Wireless clients” is the same count as Client Devices with this network,
+        online presence and wireless connection selected. It uses current
+        hostapd associations plus recent station telemetry, so private MACs and
+        clients on another managed VLAN count when their client row is local;
+        uplink-side and unplaced rows do not. If any device cannot report its
+        station set, the matching-row count remains available but is not shown
+        as a complete fleet total. “Devices on the LAN” counts every online row on{' '}
+        <em>this</em> network, wired included. “Devices in focus” counts the ones
+        being polled every few seconds instead of every minute, which happens
+        only while somebody has a device panel open — so from this screen it is
+        normally zero, and that is the honest answer rather than a stuck counter.
+      </div>
+
+      {!data.wireless_clients_complete && (
         <Banner>
           The wireless client total is unavailable because{' '}
-          <strong>{data.wireless_clients_unknown_on.join(', ')}</strong> did not
-          report a client count. Adding up the rest would show a dip that looks
-          like clients leaving, so no total is shown at all.
+          <strong>
+            {wirelessUnknownOn.length > 0
+              ? wirelessUnknownOn.join(', ')
+              : 'one or more managed devices'}
+          </strong>{' '}
+          did not report a current station set. Client Devices still identifies{' '}
+          {data.wireless_clients} matching row
+          {data.wireless_clients === 1 ? '' : 's'}, but presenting that partial
+          evidence as the fleet total would show a false zero or dip.
         </Banner>
       )}
-
-      <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-        “Wireless clients” counts stations associated to the radios, from
-        hostapd. “Devices on the LAN” counts everything on <em>this</em> network
-        that answered ARP or DHCP, wired included — hosts on the uplink side of
-        a gateway are excluded, and “unplaced” means no address has been
-        observed to place them either way. They are different questions and will
-        not match. The client list uses the same scoping, so the two screens
-        agree. “Devices in focus” counts the ones being polled every few seconds
-        instead of every minute, which happens only while somebody has a device
-        panel open — so from this screen it is normally zero, and that is the
-        honest answer rather than a stuck counter.
-      </div>
 
       {d.pending > 0 && (
         <Banner tone="accent">

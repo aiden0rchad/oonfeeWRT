@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -33,10 +34,12 @@ const nullSession = "00000000000000000000000000000000"
 //   - a batch of 550 calls / 65KB was accepted with per-call cost flat from
 //     ~10 calls up. Chunk on bytes, not on call count.
 const (
-	KeepAliveIdle  = 20 * time.Second
-	SessionIdle    = 300 * time.Second
-	maxBatchBytes  = 48 << 10 // conservative against the ~65KB observed ceiling
-	defaultTimeout = 15 * time.Second
+	KeepAliveIdle           = 20 * time.Second
+	SessionIdle             = 300 * time.Second
+	maxBatchBytes           = 48 << 10 // conservative against the ~65KB observed ceiling
+	maxErrorDiagnosticBytes = 64 << 10
+	maxSuccessResponseBytes = 16 << 20
+	defaultTimeout          = 15 * time.Second
 )
 
 // Invocation is one ubus call inside a batch.
@@ -137,7 +140,17 @@ func New(opt Options) *Client {
 			},
 		}
 	}
-	c.http = &http.Client{Transport: tr, Timeout: timeout}
+	c.http = &http.Client{
+		Transport: tr,
+		Timeout:   timeout,
+		// A device sees the login request before choosing its redirect. Following
+		// a 307/308 would resend the password-bearing POST to an arbitrary host;
+		// even a rejected redirect error may include a reflected Location. Treat
+		// every redirect as its fixed-metadata HTTP response instead.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return c
 }
 
@@ -161,11 +174,19 @@ func (c *Client) verifyPin(rawCerts [][]byte) error {
 	if got != c.pinnedCert {
 		// Truncate safely: a caller-supplied pin may be any length, and
 		// slicing it blindly panics inside the TLS handshake callback.
-		return fmt.Errorf("ubus: certificate fingerprint changed "+
-			"(pinned %s, got %s) — device reflashed, replaced, or intercepted",
-			short(c.pinnedCert), short(got))
+		return &certificatePinError{pinned: c.pinnedCert, got: got}
 	}
 	return nil
+}
+
+// certificatePinError is an allowlisted transport diagnostic. Unlike an HTTP
+// parser error it contains only hashes computed locally, never response text.
+type certificatePinError struct{ pinned, got string }
+
+func (e *certificatePinError) Error() string {
+	return fmt.Sprintf("ubus: certificate fingerprint changed "+
+		"(pinned %s, got %s) — device reflashed, replaced, or intercepted",
+		short(e.pinned), short(e.got))
 }
 
 func short(s string) string {
@@ -415,7 +436,8 @@ func (c *Client) callWithSession(ctx context.Context, session, object, method st
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("ubus %s.%s: decode payload: %w", object, method, err)
+			return &ProtocolError{Code: 0, Message: fmt.Sprintf(
+				"%s.%s: decode payload: %s", object, method, jsonDiagnostic(err))}
 		}
 	}
 	return nil
@@ -431,7 +453,12 @@ func decodeFrame(object, method string, r *rpcResponse) (Status, json.RawMessage
 		if r.Error.Code == rpcErrAccessDenied {
 			return 0, nil, &DeniedError{Object: object, Method: method}
 		}
-		return 0, nil, &ProtocolError{Code: r.Error.Code, Message: r.Error.Message}
+		// Error.Message is device-controlled. A hostile endpoint can copy the
+		// request into it, including the login password or current session token,
+		// and this error is propagated through logs and the adoption API. The
+		// numeric code and trusted call name are sufficient diagnostics.
+		return 0, nil, &ProtocolError{Code: r.Error.Code,
+			Message: fmt.Sprintf("%s.%s: JSON-RPC error response", object, method)}
 	}
 	var frame []json.RawMessage
 	if err := json.Unmarshal(r.Result, &frame); err != nil || len(frame) == 0 {
@@ -473,19 +500,95 @@ func (c *Client) postRaw(ctx context.Context, body []byte, out any) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("ubus transport: %w", err)
+		return safeTransportError(ctx, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("ubus transport: read body: %w", err)
-	}
 	if resp.StatusCode != http.StatusOK {
-		return &ProtocolError{Code: resp.StatusCode,
-			Message: fmt.Sprintf("HTTP %d: %.120s", resp.StatusCode, raw)}
+		// Never quote an HTTP error body. Every ubus request carries either the
+		// login password or an authenticated session token, and a device can
+		// reflect those bytes verbatim. Keep only bounded, classified metadata.
+		n, readErr := io.Copy(io.Discard,
+			io.LimitReader(resp.Body, maxErrorDiagnosticBytes+1))
+		body := fmt.Sprintf("%d-byte body", n)
+		if n > maxErrorDiagnosticBytes {
+			body = fmt.Sprintf("body larger than %d bytes", maxErrorDiagnosticBytes)
+		}
+		if readErr != nil {
+			body = "unreadable body"
+		}
+		return &ProtocolError{Code: resp.StatusCode, Message: fmt.Sprintf(
+			"HTTP %d (%s; %s)", resp.StatusCode,
+			responseContentClass(resp.Header.Get("Content-Type")), body)}
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxSuccessResponseBytes+1))
+	if err != nil {
+		return errors.New("ubus transport: could not read response body")
+	}
+	if len(raw) > maxSuccessResponseBytes {
+		return &ProtocolError{Code: 0, Message: fmt.Sprintf(
+			"response body exceeds the %d-byte controller limit", maxSuccessResponseBytes)}
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return &ProtocolError{Code: 0, Message: fmt.Sprintf("decode: %v", err)}
+		return &ProtocolError{Code: 0,
+			Message: "decode JSON response: " + jsonDiagnostic(err)}
 	}
 	return nil
+}
+
+// safeTransportError never returns HTTP parser or redirect text. A server can
+// read the credential-bearing request and then place it in a malformed status
+// line/header, which net/http includes in its error. Only locally generated,
+// allowlisted facts cross this boundary.
+func safeTransportError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("ubus transport: %w", ctxErr)
+	}
+	var pin *certificatePinError
+	if errors.As(err, &pin) {
+		return fmt.Errorf("ubus transport: %w", pin)
+	}
+	// These are locally generated socket facts, not text supplied by the HTTP
+	// endpoint. Keep the diagnosis while still suppressing the URL, headers and
+	// request body carried by the surrounding net/http error.
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return errors.New("ubus transport: controller host has no usable route to the device")
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return errors.New("ubus transport: request timed out")
+	}
+	return errors.New("ubus transport: request failed")
+}
+
+// responseContentClass classifies without returning header bytes. Content-Type
+// is controlled by the same endpoint as the body and can itself reflect a
+// credential, so even a bounded raw value is not safe diagnostic text.
+func responseContentClass(raw string) string {
+	media := strings.ToLower(strings.TrimSpace(strings.SplitN(raw, ";", 2)[0]))
+	switch {
+	case media == "":
+		return "content type unspecified"
+	case media == "application/json" || strings.HasSuffix(media, "+json"):
+		return "JSON response"
+	case media == "text/html":
+		return "HTML response"
+	case media == "text/plain":
+		return "text response"
+	default:
+		return "other content type"
+	}
+}
+
+// jsonDiagnostic retains deterministic location/type evidence without quoting
+// any device-controlled JSON token, field, or value.
+func jsonDiagnostic(err error) string {
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		return fmt.Sprintf("syntax error at byte %d", syntax.Offset)
+	}
+	var mismatch *json.UnmarshalTypeError
+	if errors.As(err, &mismatch) {
+		return fmt.Sprintf("type mismatch at byte %d", mismatch.Offset)
+	}
+	return "invalid response shape"
 }

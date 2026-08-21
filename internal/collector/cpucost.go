@@ -44,12 +44,11 @@ package collector
 //
 // # Why it is per class
 //
-// These are class-A numbers and are reported only for class-A devices. Class C
-// (MT7621) is the class that sets the budget and has never been measured; a
-// class-A figure shown against a class-C device would be a guess wearing a
-// measurement's clothes. Unmeasured classes report no figure and say why —
-// the same rule as everywhere else, that a value nobody has established is
-// absent rather than approximated.
+// These are class-A numbers and are reported only for class-A devices. The
+// QCA956X class-C harness has measured whole-device load and request cadence,
+// but not attributable CPU milliseconds per poll; applying the class-A figure
+// there would still be a guess wearing a measurement's clothes. Classes with
+// no per-poll control measurement report no figure and say why.
 
 // cpuPerPoll is device CPU milliseconds per poll, by device class and tier.
 // Absent means never measured on that class.

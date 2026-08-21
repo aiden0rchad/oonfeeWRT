@@ -70,16 +70,27 @@ func (s State) Decided() bool { return s == Present || s == Absent }
 type Feature string
 
 const (
-	// FeatDSA gates the Ports screen. Detected from luci-rpc.getNetworkDevices
-	// (devtype "dsa") rather than /sys, because rpcd canonicalises paths and a
-	// /sys/class/net/* grant silently never matches.
+	// FeatDSA gates DSA-specific VLAN and port configuration. It does not gate
+	// the read-only Ports screen: legacy swconfig devices can expose useful
+	// port state and counters too.
 	FeatDSA Feature = "dsa"
+	// FeatSwitchPorts gates the read-only Ports screen. It is present for DSA
+	// user ports or for a legacy switch exposed by stock swconfig.
+	FeatSwitchPorts Feature = "switch-port-stats"
+	// FeatBridgeFDB gates MAC-to-bridge-port topology evidence. Prefer stock
+	// BusyBox brctl; iproute2 bridge is an optional fallback.
+	FeatBridgeFDB Feature = "bridge-fdb"
 	// FeatFirewall4 selects the nftables zone model over legacy iptables.
 	FeatFirewall4 Feature = "firewall4"
 	// FeatBatching allows collapsing a poll into one request.
 	FeatBatching Feature = "jsonrpc-batching"
 	// FeatSurvey gates channel utilization (busy/active), the portable metric.
 	FeatSurvey Feature = "iwinfo-survey"
+	// FeatRadioScan means the controller credential is currently authorized to
+	// call iwinfo.scan. It is checked through session.access without running a
+	// scan: probing must not take a serving radio off-channel. The driver may
+	// still reject a particular radio when an operator later requests a scan.
+	FeatRadioScan Feature = "iwinfo-scan"
 	// FeatAirtimeSplit gates Interference and the Airtime split, which need
 	// rx_time/tx_time and are NOT computable where the driver leaves them
 	// uninitialised.
@@ -116,7 +127,7 @@ type Class string
 const (
 	ClassA       Class = "A" // comfortable (mvebu, WRT3200ACM)
 	ClassB       Class = "B" // modern efficient (MT7981/Filogic)
-	ClassC       Class = "C" // constrained (MT7621) — sets the budget
+	ClassC       Class = "C" // constrained MIPS (measured QCA956X; MT7621 target)
 	ClassUnknown Class = "?"
 )
 
@@ -136,6 +147,7 @@ type Quirk struct {
 type Board struct {
 	Model      string
 	BoardName  string
+	System     string
 	Kernel     string
 	Target     string
 	Release    string
@@ -156,8 +168,13 @@ type Board struct {
 // tagged VLAN on its uplink, and the renderer says what it could not do rather
 // than inventing port names.
 type Ports struct {
-	// Bridge is the L2 device the LAN ports are members of, e.g. "br-lan".
+	// Bridge is the board JSON's LAN device used by the renderer. On DSA it is
+	// normally br-lan; on swconfig it may be eth0.1 even though the runtime
+	// Linux bridge (and its FDB) is still br-lan.
 	Bridge string
+	// BridgeDevices are runtime devices reported with devtype=bridge. They are
+	// topology inputs, not UCI render targets.
+	BridgeDevices []string
 	// LAN are the switch port names, in board order.
 	LAN []string
 	// WAN is the uplink device name, when the board declares one.

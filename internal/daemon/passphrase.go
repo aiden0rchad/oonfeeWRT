@@ -42,7 +42,7 @@ func passphraseFor(cfg Config, firstRun bool, in *os.File, out io.Writer) ([]byt
 	}
 
 	fmt.Fprintf(out, "No keyring found in %s — creating one.\n", cfg.DataDir)
-	fmt.Fprintf(out, "This passphrase protects every device credential. "+
+	fmt.Fprintf(out, "This passphrase protects controller credentials and wireless keys. "+
 		"There is no recovery if it is lost.\n")
 	first, err := promptOnce(fd, out, "New operator passphrase: ")
 	if err != nil {
@@ -95,6 +95,6 @@ func unlockHint(cfg Config, path string, err error) error {
 		"have been typed by anyone — pass the file instead:\n"+
 		"  -passphrase-file /path/to/passphrase   (must be mode 0600)\n"+
 		"or OONFEE_PASSPHRASE_FILE. There is no recovery if the passphrase is "+
-		"genuinely lost; re-adopting each device rebuilds the keyring and "+
-		"rotates their credentials", err, path)
+		"genuinely lost; restore a matching database-and-keyring backup or reset "+
+		"the controller and re-adopt the devices", err, path)
 }

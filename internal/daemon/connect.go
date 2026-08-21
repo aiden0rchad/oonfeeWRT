@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/discovery"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -114,6 +115,18 @@ func resetHint(ctx context.Context, dev *store.Device, https bool) string {
 func hostPort(dev *store.Device, https bool) string {
 	port := dev.Port
 	if port == 0 || (https && port == 443) || (!https && port == 80) {
+		// A bare IPv6 literal is not a valid URL authority. Keep the default port
+		// explicit so net.JoinHostPort supplies the brackets; IPv4 and hostnames
+		// retain their existing representation.
+		if net.ParseIP(dev.Host) != nil && strings.Contains(dev.Host, ":") {
+			if port == 0 {
+				port = 80
+				if https {
+					port = 443
+				}
+			}
+			return net.JoinHostPort(dev.Host, strconv.Itoa(port))
+		}
 		return dev.Host
 	}
 	return net.JoinHostPort(dev.Host, strconv.Itoa(port))

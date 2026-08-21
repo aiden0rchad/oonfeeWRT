@@ -41,7 +41,11 @@ func originMatchesHost(raw string, r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	scheme := "http"
+	if secureCookies(r) {
+		scheme = "https"
+	}
+	return strings.EqualFold(u.Scheme, scheme) && strings.EqualFold(u.Host, r.Host)
 }
 
 // requireSameOrigin wraps the unauthenticated mutating routes.

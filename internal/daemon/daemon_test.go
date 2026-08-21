@@ -216,6 +216,28 @@ func TestKeyringLifecycleAcrossRestarts(t *testing.T) {
 	}
 }
 
+func TestMissingKeyringBesideExistingDatabaseIsRefused(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t, "placeholder passphrase")
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.DBPath(), []byte("existing database fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Open(ctx, cfg, quietLogger())
+	if err == nil {
+		d.Close()
+		t.Fatal("missing keyring was replaced beside an existing database")
+	}
+	if !strings.Contains(err.Error(), "restore the matching keyring") {
+		t.Fatalf("missing-keyring refusal lacks recovery guidance: %v", err)
+	}
+	if _, statErr := os.Stat(secrets.DefaultPath(cfg.DataDir)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("missing keyring was created: %v", statErr)
+	}
+}
+
 // Open binds the listener before prompting for or reading the passphrase, so a
 // port clash is reported without first asking an operator to type a secret.
 func TestOpenReportsPortClashBeforeTouchingTheKeyring(t *testing.T) {
@@ -284,6 +306,8 @@ func TestHostPort(t *testing.T) {
 		{"zero treated as default", store.Device{Host: "192.168.1.1"}, false, "192.168.1.1"},
 		{"https on 80 is not default", store.Device{Host: "192.168.1.1", Port: 80}, true, "192.168.1.1:80"},
 		{"ipv6 bracketed", store.Device{Host: "fd00::1", Port: 8080}, false, "[fd00::1]:8080"},
+		{"ipv6 default http bracketed", store.Device{Host: "fd00::1", Port: 80}, false, "[fd00::1]:80"},
+		{"ipv6 default https bracketed", store.Device{Host: "fd00::1", Port: 443}, true, "[fd00::1]:443"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := hostPort(&tc.dev, tc.https); got != tc.want {
@@ -367,6 +391,36 @@ func TestTrackApplyDetachesFromCallerCancellation(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TrackApply: %v", err)
+	}
+}
+
+func TestNestedTrackApplyKeepsTheFleetDeadline(t *testing.T) {
+	d := &Daemon{Config: DefaultConfig()}
+	d.Config.ApplyDrain = 2 * time.Minute
+	caller, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	if err := d.TrackApply(caller, 0, func(outer context.Context) error {
+		outerDeadline, ok := outer.Deadline()
+		if !ok {
+			t.Fatal("outer apply has no deadline")
+		}
+		return d.TrackApply(outer, 7, func(inner context.Context) error {
+			innerDeadline, ok := inner.Deadline()
+			if !ok {
+				t.Fatal("nested apply has no deadline")
+			}
+			if !innerDeadline.Equal(outerDeadline) {
+				t.Fatalf("nested deadline %s reset outer deadline %s",
+					innerDeadline, outerDeadline)
+			}
+			if time.Until(innerDeadline) < time.Minute {
+				t.Fatal("caller's short HTTP deadline leaked into the fleet run")
+			}
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -599,17 +653,39 @@ func TestForceRemovesADeviceThatCannotBeReached(t *testing.T) {
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
+	if err := d.Store.RecordOwned(ctx, []store.OwnedSection{{
+		DeviceID: dev.ID, Config: "wireless", Section: "oowrt_wlan1_radio0",
+		RenderedHash: "known", AppliedAt: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartCollector(ctx, collector.Options{
+		Baseline: time.Minute, Log: quietLogger(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.collectorRef().Tier(dev.ID); !ok {
+		t.Fatal("precondition: adopted device is not tracked")
+	}
 
-	// Without Force: refuse, and say a credential is needed.
+	// Without Force: refuse because phase 1 could not be proved. An SSH
+	// credential cannot repair the controller session, and neither the row nor
+	// its polling target may disappear on this retryable failure.
 	res, err := d.Unadopt(ctx, api.UnadoptRequest{DeviceID: dev.ID})
-	if !errors.Is(err, api.ErrOperatorRequired) {
-		t.Fatalf("unforced unadopt of an unreachable device: err = %v, want ErrOperatorRequired", err)
+	if err == nil || errors.Is(err, api.ErrOperatorRequired) {
+		t.Fatalf("unforced unreachable unadopt = %v, want a phase-1 controller error", err)
 	}
 	if res.Removed {
-		t.Error("unforced unadopt removed a device with a footprint still on it")
+		t.Error("unforced unadopt removed a device with unproved config and a footprint")
+	}
+	if res.ConfigRevertComplete || len(res.ConfigRemains) != 1 {
+		t.Fatalf("unproved config hand-back was not reported exactly: %+v", res)
 	}
 	if _, err := d.Store.DeviceByID(ctx, dev.ID); err != nil {
 		t.Fatalf("the device row should survive a refused unadopt: %v", err)
+	}
+	if _, ok := d.collectorRef().Tier(dev.ID); !ok {
+		t.Fatal("a failed unadopt silently stopped polling until restart")
 	}
 
 	// With Force: gone from the inventory, and the residue reported — that
@@ -629,8 +705,19 @@ func TestForceRemovesADeviceThatCannotBeReached(t *testing.T) {
 		t.Error("forced removal deleted the only record of what is on the device " +
 			"without listing it")
 	}
+	if got := strings.Join(res.CleanupCommands, "\n"); !strings.Contains(got, "uci -q delete rpcd.oonfeewrt") ||
+		!strings.Contains(got, "rm -f '/usr/share/rpcd/acl.d/oonfeewrt.json'") ||
+		!strings.Contains(got, "uci -q delete wireless.oowrt_wlan1_radio0") {
+		t.Errorf("forced removal did not preserve an actionable cleanup recipe: %q", got)
+	}
+	if len(res.ConfigRemains) != 1 || res.ConfigRemains[0] != "wireless.oowrt_wlan1_radio0" {
+		t.Fatalf("forced removal lost the exact config residue: %+v", res.ConfigRemains)
+	}
 	if _, err := d.Store.DeviceByID(ctx, dev.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("the device row survived a forced unadopt: %v", err)
+	}
+	if _, ok := d.collectorRef().Tier(dev.ID); ok {
+		t.Fatal("a forced inventory removal left the device in the poll loop")
 	}
 }
 

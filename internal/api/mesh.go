@@ -9,10 +9,11 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
-// meshView omits the passphrase, for the same reason wlanView does: a list of
+// meshView never returns the passphrase. Key is a write-only request field, for
+// the same reason wlanView uses one: a list of
 // every mesh is exactly the response that ends up cached, screenshot, or pasted
 // into a support thread. HasKey answers the question a list screen asks — "is
-// this secured" — and the key itself is one explicit request away.
+// this secured" — without making a signed-in browser a credential export path.
 //
 // The consequence is sharper here than for a WLAN. An open mesh is joinable by
 // anyone in radio range, with access to the network behind it, so the
@@ -26,19 +27,17 @@ type meshView struct {
 	// Band is singular, not a list. Mesh nodes peer only with nodes on the same
 	// band, so publishing "one mesh" on two bands is two disjoint backhauls —
 	// see model.Mesh.
-	Band    string `json:"band"`
-	HasKey  bool   `json:"has_key"`
-	Key     string `json:"key,omitempty"`
-	Enabled bool   `json:"enabled"`
+	Band     string `json:"band"`
+	HasKey   bool   `json:"has_key"`
+	Key      string `json:"key,omitempty"`
+	ClearKey bool   `json:"clear_key,omitempty"`
+	Enabled  bool   `json:"enabled"`
 }
 
-func viewMesh(m model.Mesh, reveal bool) meshView {
+func viewMesh(m model.Mesh) meshView {
 	v := meshView{
 		ID: m.ID, MeshID: m.MeshID, NetworkID: m.NetworkID, GroupID: m.GroupID,
 		Band: string(m.Band), HasKey: !m.Open(), Enabled: m.Enabled,
-	}
-	if reveal {
-		v.Key = m.Key
 	}
 	return v
 }
@@ -51,10 +50,7 @@ func (v meshView) toModel() model.Mesh {
 	}
 }
 
-// handleGetMesh reveals one mesh's passphrase.
-//
-// Deliberately a separate request from the list, so revealing a key is an
-// action someone took rather than a side effect of opening a screen.
+// handleGetMesh returns editable mesh metadata but never its passphrase.
 func (s *Server) handleGetMesh(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id <= 0 {
@@ -67,7 +63,7 @@ func (s *Server) handleGetMesh(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range site.Meshes {
 		if m.ID == id {
-			writeJSON(w, http.StatusOK, viewMesh(m, true))
+			writeJSON(w, http.StatusOK, viewMesh(m))
 			return
 		}
 	}
@@ -75,6 +71,10 @@ func (s *Server) handleGetMesh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveMesh(w http.ResponseWriter, r *http.Request) {
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
 	var v meshView
 	if !decodeJSON(w, r, &v) {
 		return
@@ -87,8 +87,13 @@ func (s *Server) handleSaveMesh(w http.ResponseWriter, r *http.Request) {
 		}
 		v.ID = n
 	}
+	if v.ClearKey && v.Key != "" {
+		writeErr(w, http.StatusBadRequest, "key and clear_key are mutually exclusive")
+		return
+	}
 	m := v.toModel()
-	if err := s.Store.SaveMesh(r.Context(), &m); err != nil {
+	if err := s.Store.SaveMeshWithOptions(r.Context(), &m,
+		store.SaveMeshOptions{ClearKey: v.ClearKey}); err != nil {
 		if err == store.ErrNotFound {
 			writeErr(w, http.StatusNotFound, "no such mesh")
 			return
@@ -110,11 +115,15 @@ func (s *Server) handleSaveMesh(w http.ResponseWriter, r *http.Request) {
 		"encrypted": !m.Open(),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"mesh": viewMesh(m, false), "problems": problems,
+		"mesh": viewMesh(m), "problems": problems,
 	})
 }
 
 func (s *Server) handleDeleteMesh(w http.ResponseWriter, r *http.Request) {
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil || id <= 0 {
 		writeErr(w, http.StatusBadRequest, "invalid id")

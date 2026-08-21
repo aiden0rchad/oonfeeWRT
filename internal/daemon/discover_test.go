@@ -84,6 +84,26 @@ func TestAnnotateLabelsAdoptedDevicesRatherThanHidingThem(t *testing.T) {
 	}
 }
 
+// Annotation must not erase the distinction the sweep established. This seam
+// is the last step before JSON, and a missing copy here turns a proven route
+// failure back into the same empty result that caused the original incident.
+func TestAnnotatePreservesNetworkFailures(t *testing.T) {
+	res := &discovery.Result{
+		Swept: 254,
+		Failures: []discovery.NetworkFailure{{
+			Network: "192.168.1.0/24", Reason: discovery.FailureUnreachable,
+			Attempts: 254,
+		}},
+	}
+
+	out := annotate(res, nil)
+	if len(out.Failures) != 1 || out.Failures[0].Network != "192.168.1.0/24" ||
+		out.Failures[0].Reason != discovery.FailureUnreachable ||
+		out.Failures[0].Attempts != 254 {
+		t.Fatalf("network failure was lost or changed: %+v", out.Failures)
+	}
+}
+
 // The sweep probes the standard port and reports honestly when that finds
 // nothing, which is the case an operator hits when their device is elsewhere.
 func TestScanReportsAnEmptySweepLegibly(t *testing.T) {

@@ -28,10 +28,15 @@ import (
 // An empty radio list means either "this device has none" or "we could not
 // ask": `probeRadios` returns early with the wireless features NotObservable
 // when `iwinfo.devices` is refused, and the list stays empty either way. Those
-// are different messages — one says the role is wrong, the other says the ACL
-// is narrow — and telling an operator to change the role when the real problem
-// is a refused call sends them to fix the wrong thing.
+// are different messages — one says the role is wrong, the other says the
+// check failed — and telling an operator to change the role when nothing was
+// established sends them to fix the wrong thing. NotObservable does not encode
+// one cause: it can be an ACL refusal, a missing API, or a transport failure.
 func roleFit(role model.Role, caps *capability.Registry) []string {
+	return functionFit(model.FunctionsForRole(role), caps)
+}
+
+func functionFit(functions model.DeviceFunctions, caps *capability.Registry) []string {
 	if caps == nil {
 		return nil
 	}
@@ -46,36 +51,35 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 	wirelessObservable := caps.State(capability.FeatSurvey).Decided()
 
 	switch {
-	case role.Wireless() && radios == 0 && wirelessObservable:
+	case functions.Wireless() && radios == 0 && wirelessObservable:
 		out = append(out, fmt.Sprintf(
-			"adopted as %q, but this device reported no radios. No WLAN will "+
+			"adopted with functions %q, but this device reported no radios. No WLAN will "+
 				"render on it. If that is a surprise, its radios may be disabled "+
 				"— enable one and re-probe from the device screen. If it is not, "+
-				"%q is the role that matches what it can do",
-			role, model.RoleSwitch))
+				"remove the AP function",
+			functions.Describe()))
 
-	case role.Wireless() && radios == 0:
+	case functions.Wireless() && radios == 0:
 		out = append(out, fmt.Sprintf(
-			"adopted as %q, but its radios could not be listed — the check was "+
-				"refused rather than answered, so whether it has any is unknown. "+
-				"This is an access-control gap on the device, not a wrong role. "+
-				"Re-adopt it so its access-control file is rewritten — the one "+
-				"the controller ships grants the calls that list radios — then "+
-				"re-probe from its screen. No WLAN renders here until they can "+
-				"be listed",
-			role))
+			"adopted with functions %q, but its radios could not be listed, so whether it "+
+				"has any is unknown. The capability notes contain the failed call "+
+				"and its cause. If they report an access-control refusal, re-adopt "+
+				"to refresh the controller ACL; otherwise check device reachability "+
+				"and its log, then re-probe. No WLAN renders here until the radios "+
+				"can be listed",
+			functions.Describe()))
 
-	case !role.Wireless() && radios > 0:
+	case !functions.Wireless() && radios > 0:
 		// Not a problem — it is the intended use of the role — but worth
 		// confirming, because "I adopted it and it never broadcast" is the
 		// question this pre-empts.
 		out = append(out, fmt.Sprintf(
-			"adopted as %q with %d radio(s) present. No WLAN will be sent to it: "+
-				"that is what this role means. Adopt it as %q if you want it to "+
-				"broadcast", role, radios, model.RoleAP))
+			"adopted with functions %q and %d radio(s) present. No WLAN will be sent to it. "+
+				"Add the %q function if you want it to broadcast",
+			functions.Describe(), radios, model.FunctionAP))
 	}
 
-	if role.Routes() {
+	if functions.Routes() {
 		portsObservable := caps.Ports.Bridge != "" || len(caps.Ports.LAN) > 0
 		if caps.Ports.WAN == "" && portsObservable {
 			out = append(out, "adopted as a gateway, but its board declares no "+
@@ -83,6 +87,10 @@ func roleFit(role model.Role, caps *capability.Registry) []string {
 				"network and wrong for one meant to route to an uplink — worth "+
 				"checking which this is before applying a firewall zone to it")
 		}
+	}
+	if functions.Switches() && caps.State(capability.FeatSwitchPorts) == capability.Absent &&
+		len(caps.Ports.LAN) < 2 {
+		out = append(out, "the switch function is selected, but this device reported no independently observable switch ports. The controller will still keep the minimum layer-2 bridge plumbing required by its other functions, but selection does not invent per-port or managed-VLAN control")
 	}
 	return out
 }

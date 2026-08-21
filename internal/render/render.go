@@ -359,6 +359,9 @@ func (e Existing) OwnedIn(config, section string) bool {
 // current wireless config so collisions are caught before staging.
 func Render(site model.Site, dev model.Device, caps *capability.Registry, existing Existing) (Doc, Report, error) {
 	var rep Report
+	if dev.Functions != nil && len(dev.Functions) == 0 {
+		return Doc{}, rep, fmt.Errorf("render: device function selection is invalid; refusing to infer responsibilities from its legacy role")
+	}
 	if errs := site.Validate(); len(errs) > 0 {
 		return Doc{}, rep, fmt.Errorf("render: site model is invalid: %v", errs[0])
 	}
@@ -394,7 +397,15 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	for _, n := range site.Networks {
 		secs, oms, m := renderNetwork(n, dev, caps, existing)
 		for _, sec := range secs {
+			if sec.Config == "network" && sec.Type == "bridge-vlan" {
+				rep.Conflicts = append(rep.Conflicts,
+					foreignBridgeVLANConflicts(sec, existing)...)
+			}
 			addOwned(&doc, &rep, existing, sec)
+			if sec.Config == "network" && sec.Type == "interface" {
+				rep.Conflicts = append(rep.Conflicts,
+					foreignDHCPConflicts(n, sec.Name, m.iface != "" && m.dhcp, existing)...)
+			}
 		}
 		rep.Omissions = append(rep.Omissions, oms...)
 		if m.iface != "" {
@@ -404,9 +415,15 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// Firewall zones last, and once per zone rather than once per network. See
 	// renderZones: a zone is identified by its name, so two networks sharing
 	// one are two sections with the same name of which the device keeps one.
-	zoneSecs, zoneConflicts := renderZones(members, existing)
+	zoneSecs, zoneConflicts := renderZones(members, site.EffectiveZonePolicies(), existing)
 	rep.Conflicts = append(rep.Conflicts, zoneConflicts...)
 	for _, sec := range zoneSecs {
+		addOwned(&doc, &rep, existing, sec)
+	}
+	policySecs, policyOmissions, policyConflicts := renderPolicies(site, dev, caps, existing, doc)
+	rep.Omissions = append(rep.Omissions, policyOmissions...)
+	rep.Conflicts = append(rep.Conflicts, policyConflicts...)
+	for _, sec := range policySecs {
 		addOwned(&doc, &rep, existing, sec)
 	}
 
@@ -418,14 +435,15 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// is not "should be broadcasting". Before roles were a closed vocabulary
 	// this branch did not exist: a device adopted as a switch was an access
 	// point in every respect that mattered, silently.
-	if !dev.Role.Wireless() {
+	functions := dev.EffectiveFunctions()
+	if !functions.Wireless() {
 		for _, w := range site.WLANsFor(dev.ID) {
 			rep.Omissions = append(rep.Omissions, Omission{
 				WLAN: w.SSID,
-				Reason: fmt.Sprintf("this device's role is %q, which does not "+
-					"publish WLANs (%s). Change the role, or take it out of the "+
-					"AP group, depending on which one is wrong",
-					dev.Role, dev.Role.Describe()),
+				Reason: fmt.Sprintf("this device's selected functions (%s) do not "+
+					"include access point, so it does not publish WLANs. Add the AP "+
+					"function, or take it out of the AP group, depending on which "+
+					"one is wrong", functions.Describe()),
 			})
 		}
 		return doc, rep, nil
@@ -491,6 +509,23 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			continue
 		}
 		net, _ := site.NetworkByID(w.NetworkID)
+		if !networkAttachmentAvailable(doc, net) {
+			reason := networkAttachmentOmission(net, "broadcast this WLAN")
+			rep.Omissions = append(rep.Omissions, Omission{
+				WLAN: w.SSID, Reason: reason,
+			})
+			if doc.blind("network") {
+				for _, band := range orderedBands(w.Bands) {
+					if radio, ok := radios[band]; ok {
+						doc.retain(&rep, existing, ifaceName(w.ID, radio),
+							"the existing WLAN was left in place because the controller "+
+								"could not observe the wired network well enough to decide "+
+								"whether its VLAN attachment is usable")
+					}
+				}
+			}
+			continue
+		}
 		rendered := 0
 		for _, band := range orderedBands(w.Bands) {
 			radio, ok := radios[band]
@@ -571,7 +606,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			rep.Omissions = append(rep.Omissions, omissions...)
 			rendered++
 		}
-		if rendered == 0 && len(rep.Conflicts) == 0 {
+		if rendered == 0 && len(rep.Conflicts) == 0 && !radiosUnknown {
 			rep.Omissions = append(rep.Omissions, Omission{
 				WLAN:   w.SSID,
 				Reason: "no radio on this device matches the selected bands",
@@ -588,33 +623,47 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	if u, ok := site.UplinkFor(dev.ID); ok {
 		if w, found := site.WLANByID(u.WLANID); found {
 			net, _ := site.NetworkByID(w.NetworkID)
-			radio, hasRadio := radios[u.Band]
-			switch {
-			case !hasRadio:
+			if !networkAttachmentAvailable(doc, net) {
 				rep.Omissions = append(rep.Omissions, Omission{
-					WLAN: w.SSID,
-					Reason: fmt.Sprintf("this device has no %s radio, so it cannot "+
-						"join %s over the air on that band", u.Band, w.SSID),
+					WLAN:   w.SSID,
+					Reason: networkAttachmentOmission(net, "join this wireless uplink"),
 				})
-			default:
-				sec, oms := renderUplink(u, w, net, radio, caps)
-				rep.Omissions = append(rep.Omissions, oms...)
+				if doc.blind("network") {
+					if radio, ok := radios[u.Band]; ok {
+						doc.retain(&rep, existing, uplinkIfaceName(u.ID, radio),
+							"the existing wireless uplink was left in place because the "+
+								"controller could not observe its wired VLAN attachment")
+					}
+				}
+			} else {
+				radio, hasRadio := radios[u.Band]
 				switch {
-				case sec.Name != "":
-					doc.Sections = append(doc.Sections, sec)
-				case undetermined(caps, capability.FeatWirelessUplink):
-					// The gate could not read the package list, so it does not
-					// know whether this device can join a network over the air.
-					// Deleting the station interface on the strength of that
-					// would cut off a device whose only path to the network is
-					// the very link we could not verify.
-					doc.retain(&rep, existing, uplinkIfaceName(u.ID, radio),
-						fmt.Sprintf("the existing wireless uplink section for %s "+
-							"is left exactly as it is: this render could not "+
-							"establish whether the device supports one, and "+
-							"removing the link the controller reaches it through "+
-							"on the strength of a check that did not run is not "+
-							"something oonfeeWRT will do", w.SSID))
+				case !hasRadio:
+					rep.Omissions = append(rep.Omissions, Omission{
+						WLAN: w.SSID,
+						Reason: fmt.Sprintf("this device has no %s radio, so it cannot "+
+							"join %s over the air on that band", u.Band, w.SSID),
+					})
+				default:
+					sec, oms := renderUplink(u, w, net, radio, caps)
+					rep.Omissions = append(rep.Omissions, oms...)
+					switch {
+					case sec.Name != "":
+						doc.Sections = append(doc.Sections, sec)
+					case undetermined(caps, capability.FeatWirelessUplink):
+						// The gate could not read the package list, so it does not
+						// know whether this device can join a network over the air.
+						// Deleting the station interface on the strength of that
+						// would cut off a device whose only path to the network is
+						// the very link we could not verify.
+						doc.retain(&rep, existing, uplinkIfaceName(u.ID, radio),
+							fmt.Sprintf("the existing wireless uplink section for %s "+
+								"is left exactly as it is: this render could not "+
+								"establish whether the device supports one, and "+
+								"removing the link the controller reaches it through "+
+								"on the strength of a check that did not run is not "+
+								"something oonfeeWRT will do", w.SSID))
+					}
 				}
 			}
 		}
@@ -624,6 +673,20 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// carrying a mesh while still serving clients is the intended arrangement.
 	for _, m := range site.MeshesFor(dev.ID) {
 		net, _ := site.NetworkByID(m.NetworkID)
+		if !networkAttachmentAvailable(doc, net) {
+			rep.Omissions = append(rep.Omissions, Omission{
+				WLAN:   m.MeshID,
+				Reason: networkAttachmentOmission(net, "carry this mesh"),
+			})
+			if doc.blind("network") {
+				if radio, ok := radios[m.Band]; ok {
+					doc.retain(&rep, existing, meshIfaceName(m.ID, radio),
+						"the existing mesh was left in place because the controller "+
+							"could not observe its wired VLAN attachment")
+				}
+			}
+			continue
+		}
 		radio, ok := radios[m.Band]
 		if !ok {
 			rep.Omissions = append(rep.Omissions, Omission{
@@ -715,6 +778,34 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	return doc, rep, nil
 }
 
+func networkAttachmentAvailable(doc Doc, n model.Network) bool {
+	if !n.Enabled {
+		return false
+	}
+	if n.VLAN <= 1 {
+		return true
+	}
+	want := networkAttachmentName(n)
+	for _, section := range doc.Sections {
+		if section.Config == "network" && section.Type == "interface" &&
+			section.Name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func networkAttachmentOmission(n model.Network, action string) string {
+	if !n.Enabled {
+		return fmt.Sprintf("network %q is disabled, so this device cannot %s", n.Name, action)
+	}
+	return fmt.Sprintf("network %q uses VLAN %d, but this device has no usable "+
+		"interface for that VLAN, so it will not %s. See the wired-network "+
+		"omission for the missing bridge or port prerequisite. Rendering the "+
+		"wireless section anyway would create a BSS that can appear on air while "+
+		"being isolated from the intended network", n.Name, n.VLAN, action)
+}
+
 // renderWifiIface builds one wifi-iface section.
 func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 	radio string, caps *capability.Registry) (Section, []Omission) {
@@ -724,7 +815,7 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 		"device":  radio,
 		"mode":    "ap",
 		"ssid":    w.SSID,
-		"network": net.Name,
+		"network": networkAttachmentName(net),
 	}
 
 	// Security
@@ -798,7 +889,16 @@ func renderWifiIface(site model.Site, w model.WLAN, net model.Network,
 
 	// Options, both directions again.
 	v["hidden"] = boolOpt(w.Options.Hidden)
+	// `isolate` asks hostapd for intra-BSS isolation. `bridge_isolate` marks an
+	// isolated BSS's bridge port too, closing the same-AP, cross-radio path.
+	// Omit bridge_isolate when off: older wifi-scripts reject the unknown option
+	// even when its value is zero. It remains in Manages so a prior 1 is deleted.
+	// Neither option isolates clients attached to different APs; that needs
+	// additional switch/bridge policy which is not currently implemented.
 	v["isolate"] = boolOpt(w.Options.Isolate)
+	if w.Options.Isolate {
+		v["bridge_isolate"] = "1"
+	}
 	// maxassoc is the exception, and the reason Section.Manages exists.
 	// `maxassoc 0` is not "no limit" to hostapd, so there is no safe value to
 	// write for "unset" — the option has to go away instead.
@@ -839,7 +939,7 @@ var wifiIfaceOptions = []string{
 	"device", "mode", "ssid", "network", "encryption", "key", "ieee80211w",
 	"ieee80211r", "ft_over_ds", "mobility_domain", "reassociation_deadline",
 	"ieee80211k", "rrm_neighbor_report", "rrm_beacon_report", "bss_transition",
-	"wnm_sleep_mode", "hidden", "isolate", "maxassoc", "wds",
+	"wnm_sleep_mode", "hidden", "isolate", "bridge_isolate", "maxassoc", "wds",
 }
 
 // boolOpt renders a flag as UCI sees it, in both directions.
@@ -1090,6 +1190,21 @@ func wantsVLAN(site model.Site) bool {
 // The ownership rule, in the one place all the wired sections pass through: a
 // section with our name that is not ours aborts rather than being overwritten.
 func addOwned(doc *Doc, rep *Report, existing Existing, sec Section) {
+	for _, wanted := range doc.Sections {
+		if wanted.Config != sec.Config || wanted.Name != sec.Name {
+			continue
+		}
+		rep.Conflicts = append(rep.Conflicts, Conflict{
+			Config: sec.Config, Section: sec.Name,
+			Reason: "the desired site state renders " + sec.Config + "." + sec.Name +
+				" more than once. Distinct site names can collapse to the same UCI " +
+				"section after normalization; applying either copy would silently let " +
+				"one claim overwrite the other. Rename the colliding site objects so " +
+				"they remain distinct after lowercasing, mapping hyphens and spaces to " +
+				"underscores, and removing other punctuation.",
+		})
+		return
+	}
 	if vals, exists := existing.In(sec.Config)[sec.Name]; exists && vals[OwnershipTag] != "1" {
 		rep.Conflicts = append(rep.Conflicts, Conflict{
 			Config: sec.Config, Section: sec.Name,

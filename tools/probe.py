@@ -104,6 +104,8 @@ EXPECTED_BINARIES = [
     ("nlbw",     "per-client accounting (pkg: nlbwmon)"),
     ("ethtool",  "per-port switch stats"),
     ("bridge",   "fdb / vlan topology"),
+    ("brctl",    "built-in bridge FDB fallback"),
+    ("swconfig", "legacy switch port state and counters"),
     ("ip",       "link and route state"),
     ("df",       "free overlay space"),
     ("nft",      "firewall4 present"),
@@ -432,8 +434,11 @@ def probe_identity(ub, rep):
         free = mem.get("free", 0) // (1024 * 1024)
         rep.line(f"      {'ram_total_mb':<18} {tot}")
         rep.line(f"      {'ram_free_mb':<18} {free}")
-        if tot and tot < 128:
-            rep.warn(f"Only {tot} MB RAM — below the class-C floor.")
+        if tot and tot < 112:
+            rep.warn(f"Only {tot} MB usable RAM — below the class-C floor.")
+        elif tot and tot < 128:
+            rep.line("      (usable memory is consistent with a nominal "
+                     "128 MB class-C device)")
     if info.get("load"):
         rep.line(f"      {'load':<18} {info['load']}")
 
@@ -446,6 +451,8 @@ def probe_identity(ub, rep):
     ram_mb = (mem.get("total", 0) // (1024 * 1024)) or 0
     if "mt7621" in sysname or "mt7621" in target or "1004kc" in sysname:
         cls, why = "C (constrained)", "MT7621 / MIPS 1004Kc"
+    elif "qca956x" in sysname:
+        cls, why = "C (constrained)", "QCA956X, measured on Archer C6 v2"
     elif "armada" in sysname or "mvebu" in target:
         cls, why = "A (comfortable)", "Marvell Armada / mvebu"
     elif "mt7981" in sysname or "filogic" in target or "mediatek" in target:
@@ -879,11 +886,22 @@ def probe_switch_and_firewall(ub, rep):
     code, devs = ub.call("luci-rpc", "getNetworkDevices")
     if code == UBUS_OK and isinstance(devs, dict):
         dsa = any((d or {}).get("devtype") == "dsa" for d in devs.values())
+    binaries = rep.data.get("binaries") or {}
+    legacy = bool(binaries.get("swconfig"))
+    fdb = bool(binaries.get("brctl") or binaries.get("bridge"))
     rep.item(True if dsa else None, "DSA switch present",
-             "per-port stats available" if dsa else
-             "no DSA — hide the Ports screen on this device" if dsa is False
+             "DSA port configuration available" if dsa else
+             "no DSA — keep DSA-only configuration hidden" if dsa is False
              else "NOT OBSERVABLE — luci-rpc denied, capability unknown")
     rep.data["dsa"] = dsa
+    rep.item(True if legacy else None, "legacy swconfig switch",
+             "read-only port state/counters available without added packages"
+             if legacy else "not installed")
+    rep.data["legacy_switch"] = legacy
+    rep.item(True if fdb else None, "bridge forwarding database",
+             "stock brctl/bridge path available" if fdb else
+             "no FDB reader found; topology falls back to ARP/associations")
+    rep.data["bridge_fdb"] = fdb
 
     ok, r = ub.exec_status("/usr/sbin/nft",
                            ["--terse", "--json", "list", "ruleset"])
@@ -1143,20 +1161,33 @@ def verdict(rep):
         out("    airtime columns must be omitted on this device, not faked.")
 
     if d.get("dsa"):
-        out("  * PORTS SCREEN: DSA present — per-port stats available.")
+        out("  * PORTS SCREEN: DSA present — read and configuration paths")
+        out("    are available.")
+    elif d.get("legacy_switch"):
+        out("  * PORTS SCREEN: legacy swconfig is present. Offer read-only")
+        out("    link state, VLAN membership and counters; keep DSA-only")
+        out("    configuration hidden.")
     elif d.get("dsa") is None:
         out("  * PORTS SCREEN: UNDETERMINED — the DSA check was denied, not")
         out("    answered — luci-rpc.getNetworkDevices was denied. Grant it")
         out("    and re-probe before hiding anything.")
     else:
-        out("  * PORTS SCREEN: no DSA. Hide the Ports screen for this device")
-        out("    entirely (UI-SPEC section 7: absent, not greyed out).")
+        out("  * PORTS SCREEN: no DSA or legacy switch reader. Hide the screen")
+        out("    rather than showing controls the device cannot support.")
+
+    if d.get("bridge_fdb"):
+        out("  * TOPOLOGY: bridge FDB evidence is available from stock tools;")
+        out("    lldpd is optional enrichment, not a prerequisite.")
 
     free = d.get("overlay_free_mb")
     if free is not None:
         if free < 3:
             out(f"  * PACKAGES: only {free:.1f} MB free. Offer NO tier-2")
             out("    installs here. Refuse cleanly and show the reason.")
+        elif free < 8:
+            out(f"  * PACKAGES: only {free:.1f} MB free. Built-ins first;")
+            out("    default to no installs and require an exact package-plus-")
+            out("    dependency size check with recovery headroom.")
         else:
             out(f"  * PACKAGES: {free:.1f} MB free — tier-2 installs viable.")
 
@@ -1262,6 +1293,8 @@ def main():
             json.dump(rep.data, fh, indent=2, default=str)
         print(f"\nraw findings -> {args.json}")
 
+    return 1 if rep.failures else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

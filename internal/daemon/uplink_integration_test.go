@@ -162,8 +162,9 @@ func TestIntegrationUplink(t *testing.T) {
 		w.Options.AllowUplink = false
 		w.Security.Key = os.Getenv("OONFEE_WLAN_KEY")
 		_ = d.Store.SaveWLAN(context.Background(), &w)
-		if _, err := d.ApplySite(context.Background(),
-			api.ApplyRequest{AcknowledgeTraversal: true}); err != nil {
+		cleanupCtx := context.Background()
+		if _, err := d.ApplySite(cleanupCtx, boundApplyRequest(t, d, cleanupCtx,
+			api.ApplyRequest{AcknowledgeTraversal: true})); err != nil {
 			t.Logf("could not prune the uplink: %v", err)
 		}
 	})
@@ -201,7 +202,9 @@ func TestIntegrationUplink(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := d.ApplySite(ctx, api.ApplyRequest{AcknowledgeTraversal: true})
+	res, err := d.ApplySite(ctx, api.ApplyRequest{
+		PreviewToken: prev.PreviewToken, AcknowledgeTraversal: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

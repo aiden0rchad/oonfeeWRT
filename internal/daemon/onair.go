@@ -51,7 +51,7 @@ func (d *Daemon) VerifyOnAir(ctx context.Context) (*api.OnAirResult, error) {
 	out := &api.OnAirResult{Devices: []api.OnAirDevice{}}
 
 	for _, dev := range devices {
-		if !dev.Adopted() || !model.RoleOf(dev.Role).Wireless() {
+		if !dev.Adopted() || !deviceFunctions(dev).Wireless() {
 			continue
 		}
 		row := api.OnAirDevice{DeviceID: dev.ID, Name: dev.Name}

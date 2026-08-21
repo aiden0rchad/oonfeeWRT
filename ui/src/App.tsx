@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api, onUnauthorized } from './lib/api'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api, ApiError, onUnauthorized } from './lib/api'
 import type { Dashboard as DashboardData, Device } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
@@ -8,15 +8,21 @@ import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
 import { Adopt } from './screens/Adopt'
 import { Settings } from './screens/Settings'
-import { Banner } from './components/ui'
+import { PolicyEngine } from './screens/PolicyEngine'
+import { Topology } from './screens/Topology'
+import { Radios } from './screens/Radios'
+import { Banner, Button } from './components/ui'
 import { live } from './lib/live'
 
-type Screen = 'dashboard' | 'devices' | 'clients' | 'settings' | 'adopt' | 'logs'
+type Screen = 'dashboard' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'settings' | 'adopt' | 'logs'
 
 const NAV: { id: Screen; label: string; glyph: string }[] = [
   { id: 'dashboard', label: 'Dashboard', glyph: '◱' },
+  { id: 'topology', label: 'Topology', glyph: '⌘' },
+  { id: 'radios', label: 'Radios', glyph: '⌁' },
   { id: 'devices', label: 'Devices', glyph: '⬡' },
   { id: 'clients', label: 'Client Devices', glyph: '⬤' },
+  { id: 'policy', label: 'Policy Engine', glyph: '⛨' },
   { id: 'settings', label: 'Settings', glyph: '⚙' },
   { id: 'adopt', label: 'Adopt a device', glyph: '＋' },
   { id: 'logs', label: 'Logs', glyph: '≣' },
@@ -24,6 +30,8 @@ const NAV: { id: Screen; label: string; glyph: string }[] = [
 
 export function App() {
   const [ready, setReady] = useState(false)
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
+  const [bootstrapErr, setBootstrapErr] = useState('')
   const [needsSetup, setNeedsSetup] = useState(false)
   const [username, setUsername] = useState<string | null>(null)
   const [screen, setScreen] = useState<Screen>('dashboard')
@@ -31,7 +39,36 @@ export function App() {
 
   const [dash, setDash] = useState<DashboardData | null>(null)
   const [devices, setDevices] = useState<Device[]>([])
-  const [err, setErr] = useState('')
+  const [devicesLoaded, setDevicesLoaded] = useState(false)
+  const [refreshErrors, setRefreshErrors] = useState<{ dashboard?: string; devices?: string }>({})
+  const [accountErr, setAccountErr] = useState('')
+  const [signingOut, setSigningOut] = useState(false)
+  const sessionGeneration = useRef(0)
+  const refreshGeneration = useRef(0)
+  const mainRef = useRef<HTMLElement>(null)
+
+  const clearProtectedState = useCallback(() => {
+    refreshGeneration.current++
+    setDash(null)
+    setDevices([])
+    setDevicesLoaded(false)
+    setRefreshErrors({})
+    setAccountErr('')
+    setScreen('dashboard')
+  }, [])
+
+  const dropSession = useCallback(() => {
+    sessionGeneration.current++
+    clearProtectedState()
+    setUsername(null)
+  }, [clearProtectedState])
+
+  const beginSession = useCallback((nextUsername: string) => {
+    sessionGeneration.current++
+    clearProtectedState()
+    setNeedsSetup(false)
+    setUsername(nextUsername)
+  }, [clearProtectedState])
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -40,46 +77,64 @@ export function App() {
   // A 401 anywhere drops us back to the sign-in screen rather than leaving a
   // signed-out page showing whatever it last loaded.
   useEffect(() => {
-    const drop = () => setUsername(null)
-    onUnauthorized.add(drop)
+    onUnauthorized.add(dropSession)
     return () => {
-      onUnauthorized.delete(drop)
+      onUnauthorized.delete(dropSession)
     }
-  }, [])
+  }, [dropSession])
 
   useEffect(() => {
+    let cancelled = false
+    setReady(false)
+    setBootstrapErr('')
     ;(async () => {
       try {
         const state = await api.setupState()
+        if (cancelled) return
         setNeedsSetup(state.needs_setup)
         if (!state.needs_setup) {
           try {
             const s = await api.session()
-            setUsername(s.username)
-          } catch {
-            /* not signed in; the auth screen handles it */
+            if (!cancelled) beginSession(s.username)
+          } catch (e) {
+            // A 401 means the sign-in screen is correct. Transport and server
+            // failures do not: setup mode is unknown until the controller answers.
+            if (!(e instanceof ApiError && e.status === 401)) throw e
           }
         }
-      } catch {
-        setErr('Cannot reach the controller.')
+      } catch (e) {
+        if (!cancelled) {
+          setBootstrapErr(e instanceof Error ? e.message : 'Cannot reach the controller.')
+        }
       } finally {
-        setReady(true)
+        if (!cancelled) setReady(true)
       }
     })()
-  }, [])
+    return () => {
+      cancelled = true
+    }
+  }, [beginSession, bootstrapAttempt])
 
   const refresh = useCallback(async () => {
     if (!username) return
-    try {
-      const [d, dv] = await Promise.all([api.dashboard(), api.devices()])
-      setDash(d)
-      setDevices(dv.devices)
-      setErr('')
-    } catch (e) {
-      // A failed refresh keeps the last good data on screen and says so. Blanking
-      // the page on one dropped request would be its own kind of lie.
-      setErr(e instanceof Error ? e.message : String(e))
+    const generation = ++refreshGeneration.current
+    const session = sessionGeneration.current
+    const [dashboardResult, devicesResult] = await Promise.allSettled([
+      api.dashboard(),
+      api.devices(),
+    ])
+    if (generation !== refreshGeneration.current || session !== sessionGeneration.current) return
+
+    if (dashboardResult.status === 'fulfilled') setDash(dashboardResult.value)
+    if (devicesResult.status === 'fulfilled') {
+      setDevices(devicesResult.value.devices)
+      setDevicesLoaded(true)
     }
+    const reason = (value: unknown) => value instanceof Error ? value.message : String(value)
+    setRefreshErrors({
+      dashboard: dashboardResult.status === 'rejected' ? reason(dashboardResult.reason) : undefined,
+      devices: devicesResult.status === 'rejected' ? reason(devicesResult.reason) : undefined,
+    })
   }, [username])
 
   useEffect(() => {
@@ -101,21 +156,47 @@ export function App() {
     live.close()
   }, [ready, username])
 
-  if (!ready) return null
+  useEffect(() => {
+    if (!username) return
+    document.title = `${NAV.find((item) => item.id === screen)?.label ?? 'oonfeeWRT'} — oonfeeWRT`
+    const timer = window.setTimeout(() => {
+      const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current
+      if (target && target !== mainRef.current) target.tabIndex = -1
+      target?.focus()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [screen, username])
+
+  if (!ready) {
+    return (
+      <main style={{ height: '100%', display: 'grid', placeItems: 'center' }}>
+        <div role="status">Connecting to oonfeeWRT…</div>
+      </main>
+    )
+  }
+  if (bootstrapErr) {
+    return (
+      <main style={{ height: '100%', display: 'grid', placeItems: 'center', padding: 24 }}>
+        <div style={{ width: 420, maxWidth: '100%', display: 'grid', gap: 12 }}>
+          <h1 style={{ margin: 0, fontSize: 18 }}>oonfeeWRT is unavailable</h1>
+          <div role="alert"><Banner tone="critical">{bootstrapErr}</Banner></div>
+          <Button onClick={() => setBootstrapAttempt((attempt) => attempt + 1)}>Retry connection</Button>
+        </div>
+      </main>
+    )
+  }
   if (!username) {
     return (
       <Auth
         needsSetup={needsSetup}
-        onSignedIn={(u) => {
-          setNeedsSetup(false)
-          setUsername(u)
-        }}
+        onSignedIn={beginSession}
       />
     )
   }
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <a className="skip-link" href="#main-content">Skip to main content</a>
       <header
         style={{
           height: 40,
@@ -132,20 +213,34 @@ export function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
           <button
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-            title="Toggle theme"
+            aria-label={`${theme === 'dark' ? 'Dark' : 'Light'} theme active; switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 14 }}
           >
             ◐
           </button>
           <span style={{ color: 'var(--text-secondary)' }}>{username}</span>
           <button
+            disabled={signingOut}
             onClick={async () => {
-              await api.logout().catch(() => {})
-              setUsername(null)
+              setSigningOut(true)
+              setAccountErr('')
+              try {
+                const result = await api.logout()
+                if (!result.ok) throw new Error('the controller did not confirm logout')
+                dropSession()
+              } catch (e) {
+                // A 401 already fired onUnauthorized and cleared local state.
+                if (!(e instanceof ApiError && e.status === 401)) {
+                  setAccountErr(`Sign out failed: ${e instanceof Error ? e.message : String(e)}. You are still signed in.`)
+                }
+              } finally {
+                setSigningOut(false)
+              }
             }}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 12 }}
           >
-            Sign out
+            {signingOut ? 'Signing out…' : 'Sign out'}
           </button>
         </div>
       </header>
@@ -187,24 +282,49 @@ export function App() {
           ))}
         </nav>
 
-        <main style={{ flex: 1, overflow: 'auto', padding: 14, minWidth: 0 }}>
-          {err && (
+        <main ref={mainRef} id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'auto', padding: 14, minWidth: 0, outline: 'none' }}>
+          {accountErr && (
             <div style={{ marginBottom: 12 }}>
+              <div role="alert"><Banner tone="critical">{accountErr}</Banner></div>
+            </div>
+          )}
+          {screen === 'dashboard' && refreshErrors.dashboard && (
+            <div role="alert" style={{ marginBottom: 12 }}>
               <Banner tone="critical">
-                {err} — showing the last data that loaded successfully.
+                Dashboard refresh failed: {refreshErrors.dashboard}
+                {dash ? ' The last successful dashboard remains visible.' : ''}
               </Banner>
             </div>
           )}
-          {screen === 'dashboard' && dash && <Dashboard data={dash} />}
-          {screen === 'devices' && (
+          {(screen === 'devices' || screen === 'settings') && refreshErrors.devices && (
+            <div role="alert" style={{ marginBottom: 12 }}>
+              <Banner tone="critical">
+                Device refresh failed: {refreshErrors.devices}
+                {devicesLoaded ? ' The last successful device list remains visible.' : ''}
+              </Banner>
+            </div>
+          )}
+          {screen === 'dashboard' && (dash
+            ? <Dashboard data={dash} />
+            : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
+          {screen === 'topology' && (
+            <Topology onReviewCapabilities={() => setScreen('devices')} />
+          )}
+          {screen === 'radios' && <Radios />}
+          {screen === 'devices' && devicesLoaded && (
             <Devices
               devices={devices}
               onAdopt={() => setScreen('adopt')}
               onChanged={refresh}
             />
           )}
+          {screen === 'devices' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
           {screen === 'clients' && <Clients />}
-          {screen === 'settings' && <Settings devices={devices} />}
+          {screen === 'policy' && (
+            <PolicyEngine onReviewChanges={() => setScreen('settings')} />
+          )}
+          {screen === 'settings' && devicesLoaded && <Settings devices={devices} />}
+          {screen === 'settings' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
           {screen === 'adopt' && <Adopt onAdopted={refresh} />}
           {screen === 'logs' && <Logs />}
         </main>

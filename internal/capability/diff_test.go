@@ -114,6 +114,17 @@ func TestDiffOfIdenticalRegistriesIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRuntimeBridgeFirstObservationIsNotAChange(t *testing.T) {
+	old := NewRegistry()
+	old.Ports = Ports{Bridge: "eth0.1"}
+	new := NewRegistry()
+	new.Ports = Ports{Bridge: "eth0.1", BridgeDevices: []string{"br-lan"}}
+
+	if got := Diff(old, new); len(got) != 0 {
+		t.Errorf("first runtime-bridge observation reported as a change: %v", got)
+	}
+}
+
 // Radios are keyed on the phy, not the interface.
 //
 // `phy0-ap0` is an interface this controller creates and removes itself, so

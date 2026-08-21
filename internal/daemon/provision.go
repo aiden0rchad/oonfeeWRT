@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -36,33 +38,60 @@ const previewTimeout = 60 * time.Second
 func (d *Daemon) Preview(ctx context.Context) (*api.PreviewResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, previewTimeout)
 	defer cancel()
+	state, err := d.buildPreview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.result, nil
+}
 
+func (d *Daemon) buildPreview(ctx context.Context) (*previewState, error) {
 	site, err := d.Store.Site(ctx)
 	if err != nil {
 		return nil, err
 	}
+	siteFingerprint, err := siteStateFingerprint(site)
+	if err != nil {
+		return nil, err
+	}
+	devices, err := d.Store.Devices(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := &api.PreviewResult{SiteName: site.Name, Devices: []api.DevicePreview{}}
+	state := &previewState{
+		result: out, site: site, devices: applyOrder(devices),
+		siteFingerprint: siteFingerprint, planFingerprints: map[int64]string{},
+	}
 
 	// Site-level validation first. A bad site model produces one clear error
 	// here instead of the same confusing failure once per device.
 	for _, e := range site.Validate() {
 		out.SiteErrors = append(out.SiteErrors, e.Error())
 	}
-	if len(out.SiteErrors) > 0 {
-		return out, nil
+	if len(out.SiteErrors) == 0 {
+		for _, dev := range state.devices {
+			if !dev.Adopted() {
+				continue
+			}
+			view, fingerprint, err := d.previewDeviceBound(ctx, site, siteFingerprint, dev)
+			if err != nil {
+				return nil, err
+			}
+			out.Devices = append(out.Devices, view)
+			state.planFingerprints[dev.ID] = fingerprint
+		}
 	}
-
-	devices, err := d.Store.Devices(ctx)
+	state.fleetFingerprint, err = fleetStateFingerprint(state.devices)
 	if err != nil {
 		return nil, err
 	}
-	for _, dev := range applyOrder(devices) {
-		if !dev.Adopted() {
-			continue
-		}
-		out.Devices = append(out.Devices, d.previewDevice(ctx, site, dev))
+	out.PreviewToken, err = previewToken(d.Keys, siteFingerprint, state.fleetFingerprint,
+		state.planFingerprints, state.devices)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	return state, nil
 }
 
 // previewDevice plans one device, converting every failure into a reported
@@ -72,28 +101,59 @@ func (d *Daemon) Preview(ctx context.Context) (*api.PreviewResult, error) {
 // applying to the others is usually still right — so it becomes a row that says
 // so, not a 502 for the whole screen.
 func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.Device) api.DevicePreview {
+	siteFingerprint, err := siteStateFingerprint(site)
+	if err != nil {
+		return api.DevicePreview{DeviceID: dev.ID, Name: dev.Name, Error: err.Error()}
+	}
+	p, _, err := d.previewDeviceBound(ctx, site, siteFingerprint, dev)
+	if err != nil {
+		p.Error = err.Error()
+	}
+	return p
+}
+
+func (d *Daemon) previewDeviceBound(ctx context.Context, site model.Site,
+	siteFingerprint string, dev *store.Device) (api.DevicePreview, string, error) {
+	functions := deviceFunctions(dev)
 	p := api.DevicePreview{DeviceID: dev.ID, Name: dev.Name,
-		Role: string(model.RoleOf(dev.Role))}
+		Role: dev.Role, Functions: functions.Strings(), Changes: []api.Change{}}
+	var owned []store.OwnedSection
+	var err error
+	if d.Store != nil {
+		owned, err = d.Store.OwnedSections(ctx, dev.ID)
+		if err != nil {
+			p.Error = "could not read the controller's ownership record"
+			fp, hashErr := planStateFingerprint(siteFingerprint, dev, nil, nil, err)
+			return p, fp, hashErr
+		}
+	}
+	finish := func(plan *reconcile.DevicePlan, planErr error) (api.DevicePreview, string, error) {
+		fp, hashErr := planStateFingerprint(siteFingerprint, dev, owned, plan, planErr)
+		return p, fp, hashErr
+	}
+	if dev.FunctionError != "" {
+		p.Error = dev.FunctionError
+		return finish(nil, fmt.Errorf("%s", dev.FunctionError))
+	}
 
 	caps, err := deviceCaps(dev)
 	if err != nil {
 		p.Error = err.Error()
-		return p
+		return finish(nil, err)
 	}
 	c, err := d.Connect(ctx, dev)
 	if err != nil {
-		p.Error = fmt.Sprintf("could not reach this device: %v", err)
-		return p
+		planErr := fmt.Errorf("could not reach this device: %w", err)
+		p.Error = planErr.Error()
+		return finish(nil, planErr)
 	}
 	defer c.Close()
 
 	r := reconcile.New(d.Store)
-	plan, err := r.PlanDevice(ctx, c, site, model.Device{
-		ID: dev.ID, Name: dev.Name, Role: model.RoleOf(dev.Role),
-	}, caps)
+	plan, err := r.PlanDevice(ctx, c, site, renderDevice(dev), caps)
 	if err != nil {
 		p.Error = err.Error()
-		return p
+		return finish(nil, err)
 	}
 
 	p.Changes = summarise(plan)
@@ -126,7 +186,7 @@ func (d *Daemon) previewDevice(ctx context.Context, site model.Site, dev *store.
 	if needsExplanation(p) {
 		p.CapabilityCause = d.recentCapabilityLoss(ctx, dev.ID)
 	}
-	return p
+	return finish(plan, nil)
 }
 
 // needsExplanation reports whether this row has something a recent capability
@@ -189,48 +249,141 @@ func summarise(p *reconcile.DevicePlan) []api.Change {
 // takes to reach everything else, so breaking it first would strand the rest of
 // the queue mid-apply with rollback timers armed and nobody able to confirm.
 func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.ApplyResult, error) {
-	site, err := d.Store.Site(ctx)
+	if req.PreviewToken == "" {
+		return nil, api.ErrPreviewRequired
+	}
+	preflightCtx, cancel := context.WithTimeout(ctx, previewTimeout)
+	state, err := d.buildPreview(preflightCtx)
+	cancel()
 	if err != nil {
 		return nil, err
 	}
-	if errs := site.Validate(); len(errs) > 0 {
-		return nil, fmt.Errorf("the site model is not valid: %s", errs[0])
+	if subtle.ConstantTimeCompare([]byte(req.PreviewToken),
+		[]byte(state.result.PreviewToken)) != 1 {
+		return nil, api.ErrPreviewStale
 	}
-	devices, err := d.Store.Devices(ctx)
-	if err != nil {
-		return nil, err
+	if len(state.result.SiteErrors) > 0 {
+		return nil, fmt.Errorf("the site model is not valid: %s", state.result.SiteErrors[0])
 	}
 	want := map[int64]bool{}
 	for _, id := range req.DeviceIDs {
 		want[id] = true
 	}
-
-	out := &api.ApplyResult{Devices: []api.DeviceApply{}}
-	for _, dev := range applyOrder(devices) {
-		if !dev.Adopted() || (len(want) > 0 && !want[dev.ID]) {
-			continue
-		}
-		res := d.applyDevice(ctx, site, dev, req.AcknowledgeTraversal)
-		out.Devices = append(out.Devices, res)
-		// An apply reconfigures the radios, which is the one thing the
-		// 15-minute interface cadence assumes does not happen between reads.
-		// Without this, a mesh applied now has its interface a few seconds
-		// later while the cached list still says that section has none — and
-		// the health readout calls that a critical fault, for up to fifteen
-		// minutes, after every successful mesh apply. Measured on hardware.
-		if res.Changes > 0 {
-			if c := d.collectorRef(); c != nil {
-				c.Rediscover(dev.ID)
+	previewed := make(map[int64]api.DevicePreview, len(state.result.Devices))
+	for _, row := range state.result.Devices {
+		previewed[row.DeviceID] = row
+	}
+	if len(want) > 0 {
+		for id := range want {
+			if _, ok := previewed[id]; !ok {
+				return nil, fmt.Errorf("device %d was not part of this adopted-fleet preview; nothing was written", id)
 			}
 		}
-		if res.Outcome != string(applyengine.Applied) {
-			// First failure stops the queue. Continuing would apply a
-			// half-consistent site — some APs on the new SSID, some on the old
-			// — which is worse than stopping somewhere an operator can see.
-			out.Aborted = true
-			out.AbortedAfter = dev.Name
-			break
+		if len(want) < len(previewed) && !req.AcknowledgePartialFleet {
+			return nil, fmt.Errorf("the selected apply skips %d adopted device(s); acknowledge the partial-fleet risk or apply the full fleet; nothing was written",
+				len(previewed)-len(want))
 		}
+	}
+	for _, row := range state.result.Devices {
+		if len(want) > 0 && !want[row.DeviceID] {
+			continue
+		}
+		if row.Error != "" {
+			return nil, fmt.Errorf("preflight failed for %s: %s; nothing was written",
+				row.Name, row.Error)
+		}
+		if row.Blocked || len(row.Conflicts) > 0 {
+			reason := "the plan is blocked by an ownership conflict"
+			if len(row.Conflicts) > 0 {
+				reason = row.Conflicts[0]
+			}
+			return nil, fmt.Errorf("preflight failed for %s: %s; nothing was written",
+				row.Name, reason)
+		}
+		if row.TouchesTraversal && !req.AcknowledgeTraversal {
+			return nil, fmt.Errorf("preflight failed for %s: this change edits its network or firewall configuration, which carries the path the controller reaches it through; acknowledge the traversal risk and apply again; nothing was written",
+				row.Name)
+		}
+		if len(row.Cautions) > 0 && !req.AcknowledgeCautions {
+			return nil, fmt.Errorf("preflight caution for %s: %s; acknowledge the caution and apply again; nothing was written",
+				row.Name, row.Cautions[0])
+		}
+		if !req.AcknowledgeDriverRisk {
+			for _, defect := range row.DriverDefects {
+				if defect.WLAN != "" && defect.Severity == "radio-death" {
+					return nil, fmt.Errorf("preflight failed for %s: %s can take the radio down and may not be recoverable by rollback; acknowledge the driver risk and apply again, or change the WLAN setting; nothing was written",
+						row.Name, defect.Summary)
+				}
+			}
+		}
+	}
+	operationOrdinals := map[int64]int{}
+	if req.OperationID != "" {
+		devices := []store.ApplyOperationDevice{}
+		for _, dev := range state.devices {
+			if !dev.Adopted() || (len(want) > 0 && !want[dev.ID]) {
+				continue
+			}
+			operationOrdinals[dev.ID] = len(devices)
+			devices = append(devices, store.ApplyOperationDevice{
+				DeviceID: dev.ID, DeviceMAC: dev.MAC, DeviceName: dev.Name,
+				Changes: len(previewed[dev.ID].Changes),
+			})
+		}
+		if err := d.Store.InitializeApplyOperationDevices(ctx, req.OperationID, devices); err != nil {
+			return nil, fmt.Errorf("could not initialize durable apply device status: %w", err)
+		}
+	}
+
+	out := &api.ApplyResult{Devices: []api.DeviceApply{}}
+	err = d.TrackApply(ctx, 0, func(runCtx context.Context) error {
+		for _, dev := range state.devices {
+			if !dev.Adopted() || (len(want) > 0 && !want[dev.ID]) {
+				continue
+			}
+			expected, ok := state.planFingerprints[dev.ID]
+			if !ok {
+				return api.ErrPreviewStale
+			}
+			if row := previewed[dev.ID]; len(row.Changes) > 0 {
+				if deadline, ok := runCtx.Deadline(); ok &&
+					time.Until(deadline) < applyengine.MinApplyBudget() {
+					reason := fmt.Sprintf("not enough apply-drain budget remains to start %s safely: a rollback-confirm cycle needs at least %s",
+						dev.Name, applyengine.MinApplyBudget())
+					out.Devices = append(out.Devices, api.DeviceApply{
+						DeviceID: dev.ID, Name: dev.Name, Outcome: "error", Reason: reason,
+					})
+					out.Aborted, out.AbortedAfter = true, dev.Name
+					break
+				}
+			}
+			res, applyErr := d.applyDeviceBoundOperation(runCtx, state.site, dev,
+				req.AcknowledgeTraversal, state.siteFingerprint,
+				state.fleetFingerprint, expected, req.OperationID,
+				operationOrdinals[dev.ID])
+			if errors.Is(applyErr, api.ErrPreviewStale) && len(out.Devices) == 0 {
+				return applyErr
+			}
+			out.Devices = append(out.Devices, res)
+			// An apply reconfigures the radios, which is the one thing the
+			// 15-minute interface cadence assumes does not happen between reads.
+			if res.Changes > 0 {
+				if c := d.collectorRef(); c != nil {
+					c.Rediscover(dev.ID)
+				}
+			}
+			if res.Outcome != string(applyengine.Applied) {
+				// First failure stops the queue. Continuing would apply a
+				// half-consistent site — some APs on the new SSID, some on the old.
+				out.Aborted = true
+				out.AbortedAfter = dev.Name
+				break
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// An apply that reconfigures a BSS restarts it, and a restarted BSS comes
@@ -250,32 +403,152 @@ func (d *Daemon) ApplySite(ctx context.Context, req api.ApplyRequest) (*api.Appl
 
 func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.Device,
 	ackTraversal bool) api.DeviceApply {
-	out := api.DeviceApply{DeviceID: dev.ID, Name: dev.Name}
+	out, _ := d.applyDeviceBound(ctx, site, dev, ackTraversal, "", "", "")
+	return out
+}
 
-	caps, err := deviceCaps(dev)
-	if err != nil {
-		out.Outcome, out.Reason = "error", err.Error()
-		return out
-	}
+func (d *Daemon) applyDeviceBound(ctx context.Context, site model.Site, dev *store.Device,
+	ackTraversal bool, expectedSite, expectedFleet, expectedPlan string) (api.DeviceApply, error) {
+	return d.applyDeviceBoundOperation(ctx, site, dev, ackTraversal, expectedSite,
+		expectedFleet, expectedPlan, "", 0)
+}
 
-	err = d.TrackApply(ctx, dev.ID, func(ctx context.Context) error {
-		c, err := d.Connect(ctx, dev)
+func (d *Daemon) applyDeviceBoundOperation(ctx context.Context, site model.Site,
+	dev *store.Device, ackTraversal bool, expectedSite, expectedFleet, expectedPlan,
+	operationID string, operationOrdinal int) (out api.DeviceApply, retErr error) {
+	out = api.DeviceApply{DeviceID: dev.ID, Name: dev.Name}
+	writeBoundary := false
+	defer func() {
+		if operationID == "" {
+			return
+		}
+		state := store.ApplyOperationDeviceCompleted
+		if retErr != nil || out.Outcome != string(applyengine.Applied) {
+			state = store.ApplyOperationDeviceFailed
+		}
+		writeState := store.ApplyWriteStateNone
+		if writeBoundary {
+			writeState = store.ApplyWriteStatePossible
+		}
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		err := d.Store.FinishApplyOperationDevice(persistCtx, operationID,
+			operationOrdinal, state, time.Now().Unix(), out.RouterOutcome,
+			out.Outcome, out.Changes, out.Reason, writeState)
+		cancel()
+		if err == nil {
+			return
+		}
+		durableErr := fmt.Errorf("could not record durable device apply status: %w", err)
+		if out.RouterOutcome != "" {
+			out.Reason = fmt.Sprintf("router outcome was %s, but %v",
+				out.RouterOutcome, durableErr)
+		} else {
+			out.Reason = durableErr.Error()
+		}
+		out.Outcome = "error"
+		retErr = durableErr
+	}()
+
+	retErr = d.TrackApply(ctx, dev.ID, func(applyCtx context.Context) error {
+		// Wait with the request context, not TrackApply's detached one: queued
+		// work must stop if its caller goes away. Once admitted, the existing
+		// apply drain semantics take over so an armed rollback is never abandoned.
+		// The drain deadline also bounds the queue wait; otherwise a blocked apply
+		// could outlive the shutdown budget before it even reached the device.
+		waitCtx, cancelWait := context.WithCancel(ctx)
+		stopDrain := context.AfterFunc(applyCtx, cancelWait)
+		defer func() {
+			stopDrain()
+			cancelWait()
+		}()
+		release, err := d.deviceOps.acquire(waitCtx, dev.ID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if applyCtx.Err() != nil {
+				return applyCtx.Err()
+			}
+			return err
+		}
+		defer release()
+		if expectedSite != "" {
+			currentSite, err := d.Store.Site(applyCtx)
+			if err != nil {
+				return err
+			}
+			currentSiteFingerprint, err := siteStateFingerprint(currentSite)
+			if err != nil {
+				return err
+			}
+			if subtle.ConstantTimeCompare([]byte(expectedSite),
+				[]byte(currentSiteFingerprint)) != 1 {
+				return api.ErrPreviewStale
+			}
+			currentDevices, err := d.Store.Devices(applyCtx)
+			if err != nil {
+				return err
+			}
+			currentFleetFingerprint, err := fleetStateFingerprint(currentDevices)
+			if err != nil {
+				return err
+			}
+			if subtle.ConstantTimeCompare([]byte(expectedFleet),
+				[]byte(currentFleetFingerprint)) != 1 {
+				return api.ErrPreviewStale
+			}
+		}
+
+		// ApplySite captured this row before it waited. Un-adopt may have won the
+		// gate and deleted it in the meantime; reloading here prevents a stale
+		// pointer from reconnecting and writing to a device no longer in the fleet.
+		fresh, err := d.Store.DeviceByID(applyCtx, dev.ID)
+		if err != nil {
+			return fmt.Errorf("could not reload this device after waiting to apply: %w", err)
+		}
+		if fresh.MAC != dev.MAC {
+			return fmt.Errorf("device id %d now identifies %s instead of %s; "+
+				"refusing a stale apply", dev.ID, fresh.MAC, dev.MAC)
+		}
+		if !fresh.Adopted() {
+			return fmt.Errorf("%s is no longer adopted", fresh.Name)
+		}
+		if fresh.FunctionError != "" {
+			return fmt.Errorf("%s: %s", fresh.Name, fresh.FunctionError)
+		}
+		dev = fresh
+		out.Name = fresh.Name
+		caps, err := deviceCaps(fresh)
+		if err != nil {
+			return err
+		}
+
+		c, err := d.Connect(applyCtx, dev)
 		if err != nil {
 			return fmt.Errorf("could not reach this device: %w", err)
 		}
 		defer c.Close()
 
 		r := reconcile.New(d.Store)
-		plan, err := r.PlanDevice(ctx, c, site, model.Device{
-			ID: dev.ID, Name: dev.Name, Role: model.RoleOf(dev.Role),
-		}, caps)
+		plan, err := r.PlanDevice(applyCtx, c, site, renderDevice(dev), caps)
 		if err != nil {
 			return err
 		}
-		if plan.Empty() && !plan.Blocked() {
-			out.Outcome = string(applyengine.Applied)
-			out.Reason = "already matches the site model"
-			return nil
+		if expectedPlan != "" {
+			owned, err := d.Store.OwnedSections(applyCtx, dev.ID)
+			if err != nil {
+				return err
+			}
+			currentPlanFingerprint, err := planStateFingerprint(expectedSite,
+				dev, owned, plan, nil)
+			if err != nil {
+				return err
+			}
+			if subtle.ConstantTimeCompare([]byte(expectedPlan),
+				[]byte(currentPlanFingerprint)) != 1 {
+				return fmt.Errorf("%w (%s changed before its write)",
+					api.ErrPreviewStale, dev.Name)
+			}
 		}
 		// Pass the acknowledgment down: the engine gates on it too, and a
 		// preflight refusal at that depth reads as a bug rather than a policy.
@@ -288,20 +561,27 @@ func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.De
 				"but you should know you are editing the road before driving "+
 				"down it", dev.Name)
 		}
-		res, err := r.Apply(ctx, c, dev.ID, plan, healthCheck(plan))
-		out.Outcome = string(res.Outcome)
-		out.Reason = res.Reason
 		out.Changes = len(plan.Plan.Ops)
+		if operationID != "" && out.Changes > 0 {
+			if err := d.Store.MarkApplyOperationDeviceApplying(applyCtx,
+				operationID, operationOrdinal, time.Now().Unix()); err != nil {
+				return fmt.Errorf("could not persist the device write boundary: %w", err)
+			}
+			writeBoundary = true
+		}
+		res, err := r.Apply(applyCtx, c, dev.ID, plan, healthCheck(plan))
+		out.Outcome = string(res.Outcome)
+		out.RouterOutcome = string(res.Outcome)
+		out.Reason = res.Reason
 		return err
 	})
-	if err != nil {
+	if retErr != nil {
 		out.Outcome = "error"
 		if out.Reason == "" {
-			out.Reason = err.Error()
+			out.Reason = retErr.Error()
 		}
-		return out
 	}
-	return out
+	return out, retErr
 }
 
 // healthCheck verifies the change is actually good, while the rollback timer is
@@ -310,9 +590,13 @@ func (d *Daemon) applyDevice(ctx context.Context, site model.Site, dev *store.De
 // Runtime state only, never uci.get: inside the confirm window a uci read is
 // overlaid with the applying session's own staged delta, so it will happily
 // confirm a change that is not really on the device (IMPLEMENTATION §6). The
-// SSIDs are read from hostapd, which is both the cheap source and the one that
-// answers — `network.wireless status` is unreachable through rpcd.
+// BSS sections are mapped through luci-rpc.getWirelessDevices, then their SSID
+// is read from hostapd and isolated bridge-port state from sysfs. The tempting
+// `network.wireless status` source is unreachable through rpcd.
 func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
+	dhcpCheck := dhcpRuntimePlanFor(plan)
+	requiredInterfaces := ownedInterfacesForPlan(plan)
+	wirelessCheck := wirelessRuntimePlanFor(plan)
 	wantSSIDs := map[string]bool{}
 	for _, s := range plan.Doc.Sections {
 		if s.Config == "wireless" && s.Values["ssid"] != "" && s.Values["disabled"] != "1" {
@@ -392,24 +676,33 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 				return fmt.Errorf("health: the lan interface is down after this change")
 			}
 		}
-		if len(wantSSIDs) == 0 && len(goneSSIDs) == 0 {
+		if err := waitForOwnedInterfaces(ctx, verify, requiredInterfaces); err != nil {
+			return err
+		}
+		if err := waitForDHCPRuntime(ctx, verify, dhcpCheck); err != nil {
+			return err
+		}
+		if wirelessCheck.empty() && len(goneSSIDs) == 0 {
 			return nil
 		}
 
-		// Then the SSIDs, from hostapd — the source that answers. Polled
-		// rather than read once: bringing up a new BSS is asynchronous, and
-		// checking the instant uci.apply returns asks the question before the
-		// hardware has had a chance to answer it. Measured on the reference
-		// device, a new BSS appears about a second after the reload; the
-		// budget here is generous against that so a slow device is not
-		// reported as a broken one, and it is bounded so a genuinely broken
-		// one still reverts well inside the rollback window.
+		// Then every desired BSS, by UCI section rather than SSID set. A new BSS
+		// appears asynchronously, including its bridge-port sysfs node, so the
+		// mapping/status/bridge-isolation check is polled as one claim. Same-BSS
+		// hostapd isolation still requires the two-client acceptance run.
 		var found map[string]bool
+		var wirelessErr error
 		deadline := time.Now().Add(ssidSettleTimeout)
 		for {
-			found = readSSIDs(ctx, verify)
-			if missingFrom(found, wantSSIDs) == nil && stillOn(found, goneSSIDs) == nil {
+			wirelessErr = checkWirelessRuntimeOnce(ctx, verify, wirelessCheck)
+			if len(goneSSIDs) != 0 {
+				found = readSSIDs(ctx, verify)
+			}
+			if wirelessErr == nil && stillOn(found, goneSSIDs) == nil {
 				return nil
+			}
+			if terminalWirelessRuntimeFailure(wirelessErr) {
+				return fmt.Errorf("%w; the device will revert", wirelessErr)
 			}
 			if time.Now().After(deadline) {
 				break
@@ -430,19 +723,8 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 				"on-air check finds and this cannot)",
 				ssidSettleTimeout, len(lingering), lingering)
 		}
-		missing := missingFrom(found, wantSSIDs)
-		// The error names what WAS found, not only what was not. "expected
-		// Home, the radios are broadcasting [OtherNet]" points at the problem;
-		// "Home is missing" leaves someone to go and look for themselves.
-		on := make([]string, 0, len(found))
-		for s := range found {
-			on = append(on, s)
-		}
-		sort.Strings(on)
-		return fmt.Errorf("health: after %s, %d SSID(s) this change should have "+
-			"brought up are not broadcasting: %v (the radios are currently "+
-			"carrying %v) — letting the device revert",
-			ssidSettleTimeout, len(missing), missing, on)
+		return fmt.Errorf("%w; wireless runtime did not settle within %s, so the device will revert",
+			wirelessErr, ssidSettleTimeout)
 	}
 }
 
@@ -512,8 +794,8 @@ func touchesTraversal(p *reconcile.DevicePlan) bool {
 func applyOrder(devices []*store.Device) []*store.Device {
 	out := append([]*store.Device(nil), devices...)
 	sort.SliceStable(out, func(i, j int) bool {
-		gi := model.RoleOf(out[i].Role).Routes()
-		gj := model.RoleOf(out[j].Role).Routes()
+		gi := deviceFunctions(out[i]).Routes()
+		gj := deviceFunctions(out[j]).Routes()
 		if gi != gj {
 			return !gi
 		}

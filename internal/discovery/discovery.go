@@ -54,6 +54,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -123,9 +124,15 @@ type Signals struct {
 	// configured and up, not what silicon exists — a radio with no SSID
 	// publishes no hostapd object and is invisible here.
 	Radios int `json:"radios"`
-	// Gateway is set when a wan interface exists.
+	// Gateway is a compatibility field set when rpcd publishes an object named
+	// network.interface.wan or network.interface.wan6. That is only a pre-auth
+	// hint: a bridged AP can retain the object without an active default route,
+	// forwarding, or NAT. Credentialed inspection decides the routing role.
 	Gateway bool `json:"gateway"`
-	// DHCP is set when a DHCP server is running.
+	// DHCP is a compatibility field set when rpcd publishes a dnsmasq or dhcp
+	// object. Object presence does not prove that a LAN pool is enabled; an AP
+	// with dhcp.lan.ignore=1 still publishes dnsmasq. Credentialed inspection
+	// reads the actual configuration.
 	DHCP bool `json:"dhcp"`
 	// Wireless is set when iwinfo is present, which is the wireless stack
 	// whether or not any AP is currently up.
@@ -143,6 +150,26 @@ type Candidate struct {
 	Note string `json:"note,omitempty"`
 }
 
+// FailureReason identifies why a network sweep could not establish anything
+// about the addresses it covers. It is deliberately separate from Verdict:
+// Verdict describes one host, while a network failure is only justified after
+// every attempted host in that network failed the same way.
+type FailureReason string
+
+const (
+	// FailureUnreachable means every connection attempt returned either
+	// EHOSTUNREACH or ENETUNREACH. It says the controller had no usable route;
+	// it says nothing about whether devices exist on the network.
+	FailureUnreachable FailureReason = "unreachable"
+)
+
+// NetworkFailure is a CIDR the sweep could not test.
+type NetworkFailure struct {
+	Network  string        `json:"network"`
+	Reason   FailureReason `json:"reason"`
+	Attempts int           `json:"attempts"`
+}
+
 // Result is one sweep.
 type Result struct {
 	Found []Candidate `json:"found"`
@@ -154,8 +181,13 @@ type Result struct {
 	Networks []string `json:"networks"`
 	// Skipped names what was NOT swept and why. This is the field that stops a
 	// silent gap from reading as an absence of devices.
-	Skipped   []string `json:"skipped,omitempty"`
-	ElapsedMS int64    `json:"elapsed_ms"`
+	Skipped []string `json:"skipped,omitempty"`
+	// Failures names networks that were attempted but could not be tested.
+	// Additive rather than replacing Swept/Answered so existing API clients
+	// retain their summary while newer ones avoid treating a route failure as
+	// proof that the subnet contains no devices.
+	Failures  []NetworkFailure `json:"failures,omitempty"`
+	ElapsedMS int64            `json:"elapsed_ms"`
 }
 
 // Options configure a sweep.
@@ -172,6 +204,10 @@ type Options struct {
 	Workers      int
 	DialTimeout  time.Duration
 	ProbeTimeout time.Duration
+
+	// dialContext is a test seam for deterministic routing errors. Production
+	// always uses net.Dialer.DialContext.
+	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 func (o Options) workers() int {
@@ -193,6 +229,14 @@ func (o Options) probeTimeout() time.Duration {
 		return o.ProbeTimeout
 	}
 	return DefaultProbeTimeout
+}
+
+func (o Options) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if o.dialContext != nil {
+		return o.dialContext(ctx, network, address)
+	}
+	dialer := net.Dialer{Timeout: o.dialTimeout()}
+	return dialer.DialContext(ctx, network, address)
 }
 
 // listRequest is the probe body: ubus `list` for every object, on no session.
@@ -218,7 +262,7 @@ func Sweep(ctx context.Context, opt Options) (*Result, error) {
 		}, nil
 	}
 
-	targets, dropped := expand(nets)
+	targets, dropped := expandTargets(nets)
 	skipped = append(skipped, dropped...)
 
 	ports := opt.Ports
@@ -227,15 +271,21 @@ func Sweep(ctx context.Context, opt Options) (*Result, error) {
 	}
 
 	type job struct {
-		host   string
-		port   int
-		scheme string
+		host    string
+		port    int
+		scheme  string
+		network string
+	}
+	type networkStats struct {
+		attempts    int
+		unreachable int
 	}
 	jobs := make(chan job)
 	var (
-		mu       sync.Mutex
-		found    []Candidate
-		answered int
+		mu           sync.Mutex
+		found        []Candidate
+		answered     int
+		routingStats = make(map[string]*networkStats, len(nets))
 	)
 
 	var wg sync.WaitGroup
@@ -244,8 +294,17 @@ func Sweep(ctx context.Context, opt Options) (*Result, error) {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				c := probe(ctx, j.host, j.port, j.scheme, opt)
+				c, dialErr := probe(ctx, j.host, j.port, j.scheme, opt)
 				mu.Lock()
+				stats := routingStats[j.network]
+				if stats == nil {
+					stats = &networkStats{}
+					routingStats[j.network] = stats
+				}
+				stats.attempts++
+				if isUnreachable(dialErr) {
+					stats.unreachable++
+				}
 				if c.Verdict != VerdictSilent {
 					answered++
 				}
@@ -259,10 +318,10 @@ func Sweep(ctx context.Context, opt Options) (*Result, error) {
 
 	swept := 0
 feed:
-	for _, host := range targets {
+	for _, target := range targets {
 		for _, p := range ports {
 			select {
-			case jobs <- job{host: host, port: p, scheme: "http"}:
+			case jobs <- job{host: target.host, port: p, scheme: "http", network: target.network}:
 				swept++
 			case <-ctx.Done():
 				break feed
@@ -270,7 +329,7 @@ feed:
 		}
 		if opt.HTTPS {
 			select {
-			case jobs <- job{host: host, port: 443, scheme: "https"}:
+			case jobs <- job{host: target.host, port: 443, scheme: "https", network: target.network}:
 				swept++
 			case <-ctx.Done():
 				break feed
@@ -282,8 +341,19 @@ feed:
 
 	sortCandidates(found)
 	names := make([]string, 0, len(nets))
+	failures := make([]NetworkFailure, 0)
+	seenFailures := make(map[string]bool)
 	for _, n := range nets {
-		names = append(names, n.String())
+		name := n.String()
+		names = append(names, name)
+		stats := routingStats[name]
+		if !seenFailures[name] && stats != nil && stats.attempts > 0 &&
+			stats.unreachable == stats.attempts {
+			failures = append(failures, NetworkFailure{
+				Network: name, Reason: FailureUnreachable, Attempts: stats.attempts,
+			})
+			seenFailures[name] = true
+		}
 	}
 	return &Result{
 		Found:     found,
@@ -291,6 +361,7 @@ feed:
 		Answered:  answered,
 		Networks:  names,
 		Skipped:   skipped,
+		Failures:  failures,
 		ElapsedMS: time.Since(start).Milliseconds(),
 	}, ctx.Err()
 }
@@ -302,20 +373,20 @@ feed:
 // is a much better answer at the top of the form than an authentication error
 // at the bottom of it.
 func Probe(ctx context.Context, host string, port int, scheme string, opt Options) Candidate {
-	return probe(ctx, host, port, scheme, opt)
+	c, _ := probe(ctx, host, port, scheme, opt)
+	return c
 }
 
-func probe(ctx context.Context, host string, port int, scheme string, opt Options) Candidate {
+func probe(ctx context.Context, host string, port int, scheme string, opt Options) (Candidate, error) {
 	c := Candidate{Host: host, Port: port, Scheme: scheme, Verdict: VerdictSilent}
 
 	// Dial first, separately. An empty /24 costs 254 short TCP connects instead
 	// of 254 HTTP requests, and the connect result is what separates "silent"
 	// from "answered but not ours".
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	dialer := net.Dialer{Timeout: opt.dialTimeout()}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := opt.dial(ctx, "tcp", addr)
 	if err != nil {
-		return c
+		return c, err
 	}
 	conn.Close()
 
@@ -324,11 +395,15 @@ func probe(ctx context.Context, host string, port int, scheme string, opt Option
 	sig, err := listObjects(ctx, host, port, scheme, opt.probeTimeout())
 	if err != nil {
 		c.Note = ubusNote(err)
-		return c
+		return c, nil
 	}
 	c.Verdict = VerdictOpenWrt
 	c.Signals = sig
-	return c
+	return c, nil
+}
+
+func isUnreachable(err error) bool {
+	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH)
 }
 
 // ubusNote turns a probe failure into something an operator can act on, without
@@ -494,9 +569,15 @@ func resolveNetworks(want []string) (nets []*net.IPNet, skipped []string, err er
 	return nets, skipped, nil
 }
 
-// expand lists every probeable host address, dropping whole networks that would
-// take the sweep past MaxHosts rather than silently truncating one.
-func expand(nets []*net.IPNet) (hosts []string, skipped []string) {
+type sweepTarget struct {
+	host    string
+	network string
+}
+
+// expandTargets lists every probeable host address with the network it came
+// from, dropping whole networks that would take the sweep past MaxHosts rather
+// than silently truncating one.
+func expandTargets(nets []*net.IPNet) (targets []sweepTarget, skipped []string) {
 	total := 0
 	for _, n := range nets {
 		addrs := hostsIn(n)
@@ -507,7 +588,19 @@ func expand(nets []*net.IPNet) (hosts []string, skipped []string) {
 			continue
 		}
 		total += len(addrs)
-		hosts = append(hosts, addrs...)
+		for _, host := range addrs {
+			targets = append(targets, sweepTarget{host: host, network: n.String()})
+		}
+	}
+	return targets, skipped
+}
+
+// expand is retained as the address-only form used by target-expansion tests.
+func expand(nets []*net.IPNet) (hosts []string, skipped []string) {
+	targets, skipped := expandTargets(nets)
+	hosts = make([]string, 0, len(targets))
+	for _, target := range targets {
+		hosts = append(hosts, target.host)
 	}
 	return hosts, skipped
 }

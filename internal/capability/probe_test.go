@@ -122,10 +122,13 @@ func TestProbeMatchesTheReferenceDevice(t *testing.T) {
 		want State
 	}{
 		{FeatDSA, Present},
+		{FeatSwitchPorts, Present},
+		{FeatBridgeFDB, Present},
 		{FeatFirewall4, Present},
 		{FeatBatching, Present},
 		{FeatPreflightDirty, Present},
 		{FeatSurvey, Present},
+		{FeatRadioScan, Present},
 		{FeatAccounting, Present},
 		// mwlwifi leaves rx_time/tx_time uninitialised, so the split is not
 		// computable even though the fields are right there in the response.
@@ -154,6 +157,26 @@ func TestProbeMatchesTheReferenceDevice(t *testing.T) {
 	}
 }
 
+func TestRadioScanCapabilityIsProvedWithoutRunningAScan(t *testing.T) {
+	r, err := Probe(context.Background(), dial(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.State(FeatRadioScan); got != Present {
+		t.Fatalf("radio scan capability = %s", got)
+	}
+
+	c := dial(t)
+	setACLGap(t, c, [2]string{"iwinfo", "scan"})
+	r, err = Probe(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.State(FeatRadioScan); got != NotObservable {
+		t.Fatalf("denied radio scan capability = %s, want not-observable", got)
+	}
+}
+
 // The rule this package exists for. A refused check is a gap in our reach, not
 // a fact about the device, and recording it as Absent deletes a working feature
 // from the UI. Each of these was a real defect at some point.
@@ -164,6 +187,7 @@ func TestRefusedChecksBecomeNotObservableNeverAbsent(t *testing.T) {
 		feat Feature
 	}{
 		{"dsa", [][2]string{{"luci-rpc", "getNetworkDevices"}}, FeatDSA},
+		{"bridge fdb", [][2]string{{"file", "exec"}}, FeatBridgeFDB},
 		{"survey", [][2]string{{"iwinfo", "survey"}}, FeatSurvey},
 		{"preflight", [][2]string{{"file", "list"}}, FeatPreflightDirty},
 		{"firewall4/accounting", [][2]string{{"file", "exec"}}, FeatFirewall4},
@@ -189,6 +213,54 @@ func TestRefusedChecksBecomeNotObservableNeverAbsent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAirtimeNotesSeparateUnknownFromProvenDriverAbsence(t *testing.T) {
+	t.Run("survey refused", func(t *testing.T) {
+		c := dial(t)
+		setACLGap(t, c, [2]string{"iwinfo", "survey"})
+		r, err := Probe(context.Background(), c)
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if got := r.State(FeatAirtimeSplit); got != NotObservable {
+			t.Fatalf("airtime split = %s, want not-observable", got)
+		}
+		notes := strings.Join(r.Notes, "\n")
+		for _, falseClaim := range []string{
+			"this driver does not supply",
+			"Channel utilization (busy/active) is still available",
+		} {
+			if strings.Contains(notes, falseClaim) {
+				t.Errorf("a refused survey was reported as a driver answer (%q):\n%s",
+					falseClaim, notes)
+			}
+		}
+		for _, want := range []string{"could not be determined", "Re-adopt"} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("unknown airtime note does not mention %q:\n%s", want, notes)
+			}
+		}
+	})
+
+	t.Run("counters proven unusable", func(t *testing.T) {
+		r, err := Probe(context.Background(), dial(t))
+		if err != nil {
+			t.Fatalf("Probe: %v", err)
+		}
+		if got := r.State(FeatAirtimeSplit); got != Absent {
+			t.Fatalf("airtime split = %s, want absent", got)
+		}
+		notes := strings.Join(r.Notes, "\n")
+		for _, want := range []string{
+			"this driver does not supply usable rx_time/tx_time",
+			"Channel utilization (busy/active) is still available",
+		} {
+			if !strings.Contains(notes, want) {
+				t.Errorf("proven driver limitation does not mention %q:\n%s", want, notes)
+			}
+		}
+	})
 }
 
 // Adoption uses this to tell the operator which grant would buy a feature back.

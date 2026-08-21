@@ -24,9 +24,12 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
+	"sort"
 	"sync"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/radio"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -42,9 +45,10 @@ const (
 	// so; 5 s remains available to anyone who lowers it deliberately.
 	DefaultFocused = 10 * time.Second
 
-	// DefaultMaxInterval caps both backoff paths. An unreachable device is
-	// retried at least this often, so one that comes back is noticed without a
-	// restart.
+	// DefaultMaxInterval caps both adaptive backoff paths unless an operator has
+	// explicitly selected a slower per-device baseline. An otherwise
+	// unreachable device is retried at least this often, so one that comes back
+	// is noticed without a restart.
 	DefaultMaxInterval = 10 * time.Minute
 
 	// DefaultSlowPoll is the response time above which a device is treated as
@@ -86,10 +90,21 @@ type Target struct {
 	DeviceID int64
 	MAC      string
 	Name     string
+	// ConnectionKey identifies the endpoint, trust pin, and credential used by
+	// Connect. It must not contain those values themselves.
+	ConnectionKey string
 	// Class is the device's capability class ("A", "B", "C"). It selects the
 	// measured per-poll CPU cost; an unmeasured class reports none rather than
 	// borrowing another class's number.
 	Class string
+	// Gateway is desired-state authority to run site-wide WAN probes from this
+	// device. Hardware labels and interface names are not substitutes: AP-only
+	// devices must never each emit a competing "site" series.
+	Gateway bool
+	// AirtimeSplit is true only when the stored capability probe proved that
+	// iwinfo's rx_time/tx_time counters track reality. Presence of the fields is
+	// not proof: some drivers return plausible-looking counters that never move.
+	AirtimeSplit bool
 	// Baseline overrides the collector-wide baseline interval for this device.
 	// Zero uses the default.
 	//
@@ -198,13 +213,18 @@ func (c *Collector) Add(t Target) {
 	defer c.mu.Unlock()
 	if p, ok := c.pollers[t.DeviceID]; ok {
 		p.mu.Lock()
-		changed := p.target.MAC != t.MAC
+		changed := p.target.MAC != t.MAC || p.target.ConnectionKey == "" ||
+			t.ConnectionKey == "" || p.target.ConnectionKey != t.ConnectionKey
+		scheduleChanged := p.target.Gateway != t.Gateway || p.target.Baseline != t.Baseline
 		p.target = t
 		p.mu.Unlock()
 		if changed {
-			// The address behind this device changed. The cached session points
-			// at the old one, and a session token is not portable between hosts.
+			// The endpoint/auth identity changed, or the caller could not prove it
+			// stayed the same. A cached token/socket is not portable across either.
 			p.closeClient()
+		}
+		if scheduleChanged && c.started {
+			p.pokeSchedule()
 		}
 		return
 	}
@@ -213,6 +233,32 @@ func (c *Collector) Add(t Target) {
 	if c.started {
 		c.launch(p)
 	}
+}
+
+// RefreshAccess forces the next poll to authenticate again and retry every
+// access-dependent slow source. rpcd scopes are fixed at session creation, and
+// denied optional calls still stamp their cadence; dropping only the token
+// would otherwise retain the old denial for up to fifteen minutes.
+func (c *Collector) RefreshAccess(deviceID int64) bool {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	p.dropClientLocked()
+	p.ifaceAt = time.Time{}
+	p.ifaceRefetchAt = time.Time{}
+	p.meshAt = time.Time{}
+	p.radioAt = time.Time{}
+	p.boardAt = time.Time{}
+	p.logAt = time.Time{}
+	p.wanProbeAt = time.Time{}
+	p.topologyAt = time.Time{}
+	p.netAt = time.Time{}
+	p.mu.Unlock()
+	return true
 }
 
 // Remove stops polling a device — un-adoption, or removal from the inventory.
@@ -522,6 +568,207 @@ func (c *Collector) IfaceModes(deviceID int64) (map[string]string, bool) {
 	return out, true
 }
 
+// Radios returns the last reconciled stable UCI radio inventory. The bool is
+// false until getWirelessDevices has answered at least once. Each channel list
+// independently carries FrequenciesKnown, so an unavailable freqlist never
+// becomes an empty or unrestricted plan.
+func (c *Collector) Radios(deviceID int64) ([]radio.LiveState, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.radiosKnown {
+		return nil, false
+	}
+	return cloneRadioStates(p.radios), true
+}
+
+// RadioStatus describes the cache's source time and the most recent device
+// poll. It lets callers retain useful last-known values without presenting an
+// offline or overdue inventory as current.
+func (c *Collector) RadioStatus(deviceID int64) (radio.CollectionStatus, bool) {
+	c.mu.Lock()
+	p := c.pollers[deviceID]
+	c.mu.Unlock()
+	if p == nil {
+		return radio.CollectionStatus{}, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.radiosKnown {
+		return radio.CollectionStatus{}, false
+	}
+	status := radio.CollectionStatus{ConsecutiveFailures: p.fails,
+		LastPollOK: p.fails == 0 && !p.lastPoll.IsZero()}
+	if !p.radioObservedAt.IsZero() {
+		status.ObservedAt = p.radioObservedAt.UnixMilli()
+	}
+	if !p.lastPoll.IsZero() {
+		status.LastPollAt = p.lastPoll.UnixMilli()
+	}
+	if !p.radioAttemptAt.IsZero() {
+		status.LastSourceAttemptAt = p.radioAttemptAt.UnixMilli()
+		status.LastSourceAttemptOK = p.radioAttemptOK
+	}
+	status.Stale = !status.LastPollOK || p.radioObservedAt.IsZero() ||
+		!p.c.now().Before(p.radioObservedAt.Add(rediscoverInterval)) ||
+		(!p.radioAttemptAt.IsZero() && !p.radioAttemptOK)
+	return status, true
+}
+
+func (p *poller) reconcileRadios(snap *Snapshot) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if snap.radioInventoryAsked {
+		attemptAt := snap.At
+		if attemptAt.IsZero() {
+			attemptAt = p.c.now()
+		}
+		p.radioAttemptAt, p.radioAttemptOK = attemptAt, snap.radioInventoryOK
+	}
+
+	discardResult := map[string]bool{}
+	if snap.radioInventory != nil {
+		observedAt := snap.At
+		if observedAt.IsZero() {
+			observedAt = p.c.now()
+		}
+		previous := make(map[string]radio.LiveState, len(p.radios))
+		for _, state := range p.radios {
+			previous[state.Key] = state
+		}
+		inventory := append([]radio.InventoryRadio(nil), snap.radioInventory...)
+		sort.Slice(inventory, func(i, j int) bool { return inventory[i].Key < inventory[j].Key })
+		next := make([]radio.LiveState, 0, len(inventory))
+		seen := map[string]bool{}
+		targetsChanged := !p.radiosKnown || len(previous) != len(inventory)
+		for _, item := range inventory {
+			if seen[item.Key] {
+				continue
+			}
+			seen[item.Key] = true
+			state := radio.LiveState{InventoryRadio: cloneRadioInventory(item),
+				InventoryObservedAt: observedAt.UnixMilli(), Frequencies: []radio.Frequency{}}
+			if old, ok := previous[item.Key]; ok && sameRadioFrequencyIdentity(old.InventoryRadio, item) {
+				state.Frequencies = cloneRadioFrequencies(old.Frequencies)
+				state.FrequenciesKnown = old.FrequenciesKnown
+				state.FrequenciesObservedAt = old.FrequenciesObservedAt
+			} else {
+				targetsChanged = true
+				discardResult[item.Key] = true
+			}
+			next = append(next, state)
+		}
+		if len(next) != len(previous) {
+			targetsChanged = true
+		}
+		p.radios, p.radiosKnown = next, true
+		p.radioObservedAt = observedAt
+		if targetsChanged {
+			// A newly learned or moved radio gets its frequency list on the next
+			// normal poll, rather than waiting a full slow interval.
+			p.radioAt = time.Time{}
+		}
+	}
+
+	if !p.radiosKnown {
+		return
+	}
+	byKey := make(map[string]int, len(p.radios))
+	for i := range p.radios {
+		byKey[p.radios[i].Key] = i
+	}
+	for key := range snap.radioFrequencyAsked {
+		if i, ok := byKey[key]; ok {
+			p.radios[i].Frequencies = []radio.Frequency{}
+			p.radios[i].FrequenciesKnown = false
+			p.radios[i].FrequenciesObservedAt = 0
+		}
+	}
+	frequencyObservedAt := snap.At
+	if frequencyObservedAt.IsZero() {
+		frequencyObservedAt = p.c.now()
+	}
+	for key, frequencies := range snap.radioFrequencies {
+		if discardResult[key] {
+			continue // result came from the pre-refresh runtime interface
+		}
+		if i, ok := byKey[key]; ok {
+			p.radios[i].Frequencies = cloneRadioFrequencies(frequencies)
+			p.radios[i].FrequenciesKnown = true
+			p.radios[i].FrequenciesObservedAt = frequencyObservedAt.UnixMilli()
+		}
+	}
+	snap.Radios = cloneRadioStates(p.radios)
+	snap.RadiosKnown = true
+	sourceAt := snap.At
+	if sourceAt.IsZero() {
+		sourceAt = p.c.now()
+	}
+	snap.RadiosStale = p.radioObservedAt.IsZero() ||
+		!sourceAt.Before(p.radioObservedAt.Add(rediscoverInterval)) ||
+		(!p.radioAttemptAt.IsZero() && !p.radioAttemptOK)
+}
+
+func sameRadioFrequencyIdentity(old, next radio.InventoryRadio) bool {
+	return old.Key == next.Key && old.Band == next.Band &&
+		preferredRadioInterface(old.Interfaces) == preferredRadioInterface(next.Interfaces)
+}
+
+func cloneRadioStates(states []radio.LiveState) []radio.LiveState {
+	if states == nil {
+		return nil
+	}
+	out := make([]radio.LiveState, len(states))
+	for i, state := range states {
+		out[i] = state
+		out[i].InventoryRadio = cloneRadioInventory(state.InventoryRadio)
+		out[i].Frequencies = cloneRadioFrequencies(state.Frequencies)
+	}
+	return out
+}
+
+func cloneRadioInventory(in radio.InventoryRadio) radio.InventoryRadio {
+	out := in
+	out.Up = clonePtr(in.Up)
+	out.Disabled = clonePtr(in.Disabled)
+	out.Pending = clonePtr(in.Pending)
+	out.CurrentMHz = clonePtr(in.CurrentMHz)
+	out.CurrentChannel = clonePtr(in.CurrentChannel)
+	if in.Interfaces != nil {
+		out.Interfaces = append([]radio.Interface(nil), in.Interfaces...)
+	}
+	return out
+}
+
+func cloneRadioFrequencies(in []radio.Frequency) []radio.Frequency {
+	if in == nil {
+		return nil
+	}
+	out := make([]radio.Frequency, len(in))
+	for i, frequency := range in {
+		out[i] = frequency
+		out[i].Restricted = clonePtr(frequency.Restricted)
+		out[i].Active = clonePtr(frequency.Active)
+		if frequency.Flags != nil {
+			out[i].Flags = append([]string(nil), frequency.Flags...)
+		}
+	}
+	return out
+}
+
+func clonePtr[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	out := *value
+	return &out
+}
+
 func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -623,10 +870,19 @@ func (c *Collector) now() time.Time {
 // ---- per-device poller ----
 
 type poller struct {
-	c      *Collector
-	wake   chan struct{}
-	done   chan struct{}
-	stopMu sync.Once
+	c          *Collector
+	wake       chan struct{}
+	reschedule chan struct{}
+	done       chan struct{}
+	stopMu     sync.Once
+	// cycleMu makes Quiesce a boundary for a cycle that already passed the
+	// quiesce check. It is held through snapshot emission, so an apply cannot
+	// begin while an older poll is still publishing pre-apply state. A cycle
+	// takes cycleMu before emitMu; stop takes only emitMu, never the reverse.
+	cycleMu sync.Mutex
+	// emitMu makes Remove a boundary: when it returns, no in-flight or later
+	// poll can still publish a snapshot under a device ID that may be reused.
+	emitMu sync.RWMutex
 
 	mu      sync.Mutex
 	target  Target
@@ -657,8 +913,26 @@ type poller struct {
 	// beside the modes and refreshed with them. It is what makes "did this
 	// controller write that BSS?" answerable at all: the poll sees interfaces
 	// and SSIDs, and only this says which section produced one.
-	ifaceSections map[string]string
-	boardAt       time.Time
+	ifaceSections   map[string]string
+	ifaceRadios     map[string]string
+	radios          []radio.LiveState
+	radiosKnown     bool
+	radioAt         time.Time
+	radioObservedAt time.Time
+	radioAttemptAt  time.Time
+	radioAttemptOK  bool
+	boardAt         time.Time
+	logAt           time.Time
+	// logInterval is fixed at one minute in production. Tests shorten it while
+	// preserving the ratio to a modeled slow full baseline.
+	logInterval time.Duration
+	wanProbeAt  time.Time
+	// wanInterval is zero in production, which means the fixed one-minute
+	// contract. Tests shorten it without exposing a rate-raising option.
+	wanInterval          time.Duration
+	topologyAt           time.Time
+	topologyBridges      []string
+	topologyBridgesKnown bool
 
 	// networks are the device's IPv4 subnets, refreshed on the slow cadence and
 	// stamped onto every poll in between. Without carrying them forward, only
@@ -697,18 +971,28 @@ type poller struct {
 
 func newPoller(c *Collector, t Target) *poller {
 	return &poller{
-		c:         c,
-		target:    t,
-		startedAt: c.now(),
-		wake:      make(chan struct{}, 1),
-		done:      make(chan struct{}),
+		c:          c,
+		target:     t,
+		startedAt:  c.now(),
+		wake:       make(chan struct{}, 1),
+		reschedule: make(chan struct{}, 1),
+		done:       make(chan struct{}),
 	}
 }
 
 func (p *poller) run(ctx context.Context) {
-	timer := time.NewTimer(p.stagger())
+	initial := p.stagger()
+	timer := time.NewTimer(initial)
 	defer timer.Stop()
+	// Full and auxiliary deadlines share one timer and one goroutine. This keeps
+	// requests serialized while allowing slow-baseline devices to retain
+	// one-minute log continuity (and gateway WAN samples) without re-running the
+	// full poll.
+	nextIsFull := true
+	fullDue := time.Now().Add(initial)
 	for {
+		doFull := nextIsFull
+		doWork := true
 		select {
 		case <-ctx.Done():
 			return
@@ -716,12 +1000,115 @@ func (p *poller) run(ctx context.Context) {
 			return
 		case <-timer.C:
 		case <-p.wake:
+			doFull = true
+		case <-p.reschedule:
+			doWork = false
 		}
-		p.tick(ctx)
+		if !doWork {
+			fullDue = time.Now().Add(p.next())
+		} else if doFull {
+			started := time.Now()
+			p.tick(ctx)
+			// Cadence is start-to-start. Besides matching the advertised rate,
+			// this lets the full one-minute gateway poll absorb the WAN probe
+			// instead of a probe-only request racing it just after completion.
+			fullDue = started.Add(p.next())
+		} else {
+			p.tickAux(ctx)
+		}
+		delay, full := p.nextWake(fullDue)
+		nextIsFull = full
 		// Go 1.23 made Timer channels synchronous, so Reset needs no drain
 		// dance: a stale value cannot be waiting in the channel.
-		timer.Reset(p.next())
+		timer.Reset(delay)
 	}
+}
+
+func (p *poller) nextWake(fullDue time.Time) (time.Duration, bool) {
+	fullDelay := time.Until(fullDue)
+	if fullDelay < 0 {
+		fullDelay = 0
+	}
+	auxDelay, enabled := p.nextAuxDelay()
+	if enabled {
+		difference := fullDelay - auxDelay
+		if difference < 0 {
+			difference = -difference
+		}
+		if difference <= p.auxCoalesceWindow() {
+			// Let a nearby full poll carry the probe in its existing batch. This
+			// preserves one request/minute at the default cadence.
+			return auxDelay, true
+		}
+	}
+	if enabled && auxDelay < fullDelay {
+		return auxDelay, false
+	}
+	return fullDelay, true
+}
+
+func (p *poller) auxCoalesceWindow() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	window := min(5*time.Second, p.logIntervalLocked()/4)
+	if p.target.Gateway {
+		window = min(window, p.wanIntervalLocked()/4)
+	}
+	return window
+}
+
+func (p *poller) nextAuxDelay() (time.Duration, bool) {
+	logDelay := p.nextLogDelay()
+	wanDelay, wanEnabled := p.nextWANDelay()
+	if wanEnabled && wanDelay < logDelay {
+		return wanDelay, true
+	}
+	return logDelay, true
+}
+
+func (p *poller) nextLogDelay() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.quiesce > 0 {
+		return clamp(p.c.opts.Focused, time.Second, p.c.opts.MaxInterval)
+	}
+	interval := p.logIntervalLocked()
+	if p.logAt.IsZero() {
+		return interval
+	}
+	elapsed := p.c.now().Sub(p.logAt)
+	if elapsed < 0 || elapsed >= interval {
+		return 0
+	}
+	return interval - elapsed
+}
+
+func (p *poller) nextWANDelay() (time.Duration, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.target.Gateway {
+		return 0, false
+	}
+	if p.quiesce > 0 {
+		return clamp(p.c.opts.Focused, time.Second, p.c.opts.MaxInterval), true
+	}
+	interval := p.wanIntervalLocked()
+	if p.wanProbeAt.IsZero() {
+		return interval, true
+	}
+	elapsed := p.c.now().Sub(p.wanProbeAt)
+	if elapsed < 0 {
+		return 0, true
+	}
+	if elapsed >= interval {
+		// A failed full poll already has its own retry schedule. Do not add an
+		// immediate second dial; the independent WAN attempt resumes next minute.
+		if p.fails > 0 {
+			return interval, true
+		}
+		return 0, true
+	}
+	return interval - elapsed, true
 }
 
 // stagger spreads devices across the baseline interval, deterministically from
@@ -740,6 +1127,9 @@ func (p *poller) stagger() time.Duration {
 }
 
 func (p *poller) tick(ctx context.Context) {
+	p.cycleMu.Lock()
+	defer p.cycleMu.Unlock()
+
 	p.mu.Lock()
 	if p.quiesce > 0 {
 		p.mu.Unlock()
@@ -749,6 +1139,7 @@ func (p *poller) tick(ctx context.Context) {
 	target := p.target
 	ifaces := p.ifaces
 	modes := p.ifaceModes
+	ifaceRadios := cloneStringMap(p.ifaceRadios)
 	p.mu.Unlock()
 
 	// Bound the poll by its own interval so a slow device produces gaps rather
@@ -764,7 +1155,7 @@ func (p *poller) tick(ctx context.Context) {
 		})
 		return
 	}
-	snap := p.poll(pctx, client, tier, ifaces, modes)
+	snap := p.poll(pctx, client, target, tier, ifaces, modes)
 	if snap.Err != nil {
 		p.fail(ctx, snap)
 		return
@@ -799,6 +1190,24 @@ func (p *poller) tick(ctx context.Context) {
 		if snap.IfaceSections != nil {
 			p.ifaceSections = snap.IfaceSections
 		}
+		if snap.IfaceRadios != nil {
+			p.ifaceRadios = snap.IfaceRadios
+			ifaceRadios = cloneStringMap(snap.IfaceRadios)
+		}
+		p.mu.Unlock()
+	}
+	if snap.IfaceRadios == nil {
+		snap.IfaceRadios = ifaceRadios
+	}
+	p.reconcileRadios(&snap)
+	if snap.Topology.Cycle && topologySourceSuccessful(snap.Topology.Sources, TopologySourceNetworkDevices) {
+		bridges := topologyBridgeNames(snap.Topology.NetworkDevices)
+		p.mu.Lock()
+		changed := !p.topologyBridgesKnown || !slices.Equal(p.topologyBridges, bridges)
+		p.topologyBridges, p.topologyBridgesKnown = bridges, true
+		if changed && len(bridges) > 0 {
+			p.topologyAt = time.Time{}
+		}
 		p.mu.Unlock()
 	}
 	// The subnets, likewise. A device with no IPv4 address at all returns an
@@ -815,7 +1224,49 @@ func (p *poller) tick(ctx context.Context) {
 	}
 	p.mu.Unlock()
 	p.succeed(snap)
-	p.c.sink.Observe(ctx, snap)
+	p.emit(ctx, snap)
+}
+
+// tickAux runs only due router-log and gateway-probe work between full polls.
+// It shares the cycle lock and session with tick, so it cannot race an apply or
+// another request. It deliberately does not update reachability, radio
+// freshness, client state, or the full-poll backoff.
+func (p *poller) tickAux(ctx context.Context) {
+	p.cycleMu.Lock()
+	defer p.cycleMu.Unlock()
+
+	p.mu.Lock()
+	if p.quiesce > 0 {
+		p.mu.Unlock()
+		return
+	}
+	target := p.target
+	p.mu.Unlock()
+	calls, wan, logs := p.buildAuxCalls()
+	if len(calls) == 0 {
+		return
+	}
+
+	pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client, err := p.dial(pctx, target)
+	var snap Snapshot
+	if err != nil {
+		snap = Snapshot{DeviceID: target.DeviceID, MAC: target.MAC, Name: target.Name,
+			Tier: Baseline, At: p.c.now(), WANOnly: wan, LogOnly: logs, Err: err}
+	} else {
+		snap = p.pollAux(pctx, client, target, calls, wan, logs)
+	}
+	p.mu.Lock()
+	p.polls++
+	if snap.Err != nil {
+		p.failures++
+		if p.client != nil {
+			p.client.Close()
+		}
+	}
+	p.mu.Unlock()
+	p.emit(ctx, snap)
 }
 
 // dial returns the cached session, opening one if needed.
@@ -850,6 +1301,11 @@ func (p *poller) fail(ctx context.Context, snap Snapshot) {
 	p.polls++
 	p.failures++
 	n := p.fails
+	// Keep the rpcd token after one hard failure, but stop a healthy keep-alive
+	// socket from pinning the next poll to a stale route or endpoint.
+	if n == 1 && p.client != nil {
+		p.client.Close()
+	}
 	// Drop the session after repeated failures so the next attempt re-logs in.
 	// One failure is not enough: the client already replays a single expired
 	// session itself, and discarding it on every blip would turn a flaky link
@@ -866,7 +1322,18 @@ func (p *poller) fail(ctx context.Context, snap Snapshot) {
 		p.c.log.Debug("poll still failing", "device", snap.MAC,
 			"consecutive", n, "err", snap.Err)
 	}
-	p.c.sink.Observe(ctx, snap)
+	p.emit(ctx, snap)
+}
+
+func (p *poller) emit(ctx context.Context, snap Snapshot) {
+	p.emitMu.RLock()
+	defer p.emitMu.RUnlock()
+	select {
+	case <-p.done:
+		return
+	default:
+		p.c.sink.Observe(ctx, snap)
+	}
 }
 
 func (p *poller) succeed(snap Snapshot) {
@@ -915,19 +1382,23 @@ func (p *poller) nextLocked() time.Duration {
 	if p.focus > 0 {
 		base = p.c.opts.Focused
 	}
+	// MaxInterval caps adaptive widening/backoff, not an operator's explicitly
+	// slower baseline. Letting a 15-minute override collapse to the default
+	// 10-minute cap silently raises the full-poll rate.
+	ceiling := max(p.c.opts.MaxInterval, base)
 	if p.quiesce > 0 {
 		// Re-check soon rather than sleeping out a full interval: an apply plus
 		// its confirm window is under two minutes, and polling should resume
 		// promptly once it clears.
-		return clamp(p.c.opts.Focused, time.Second, p.c.opts.MaxInterval)
+		return clamp(p.c.opts.Focused, time.Second, ceiling)
 	}
 	if p.fails > 0 {
 		// Jitter first, clamp second. The other order lets a jittered interval
 		// land up to 50% above MaxInterval, which quietly turns a documented
 		// ceiling into an approximate one.
-		return clamp(withJitter(base<<min(p.fails, 6)), base/2, p.c.opts.MaxInterval)
+		return clamp(withJitter(base<<min(p.fails, 6)), base/2, ceiling)
 	}
-	return clamp(base<<p.widen, base, p.c.opts.MaxInterval)
+	return clamp(base<<p.widen, base, ceiling)
 }
 
 // baselineLocked is this device's baseline interval: its own override when it
@@ -983,6 +1454,13 @@ func (p *poller) addQuiesce() func() {
 	p.mu.Lock()
 	p.quiesce++
 	p.mu.Unlock()
+
+	// A cycle that acquired cycleMu before the flag changed may finish, including
+	// its sink emission. Waiting here makes return from Quiesce the point after
+	// which no poll is in flight; cycles queued behind us see quiesce above.
+	p.cycleMu.Lock()
+	p.cycleMu.Unlock()
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -1006,8 +1484,17 @@ func (p *poller) poke() {
 	}
 }
 
+func (p *poller) pokeSchedule() {
+	select {
+	case p.reschedule <- struct{}{}:
+	default:
+	}
+}
+
 func (p *poller) stop() {
+	p.emitMu.Lock()
 	p.stopMu.Do(func() { close(p.done) })
+	p.emitMu.Unlock()
 }
 
 func (p *poller) closeClient() {
