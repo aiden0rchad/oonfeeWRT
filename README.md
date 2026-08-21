@@ -5,7 +5,8 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** working, on two devices. Not released.
+**Status:** Phase 4 is complete on `main`, hardened and working on two devices.
+Not released.
 
 **Current live checkpoint (2026-08-20):** the repository and lab database run
 schema 16.
@@ -27,6 +28,13 @@ fleet Preview and verified schema-16 recovery pair are recorded in STATUS
 Phase 3 now has two-client DHCP/DNS/WAN and no-LAN hardware proof. Its literal
 bidirectional peer data-plane claim remains partial because reciprocal raw
 Safari peer-IP failures had no known-live peer listener or positive control.
+
+The Phase-4 completion and hardening work was merged through
+[PR #1](https://github.com/aiden0rchad/oonfeewrt/pull/1) as `ee15e2f`. At that
+checkpoint the local release gates passed: full Go normal and race suites,
+`go vet`, module-tidiness check, all 247 UI tests, production UI build, bundle
+budget, tree secret scan, `git diff --check` and reproducible binary check. This
+is a source checkpoint, not a tagged or packaged release.
 
 There is a controller you can run: a Go daemon and an embedded React UI that
 adopt an OpenWrt device, reconcile a site model onto it, and take themselves
@@ -199,11 +207,11 @@ attached.
 
 ## Getting it running
 
-Two sides, and only one of them needs anything installed. Every step below is
-what the code actually does today, verified against a Linksys WRT3200ACM on
-OpenWrt 25.12.5.
+Two sides, and only the controller needs executable software installed. Every
+step below is what the code actually does today, verified against a Linksys
+WRT3200ACM on OpenWrt 25.12.5.
 
-### The router: nothing to install
+### The router: no executable software to install
 
 There is no package to build, no opkg feed, no init script. A stock OpenWrt
 device already has everything: `rpcd`, and `uhttpd` with the ubus handler
