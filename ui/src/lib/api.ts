@@ -34,6 +34,10 @@ export class ApiError extends Error {
 /** Fires when the server says we are not signed in. */
 export const onUnauthorized = new Set<() => void>()
 
+/** Fires when an API response comes from a different daemon process. */
+export const onControllerRestart = new Set<() => void>()
+let controllerInstance = ''
+
 function csrfToken(): string {
   const m = document.cookie.match(/(?:^|;\s*)oonfee_csrf=([^;]*)/)
   return m ? decodeURIComponent(m[1]) : ''
@@ -57,6 +61,16 @@ async function request<T>(
     // same-origin fetch in some configurations and every call 401s.
     credentials: 'same-origin',
   })
+
+  const nextInstance = resp.headers.get('X-OonfeeWRT-Instance') ?? ''
+  if (nextInstance) {
+    if (controllerInstance && controllerInstance !== nextInstance) {
+      controllerInstance = nextInstance
+      onControllerRestart.forEach((fn) => fn())
+      throw new ApiError(409, 'controller restarted')
+    }
+    controllerInstance = nextInstance
+  }
 
   if (resp.status === 401) {
     onUnauthorized.forEach((fn) => fn())
@@ -350,6 +364,8 @@ export interface TopologySnapshot {
   truncated: boolean
   nodes: TopologyNode[]
   edges: TopologyEdge[]
+  /** Latest closed placement for currently unplaced devices; never current evidence. */
+  last_known_edges?: TopologyEdge[]
   /** Sorted sources the controller could not observe. */
   gaps: string[]
 }
@@ -590,6 +606,23 @@ export interface RefreshACLResult {
   unobservable?: string[]
 }
 
+export interface LLDPCapabilityResult {
+  device_id: number
+  name: string
+  state: 'not_installed' | 'install_planned' | 'installing' | 'installed' | 'configure_planned' | 'remove_planned' | 'removing' | 'error'
+  package_manager?: 'apk' | 'opkg'
+  requested_packages: string[]
+  added_packages: string[]
+  plan?: string
+  plan_hash?: string
+  diagnostics?: string
+  configuration_state?: 'package_default' | 'planned' | 'configured' | 'incomplete'
+  configured_interfaces?: string[]
+  service_enabled?: boolean
+  service_running?: boolean
+  detail?: string
+}
+
 /** One page of the client grid. Same shape as EventPage and for the same
  *  reason: filters, paging and facet counts are all server-side, so the rail
  *  counts the whole filtered table rather than the rows that arrived. */
@@ -630,6 +663,13 @@ export interface Dashboard {
   active_devices: number
   upstream_devices: number
   unscoped_devices: number
+  /** Current default-route truth for each adopted gateway. `missing` is used
+   * only after a fresh successful interface observation on an online device. */
+  gateway_uplinks: Array<{
+    device_id: number
+    name: string
+    state: 'up' | 'missing' | 'unknown'
+  }>
   focused_devices: number
   quiesced_devices: number
   recent_events: EventRow[] | null
@@ -668,7 +708,7 @@ export interface InspectResult {
   model: string
   class: string
   firmware: string
-  radio_count: number
+  radio_count: number | null
   lan_ports: string[]
   wan_port?: string
   /** What inspection can safely claim about the switch. DSA support remains
@@ -1247,8 +1287,8 @@ export interface Overhead {
   failed_polls: number
   since: number
   requests_per_minute: number
-  /** Requests that were not polls: session logins, and anything that escaped
-   *  the batch. The second is a defect, not a rate. */
+  /** Requests that were not scheduled polls, including session setup and
+   *  explicit actions such as discovery, capability probes, and RF scans. */
   non_poll_requests: number
   quiesced: boolean
   /** Device CPU one poll of the current tier costs. Absent when this device's
@@ -1264,8 +1304,7 @@ export interface Overhead {
 /** The Management Overhead payload (DEVICE-BUDGET §7). */
 export interface OverheadReport {
   overhead: Overhead
-  /** Packages the controller installed. Always empty today, and reported
-   *  rather than omitted so the "we install nothing" claim is checkable. */
+  /** Packages added by explicitly authorized controller capabilities. */
   packages: string[]
   packages_note: string
   /** 0 means the controller default. */
@@ -1318,6 +1357,18 @@ export const api = {
     private_key?: string
     acknowledge_router_changes: true
   }) => post<RefreshACLResult>(`/devices/${id}/refresh-acl`, credential),
+  lldpCapability: (id: number) =>
+    get<LLDPCapabilityResult>(`/devices/${id}/capabilities/lldp`),
+  changeLLDPCapability: (id: number, request: {
+    action: 'diagnose' | 'plan_install' | 'install' | 'plan_configure' | 'configure' | 'plan_remove' | 'remove'
+    username: string
+    password: string
+    private_key?: string
+    plan_hash?: string
+    acknowledge_package_index_refresh?: boolean
+    acknowledge_read_only_diagnostics?: boolean
+    acknowledge_router_changes?: boolean
+  }) => post<LLDPCapabilityResult>(`/devices/${id}/capabilities/lldp`, request),
   distributeNeighbours: () => post<NeighbourResult>('/roaming/neighbours', {}),
   /** The most recent distribution, WITHOUT running one. `ran: false` means no
    *  cycle has completed since the controller started — not that nothing

@@ -22,26 +22,30 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | ~~D5~~ | ~~Self-management over loopback~~ | **superseded by D7** — there is no self to manage |
 | D6 | Target UX reference originated with **UniFi Network 10.4** screenshots and tracks the current stable release; the active baseline is **Network 10.5.67** as of 2026-08-18. Copy interaction contracts and information architecture, never Ubiquiti branding or assets. | earlier fixed 10.4 target |
 | D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
+| D8 | **Optional router packages are two-stage, per-feature root actions.** Resolve and display the package manager's exact plan, bind it, then require a second unchecked acknowledgement. Persist the before-state and actual package diff; rollback removes that exact added set while preserving pre-existing packages, and un-adoption stays blocked until rollback succeeds. Adoption never selects a package. The first capability is official-feed `lldpd`. | previously documented future tier-2 flow |
 
-### Current live checkpoint (2026-08-20)
+### Current live checkpoint (2026-08-22)
 
-The build expects schema **16**. Do not collapse its three recent compatibility
+The build expects schema **17**. Do not collapse its four recent compatibility
 epochs: v14 is the one-time secret-sealing/scrub boundary, v15 makes the
 cross-feature policy model authoritative, and v16 adds attested observability
 tables/columns for producer-provenanced events and cursors, topology validity
-intervals/source state, and explicit RF scans. Read-only tools require the
-current schema; neither they nor an older daemon may silently accept newer
-intent.
+intervals/source state, and explicit RF scans. Schema 17 adds the durable
+device capability install/rollback ledger. Read-only tools require the current
+schema; neither they nor an older daemon may silently accept newer intent.
 
-The lab database has been promoted to schema 16. The initial signed-in pass
-exercised Phase 4 under both routers' older ACLs. That checkpoint was superseded
-when the operator explicitly acknowledged ACL refresh for both routers at
-15:16 and 15:17. Subsequent polls persisted OpenWrt-log and topology-source
-observations from both routers plus fixed-`1.1.1.1` ICMP observations from the
-Gateway. Historical source coverage remains unavailable because it is not
-stored. The refresh implementation installs no package, binary, daemon or
-service; without before/after package-inventory hashes, the live proof makes no
-claim that package inventory was unchanged.
+The lab database has been promoted to schema 17. The earlier schema-16 pass
+proved the joined Phase-4 surfaces and the separately acknowledged ACL refresh.
+The fresh-start pass then proved schema 17's optional official-feed LLDP path on
+both reference devices: exact plan, install, physical-interface configuration,
+read-only diagnosis, drift-checked rollback with final package/service readback,
+and clean reinstallation. Default adoption still installs no package, binary,
+daemon or service. Historical source coverage remains unavailable because it is
+not stored. Final release-candidate artifact
+`dev-schema17-fresh-start-transparent-v40` (15,312,098 bytes; SHA-256
+`9c3a797c1470d8630f42dc77619007370aad553fae00078716a5a5a457c6b4cc`)
+passed the signed-in deep-link, settled regression, recovery, secret and
+reproducibility gates. It is merge-ready, not tagged or published.
 
 ---
 
@@ -311,6 +315,20 @@ CREATE TABLE radio_scan_bss (
   mhz INTEGER NOT NULL, channel INTEGER NOT NULL, signal INTEGER, width INTEGER,
   PRIMARY KEY (scan_id,bssid,mhz)
 ) WITHOUT ROWID;
+
+-- ===== optional device capability ownership (v17) =====
+CREATE TABLE device_capability_installs (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
+  capability TEXT NOT NULL,
+  package_manager TEXT NOT NULL CHECK (package_manager IN ('apk','opkg')),
+  requested_packages_json TEXT NOT NULL,
+  baseline_packages_json TEXT NOT NULL DEFAULT '[]',
+  added_packages_json TEXT NOT NULL DEFAULT '[]',
+  services_json TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL CHECK (state IN ('installing','installed','removing','error')),
+  detail TEXT NOT NULL DEFAULT '', installed_at INTEGER, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id,capability)
+) WITHOUT ROWID;
 ```
 
 Migration 11 adds and backfills `functions_json` in one transaction. Existing
@@ -376,6 +394,12 @@ cursor, topology and scan shape above. Startup attests every column in order,
 the partial-unique source index predicate, required indexes/foreign keys,
 WITHOUT-ROWID and CHECK clauses before accepting a v16 marker; `IF NOT EXISTS`
 is never mistaken for validation.
+
+Migration 17 adds `device_capability_installs`. `ON DELETE RESTRICT` is
+load-bearing: un-adoption cannot discard the only package/service rollback
+record. The row is written in `installing` state before SSH mutates the router,
+then completed with the observed package diff; interruption or uncertainty
+becomes `error`, never an invented clean state.
 
 Maintenance runs every 5 minutes. The RAM-ring flush writes its completed
 `rollup_5m` rows in one transaction; hourly folding is count-weighted and never
@@ -453,7 +477,8 @@ and abort the render for that device.
 
 ### Worked example 1 — WLAN fan-out (the product, in one example)
 
-Site model: WLAN id=3, ssid `Home`, security `sae-mixed` key `s3cret`,
+Site model: WLAN id=3, ssid `example-wlan`, security `sae-mixed` key
+`example-passphrase`,
 bands `2g,5g`, network `lan` (VLAN 1), roaming `{ft:true, ft_over_ds:true, kv:true}`,
 group containing device 7 whose caps report radios `radio0` (5g) and `radio1` (2g).
 
@@ -461,7 +486,7 @@ Rendered staged calls for device 7 (order matters; all staged, no commit — D2)
 
 ```
 uci.add {config:"wireless", type:"wifi-iface", name:"oowrt_wlan3_radio0", values:{
-  device:"radio0", mode:"ap", ssid:"Home", encryption:"sae-mixed", key:"s3cret",
+  device:"radio0", mode:"ap", ssid:"example-wlan", encryption:"sae-mixed", key:"example-passphrase",
   network:"lan", ieee80211w:"1",
   ieee80211r:"1", mobility_domain:"e3a1", ft_over_ds:"1", reassociation_deadline:"20000",
   bss_transition:"1", wnm_sleep_mode:"1", time_advertisement:"2", time_zone:"UTC",
@@ -486,13 +511,13 @@ Rules encoded here:
 
 ### Worked example 2 — network + zone
 
-Network `iot` VLAN 45, `10.7.45.1/24`, zone `Guest`, DHCP on with configured
+Network `iot` VLAN 45, `203.0.113.1/24`, zone `Guest`, DHCP on with configured
 pool start `100`, lease count `149` and lease time `12h`:
 
 ```
 # /etc/config/network (staged)
 uci.add {config:"network", type:"bridge-vlan", name:"oowrt_bv45", values:{device:"br-lan", vlan:"45", ports:[…per-device port map…], oonfeewrt:"1"}}
-uci.add {config:"network", type:"interface", name:"oowrt_net_iot", values:{proto:"static", device:"br-lan.45", ipaddr:"10.7.45.1", netmask:"255.255.255.0", oonfeewrt:"1"}}
+uci.add {config:"network", type:"interface", name:"oowrt_net_iot", values:{proto:"static", device:"br-lan.45", ipaddr:"203.0.113.1", netmask:"255.255.255.0", oonfeewrt:"1"}}
 # /etc/config/dhcp
 uci.add {config:"dhcp", type:"dhcp", name:"oowrt_dhcp_iot", values:{interface:"oowrt_net_iot", start:"100", limit:"149", leasetime:"12h", oonfeewrt:"1"}}
 # /etc/config/firewall
@@ -912,8 +937,25 @@ explicit selection plus the operator credential rather than the controller's
 own—the same split that un-adoption needs. Adoption, polling and validation
 never select it automatically. Anything that widens the device's attack surface
 should cost an operator credential; anything that only reads or reconciles
-owned UCI should
-not.
+owned UCI should not. The LLDP flow runs the package manager's simulation,
+hash-binds that exact output, and requires a second acknowledgement before
+`apk -U add lldpd` (OpenWrt 25.12+) or `opkg update && opkg install lldpd`
+(24.10 and older). It records the complete pre-install package list, the actual
+post-install diff, and the prior `lldpd` enabled/running state. After installation,
+a credentialed read-only plan derives only non-wireless physical members of
+`br-lan`; a separate unchecked acknowledgement can replace only
+`lldpd.config.interface`, commit only `lldpd`, restart only that service, wait
+boundedly for its control socket, and verify every planned runtime interface.
+The ledger retains the exact baseline/applied UCI exports and configured
+interfaces. Read-only diagnostics preserve that durable state in their response.
+Rollback refuses external UCI drift, restores and verifies the exact baseline,
+removes the complete recorded added-package set, and independently verifies the
+final package inventory and `lldpd` enabled/running state before deleting the
+ledger. A pre-existing package is retained and its prior service state restored.
+An installing/error record survives crashes and blocks un-adoption instead of
+silently losing ownership. Rejected credentialed plan requests clear transient
+password/private-key fields before retry; successful plan/apply reuse remains
+limited to the open review.
 - Audit: every changeset stores author, timestamp, full diff, per-device
   outcome. Every login and failed login is an event.
 - No default credentials anywhere. First run generates the admin account
@@ -1062,19 +1104,27 @@ and Logs screen.
 evidence from one query; Radios shows interference/airtime for mt76 fixture
 radios and correctly *omits* them for the mwlwifi fixture radio.
 
-Current live status (2026-08-20): the schema-16 store, producers, bounded
+Current live status (2026-08-22): the schema-17 store, producers, bounded
 REST APIs and React screens are implemented. The joined timeline is rollup-only
 and gap-aware; `wifi-v1` is fixed/all-or-null; topology preserves source
 ambiguity and validity intervals; Radios uses explicit scans and freshness;
 Logs distinguishes observed-empty from missing/stale/gapped producer coverage.
-The WebSocket remains `device.stats` only. The live lab database is schema 16.
-After explicit ACL refresh at 15:16 and 15:17, both routers supplied current
-OpenWrt-log and topology-source observations and the Gateway supplied fixed-
-target ICMP observations. Historical log/topology coverage is still
-unavailable rather than inferred; DFS and scan outcomes remain evidence-gated,
-and no disruptive scan was run. Persisted RF scan history is bounded to the
-newest terminal result per stable radio key by the normal maintenance
-transaction.
+The WebSocket remains `device.stats` only. The live lab database is schema 17.
+Both routers have separately opted-in, controller-recorded LLDP installations
+and physical-interface configurations. Their runtime diagnostics and current
+source state produce one measured AP-to-gateway edge. Peer rediscovery closed a
+transient reciprocal interval after capability changes, but a v38 restart
+exposed the same reverse edge briefly. Source-aware reconciliation now withholds
+a new managed-device LLDP edge until its claimed parent has a proven Internet-
+root path and suppresses a reciprocal direction that conflicts with rooted
+parent/child depth. V39 first yielded five nodes, four links and no reciprocal
+edge on the signed-in direct `/topology` render. V40 retained that graph; after a
+complete poll, gateway association coverage was observed and AP coverage was
+observed-empty. Only the two BusyBox `brctl showmacs` VLAN ambiguities remain as
+current topology gaps. Historical log/topology coverage is still unavailable
+rather than inferred; DFS and scan outcomes remain evidence-gated. Persisted RF
+scan history is bounded to the newest terminal result per stable radio key by
+the normal maintenance transaction.
 
 Flows/DPI: not scheduled. Revisit only after M6 ships and only for capable
 hardware, per PARITY-MATRIX.
@@ -1476,8 +1526,8 @@ with the network it connects to. On the reference device, of 16 known hosts:
 
 | | count |
 |---|---|
-| clients of this network (192.168.1.0/24) | **3** — a laptop, a phone, a watch |
-| neighbours on the uplink (10.7.46.0/24, behind the WAN port) | **7** |
+| clients of this network (192.0.2.0/24) | **3** — a laptop, a phone, a watch |
+| neighbours on the uplink (203.0.113.0/24, behind the WAN port) | **7** |
 | no observed IPv4 at all | **4** |
 | the device's own interface MACs, already filtered | 2 |
 
@@ -1577,7 +1627,7 @@ What that looks like, measured:
 | observation | value |
 |---|---|
 | `vlan_filtering` | 0 → 1 |
-| `br-lan` state | UP, still holding `192.168.1.1/24` |
+| `br-lan` state | UP, still holding `192.0.2.1/24` |
 | `ip neigh show dev br-lan` | **empty — not one neighbour** |
 | apply engine's verdict | `applied — health passed and confirm landed` |
 | actual device reachability | gone, until a pre-armed restore ran |
@@ -1597,7 +1647,7 @@ ARCHITECTURE §0 forbids.
 So: **a device whose bridge is not already VLAN-aware is refused, with an
 explanation naming the one-time change.** Once an operator has made it, VLANs
 are managed from the controller normally — verified end to end: bridge-VLAN,
-interface at `10.7.45.1/24`, DHCP, a closed-by-default zone and its forwarding,
+interface at `203.0.113.1/24`, DHCP, a closed-by-default zone and its forwarding,
 all applied and confirmed with the LAN intact, then pruned cleanly, leaving
 `/etc/config/{network,firewall,dhcp}` byte-identical to their pre-test md5s.
 
@@ -1671,7 +1721,7 @@ two WLAN sections. The next preview had 0 changes, the controller showed 2/2
 online and both radios on both devices were broadcasting.
 
 The cycle left 0 pending UCI changes and installed no package. The WRT retained
-its default route via `10.7.46.1`, DHCP `100`/`150`/`12h`, firewall hash and flat
+its default route via `203.0.113.1`, DHCP `100`/`150`/`12h`, firewall hash and flat
 `lan1`–`lan4` bridge; the C6 retained DHCP ignore=1, down WAN and its active
 read-only swconfig links. SQLite ended with schema 11, 2 device rows, 4 owned
 WLAN sections and `integrity_check=ok`; the v10→v11 migration was separately
@@ -1688,7 +1738,7 @@ read-only ACL pattern fixed the observation boundary. The retry
 (`fa6bb976-1ca8-4c73-8de8-64b308b27746`) recorded C6 as a zero-change no-op and
 WRT as seven changes applied.
 
-Runtime proof covered `br-lan.2` at `192.168.2.1/24`, tagged bridge membership,
+Runtime proof covered `br-lan.2` at `198.51.100.1/24`, tagged bridge membership,
 the live dnsmasq range, firewall4 input/forward dispatch, separate TCP/UDP DNS,
 DHCP UDP 68→67, closed tails and `lan2`→`wan`. A WRT-only temporary WLAN carried
 a real Mac client; the C6 omission was explicit. Policy blocked WAN while
@@ -1746,8 +1796,8 @@ was advertised in every beacon and answered with nothing.
 
 `rrm_nr_get_own` returns a **positional triple**, not an object:
 
-    { "value": [ "32:23:03:db:be:43", "oonfee-roam",
-                 "322303dbbe43ef1900008024090603022a00" ] }
+    { "value": [ "<ap-bssid>", "example-managed-wlan",
+                 "<sanitized-neighbor-report-hex>" ] }
 
 The element decodes as BSSID (6 bytes) · BSS-info (4, LE) · operating class ·
 channel · PHY type · optional subelements. The controller does not decode it:

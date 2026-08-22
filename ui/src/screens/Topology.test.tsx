@@ -9,11 +9,16 @@ const api = {
   deviceSeries: vi.fn(),
   overhead: vi.fn(),
   stats: vi.fn(),
+  lldpCapability: vi.fn(),
+  changeLLDPCapability: vi.fn(),
 }
 
 vi.mock('../lib/api', () => ({ api }))
 
-const { Topology, detailText, edgeLaneOffsets, layoutTopology, topologyEdgesAt } = await import('./Topology')
+const {
+  Topology, detailText, edgeLaneOffsets, layoutTopology, topologyEdgeRoute, topologyEdgesAt, topologyLastKnownRoute,
+  topologyNodeLabelLines,
+} = await import('./Topology')
 
 const current: TopologySnapshot = {
   at: 1_787_100_000_000,
@@ -64,6 +69,10 @@ beforeEach(() => {
   api.deviceSeries.mockResolvedValue({ series: {} })
   api.overhead.mockRejectedValue(new Error('none'))
   api.stats.mockRejectedValue(new Error('none'))
+  api.lldpCapability.mockResolvedValue({
+    device_id: 2, name: 'Hall AP', state: 'not_installed',
+    requested_packages: ['lldpd'], added_packages: [],
+  })
 })
 
 describe('Topology', () => {
@@ -91,6 +100,54 @@ describe('Topology', () => {
     expect(within(table).getByText(/BusyBox FDB does not identify VLAN/)).toBeTruthy()
     expect(within(table).getByText(/bridge_fdb via brctl.showmacs/)).toBeTruthy()
     expect(screen.queryByText(/optional oonfeeWRT topology capability/i)).toBeNull()
+    expect(screen.getByText(/LLDP evidence is unavailable on 1 router/i)).toBeTruthy()
+    expect(screen.getByText(/never installed automatically/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review LLDP capability' }))
+    expect(reviewCapabilities).toHaveBeenCalledTimes(1)
+  })
+
+  it('connects an unplaced device with explicitly expired last-known evidence', async () => {
+    const gateway = current.nodes[0]
+    const hall = current.nodes[1]
+    const internet = { id: 'synthetic:internet', kind: 'synthetic' as const, name: 'Internet', synthetic: true }
+    const closedAt = current.at - 5 * 60_000
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      nodes: [gateway, hall, internet],
+      edges: [{
+        ...current.edges[0], id: 8, child_id: gateway.id, parent_id: internet.id,
+        parent_device_id: undefined, parent_port: 'wan', medium: 'uplink', confidence: 'measured',
+      }],
+      last_known_edges: [{ ...current.edges[0], parent_port: 'lan3', valid_to: closedAt }],
+    })
+    render(<Topology />)
+
+    const graph = await screen.findByRole('group', { name: /3 topology nodes and 1 links, plus 1 last-known placement/ })
+    expect(within(graph).getByText('last known · lan3')).toBeTruthy()
+    expect(screen.getByText(/Dashed gray links are expired placements, not current proof/)).toBeTruthy()
+    expect(screen.getByText(/Hall AP → Gateway lan3 ended/)).toBeTruthy()
+    expect(screen.getByText('last known')).toBeTruthy()
+  })
+
+  it('paints every port label above every edge path', async () => {
+    const branch = {
+      ...current.nodes[1], id: 'device:aa:bb:cc:dd:ee:03', name: 'Second AP', device_id: 3,
+    }
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      nodes: [...current.nodes, branch],
+      edges: [current.edges[0], {
+        ...current.edges[0], id: 8, child_id: branch.id, parent_port: 'lan3', confidence: 'measured',
+      }],
+    })
+    render(<Topology />)
+
+    const graph = await screen.findByRole('group', { name: /3 topology nodes and 2 links/ })
+    const painted = [...graph.querySelectorAll('path, text')]
+    const lastPath = painted.map((element) => element.tagName.toLowerCase()).lastIndexOf('path')
+    for (const label of ['lan2', 'lan3']) {
+      expect(painted.findIndex((element) => element.textContent === label)).toBeGreaterThan(lastPath)
+    }
   })
 
   it('offers the opt-in capability path without installing from Topology', async () => {
@@ -180,8 +237,22 @@ describe('Topology', () => {
       .toMatch(/No links match/)
     fireEvent.change(screen.getByLabelText('Filter topology by confidence'), { target: { value: 'all' } })
 
+    const viewport = screen.getByRole('region', { name: 'Topology graph viewport' })
+    expect(viewport.style.maxHeight).toBe('520px')
     fireEvent.click(screen.getByLabelText('Zoom in topology'))
     expect(screen.getByLabelText('Reset topology zoom').textContent).toBe('125%')
+    expect(graph.style.width).toBe('125%')
+    expect(viewport.style.maxHeight).toBe('520px')
+    viewport.scrollLeft = 80
+    viewport.scrollTop = 30
+    fireEvent.pointerDown(viewport, { button: 0, pointerId: 7, clientX: 200, clientY: 150 })
+    expect(viewport.style.cursor).toBe('grabbing')
+    fireEvent.pointerMove(viewport, { pointerId: 7, clientX: 160, clientY: 130 })
+    expect(viewport.scrollLeft).toBe(120)
+    expect(viewport.scrollTop).toBe(50)
+    fireEvent.pointerUp(viewport, { pointerId: 7 })
+    expect(viewport.style.cursor).toBe('grab')
+    expect(screen.getByText('Drag background to pan')).toBeTruthy()
 
     const hallAP = within(graph).getByRole('button', { name: 'Open details for Hall AP' })
     hallAP.focus()
@@ -290,6 +361,9 @@ describe('layoutTopology', () => {
     expect(result.positions.get('device:aa:bb:cc:dd:ee:01')!.y)
       .toBeLessThan(result.positions.get('device:aa:bb:cc:dd:ee:02')!.y)
     expect(result.positions.has(detached.id)).toBe(true)
+    expect(result.unplaced).toEqual([detached.id])
+    expect(result.positions.get(detached.id)!.x)
+      .toBeGreaterThan(result.positions.get('device:aa:bb:cc:dd:ee:01')!.x)
   })
 
   it('bounds the canvas when ambiguous evidence contains a cycle', () => {
@@ -306,6 +380,31 @@ describe('layoutTopology', () => {
     const offsets = edgeLaneOffsets([current.edges[0], alternate])
     expect(offsets.get(current.edges[0].id)).not.toBe(offsets.get(alternate.id))
     expect((offsets.get(current.edges[0].id) ?? 0) + (offsets.get(alternate.id) ?? 0)).toBe(0)
+  })
+
+  it('uses separate orthogonal routes and label lanes', () => {
+    const first = topologyEdgeRoute({ x: 500, y: 64 }, { x: 300, y: 214 }, -12)
+    const second = topologyEdgeRoute({ x: 500, y: 64 }, { x: 300, y: 214 }, 12)
+    expect(first.path).toMatch(/^M 500 102 V .* H 300 V 176$/)
+    expect(first.label.y).not.toBe(second.label.y)
+    expect(first.label.x).toBe(400)
+  })
+
+  it('places a vertical-link label on its unique lower segment', () => {
+    const route = topologyEdgeRoute({ x: 500, y: 214 }, { x: 500, y: 364 })
+    expect(route.path).toBe('M 500 252 V 289 H 500 V 326')
+    expect(route.label).toEqual({ x: 500, y: 307.5 })
+  })
+
+  it('wraps long device names without hiding their second line', () => {
+    expect(topologyNodeLabelLines('TP-Link Archer C6 v2 (US) / A6 v2 (US/TW)'))
+      .toEqual(['TP-Link Archer C6 v2', '(US) / A6 v2 (US/TW)'])
+  })
+
+  it('routes last-known evidence across the unplaced divider', () => {
+    const route = topologyLastKnownRoute({ x: 400, y: 214 }, { x: 960, y: 76 })
+    expect(route.path).toBe('M 488 214 H 800 V 76 H 872')
+    expect(route.label).toEqual({ x: 644, y: 214 })
   })
 })
 

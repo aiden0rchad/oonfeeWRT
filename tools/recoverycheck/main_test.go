@@ -119,7 +119,7 @@ func TestRecoveryCheckTraversesEverySealedRecordAndPrintsCountsOnly(t *testing.T
 	if err := run(context.Background(), fixture.dbPath, &output); err != nil {
 		t.Fatal(err)
 	}
-	const want = "schema=16 devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n"
+	const want = "schema=17 devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}

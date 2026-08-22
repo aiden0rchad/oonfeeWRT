@@ -25,7 +25,7 @@ server token, whole-selected-fleet preflight, explicit traversal/driver/caution/
 partial-fleet gates, per-device revalidation, detached execution, a hard
 quiesce boundary and truthful ownership-ledger failure reporting (§5bd).
 
-Schema 14 is now live on the two-router `.run` controller. The promotion used a
+The historical schema-14 promotion on the two-router lab controller used a
 stopped schema-13 database/keyring backup, an isolated copy-only rehearsal and a
 controlled restart. The live store passed integrity, key-check/scrub, structural
 sealing and legacy-value byte scans; passphrase-authenticated `dryrun` reported
@@ -228,7 +228,7 @@ malformed runtime ruleset fails closed instead of being treated as clean.
 
 The WRT3200ACM is adopted as Gateway + AP + Switch. After an explicit,
 operator-owned one-time conversion put management on `br-lan.1`, the signed-in
-browser applied VLAN 2, `br-lan.2` at `192.168.2.1/24`, configurable DHCP and
+browser applied VLAN 2, `br-lan.2` at `198.51.100.1/24`, configurable DHCP and
 the zone-LIST/firewall4 stack. A real Mac client proved DHCP, DNS and WAN;
 Policy Engine then blocked WAN while retaining DHCP/DNS and restored it; DHCP
 disable removed the live range, and a `50`–`59`/`1h` pool issued `.54` for
@@ -294,8 +294,9 @@ UI, in under a minute, and have it verifiably enforced.
 
 The screens that make people *enjoy* the tool.
 
-**Live status 2026-08-20: the source contract and explicit capability path are
-exercised.** The controller is promoted to schema 16. An initial signed-in pass
+**Live status through 2026-08-22: both explicit capability paths are exercised;
+release hardening remains open.** The controller is promoted to schema 17. An
+initial signed-in schema-16 pass
 used the routers' older ACLs; that no-router-change checkpoint was superseded
 when the operator explicitly acknowledged ACL refresh for both routers at
 15:16 and 15:17. Subsequent polls persisted OpenWrt-log and topology-source
@@ -305,9 +306,10 @@ before/after package-inventory hashes were taken, so this live proof does not
 claim that package inventory was unchanged. The contract remains bounded and
 gap-aware:
 
-- schema 16 persists producer-provenanced events/cursors, half-open topology
+- schema 17 retains schema 16's producer-provenanced events/cursors, half-open topology
   intervals/source state and explicit RF-scan runs, with full schema
-  attestation on migration;
+  attestation on migration, and adds a durable optional-capability package and
+  service rollback ledger;
 - Client Observability joins durable rollups, exact events and persisted path
   intervals under one cursor. It persists no raw poll samples; `wifi-v1` is
   fixed 45/35/20 RSSI/retry/failure and all-or-null;
@@ -328,6 +330,15 @@ gap-aware:
   Its administrator SSH credential is one-request-only; UCI, ownership and the
   controller login stay unchanged. Declining leaves the router unchanged and
   dependent observations explicitly unavailable.
+- unsupported LLDP evidence may separately offer the official-feed `lldpd`
+  capability. Package-index refresh/plan resolution and package/service
+  installation have distinct unchecked acknowledgements; the reviewed plan is
+  bound, actual additions and prior service state are durable. Physical-interface
+  planning is read-only; changing only `lldpd.config.interface` requires another
+  acknowledgement and retains the exact UCI baseline. Rollback drift-checks and
+  restores that baseline, removes only the recorded additions, independently
+  verifies package/service state, and must complete before un-adoption. Adoption
+  never selects this option.
 
 After the explicit refreshes, both routers produced current topology-source and
 OpenWrt-log observations, and the Gateway produced fixed-target ICMP
@@ -373,13 +384,21 @@ same surface shows whether the cause was its signal/retries, an AP/uplink event,
 or site latency/loss—without touching a terminal and without inventing a metric
 the hardware did not supply.
 
-> **Status: complete with the optional ACL capability path explicitly
-> exercised.** The schema-16 joined surface, topology/history, Radios, General
-> Logs and Audit interaction are live-rendered. Current OpenWrt-log,
-> topology-source and fixed-ICMP producers have observations from both refreshed
-> routers where applicable. Historical source coverage remains unavailable by
-> design; DFS and scan results remain evidence-gated, and no disruptive scan was
-> run. ACL refresh remains default-off for other routers.
+> **Status: hardware-verified with the optional ACL and LLDP capability paths
+> explicitly exercised; final release-candidate gates pass.** The result is
+> merge-ready, not tagged or published. The schema-17 joined
+> surface, topology/history, Radios, General
+> Logs and Audit interaction are live-rendered. ACL refresh remains default-off.
+> The separate LLDP workflow proved exact official-feed plans, installation,
+> physical-interface configuration, read-only diagnosis, drift-checked rollback,
+> verified package/service cleanup and clean reinstallation on both reference
+> routers. The final signed-in `/topology` deep-link check has five nodes, four
+> current links, one measured AP-to-gateway edge and no reciprocal stale edge.
+> After a complete poll, association coverage is observed/observed-empty; only
+> the two BusyBox VLAN ambiguity gaps remain. Historical source coverage remains
+> unavailable by design; DFS
+> and scan results remain evidence-gated, and no disruptive scan was run merely
+> to prove access.
 
 ---
 

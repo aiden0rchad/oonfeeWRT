@@ -18,6 +18,7 @@ type stubEnroller struct {
 	inspected  []InspectRequest
 	adopted    []AdoptRequest
 	refreshed  []RefreshACLRequest
+	lldp       []LLDPCapabilityRequest
 	unadopt    []UnadoptRequest
 	adoptErr   error
 	unaErr     error
@@ -27,6 +28,21 @@ type stubEnroller struct {
 	inspectRes *InspectResult
 	refreshErr error
 	refreshRes *RefreshACLResult
+	lldpErr    error
+	lldpRes    *LLDPCapabilityResult
+}
+
+func (e *stubEnroller) LLDPCapability(_ context.Context, req LLDPCapabilityRequest) (*LLDPCapabilityResult, error) {
+	e.mu.Lock()
+	e.lldp = append(e.lldp, req)
+	e.mu.Unlock()
+	if e.lldpErr != nil {
+		return nil, e.lldpErr
+	}
+	if e.lldpRes != nil {
+		return e.lldpRes, nil
+	}
+	return &LLDPCapabilityResult{DeviceID: req.DeviceID, State: "installed"}, nil
 }
 
 func (e *stubEnroller) RefreshACL(_ context.Context, req RefreshACLRequest) (*RefreshACLResult, error) {
@@ -189,6 +205,48 @@ func TestRefreshACLRequiresExplicitRouterChangeAcknowledgementBeforeEnroller(t *
 				t.Fatalf("unacknowledged ACL refresh reached the enroller: %+v", e.refreshed)
 			}
 		})
+	}
+}
+
+func TestLLDPCapabilityRequiresSeparatePlanAndMutationAcknowledgements(t *testing.T) {
+	h, e := harnessWithEnroller(t)
+	for _, body := range []map[string]any{
+		{"action": "diagnose", "username": "root"},
+		{"action": "plan_configure", "username": "root"},
+		{"action": "plan_install", "username": "root"},
+		{"action": "install", "username": "root", "plan_hash": "abc"},
+		{"action": "install", "username": "root", "plan_hash": "abc", "acknowledge_router_changes": true},
+		{"action": "configure", "username": "root", "plan_hash": "abc"},
+		{"action": "remove", "username": "root", "acknowledge_router_changes": true},
+	} {
+		w := h.do(http.MethodPost, "/api/v1/devices/7/capabilities/lldp", body)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("body=%v status=%d response=%s", body, w.Code, w.Body.String())
+		}
+	}
+	if len(e.lldp) != 0 {
+		t.Fatalf("unacknowledged action reached enroller: %+v", e.lldp)
+	}
+	w := h.do(http.MethodPost, "/api/v1/devices/7/capabilities/lldp", map[string]any{
+		"action": "install", "username": "root", "password": "sentinel-password",
+		"plan_hash": "abc", "acknowledge_router_changes": true, "acknowledge_package_index_refresh": true,
+	})
+	if w.Code != http.StatusOK || len(e.lldp) != 1 || e.lldp[0].Password != "sentinel-password" ||
+		!e.lldp[0].AcknowledgePackageIndexRefresh {
+		t.Fatalf("status=%d response=%s request=%+v", w.Code, w.Body.String(), e.lldp)
+	}
+	if strings.Contains(w.Body.String(), "sentinel-password") {
+		t.Fatalf("response exposed credential: %s", w.Body.String())
+	}
+	w = h.do(http.MethodPost, "/api/v1/devices/7/capabilities/lldp", map[string]any{
+		"action": "diagnose", "username": "root", "password": "diagnostic-password",
+		"acknowledge_read_only_diagnostics": true,
+	})
+	if w.Code != http.StatusOK || len(e.lldp) != 2 || !e.lldp[1].AcknowledgeReadOnlyDiagnostics {
+		t.Fatalf("status=%d response=%s request=%+v", w.Code, w.Body.String(), e.lldp)
+	}
+	if strings.Contains(w.Body.String(), "diagnostic-password") {
+		t.Fatalf("response exposed diagnostic credential: %s", w.Body.String())
 	}
 }
 

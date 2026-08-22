@@ -44,17 +44,23 @@ func probeRadioScanAccess(ctx context.Context, c *ubus.Client, r *Registry) {
 		Access bool `json:"access"`
 	}
 	err := c.Call(ctx, "session", "access", map[string]any{
-		"ubus_rpc_session": c.Session(),
-		"scope":            "ubus",
-		"object":           "iwinfo",
-		"function":         "scan",
+		"scope":    "ubus",
+		"object":   "iwinfo",
+		"function": "scan",
 	}, &answer)
 	if err != nil || !answer.Access {
 		r.Set(FeatRadioScan, NotObservable)
 		if err != nil {
-			r.Note("explicit RF scan access could not be checked without running a scan (%v)", err)
+			r.Note("RF scan authorization is undetermined: the current inspection "+
+				"credential did not expose a usable session.access result. No scan "+
+				"was run, and this is not evidence that RF scanning is unsupported. "+
+				"If the optional controller access payload is accepted, verify again "+
+				"after adoption (%v)", err)
 		} else {
-			r.Note("the controller credential is not authorized for iwinfo.scan; explicit RF scans are unavailable until the device ACL is refreshed")
+			r.Note("RF scan authorization is undetermined: the current inspection " +
+				"credential is not authorized for iwinfo.scan. No scan was run, and " +
+				"this is not evidence that RF scanning is unsupported. If the optional " +
+				"controller access payload is accepted, verify again after adoption")
 		}
 		return
 	}
@@ -276,8 +282,8 @@ func probeSwitchAndFirewall(ctx context.Context, c *ubus.Client, r *Registry) {
 	if err := c.Call(ctx, "luci-rpc", "getNetworkDevices", nil, &devs); err != nil {
 		r.Note("DSA undetermined: luci-rpc.getNetworkDevices denied (%v). "+
 			"DSA-only configuration stays hidden while this is unknown. "+
-			"Re-adopt the device so its access-control file is rewritten — the "+
-			"one the controller ships grants luci-rpc — then re-probe", err)
+			"Install the controller access payload during adoption, or refresh it "+
+			"on an already adopted device, then re-probe", err)
 	} else {
 		dsa = Absent
 		for name, d := range devs {
@@ -524,22 +530,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	var devs struct {
 		Devices []string `json:"devices"`
 	}
-	if err := c.Call(ctx, "iwinfo", "devices", nil, &devs); err != nil {
-		r.Set(FeatSurvey, NotObservable)
-		r.Set(FeatAirtimeSplit, NotObservable)
-		r.Set(FeatHostapdControl, NotObservable)
-		if isDenied(err) {
-			r.Note("radios undetermined: iwinfo.devices was refused (%v). "+
-				"No WLAN can be rendered until the radios can be listed. Re-adopt "+
-				"the device so the controller ACL is refreshed, then re-probe", err)
-		} else {
-			r.Note("radios undetermined: iwinfo.devices failed (%v). No WLAN can "+
-				"be rendered until the radios can be listed. This was not identified "+
-				"as an access-control refusal; check device reachability and its log, "+
-				"then re-probe", err)
-		}
-		return
-	}
+	iwinfoErr := c.Call(ctx, "iwinfo", "devices", nil, &devs)
 
 	// A radio with no interface on it is still a radio.
 	//
@@ -568,6 +559,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	// detail, where an interface exists.
 	radioIfaces, listErr := radiosWithInterfaces(ctx, c, devs.Devices)
 	if listErr != nil && len(radioIfaces) == 0 {
+		r.RadioInventory = NotObservable
 		// Nothing enumerated this device's radios: getWirelessDevices was
 		// refused AND iwinfo listed no broadcasting interface to fall back on.
 		//
@@ -581,14 +573,24 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		r.Set(FeatAirtimeSplit, NotObservable)
 		r.Set(FeatHostapdControl, NotObservable)
 		r.Set(FeatNeighborReport, NotObservable)
-		r.Note("radios undetermined: luci-rpc.getWirelessDevices failed (%v) "+
-			"and iwinfo listed no broadcasting interface, so nothing "+
-			"enumerated this device's radios. If the call was refused, re-adopt "+
-			"the device so its access-control file is rewritten — the one the "+
-			"controller ships grants luci-rpc — then re-probe. If it failed for "+
-			"another reason the device is answering some calls and not others, "+
-			"and its log is the next place to look", listErr)
+		if iwinfoErr != nil {
+			r.Note("radios undetermined: luci-rpc.getWirelessDevices failed (%v) "+
+				"and iwinfo.devices failed (%v), so nothing enumerated this device's "+
+				"radios. Install the controller access payload during adoption, or "+
+				"refresh it on an already adopted device, then re-probe. If access is "+
+				"not the cause, check device reachability and its log", listErr, iwinfoErr)
+		} else {
+			r.Note("radios undetermined: luci-rpc.getWirelessDevices failed (%v) "+
+				"and iwinfo listed no broadcasting interface. Install the controller "+
+				"access payload during adoption, or refresh it on an already adopted "+
+				"device, then re-probe", listErr)
+		}
 		return
+	}
+	if len(radioIfaces) == 0 {
+		r.RadioInventory = Absent
+	} else {
+		r.RadioInventory = Present
 	}
 
 	// One accumulator per feature. The first three previously defaulted to
@@ -786,8 +788,8 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 	if neighborsOK == NotObservable && rrmRefused {
 		r.Note("802.11k neighbour lists cannot be distributed to this device: " +
 			"rpcd refused hostapd's rrm_nr_get_own. The controller's ACL is " +
-			"written to a device once, at adoption, so a device adopted before " +
-			"this feature existed will keep refusing until it is re-adopted. " +
+			"versioned, so a device adopted before this feature existed will keep " +
+			"refusing until its controller access payload is explicitly refreshed. " +
 			"Nothing is wrong with the hardware")
 	}
 
@@ -829,8 +831,8 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			"rx_time/tx_time could not be determined. This is not evidence that " +
 			"the driver lacks them."
 		if split.refused {
-			note += " The survey call was refused. Re-adopt the device so the " +
-				"controller ACL is refreshed, then re-probe."
+			note += " The survey call was refused. Install the controller access " +
+				"payload during adoption, or refresh it on an already adopted device, then re-probe."
 		}
 		switch surveyOK {
 		case Present:
@@ -1052,8 +1054,11 @@ func probeMesh(ctx context.Context, c *ubus.Client, r *Registry) {
 	pkgs, err := installedPackages(ctx, c)
 	if err != nil {
 		r.Set(FeatMesh, NotObservable)
-		r.Note("802.11s mesh support undetermined: the installed-package list "+
-			"could not be read (%v). It is the only source that answers this — "+
+		r.Note("802.11s mesh support undetermined: the current inspection "+
+			"credential could not invoke the allow-listed package-inventory "+
+			"command. This is not evidence that the package manager is absent. "+
+			"If the optional controller access payload is accepted, verify again "+
+			"after adoption (%v). The installed-package list is the only source that answers this — "+
 			"iwinfo reports PHY modes rather than interface modes, and "+
 			"`iw phy` is not in the ACL", err)
 		return
@@ -1274,9 +1279,12 @@ func probeUplink(ctx context.Context, c *ubus.Client, r *Registry) {
 	pkgs, err := installedPackages(ctx, c)
 	if err != nil {
 		r.Set(FeatWirelessUplink, NotObservable)
-		r.Note("wireless uplink undetermined: the installed-package list could "+
-			"not be read (%v), and it is the only source that says whether a "+
-			"supplicant is present", err)
+		r.Note("wireless uplink undetermined: the current inspection credential "+
+			"could not invoke the allow-listed package-inventory command. This is "+
+			"not evidence that the package manager is absent. If the optional "+
+			"controller access payload is accepted, verify again after adoption "+
+			"(%v). The installed-package list is the only source that says whether "+
+			"a supplicant is present", err)
 		return
 	}
 	state := uplinkFromPackages(pkgs)

@@ -106,6 +106,55 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	}
 }
 
+func TestTopologyReturnsLatestClosedPlacementForUnplacedDevice(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Date(2026, 8, 21, 22, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	wrt := topologyDevice(t, h, "aa:bb:cc:00:00:01", "Gateway", now)
+	topologyDevice(t, h, "aa:bb:cc:00:00:02", "Hall AP", now)
+	parentID := wrt.ID
+	closedAt := now.Add(-5 * time.Minute).UnixMilli()
+	closed := model.TopologyEdge{
+		ChildNode: "device:aa:bb:cc:00:00:02", ParentNode: "device:aa:bb:cc:00:00:01",
+		ParentDeviceID: &parentID, ParentPort: "lan3", Medium: "wired", Confidence: "ambiguous",
+		ValidFrom: now.Add(-time.Hour).UnixMilli(), ValidTo: &closedAt, LastSeen: closedAt - 1,
+		Evidence: []model.TopologyEvidence{}, Ambiguities: []string{},
+	}
+	active := model.TopologyEdge{
+		ChildNode: "device:aa:bb:cc:00:00:01", ParentNode: "synthetic:internet",
+		ParentPort: "wan", Medium: "uplink", Confidence: "measured",
+		ValidFrom: now.Add(-time.Hour).UnixMilli(), LastSeen: now.UnixMilli(),
+		Evidence: []model.TopologyEvidence{}, Ambiguities: []string{},
+	}
+	for _, edge := range []*model.TopologyEdge{&closed, &active} {
+		if err := h.db.SaveTopologyEdge(context.Background(), edge); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/topology", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	var got topologyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Edges) != 1 || len(got.LastKnown) != 1 || got.LastKnown[0].ParentPort != "lan3" || got.LastKnown[0].ValidTo == nil {
+		t.Fatalf("current/last-known edges=%#v/%#v", got.Edges, got.LastKnown)
+	}
+
+	at := h.do(http.MethodGet, "/api/v1/topology?at="+strconv.FormatInt(now.UnixMilli(), 10), nil)
+	got = topologyResponse{}
+	if err := json.Unmarshal(at.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.LastKnown) != 0 {
+		t.Fatalf("historical snapshot exposed presentation-only last-known edges: %#v", got.LastKnown)
+	}
+}
+
 func TestTopologyReturnsOnlyGraphReferencedClients(t *testing.T) {
 	h := newHarness(t)
 	h.setup()

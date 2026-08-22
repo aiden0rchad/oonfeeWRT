@@ -794,6 +794,55 @@ func TestRefreshAccessForcesFreshLoginAndSlowSourceRetryAfterACLRefresh(t *testi
 	}
 }
 
+func TestRediscoverWakesPollerAfterApplyInvalidation(t *testing.T) {
+	c := New(newRecorder(), fastOptions())
+	now := time.Unix(100, 0)
+	c.opts.Now = func() time.Time { return now }
+	var delayed func()
+	c.after = func(delay time.Duration, f func()) *time.Timer {
+		if delay != ifaceSettleDelay {
+			t.Fatalf("delayed rediscovery = %v, want %v", delay, ifaceSettleDelay)
+		}
+		delayed = f
+		return nil
+	}
+	c.Add(Target{DeviceID: 1, MAC: "aa", Name: "router"})
+	p := c.pollers[1]
+	p.ifaceAt = now
+	p.topologyAt = now
+
+	c.Rediscover(1)
+
+	if !p.ifaceAt.IsZero() || p.ifaceRefetchAt.IsZero() || !p.topologyAt.IsZero() {
+		t.Fatalf("rediscovery cadence was not reset: iface=%v refetch=%v topology=%v",
+			p.ifaceAt, p.ifaceRefetchAt, p.topologyAt)
+	}
+	select {
+	case <-p.wake:
+	default:
+		t.Fatal("rediscovery did not wake the poller")
+	}
+	if delayed == nil {
+		t.Fatal("rediscovery did not schedule the settled interface re-read")
+	}
+	// Stand in for the immediate read. The delayed wake must force a second
+	// topology read after LLDP/interface state has had time to settle.
+	p.topologyAt = now
+	if p.needTopology() {
+		t.Fatal("topology settled re-read became due before the delay")
+	}
+	now = now.Add(ifaceSettleDelay)
+	if !p.needTopology() {
+		t.Fatal("topology settled re-read was not due after the delay")
+	}
+	delayed()
+	select {
+	case <-p.wake:
+	default:
+		t.Fatal("settled interface re-read did not wake the poller")
+	}
+}
+
 func TestAddWithoutConnectionKeyFailsClosed(t *testing.T) {
 	c := New(newRecorder(), fastOptions())
 	target := Target{DeviceID: 1, MAC: "aa", Name: "router"}

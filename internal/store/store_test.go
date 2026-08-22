@@ -835,6 +835,35 @@ func TestClientScopeChangesWhenTheAnswerChanges(t *testing.T) {
 	}
 }
 
+func TestClientLocalScopeWinsSameIPFleetConflict(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	const mac = "aa:bb:cc:00:00:04"
+
+	if err := db.UpsertClients(ctx, []SeenClient{{
+		MAC: mac, IPv4: "192.168.1.9", Scope: ScopeLocal,
+	}}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertClients(ctx, []SeenClient{{
+		MAC: mac, IPv4: "192.168.1.9", Scope: ScopeUpstream,
+	}}, 101); err != nil {
+		t.Fatal(err)
+	}
+	if got := clientByMAC(t, db, mac); got.Scope != ScopeLocal {
+		t.Errorf("scope = %q, want %q when a downstream AP sees the gateway LAN as upstream", got.Scope, ScopeLocal)
+	}
+
+	if err := db.UpsertClients(ctx, []SeenClient{{
+		MAC: mac, IPv4: "10.7.46.9", Scope: ScopeUpstream,
+	}}, 102); err != nil {
+		t.Fatal(err)
+	}
+	if got := clientByMAC(t, db, mac); got.Scope != ScopeUpstream {
+		t.Errorf("scope = %q after IP changed, want %q", got.Scope, ScopeUpstream)
+	}
+}
+
 // A row from before the column existed reads as undetermined, not local.
 func TestClientWithNoStoredScopeReadsAsUnknown(t *testing.T) {
 	db := open(t)

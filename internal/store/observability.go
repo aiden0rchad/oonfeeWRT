@@ -371,6 +371,30 @@ func (db *DB) TopologyEdgesAt(ctx context.Context, at int64) ([]model.TopologyEd
 	return scanTopologyEdges(rows)
 }
 
+// LatestClosedTopologyEdgesSince returns at most one latest closed interval per
+// child. It is presentation evidence only; callers must not treat it as current.
+func (db *DB) LatestClosedTopologyEdgesSince(ctx context.Context, since int64) ([]model.TopologyEdge, error) {
+	if since <= 0 {
+		return nil, errors.New("store: latest closed topology cutoff must be positive")
+	}
+	rows, err := db.sql.QueryContext(ctx, `
+SELECT e.id, e.child_node, e.child_mac, e.parent_node, e.parent_device_id,
+ e.parent_port, e.medium, e.confidence, e.valid_from, e.valid_to, e.last_seen,
+ e.evidence_json, e.ambiguity_json
+FROM topology_edges e
+WHERE e.valid_to IS NOT NULL AND e.valid_to >= ?
+  AND NOT EXISTS (
+    SELECT 1 FROM topology_edges newer
+    WHERE newer.child_node=e.child_node AND newer.valid_to IS NOT NULL
+      AND (newer.valid_to > e.valid_to OR (newer.valid_to=e.valid_to AND newer.id > e.id))
+  )
+ORDER BY e.child_node, e.id`, since)
+	if err != nil {
+		return nil, err
+	}
+	return scanTopologyEdges(rows)
+}
+
 // TopologyEdgesBetween returns the newest bounded set of intervals intersecting
 // [from,to), ordered chronologically for deterministic replay. truncated is
 // explicit because silently dropping old intervals would turn a partial graph

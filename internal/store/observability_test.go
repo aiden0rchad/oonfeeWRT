@@ -40,8 +40,8 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 		`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 16 {
-		t.Fatalf("schema version=%d, want 16", version)
+	if version != 17 {
+		t.Fatalf("schema version=%d, want 17", version)
 	}
 	events, err := db.RecentEvents(ctx, 10)
 	if err != nil {
@@ -54,8 +54,8 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 }
 
 func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.T) {
-	if schemaVersion != 16 || secretSchemaVersion != 14 {
-		t.Fatalf("schema epochs=(%d,%d), want (16,14)", schemaVersion, secretSchemaVersion)
+	if schemaVersion != 17 || secretSchemaVersion != 14 {
+		t.Fatalf("schema epochs=(%d,%d), want (17,14)", schemaVersion, secretSchemaVersion)
 	}
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "newer.db")
@@ -64,7 +64,7 @@ func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := db.SQL().ExecContext(ctx,
-		`UPDATE schema_version SET version=17`); err != nil {
+		`UPDATE schema_version SET version=18`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -72,7 +72,7 @@ func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.
 	}
 	if newer, err := Open(ctx, driver, path, testProtector(t, path)); err == nil {
 		newer.Close()
-		t.Fatal("v16 build accepted a v17 database")
+		t.Fatal("v17 build accepted a v18 database")
 	} else if !strings.Contains(err.Error(), "refusing to downgrade") {
 		t.Fatalf("downgrade error=%v", err)
 	}
@@ -648,6 +648,32 @@ func TestTopologyEdgesBetweenReturnsNewestBoundedIntervalsChronologically(t *tes
 	}
 	if _, _, err := db.TopologyEdgesBetween(ctx, 50, 400, 0); err == nil {
 		t.Fatal("zero topology history limit was accepted")
+	}
+}
+
+func TestLatestClosedTopologyEdgesSinceReturnsOnePerChild(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	ptr := func(value int64) *int64 { return &value }
+	for _, edge := range []*model.TopologyEdge{
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:11", Medium: "wired", Confidence: "measured", ValidFrom: 100, ValidTo: ptr(int64(150)), LastSeen: 149},
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:12", ParentPort: "lan3", Medium: "wired", Confidence: "measured", ValidFrom: 200, ValidTo: ptr(int64(250)), LastSeen: 249},
+		{ChildNode: "device:02:00:00:00:00:02", ParentNode: "device:02:00:00:00:00:13", Medium: "wired", Confidence: "measured", ValidFrom: 210, ValidTo: ptr(int64(260)), LastSeen: 259},
+	} {
+		edge.Evidence, edge.Ambiguities = []model.TopologyEvidence{}, []string{}
+		if err := db.SaveTopologyEdge(ctx, edge); err != nil {
+			t.Fatal(err)
+		}
+	}
+	edges, err := db.LatestClosedTopologyEdgesSince(ctx, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 2 || edges[0].ParentNode != "device:02:00:00:00:00:12" || edges[0].ParentPort != "lan3" || edges[1].ChildNode != "device:02:00:00:00:00:02" {
+		t.Fatalf("latest closed edges=%+v", edges)
+	}
+	if _, err := db.LatestClosedTopologyEdgesSince(ctx, 0); err == nil {
+		t.Fatal("zero cutoff accepted")
 	}
 }
 

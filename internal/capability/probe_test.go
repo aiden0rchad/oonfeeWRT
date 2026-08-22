@@ -177,6 +177,27 @@ func TestRadioScanCapabilityIsProvedWithoutRunningAScan(t *testing.T) {
 	}
 }
 
+func TestInspectionAccessGapsDoNotClaimRouterFeaturesAreAbsent(t *testing.T) {
+	c := dial(t)
+	setACLGap(t, c,
+		[2]string{"session", "access"},
+		[2]string{"file", "exec"})
+	r, err := Probe(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Join(r.Notes, "\n")
+	for _, want := range []string{
+		"this is not evidence that RF scanning is unsupported",
+		"This is not evidence that the package manager is absent",
+		"optional controller access payload",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Errorf("inspection notes missing %q:\n%s", want, notes)
+		}
+	}
+}
+
 // The rule this package exists for. A refused check is a gap in our reach, not
 // a fact about the device, and recording it as Absent deletes a working feature
 // from the UI. Each of these was a real defect at some point.
@@ -236,7 +257,7 @@ func TestAirtimeNotesSeparateUnknownFromProvenDriverAbsence(t *testing.T) {
 					falseClaim, notes)
 			}
 		}
-		for _, want := range []string{"could not be determined", "Re-adopt"} {
+		for _, want := range []string{"could not be determined", "controller access payload"} {
 			if !strings.Contains(notes, want) {
 				t.Errorf("unknown airtime note does not mention %q:\n%s", want, notes)
 			}
@@ -391,12 +412,12 @@ func TestNeighborReportDeniedIsNotObservable(t *testing.T) {
 	// what changes between them is what someone is told to do about it.
 	var found bool
 	for _, n := range r.Notes {
-		if strings.Contains(n, "re-adopt") {
+		if strings.Contains(n, "access payload is explicitly refreshed") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("no note names re-adoption as the remedy; notes = %q", r.Notes)
+		t.Errorf("no note names access-payload refresh as the remedy; notes = %q", r.Notes)
 	}
 }
 
@@ -619,6 +640,9 @@ func TestRadiosNobodyCouldEnumerateAreNotObservable(t *testing.T) {
 		t.Errorf("FeatSurvey=%v; nothing enumerated the radios, so this is a "+
 			"gap in our reach and not a fact about the device", got)
 	}
+	if r.RadioInventory != NotObservable {
+		t.Errorf("radio inventory=%v, want not-observable", r.RadioInventory)
+	}
 	for _, f := range []Feature{FeatHostapdControl, FeatNeighborReport} {
 		if got := r.State(f); got == Absent {
 			t.Errorf("%s recorded Absent on a device whose radios could not be "+
@@ -633,5 +657,22 @@ func TestRadiosNobodyCouldEnumerateAreNotObservable(t *testing.T) {
 	}
 	if !explained {
 		t.Error("nothing in the notes says why the radios are unknown")
+	}
+}
+
+func TestRadioInventoryFallsBackWhenIWInfoDevicesIsDenied(t *testing.T) {
+	c := dial(t)
+	setACLGap(t, c, [2]string{"iwinfo", "devices"})
+	r, err := Probe(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RadioInventory != Present || len(r.Radios) != 2 {
+		t.Fatalf("radio inventory=%v radios=%v, want two luci-rpc radios", r.RadioInventory, r.Radios)
+	}
+	for _, note := range r.Notes {
+		if strings.Contains(note, "radios undetermined") || strings.Contains(note, "Re-adopt") {
+			t.Errorf("successful fallback produced false remediation: %q", note)
+		}
 	}
 }

@@ -336,3 +336,21 @@ CREATE TABLE IF NOT EXISTS foreign_ssid_notes (
   decided_by TEXT NOT NULL,
   PRIMARY KEY (device_id, section)
 );
+
+-- ===== optional device capability ownership (migration v17) =====
+-- This is a rollback ledger, not detected package inventory. Rows exist only
+-- for router state the controller was explicitly authorized to change.
+CREATE TABLE IF NOT EXISTS device_capability_installs (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
+  capability TEXT NOT NULL,
+  package_manager TEXT NOT NULL CHECK (package_manager IN ('apk','opkg')),
+  requested_packages_json TEXT NOT NULL,
+  baseline_packages_json TEXT NOT NULL DEFAULT '[]',
+  added_packages_json TEXT NOT NULL DEFAULT '[]',
+  services_json TEXT NOT NULL DEFAULT '[]',
+  state TEXT NOT NULL CHECK (state IN ('installing','installed','removing','error')),
+  detail TEXT NOT NULL DEFAULT '',
+  installed_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, capability)
+) WITHOUT ROWID;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
-import { DataGrid, FilterRail, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
+import { Banner, Button, DataGrid, FilterRail, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
 import { axisLabels, fmt, widenTo } from './Chart'
 
@@ -43,6 +43,42 @@ const columns: Column<Row>[] = [
 ]
 
 const noPrefs: ColumnPrefs = { hidden: [], order: [] }
+
+describe('Banner', () => {
+  it('leaves short notices unchanged', () => {
+    render(<Banner>Nothing changed.</Banner>)
+    expect(screen.queryByText(/Show details/)).toBeNull()
+    expect(screen.getByText('Nothing changed.')).toBeTruthy()
+  })
+
+  it('truncates long notices behind native expandable details without losing content or semantics', () => {
+    const notice = 'Topology evidence is incomplete. '.repeat(12)
+    render(<div role="alert"><Banner>{notice}</Banner></div>)
+
+    const alert = screen.getByRole('alert')
+    const summary = within(alert).getByText('Show details').closest('summary') as HTMLElement
+    const details = summary.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(summary.textContent?.length).toBeLessThan(notice.length)
+    expect(alert.textContent).toContain(notice)
+    summary.focus()
+    expect(document.activeElement).toBe(summary)
+    fireEvent.click(summary)
+    expect(details.open).toBe(true)
+    expect(within(alert).getByText('Hide details')).toBeTruthy()
+  })
+
+  it('keeps actionable prompts fully visible', () => {
+    render(
+      <Banner>
+        {'Installing this optional capability changes the router. '.repeat(8)}
+        <Button>Review capability</Button>
+      </Banner>,
+    )
+    expect(screen.queryByText(/Show details/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Review capability' })).toBeTruthy()
+  })
+})
 
 describe('SlideOver', () => {
   it('keeps keyboard focus inside, preserves it across renders, and restores the opener', () => {

@@ -18,6 +18,10 @@ probe-*.json
 # in a public repo, one `git add -A` from being published.
 data/
 .run/
+/local-backups/
+
+# Local OpenWrt configuration archives contain credentials and private keys.
+/*-before-factory-reset.tar*
 
 __pycache__/
 *.pyc

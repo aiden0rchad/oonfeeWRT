@@ -13,6 +13,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const d = data.devices
   const events = data.recent_events ?? []
   const wirelessUnknownOn = data.wireless_clients_unknown_on ?? []
+  const missingWAN = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'missing')
 
   // What "Devices on the LAN" leaves out, named under the number itself.
   //
@@ -27,6 +28,16 @@ export function Dashboard({ data }: { data: DashboardData }) {
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <h1 style={{ margin: 0, fontSize: 20 }}>Dashboard</h1>
+      {missingWAN.length > 0 && (
+        <div role="alert">
+          <Banner tone="critical">
+            No active WAN/default route was observed on{' '}
+            <strong>{missingWAN.map((gateway) => gateway.name).join(', ')}</strong>.
+            {' '}The gateway is reachable, but clients may not have Internet access.
+            Check its WAN cable, upstream modem, and OpenWrt interface status.
+          </Banner>
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 14 }}>
         <Card>
           <Stat label="Devices online" value={`${d.online}/${d.total}`}

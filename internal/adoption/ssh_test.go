@@ -65,6 +65,128 @@ func TestSSHRunErrorRedactsAnEchoedCommand(t *testing.T) {
 	}
 }
 
+func TestBoundedBufferDrainsWithoutGrowingPastLimit(t *testing.T) {
+	var buf boundedBuffer
+	payload := []byte(strings.Repeat("x", maxSSHOutput+1024))
+	n, err := buf.Write(payload)
+	if err != nil || n != len(payload) {
+		t.Fatalf("Write() = %d, %v; want %d, nil", n, err, len(payload))
+	}
+	if !buf.truncated || len(buf.String()) != maxSSHOutput {
+		t.Fatalf("truncated=%v retained=%d; want true, %d", buf.truncated, len(buf.String()), maxSSHOutput)
+	}
+	if n, err := buf.Write([]byte("still drained")); err != nil || n != len("still drained") || len(buf.String()) != maxSSHOutput {
+		t.Fatalf("post-limit Write() = %d, %v retained=%d", n, err, len(buf.String()))
+	}
+}
+
+func TestParsePackageStateKeepsOnlyBoundedFacts(t *testing.T) {
+	state, err := parsePackageState("manager=apk\npackage=lldpd\npackage=libcap\npackage=lldpd\n" +
+		"package=bad value\nlldp_enabled=1\nlldp_running=0\nignored=secret\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Manager != "apk" || len(state.Installed) != 2 ||
+		state.Installed[0] != "lldpd" || state.Installed[1] != "libcap" ||
+		!state.LLDPEnabled || state.LLDPRunning {
+		t.Fatalf("state=%+v", state)
+	}
+	if _, err := parsePackageState("manager=none\n"); err == nil {
+		t.Fatal("router without a supported package manager was accepted")
+	}
+}
+
+func TestLLDPPackageActionsRejectAnUnrecognizedManagerBeforeSSH(t *testing.T) {
+	boot := &SSHBootstrap{}
+	if _, err := boot.LLDPPlan(context.Background(), "sh", nil); err == nil {
+		t.Fatal("plan accepted an arbitrary manager")
+	}
+	if err := boot.InstallLLDP(context.Background(), "sh"); err == nil {
+		t.Fatal("install accepted an arbitrary manager")
+	}
+	if err := boot.RemoveLLDP(context.Background(), "sh", []string{"lldpd"}, false, false); err == nil {
+		t.Fatal("removal accepted an arbitrary manager")
+	}
+	if _, err := boot.LLDPPlan(context.Background(), "apk", []string{"lldpd;reboot"}); err == nil {
+		t.Fatal("plan accepted an unsafe package name")
+	}
+	if err := boot.RemoveLLDP(context.Background(), "apk", []string{"lldpd;reboot"}, false, false); err == nil {
+		t.Fatal("removal accepted an unsafe package name")
+	}
+}
+
+func TestAPKLLDPPlanRefreshesIndexesBeforeSimulation(t *testing.T) {
+	if lldpAPKInstallPlanCommand != "{ apk update && apk --simulate add lldpd; } 2>&1" {
+		t.Fatalf("plan command = %q", lldpAPKInstallPlanCommand)
+	}
+}
+
+func TestLLDPInstallUsesTheIndexRefreshedByTheBoundPlan(t *testing.T) {
+	for manager, commands := range map[string][2]string{
+		"apk":  {lldpAPKInstallPlanCommand, lldpAPKInstallCommand},
+		"opkg": {lldpOPKGInstallPlanCommand, lldpOPKGInstallCommand},
+	} {
+		t.Run(manager, func(t *testing.T) {
+			if strings.Count(commands[0], " update") != 1 {
+				t.Fatalf("plan must refresh exactly once: %q", commands[0])
+			}
+			if strings.Contains(commands[1], " update") || strings.Contains(commands[1], "-U") {
+				t.Fatalf("install redundantly refreshed the package index: %q", commands[1])
+			}
+		})
+	}
+}
+
+func TestLLDPDiagnosticsCommandIsReadOnlyAndBounded(t *testing.T) {
+	for _, forbidden := range []string{" apk ", "uci set", "uci add", "uci delete", "uci commit", "/etc/init.d/"} {
+		if strings.Contains(" "+lldpDiagnosticsCommand, forbidden) {
+			t.Fatalf("diagnostic command contains mutating fragment %q", forbidden)
+		}
+	}
+	for _, required := range []string{"uci -q show lldpd", "show interfaces", "show neighbors hidden"} {
+		if !strings.Contains(lldpDiagnosticsCommand, required) {
+			t.Fatalf("diagnostic command missing %q", required)
+		}
+	}
+}
+
+func TestLLDPInterfaceDiscoveryParsesOnlyBoundedNames(t *testing.T) {
+	names, err := parseInterfaceNames("lan3\neth0.1\nlan3\n")
+	if err != nil || strings.Join(names, ",") != "eth0.1,lan3" {
+		t.Fatalf("names=%v err=%v", names, err)
+	}
+	if _, err := parseInterfaceNames("lan3;reboot\n"); err == nil {
+		t.Fatal("unsafe interface name accepted")
+	}
+	runtime, err := parseLLDPRuntimeInterfaces(`{"lldp":{"interface":{"lan3":{},"lan1":{}}}}`)
+	if err != nil || strings.Join(runtime, ",") != "lan1,lan3" {
+		t.Fatalf("runtime=%v err=%v", runtime, err)
+	}
+	for _, raw := range []string{
+		`{"lldp":{"interface":[{"lan3":{}},{"lan1":{}}]}}`,
+		`{"lldp":{"interface":[{"name":"lan3"},{"name":"lan1"}]}}`,
+	} {
+		runtime, err = parseLLDPRuntimeInterfaces(raw)
+		if err != nil || strings.Join(runtime, ",") != "lan1,lan3" {
+			t.Fatalf("runtime=%v err=%v for %s", runtime, err, raw)
+		}
+	}
+	if _, err := parseLLDPRuntimeInterfaces(`{"lldp":`); err == nil {
+		t.Fatal("malformed runtime JSON accepted")
+	}
+	if _, err := parseLLDPRuntimeInterfaces(`{"lldp":{"interface":[{"lan1":{},"lan2":{}}]}}`); err == nil {
+		t.Fatal("ambiguous runtime interface accepted")
+	}
+}
+
+func TestLLDPRestartWaitsForControlSocket(t *testing.T) {
+	for _, required := range []string{"/etc/init.d/lldpd restart", "/var/run/lldpd.socket", "sleep 1", "exit 24"} {
+		if !strings.Contains(lldpRestartReadyCommand, required) {
+			t.Fatalf("restart readiness command missing %q", required)
+		}
+	}
+}
+
 // A host that accepts TCP and never speaks SSH must not hang adoption.
 //
 // ClientConfig.Timeout is read only by ssh.Dial; NewClientConn hands the

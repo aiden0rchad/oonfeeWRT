@@ -163,8 +163,9 @@ type Snapshot struct {
 	NetDevsFresh bool
 	APs          []AP
 
-	// APsFresh records that this poll ASKED what is broadcasting — it had a
-	// current interface list, whether or not anything in it serves clients.
+	// APsFresh records that this poll ASKED hostapd/interface inventory which
+	// BSSs are enabled, whether or not anything in it serves clients. This is
+	// not independent on-air scan evidence.
 	//
 	// Needed for the same reason as IfacesFresh, and missing for the reason
 	// that keeps catching this package out: the cache was written only when APs
@@ -243,6 +244,11 @@ func (s *Snapshot) Complete() bool { return s.Err == nil && len(s.Degraded) == 0
 type Degradation struct {
 	Object string
 	Method string
+	// Target identifies the fixed controller-side command behind a generic
+	// file.exec call. It never comes from a router response and contains no
+	// credentials; without it every missing optional utility collapses to the
+	// same unactionable "file.exec" row.
+	Target string
 	Status ubus.Status
 	// Cause is the failure domain, kept separately from the rendered error text
 	// so an API/UI can distinguish an ACL or unsupported driver operation from a
@@ -269,7 +275,23 @@ const (
 )
 
 func (d Degradation) String() string {
-	return fmt.Sprintf("%s.%s: %s", d.Object, d.Method, d.Err)
+	call := d.Object + "." + d.Method
+	if d.Target != "" {
+		call += " " + d.Target
+	}
+	return fmt.Sprintf("%s: %s", call, d.Err)
+}
+
+func degradationTarget(inv ubus.Invocation) string {
+	if inv.Object != "file" || inv.Method != "exec" {
+		return ""
+	}
+	args, ok := inv.Args.(map[string]any)
+	if !ok {
+		return ""
+	}
+	command, _ := args["command"].(string)
+	return command
 }
 
 // Board is the firmware identity, re-read rarely because it changes only on

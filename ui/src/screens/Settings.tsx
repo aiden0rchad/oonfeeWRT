@@ -43,6 +43,14 @@ function retainApplyOperationID(id: string) {
   }
 }
 
+function forgetApplyOperationID() {
+  try {
+    localStorage.removeItem(applyOperationStorageKey)
+  } catch {
+    // Recovery remains usable without browser storage.
+  }
+}
+
 function newApplyOperationID(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   const bytes = crypto.getRandomValues(new Uint8Array(16))
@@ -53,12 +61,23 @@ function newApplyOperationID(): string {
 }
 
 function applyResultMessage(res: ApplyResult): string {
-  const ok = res.devices.filter((d) => d.outcome === 'applied').length
-  return res.aborted
-    ? `Stopped after ${res.aborted_after}: ${
+  if (res.aborted) {
+    return `Stopped after ${res.aborted_after}: ${
         res.devices.find((d) => d.outcome !== 'applied')?.reason ?? 'apply failed'
       }`
-    : `Applied to ${ok} device${ok === 1 ? '' : 's'}.`
+  }
+  const applied = res.devices.filter((d) => d.outcome === 'applied')
+  const changed = applied.filter((d) => (d.changes ?? 0) > 0)
+  const changes = changed.reduce((sum, d) => sum + (d.changes ?? 0), 0)
+  const matched = applied.length - changed.length
+  const parts: string[] = []
+  if (changes > 0) {
+    parts.push(`${changes} change${changes === 1 ? '' : 's'} applied to ${changed.length} device${changed.length === 1 ? '' : 's'}`)
+  }
+  if (matched > 0) {
+    parts.push(`${matched} device${matched === 1 ? '' : 's'} already matched`)
+  }
+  return `${parts.join('; ') || 'No device changes were applied'}.`
 }
 
 function applyWriteSummary(
@@ -79,9 +98,9 @@ function applyWriteSummary(
   const writeState = operation.write_state ?? 'none'
   const result = operation.result ? ' The recorded result above is authoritative.' : ''
   if (writeState === 'none') {
-    return `Apply operation ${operationID} is ${operation.state}. Durable write state: none — no device write began.${result}`
+    return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: none — no device write began.${result}`
   }
-  return `Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
+  return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
 }
 
 /**
@@ -156,6 +175,7 @@ export function Settings({ devices }: { devices: Device[] }) {
           timer = window.setTimeout(poll, applyOperationPollMs)
           return
         }
+        if (found.state !== 'unknown') forgetApplyOperationID()
         setRecoveringOperation(false)
         setBusy('')
         setPreview(null)
@@ -163,7 +183,7 @@ export function Settings({ devices }: { devices: Device[] }) {
         setAckFatal(false)
         setAckCautions(false)
         if (found.result) {
-          setApplied(applyResultMessage(found.result))
+          setApplied(`Previous result: ${applyResultMessage(found.result)}`)
         } else {
           setApplied(null)
         }
@@ -179,6 +199,16 @@ export function Settings({ devices }: { devices: Device[] }) {
         }
       } catch (e) {
         if (stopped) return
+        if (e instanceof ApiError && e.status === 404) {
+          forgetApplyOperationID()
+          setOperationID('')
+          setOperation(null)
+          setRecoveringOperation(false)
+          setBusy('')
+          setErr('')
+          setApplied('Cleared a saved Apply reference that does not exist on this controller.')
+          return
+        }
         const message = e instanceof Error ? e.message : String(e)
         setRecoveringOperation(false)
         setBusy('')
@@ -256,6 +286,7 @@ export function Settings({ devices }: { devices: Device[] }) {
         write_state: res.devices.some((d) => (d.changes ?? 0) > 0) ? 'possible' : 'none',
         devices: [],
       })
+      forgetApplyOperationID()
       setApplied(resultMessage)
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -326,6 +357,11 @@ export function Settings({ devices }: { devices: Device[] }) {
   }
 
   const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
+  const operationNeedsAttention = Boolean(
+    recoveringOperation || !operation ||
+    operation.state === 'queued' || operation.state === 'running' || operation.state === 'unknown',
+  )
+  const showOperation = Boolean(operationID && (operationNeedsAttention || !preview))
   const traversal = preview?.devices.filter((d) => d.touches_traversal) ?? []
   const cautions =
     preview?.devices.flatMap((d) =>
@@ -517,7 +553,7 @@ export function Settings({ devices }: { devices: Device[] }) {
           </Button>
           {applied && <span style={{ fontSize: 12 }}>{applied}</span>}
         </div>
-        {operationID && (
+        {showOperation && (
           <div
             role="status"
             aria-live="polite"
@@ -526,7 +562,7 @@ export function Settings({ devices }: { devices: Device[] }) {
               marginTop: 8, fontSize: 11, color: 'var(--text-secondary)',
             }}
           >
-            <strong>Apply operation</strong>
+            <strong>{operationNeedsAttention ? 'Apply operation' : 'Previous Apply operation'}</strong>
             <code>{operationID}</code>
             <span>
               {recoveringOperation
@@ -553,7 +589,11 @@ export function Settings({ devices }: { devices: Device[] }) {
           </div>
         )}
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-          {applyWriteSummary(operationID, operation, recoveringOperation)} Apply
+          {applyWriteSummary(
+            showOperation ? operationID : '',
+            showOperation ? operation : null,
+            showOperation && recoveringOperation,
+          )} Apply
           is the only step that writes, and it stops at the first device that
           fails to limit a partial rollout. Devices that already applied stay
           changed; the result names exactly where it stopped. Every change is
@@ -1091,7 +1131,7 @@ function Groups({
 
     const previous = membershipQueues.current.get(g.id) ?? Promise.resolve()
     const task = previous.catch(() => undefined).then(async () => {
-      await api.saveGroup({ id: g.id, device_ids: next })
+      await api.saveGroup({ id: g.id, name: g.name, device_ids: next })
     })
     membershipQueues.current.set(g.id, task)
 
@@ -1250,26 +1290,47 @@ function Deviations({
 }: {
   site: Site
   devices: Device[]
-  onChanged: () => void
+  onChanged: () => Promise<void>
 }) {
   const [deviceID, setDeviceID] = useState<number | null>(null)
+  const [pending, setPending] = useState<Record<string, string>>({})
+  const [changeError, setChangeError] = useState('')
   const adopted = devices.filter((d) => d.adopted)
   const target = deviceID ?? adopted[0]?.id ?? null
 
   if (site.wlans.length === 0 || adopted.length === 0) return null
 
   const forDevice = site.overrides.filter((o) => o.device_id === target)
-  const valueOf = (wlanID: number, key: string) =>
-    forDevice.find((o) => o.wlan_id === wlanID && o.key === key)?.value ?? ''
+  const pendingKey = (wlanID: number, key: string) => `${target}.${wlanID}.${key}`
+  const valueOf = (wlanID: number, key: string) => {
+    const k = pendingKey(wlanID, key)
+    return Object.prototype.hasOwnProperty.call(pending, k)
+      ? pending[k]
+      : forDevice.find((o) => o.wlan_id === wlanID && o.key === key)?.value ?? ''
+  }
 
   async function set(wlanID: number, key: string, value: string) {
-    await api.setOverride(target!, wlanID, key, value)
-    onChanged()
+    const k = pendingKey(wlanID, key)
+    setPending((current) => ({ ...current, [k]: value }))
+    setChangeError('')
+    try {
+      await api.setOverride(target!, wlanID, key, value)
+      await onChanged()
+    } catch (error) {
+      setChangeError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPending((current) => {
+        const next = { ...current }
+        delete next[k]
+        return next
+      })
+    }
   }
 
   return (
     <Card title="Per-device overrides">
       <div style={{ display: 'grid', gap: 10 }}>
+        {changeError && <div role="alert"><Banner tone="critical">{changeError}</Banner></div>}
         {site.overrides.length > 0 && (
           <div style={{ fontSize: 11 }}>
             <strong>{new Set(site.overrides.map((o) => o.device_id)).size}</strong>{' '}
@@ -1301,16 +1362,19 @@ function Deviations({
               <Toggle
                 label="Do not publish here"
                 on={valueOf(w.id, 'disabled') === '1'}
+                disabled={Object.prototype.hasOwnProperty.call(pending, pendingKey(w.id, 'disabled'))}
                 onChange={(v) => set(w.id, 'disabled', v ? '1' : '')}
               />
               <Toggle
                 label="Hide here"
                 on={valueOf(w.id, 'hidden') === '1'}
+                disabled={Object.prototype.hasOwnProperty.call(pending, pendingKey(w.id, 'hidden'))}
                 onChange={(v) => set(w.id, 'hidden', v ? '1' : '')}
               />
               <Toggle
                 label="Isolate clients here"
                 on={valueOf(w.id, 'isolate') === '1'}
+                disabled={Object.prototype.hasOwnProperty.call(pending, pendingKey(w.id, 'isolate'))}
                 onChange={(v) => set(w.id, 'isolate', v ? '1' : '')}
               />
             </div>

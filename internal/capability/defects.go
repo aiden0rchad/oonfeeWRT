@@ -264,10 +264,22 @@ func DefectsFor(r *Registry) []Defect {
 	if r == nil {
 		return nil
 	}
+	hardware := make([]string, 0, len(r.Radios)+1)
+	for _, radio := range r.Radios {
+		hardware = append(hardware, radio.Hardware)
+	}
+	// Factory-default WRT3200ACM radios have no wifi-iface, so iwinfo cannot
+	// name their 88W8964 hardware until after the first WLAN is enabled. The
+	// board identity is already authoritative; use it so Preview warns before
+	// that first Apply rather than discovering the defect after exposure.
+	board := strings.ToLower(r.Board.Model + " " + r.Board.BoardName)
+	if strings.Contains(board, "wrt3200acm") {
+		hardware = append(hardware, "Marvell 88W8964")
+	}
 	var out []Defect
 	seen := map[string]bool{}
-	for _, radio := range r.Radios {
-		hw := strings.ToLower(radio.Hardware)
+	for _, name := range hardware {
+		hw := strings.ToLower(name)
 		if hw == "" {
 			continue
 		}

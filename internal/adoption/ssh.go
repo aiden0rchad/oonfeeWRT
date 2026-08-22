@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,6 +48,19 @@ type SSHOptions struct {
 	// pinned thereafter, exactly like the TLS certificate.
 	HostKeyFP string
 	Timeout   time.Duration
+}
+
+type PackageState struct {
+	Manager     string
+	Installed   []string
+	LLDPEnabled bool
+	LLDPRunning bool
+}
+
+type LLDPConfigState struct {
+	Export             string
+	WiredBridgeMembers []string
+	RuntimeInterfaces  []string
 }
 
 // DialSSH opens the bootstrap channel.
@@ -166,7 +181,7 @@ func (b *SSHBootstrap) run(ctx context.Context, stdin []byte, operation, cmd str
 	if stdin != nil {
 		sess.Stdin = bytes.NewReader(stdin)
 	}
-	var out, errb bytes.Buffer
+	var out, errb boundedBuffer
 	sess.Stdout = &out
 	sess.Stderr = &errb
 
@@ -177,12 +192,42 @@ func (b *SSHBootstrap) run(ctx context.Context, stdin []byte, operation, cmd str
 		_ = sess.Signal(ssh.SIGKILL)
 		return "", ctx.Err()
 	case err := <-done:
+		if out.truncated || errb.truncated {
+			return "", fmt.Errorf("adoption: %s output exceeded %d KiB", operation, maxSSHOutput/(1<<10))
+		}
 		if err != nil {
 			return out.String(), sshRunError(operation, err, out.String(), errb.String(), cmd, secrets)
 		}
 	}
 	return out.String(), nil
 }
+
+const maxSSHOutput = 64 << 10
+
+// boundedBuffer drains remote output while retaining only a fixed prefix.
+// Returning len(p) prevents a chatty peer from blocking the SSH channel after
+// the capture limit is reached.
+type boundedBuffer struct {
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := maxSSHOutput - b.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			p = p[:remaining]
+		}
+		_, _ = b.buf.Write(p)
+	}
+	if n > remaining {
+		b.truncated = true
+	}
+	return n, nil
+}
+
+func (b *boundedBuffer) String() string { return b.buf.String() }
 
 func sshRunError(operation string, runErr error, stdout, stderr, cmd string, secrets []string) error {
 	redactions := append([]string{cmd}, secrets...)
@@ -258,6 +303,8 @@ func verifyACLHash(content []byte, output string) error {
 // a hash and must never reach a shell.
 var cryptHash = regexp.MustCompile(`^[A-Za-z0-9$./]+$`)
 var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+var packageIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+_.-]*$`)
+var interfaceIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,31}$`)
 
 // CreateLogin writes the rpcd login and commits it.
 //
@@ -356,6 +403,337 @@ func (b *SSHBootstrap) RemoveFootprint(ctx context.Context, aclPath, user string
 	if strings.Contains(out, "acl=present") {
 		return fmt.Errorf("adoption: the ACL file %s is still on the device "+
 			"after removal", aclPath)
+	}
+	return nil
+}
+
+// PackageState reads only the fixed package/service facts needed by the LLDP
+// capability workflow. It is not a generic remote-command surface.
+func (b *SSHBootstrap) PackageState(ctx context.Context) (PackageState, error) {
+	const cmd = `if command -v apk >/dev/null 2>&1; then
+  echo manager=apk
+  apk info 2>/dev/null | sed 's/^/package=/'
+elif command -v opkg >/dev/null 2>&1; then
+  echo manager=opkg
+  opkg list-installed 2>/dev/null | sed 's/ .*/ /' | sed 's/ $//' | sed 's/^/package=/'
+else
+  echo manager=none
+fi
+[ -x /etc/init.d/lldpd ] && /etc/init.d/lldpd enabled >/dev/null 2>&1 && echo lldp_enabled=1 || echo lldp_enabled=0
+pidof lldpd >/dev/null 2>&1 && echo lldp_running=1 || echo lldp_running=0`
+	out, err := b.run(ctx, nil, "inspect package capability state", cmd)
+	if err != nil {
+		return PackageState{}, err
+	}
+	return parsePackageState(out)
+}
+
+func parsePackageState(output string) (PackageState, error) {
+	var state PackageState
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "manager":
+			state.Manager = value
+		case "package":
+			value = strings.TrimSpace(value)
+			if packageIdentifier.MatchString(value) && !seen[value] {
+				seen[value] = true
+				state.Installed = append(state.Installed, value)
+			}
+		case "lldp_enabled":
+			state.LLDPEnabled = value == "1"
+		case "lldp_running":
+			state.LLDPRunning = value == "1"
+		}
+	}
+	if state.Manager != "apk" && state.Manager != "opkg" {
+		return PackageState{}, fmt.Errorf("adoption: the router has neither apk nor opkg")
+	}
+	return state, nil
+}
+
+// LLDPPlan asks the router's package manager for the exact proposed change.
+// Installation planning refreshes the package index; callers must disclose and
+// obtain acknowledgement for that bounded write before invoking it.
+const lldpAPKInstallPlanCommand = "{ apk update && apk --simulate add lldpd; } 2>&1"
+const lldpOPKGInstallPlanCommand = "{ opkg update && opkg --noaction install lldpd; } 2>&1"
+const lldpAPKInstallCommand = "apk add lldpd"
+const lldpOPKGInstallCommand = "opkg install lldpd"
+
+const lldpDiagnosticsCommand = `echo CONFIGURATION
+uci -q show lldpd 2>&1 || echo lldpd_config=absent
+echo RUNTIME_INTERFACES
+lldpcli -f json show interfaces 2>&1
+echo RUNTIME_NEIGHBORS
+lldpcli -f json show neighbors hidden 2>&1`
+
+// LLDPDiagnostics reads the fixed configuration and runtime facts needed to
+// explain an installed service that reports no neighbours. It changes nothing.
+func (b *SSHBootstrap) LLDPDiagnostics(ctx context.Context) (string, error) {
+	out, err := b.run(ctx, nil, "inspect LLDP runtime interfaces", lldpDiagnosticsCommand)
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if len(out) > 32*1024 {
+		return "", fmt.Errorf("adoption: LLDP diagnostics exceeded 32 KiB")
+	}
+	return out, nil
+}
+
+// LLDPConfigPlanState reads only persistent configuration and physical bridge
+// membership. Planning and rollback must remain available while lldpd is down.
+func (b *SSHBootstrap) LLDPConfigPlanState(ctx context.Context) (LLDPConfigState, error) {
+	exported, err := b.run(ctx, nil, "read LLDP configuration baseline", "uci -q export lldpd")
+	if err != nil {
+		return LLDPConfigState{}, err
+	}
+	if exported == "" || len(exported) > 16*1024 {
+		return LLDPConfigState{}, fmt.Errorf("adoption: invalid LLDP configuration baseline")
+	}
+	const membersCommand = `for p in /sys/class/net/br-lan/lower_*; do
+  [ -e "$p" ] || continue
+  n=${p##*/lower_}
+  [ -e "/sys/class/net/$n/phy80211" ] && continue
+  [ -d "/sys/class/net/$n/wireless" ] && continue
+  printf '%s\n' "$n"
+done`
+	membersRaw, err := b.run(ctx, nil, "read wired bridge members", membersCommand)
+	if err != nil {
+		return LLDPConfigState{}, err
+	}
+	members, err := parseInterfaceNames(membersRaw)
+	if err != nil || len(members) == 0 {
+		return LLDPConfigState{}, fmt.Errorf("adoption: no safe wired bridge member was found")
+	}
+	return LLDPConfigState{Export: exported, WiredBridgeMembers: members}, nil
+}
+
+func (b *SSHBootstrap) LLDPConfigState(ctx context.Context) (LLDPConfigState, error) {
+	state, err := b.LLDPConfigPlanState(ctx)
+	if err != nil {
+		return LLDPConfigState{}, err
+	}
+	runtimeRaw, err := b.run(ctx, nil, "read LLDP runtime interfaces", "lldpcli -f json show interfaces")
+	if err != nil {
+		return LLDPConfigState{}, err
+	}
+	runtime, err := parseLLDPRuntimeInterfaces(runtimeRaw)
+	if err != nil {
+		return LLDPConfigState{}, err
+	}
+	state.RuntimeInterfaces = runtime
+	return state, nil
+}
+
+const lldpRestartReadyCommand = "/etc/init.d/lldpd restart || exit $?; " +
+	"for i in 1 2 3 4 5; do [ -S /var/run/lldpd.socket ] && exit 0; sleep 1; done; exit 24"
+
+func (b *SSHBootstrap) ConfigureLLDP(ctx context.Context, expectedExport string, interfaces []string) error {
+	if err := validateInterfaceNames(interfaces); err != nil {
+		return err
+	}
+	expected := sha256.Sum256([]byte(expectedExport))
+	cmd := "[ \"$(uci -q export lldpd | sha256sum | cut -d' ' -f1)\" = " + shellQuote(hex.EncodeToString(expected[:])) + " ] || exit 23; " +
+		"uci -q delete lldpd.config.interface; "
+	for _, name := range interfaces {
+		cmd += "uci add_list lldpd.config.interface=" + shellQuote(name) + "; "
+	}
+	cmd += "uci commit lldpd; " + lldpRestartReadyCommand
+	_, err := b.run(ctx, nil, "configure LLDP physical interfaces", cmd)
+	return err
+}
+
+func (b *SSHBootstrap) RestoreLLDPConfig(ctx context.Context, expectedExport, baseline string) error {
+	expected := sha256.Sum256([]byte(expectedExport))
+	restored := sha256.Sum256([]byte(baseline))
+	cmd := "[ \"$(uci -q export lldpd | sha256sum | cut -d' ' -f1)\" = " + shellQuote(hex.EncodeToString(expected[:])) + " ] || exit 23; " +
+		"uci import lldpd && uci commit lldpd; " +
+		"[ \"$(uci -q export lldpd | sha256sum | cut -d' ' -f1)\" = " + shellQuote(hex.EncodeToString(restored[:])) + " ] || exit 25; " +
+		"/etc/init.d/lldpd restart"
+	_, err := b.run(ctx, []byte(baseline), "restore LLDP configuration baseline", cmd)
+	return err
+}
+
+func parseInterfaceNames(raw string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || seen[name] {
+			continue
+		}
+		if !interfaceIdentifier.MatchString(name) {
+			return nil, fmt.Errorf("adoption: invalid interface name %q", name)
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func validateInterfaceNames(names []string) error {
+	if len(names) == 0 || len(names) > 32 {
+		return fmt.Errorf("adoption: invalid LLDP interface count")
+	}
+	for _, name := range names {
+		if !interfaceIdentifier.MatchString(name) {
+			return fmt.Errorf("adoption: invalid interface name %q", name)
+		}
+	}
+	return nil
+}
+
+func parseLLDPRuntimeInterfaces(raw string) ([]string, error) {
+	var doc struct {
+		LLDP json.RawMessage `json:"lldp"`
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		return nil, fmt.Errorf("adoption: decode LLDP runtime interfaces: %w", err)
+	}
+	var lldp struct {
+		Interface json.RawMessage `json:"interface"`
+	}
+	if err := json.Unmarshal(doc.LLDP, &lldp); err != nil {
+		return nil, fmt.Errorf("adoption: decode LLDP runtime interfaces: %w", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(lldp.Interface, &object); err == nil {
+		names := make([]string, 0, len(object))
+		for name := range object {
+			names = append(names, name)
+		}
+		if err := validateInterfaceNames(names); err != nil && len(names) > 0 {
+			return nil, err
+		}
+		slices.Sort(names)
+		return names, nil
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(lldp.Interface, &rows); err != nil {
+		return nil, fmt.Errorf("adoption: decode LLDP runtime interfaces: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if nameRaw, ok := row["name"]; ok {
+			var name string
+			if err := json.Unmarshal(nameRaw, &name); err != nil || !interfaceIdentifier.MatchString(name) {
+				return nil, fmt.Errorf("adoption: invalid LLDP runtime interface name")
+			}
+			seen[name] = true
+			continue
+		}
+		if len(row) != 1 {
+			return nil, fmt.Errorf("adoption: ambiguous LLDP runtime interface")
+		}
+		for name := range row {
+			if !interfaceIdentifier.MatchString(name) {
+				return nil, fmt.Errorf("adoption: invalid LLDP runtime interface name")
+			}
+			seen[name] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	if len(names) > 32 {
+		return nil, fmt.Errorf("adoption: invalid LLDP interface count")
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+func (b *SSHBootstrap) LLDPPlan(ctx context.Context, manager string, removePackages []string) (string, error) {
+	if err := validatePackageNames(removePackages); err != nil {
+		return "", err
+	}
+	remove := len(removePackages) > 0
+	packageArgs := strings.Join(removePackages, " ")
+	var operation, cmd string
+	switch {
+	case manager == "apk" && !remove:
+		operation, cmd = "resolve LLDP package installation", lldpAPKInstallPlanCommand
+	case manager == "apk" && remove:
+		operation, cmd = "resolve LLDP package removal", "apk --simulate del "+packageArgs+" 2>&1"
+	case manager == "opkg" && !remove:
+		operation, cmd = "resolve LLDP package installation", lldpOPKGInstallPlanCommand
+	case manager == "opkg" && remove:
+		operation, cmd = "resolve LLDP package removal", "opkg --noaction remove "+packageArgs+" 2>&1"
+	default:
+		return "", fmt.Errorf("adoption: unsupported package manager %q", manager)
+	}
+	out, err := b.run(ctx, nil, operation, cmd)
+	if err != nil {
+		return "", err
+	}
+	out = strings.TrimSpace(out)
+	if len(out) > 16*1024 {
+		return "", fmt.Errorf("adoption: package plan exceeded 16 KiB")
+	}
+	if out == "" {
+		out = "Package manager reported no package changes."
+	}
+	return out, nil
+}
+
+func (b *SSHBootstrap) InstallLLDP(ctx context.Context, manager string) error {
+	var cmd string
+	switch manager {
+	case "apk":
+		cmd = lldpAPKInstallCommand
+	case "opkg":
+		cmd = lldpOPKGInstallCommand
+	default:
+		return fmt.Errorf("adoption: unsupported package manager %q", manager)
+	}
+	cmd += " && /etc/init.d/lldpd enable && /etc/init.d/lldpd restart && command -v lldpcli >/dev/null"
+	_, err := b.run(ctx, nil, "install and enable LLDP capability", cmd)
+	return err
+}
+
+func (b *SSHBootstrap) RemoveLLDP(ctx context.Context, manager string, removePackages []string, wasEnabled, wasRunning bool) error {
+	if err := validatePackageNames(removePackages); err != nil {
+		return err
+	}
+	var cmd string
+	if len(removePackages) > 0 {
+		packageArgs := strings.Join(removePackages, " ")
+		switch manager {
+		case "apk":
+			cmd = "apk del " + packageArgs
+		case "opkg":
+			cmd = "opkg remove " + packageArgs
+		default:
+			return fmt.Errorf("adoption: unsupported package manager %q", manager)
+		}
+	} else {
+		if wasEnabled {
+			cmd = "/etc/init.d/lldpd enable"
+		} else {
+			cmd = "/etc/init.d/lldpd disable"
+		}
+		if wasRunning {
+			cmd += " && /etc/init.d/lldpd restart"
+		} else {
+			cmd += " && /etc/init.d/lldpd stop"
+		}
+	}
+	_, err := b.run(ctx, nil, "remove LLDP capability", cmd)
+	return err
+}
+
+func validatePackageNames(packages []string) error {
+	for _, name := range packages {
+		if !packageIdentifier.MatchString(name) {
+			return fmt.Errorf("adoption: invalid package name %q", name)
+		}
 	}
 	return nil
 }

@@ -220,7 +220,9 @@ type Registry struct {
 	Features map[Feature]State
 	Quirks   []Quirk
 	Radios   []Radio
-	Ports    Ports
+	// RadioInventory distinguishes a proved zero from an unreadable inventory.
+	RadioInventory State
+	Ports          Ports
 
 	// Binaries reachable through the ACL's file.exec grants. Absent entries may
 	// mean "not installed" OR "not granted" — Notes records which.

@@ -59,8 +59,7 @@ func (d *Daemon) ScanRadio(ctx context.Context, deviceID int64, radioKey string)
 		Access bool `json:"access"`
 	}
 	if err := client.Call(ctx, "session", "access", map[string]any{
-		"ubus_rpc_session": client.Session(), "scope": "ubus",
-		"object": "iwinfo", "function": "scan",
+		"scope": "ubus", "object": "iwinfo", "function": "scan",
 	}, &access); err != nil || !access.Access {
 		return model.RadioScan{}, nil, fmt.Errorf("%w: current device session does not prove iwinfo.scan access", api.ErrRadioScanUnavailable)
 	}

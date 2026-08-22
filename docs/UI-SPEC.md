@@ -35,15 +35,18 @@ Official references: [UniFi Network 10.5.67 release notes](https://community.ui.
 [Traffic & Policy Management](https://help.ui.com/hc/en-us/articles/5546542486551-Traffic-Policy-Management-in-UniFi),
 and [Zone-Based Firewalls](https://help.ui.com/hc/en-us/articles/115003173168-Zone-Based-Firewalls-in-UniFi).
 
-**Current live boundary (2026-08-20):** the lab is schema 16. An initial
-signed-in pass preserved the gaps produced by both routers' older ACLs; the
-operator later accepted the separate scoped capability-refresh prompt on each
-router. Subsequent polls observed additional topology, OpenWrt-log and fixed-
-target ICMP sources. The refresh remains optional/default-off elsewhere and
-installs no package, binary, daemon, service or firmware, changes no UCI, and
-does not imply that package inventory was measured unchanged. No RF scan was
-run. All durable Phase-4 data is REST; the WebSocket supplies only
-`device.stats` focus/current updates.
+**Current live boundary (2026-08-22):** the lab and UI contract are schema 17.
+Both factory-reset reference routers were re-adopted only after the operator
+accepted the default-off controller-access-payload disclosure; adoption
+installed no package, binary, daemon, service or firmware. The separate,
+default-off official-feed `lldpd` workflow was exercised through exact planning,
+installation, physical-interface configuration, read-only diagnosis,
+drift-checked rollback and clean reinstallation on both routers. V39 remains the
+historical startup-fix checkpoint; the v40 signed-in deep-link and complete-poll
+result is the merge-ready final release candidate, not a tagged or published
+release.
+All durable Phase-4 data is REST; the WebSocket supplies only `device.stats`
+focus/current updates.
 
 ---
 
@@ -440,6 +443,26 @@ after their respective unchecked disclosure is selected. Adoption's disclosure
 also says that acceptance creates the scoped controller login. Omitted/false
 requests are rejected before SSH or any mutation. Inspect never sends it
 because Inspect is read-only.
+
+An unsupported LLDP topology source shows a separate compact notice. It never
+claims a package is absent from a generic source error; it says LLDP evidence is
+unavailable and links to the device's **Optional LLDP topology capability**.
+That panel first requires acknowledgement that resolving the exact plan may
+refresh only the package-index cache. It displays the package manager's full
+bounded plan. A second unchecked acknowledgement authorizes installing the
+official-feed `lldpd` package and dependencies in that plan, then enabling and
+starting its service. A credentialed, explicitly acknowledged read-only plan
+then identifies only non-wireless physical bridge members. Replacing only
+`lldpd.config.interface`, committing only `/etc/config/lldpd`, and restarting
+only `lldpd` requires another unchecked acknowledgement bound to that plan.
+Read-only diagnosis reports the retained durable install/configuration state,
+UCI export, runtime interfaces, and neighbors without changing the router.
+Removal has its own reviewed plan and acknowledgement, drift-checks and restores
+the exact UCI baseline, removes the recorded controller-added package set, keeps
+pre-existing packages, restores and verifies prior service state, and must
+complete before un-adoption. Administrator credentials are never stored. They
+remain only in the open review for its plan/apply pair and clear when the review
+closes, after a router change completes, or after a failed or rejected request.
 
 **Settings → Networks.** The network slide-over edits name, VLAN, zone, enabled
 state, IPv4 gateway/CIDR and DHCP `{enabled, start, limit, leasetime}`. Derived

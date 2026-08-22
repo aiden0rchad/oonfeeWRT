@@ -149,8 +149,9 @@ type Server struct {
 	// persistence invariants, but a partial network handler reads before it
 	// writes; two such requests could otherwise each merge against stale state
 	// and silently discard the other's field.
-	siteMu   siteMutex
-	requests *requestGate
+	siteMu     siteMutex
+	requests   *requestGate
+	instanceID string
 }
 
 // New builds a Server.
@@ -158,12 +159,17 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
+	instanceID, err := randomToken()
+	if err != nil {
+		panic("api: cannot generate controller instance identifier: " + err.Error())
+	}
 	srv := &Server{
 		Store: db, Fleet: fleet, Enroll: enroll, Log: log, Now: time.Now,
-		sessions: newSessions(),
-		throttle: newThrottle(),
-		hashing:  make(chan struct{}, hashSlots),
-		requests: newRequestGate(),
+		sessions:   newSessions(),
+		throttle:   newThrottle(),
+		hashing:    make(chan struct{}, hashSlots),
+		requests:   newRequestGate(),
+		instanceID: instanceID,
 	}
 	srv.Hub = NewHub(fleet, log)
 	// One derivation at startup, with the shipped parameters, so that verifying
@@ -226,6 +232,8 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("POST /api/v1/devices/inspect", s.handleInspect)
 	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
 	private.HandleFunc("POST /api/v1/devices/{id}/refresh-acl", s.handleRefreshACL)
+	private.HandleFunc("GET /api/v1/devices/{id}/capabilities/lldp", s.handleLLDPStatus)
+	private.HandleFunc("POST /api/v1/devices/{id}/capabilities/lldp", s.handleLLDPCapability)
 	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
 	// Records a DECISION about a foreign wireless section. Writes nothing to
 	// any device — the controller does not touch config it did not create.
@@ -289,15 +297,16 @@ func (s *Server) Routes() http.Handler {
 	private.HandleFunc("GET /api/v1/live", s.handleLive)
 
 	mux.Handle("/api/v1/", s.requireAuth(private))
-	return noStore(s.admitRequests(mux))
+	return noStore(s.instanceID, s.admitRequests(mux))
 }
 
 // noStore keeps API responses out of caches. Everything here is either live
 // fleet state or scoped to one signed-in operator, and neither should survive
 // in a shared cache or a browser's back-forward store.
-func noStore(next http.Handler) http.Handler {
+func noStore(instanceID string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-OonfeeWRT-Instance", instanceID)
 		next.ServeHTTP(w, r)
 	})
 }

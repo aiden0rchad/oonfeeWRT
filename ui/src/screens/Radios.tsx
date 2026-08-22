@@ -315,7 +315,7 @@ export function Radios() {
                     </div>
                   </> : <Unknown />}</td>
                   <td style={cell}>
-                    {row.radio.scan_capability === 'present' && row.radio.interfaces.some((iface) => iface.name.trim() !== '') ? (
+                    {row.radio.scan_capability === 'present' && (row.radio.interfaces ?? []).some((iface) => iface.name.trim() !== '') ? (
                       <Button onClick={() => {
                         returnFocusRef.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null
                         setScanTarget({ deviceID: row.deviceID, name: row.deviceName, radio: row.radio }); setAcknowledged(false); setScanError(''); setNotice('')

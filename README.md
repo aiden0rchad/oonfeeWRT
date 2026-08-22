@@ -5,29 +5,41 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** Phase 4 is complete on `main`, hardened and working on two devices.
-Not released.
+**Status:** Phase 4's schema-17 fresh-start hardware flow is verified. The v40
+final release candidate is merge-ready; it is not tagged or published.
 
-**Current live checkpoint (2026-08-20):** the repository and lab database run
-schema 16.
-Schema 14 remains the secret-sealing epoch, schema 15 is the semantic boundary
-for cross-feature policy intent, and schema 16 adds event provenance, topology
-intervals/source coverage and explicit RF-scan records. The signed-in Phase-4
-pass initially exercised the live schema-16 controller under both routers'
-older ACLs and truthfully retained the resulting source gaps. That historical
-no-router-change checkpoint was superseded when the operator explicitly
-accepted the separately prompted, scoped ACL refresh on both routers at 15:16
-and 15:17. Subsequent polls persisted topology-source and OpenWrt-log
-observations from both routers plus fixed-`1.1.1.1` ICMP observations from the
-Gateway. The refresh installs no package, binary, daemon, service or firmware;
-no before/after package-inventory hashes were captured, so this checkpoint
-makes no claim that the live package inventory was unchanged. No
-disruption-acknowledged RF scan was run. The final audited binary, zero-change
-fleet Preview and verified schema-16 recovery pair are recorded in STATUS
-§5bk.
-Phase 3 now has two-client DHCP/DNS/WAN and no-LAN hardware proof. Its literal
-bidirectional peer data-plane claim remains partial because reciprocal raw
-Safari peer-IP failures had no known-live peer listener or positive control.
+**Current validation checkpoint (2026-08-22):** both test routers were factory
+reset, re-adopted through the default-off ACL/login disclosure, and restored to
+the reviewed WPA2-only lab WLAN. Adoption installed no package. The separate,
+default-off LLDP capability was then proved end to end on both devices: exact
+official-feed plans, installation, physical-interface configuration, read-only
+diagnostics, hardened rollback to the stock package/service baselines, clean
+reinstallation, and measured AP-to-gateway topology. Each durable ledger row
+records only the observed additions (`libcap`, `libevent2-7`, and `lldpd`), the
+prior disabled/stopped `lldpd` service state, and the drift-checked configuration
+baseline. The v40 signed-in `/topology` deep link stayed on route and showed five
+nodes and four current links: gateway→Internet `wan`, AP→gateway `lan3`, and
+wireless test client→gateway `phy0-ap0` measured; wired test client→gateway
+`lan2` ambiguous. No reciprocal gateway→AP edge appeared. After a complete poll,
+the gateway association source was observed, the AP source was observed-empty,
+and only two truthful BusyBox VLAN-identity gaps remained. Progress, defects,
+and exact proof boundaries are recorded in
+[`docs/FRESH-START-VALIDATION.md`](docs/FRESH-START-VALIDATION.md).
+
+The merge-ready artifact is `dev-schema17-fresh-start-transparent-v40`
+(15,312,098 bytes; SHA-256
+`9c3a797c1470d8630f42dc77619007370aad553fae00078716a5a5a457c6b4cc`).
+Its settled normal/race/vet/tidy/module-verification, 274-test UI/build, bundle,
+diff, tree/history secret, and reproducibility gates all passed. An ignored,
+access-controlled final-RC recovery pair independently passed
+`recoverycheck` at schema 17 with two devices, two sealed credentials, four
+owned sections, one WLAN and no mesh; its passphrase and lab identifiers are
+intentionally excluded from the repository.
+
+This is final release-candidate evidence, not a tagged or published release.
+Building, restarting, checking, and copying recovery evidence changed no router
+state. FS-117 retains the superseded v39 runtime checkpoint rather than erasing
+that history.
 
 The Phase-4 completion and hardening work was merged through
 [PR #1](https://github.com/aiden0rchad/oonfeewrt/pull/1) as `ee15e2f`. At that
@@ -80,8 +92,8 @@ system, not a patch set, not a kernel module, not a device-side daemon we wrote.
 
 Everything oonfeeWRT touches on a device is either already in stock OpenWrt or
 already in the official package feeds. The optional **oonfeeWRT controller
-capability installation** has only two possible device-side artifacts: **one
-JSON file**—an rpcd ACL granting a dedicated user scoped permissions—and the
+access payload** has only two possible device-side artifacts: **one JSON
+file**—an rpcd ACL granting a dedicated user scoped permissions—and the
 scoped login that adoption may create. Accepting its separate prompt installs
 or replaces that ACL file; it unlocks controller access to supported topology,
 radio channel/scan, OpenWrt log and fixed-target WAN ICMP observations. It does
@@ -89,9 +101,22 @@ radio channel/scan, OpenWrt log and fixed-target WAN ICMP observations. It does
 unchecked or cancelling leaves the router unchanged, and observations needing
 newer read grants stay visible as unavailable/partial source gaps.
 
-If a feature would require shipping code that runs on the router, the feature is
-cut. That constraint is the entire reason this project can survive with a small
-team.
+Separately, a post-adoption LLDP option can install the official OpenWrt
+`lldpd` package—not controller-authored code. It first requires permission to
+refresh the package index and shows the exact simulated package-manager plan.
+A second unchecked acknowledgement authorizes the package/service change. The
+controller records the complete package baseline and actual additions. A
+separate credentialed read-only plan identifies the exact physical interfaces;
+changing only `lldpd.config.interface` requires its own unchecked acknowledgement
+and retains the prior UCI export. Rollback shows another exact plan, restores and
+drift-checks that export, removes only the recorded added set, preserves every
+pre-existing package, restores the prior `lldpd` service state, and independently
+re-reads the final package/service state before clearing the ledger. Un-adoption
+is blocked while this rollback record exists.
+
+If a feature would require shipping controller-authored code that runs on the
+router, the feature is cut. That constraint is the entire reason this project
+can survive with a small team.
 
 ### And we scope to what OpenWrt can already do
 
@@ -207,18 +232,23 @@ attached.
 
 ## Getting it running
 
-Two sides, and only the controller needs executable software installed. Every
-step below is what the code actually does today, verified against a Linksys
-WRT3200ACM on OpenWrt 25.12.5.
+The controller is required; router packages are optional and default-off. Every
+step below is what the code actually does today, verified against stock OpenWrt
+25.12.5 on two hardware classes.
 
-### The router: no executable software to install
+### The router: no controller-authored executable
 
-There is no package to build, no opkg feed, no init script. A stock OpenWrt
-device already has everything: `rpcd`, and `uhttpd` with the ubus handler
-enabled. If you explicitly opt in to controller access during adoption, it
-needs **SSH access once** to write the ACL JSON and create the scoped login.
-That is a capability grant to software OpenWrt already runs, not a software
-installation.
+There is no oonfeeWRT package, custom feed, init script, firmware, or agent. A
+stock OpenWrt device already has the default-adoption prerequisites: `rpcd`, and
+`uhttpd` with the ubus handler enabled. Adoption requires a default-off
+acknowledgement before it uses **SSH access once** to install the controller
+access payload: one ACL JSON file and
+one scoped login. The review panel names the exact path and grants. They cover
+observations, later acknowledged Apply operations for controller-owned
+network/wireless/firewall/DHCP sections, and runtime 802.11k neighbour-list
+updates; client disconnect/steering is not granted. No package, binary, daemon,
+service, or firmware is installed by adoption. Optional official-feed packages,
+currently only `lldpd`, use the separate two-stage workflow described above.
 
 ```
 Prerequisites on the device
@@ -235,14 +265,15 @@ refuse, because you may be knowingly running that way on a trusted lab network.
 But it means the credential you type proves nothing about who you are:
 
 ```sh
-ssh root@192.168.1.1 passwd     # do this first
+ROUTER_ADDRESS=192.0.2.1        # replace with the router's address
+ssh root@"$ROUTER_ADDRESS" passwd
 ```
 
-After the separate optional-capability installation acknowledgment, adoption
-uses that credential to install or replace one ACL JSON file and create one
-scoped login, and never stores it. Removing the device asks for it again.
-Leaving the prompt unchecked or cancelling makes neither change; observations
-that require the capability remain visibly unavailable.
+After the separate controller-access-payload acknowledgement, adoption uses
+that credential to install or replace one ACL JSON file and create one scoped
+login, and never stores it. Removing the device asks for it again. Leaving the
+prompt unchecked or cancelling makes neither change; observations that require
+the capability remain visibly unavailable.
 
 ### The controller
 

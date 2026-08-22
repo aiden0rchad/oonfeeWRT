@@ -1835,6 +1835,30 @@ func TestAnUnidentifiedRadioDoesNotSilenceADefect(t *testing.T) {
 	}
 }
 
+func TestFactoryDefaultWRTWarnsBeforeFirstUnsafeWLANApply(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Class = capability.ClassA
+	caps.Board.Model = "Linksys WRT3200ACM"
+	caps.Radios = []capability.Radio{
+		{Device: "radio0", Band: "5g"},
+		{Device: "radio1", Band: "2g"},
+	}
+
+	_, rep, err := Render(testSite(), model.Device{ID: 7, Role: "ap"}, caps, Existing{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	found := map[string]bool{}
+	for _, warning := range rep.Warnings {
+		found[warning.DefectID] = true
+	}
+	for _, id := range []string{"mwlwifi-80211w-unsupported", "mwlwifi-wpa3-unsupported"} {
+		if !found[id] {
+			t.Errorf("first unsafe WLAN Preview omitted %s: %+v", id, rep.Warnings)
+		}
+	}
+}
+
 // A channel-keyed defect must judge the channel the radio is on NOW.
 //
 // capability.Radio.Channel is frozen at adoption, and the controller does not

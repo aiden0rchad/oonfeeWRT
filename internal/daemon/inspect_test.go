@@ -137,7 +137,7 @@ func TestInspectProbesWithoutBootstrappingOrWritingInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
-	if res.MAC == "" || res.Model == "" || res.RadioCount != 2 {
+	if res.MAC == "" || res.Model == "" || res.RadioCount == nil || *res.RadioCount != 2 {
 		t.Fatalf("inspection returned incomplete measured facts: %+v", res)
 	}
 	for _, want := range []string{"gateway", "ap", "switch"} {

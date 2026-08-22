@@ -9,9 +9,11 @@ const mocks = vi.hoisted(() => ({
     session: vi.fn(),
     dashboard: vi.fn(),
     devices: vi.fn(),
+    login: vi.fn(),
     logout: vi.fn(),
   },
   live: { connect: vi.fn(), close: vi.fn() },
+  radioCrash: false,
 }))
 
 vi.mock('./lib/api', async (importOriginal) => ({
@@ -21,6 +23,10 @@ vi.mock('./lib/api', async (importOriginal) => ({
 vi.mock('./lib/live', () => ({ live: mocks.live }))
 vi.mock('./screens/Dashboard', () => ({ Dashboard: () => <div>dashboard data</div> }))
 vi.mock('./screens/Topology', () => ({ Topology: () => <h1>Topology</h1> }))
+vi.mock('./screens/Radios', () => ({ Radios: () => {
+  if (mocks.radioCrash) throw new Error('radio fixture failed')
+  return <h1>Radios &amp; Channel Plan</h1>
+} }))
 
 function signedIn() {
   mocks.api.setupState.mockResolvedValue({ needs_setup: false })
@@ -32,6 +38,8 @@ function signedIn() {
 describe('App session boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.history.replaceState(null, '', '/')
+    mocks.radioCrash = false
     mocks.api.logout.mockResolvedValue({ ok: true })
   })
 
@@ -55,6 +63,24 @@ describe('App session boundaries', () => {
 
     expect(await screen.findByText('database unavailable')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull()
+  })
+
+  it('preserves a deep link through bootstrap and sign-in', async () => {
+    window.history.replaceState(null, '', '/topology')
+    mocks.api.setupState.mockResolvedValue({ needs_setup: false })
+    mocks.api.session.mockRejectedValue(new ApiError(401, 'not signed in'))
+    mocks.api.login.mockResolvedValue({ username: 'admin', csrf: 'token' })
+    mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [] })
+    mocks.api.devices.mockResolvedValue({ devices: [] })
+    render(<App />)
+
+    fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'admin' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'controller password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByRole('heading', { name: 'Topology' })).toBeTruthy()
+    expect(window.location.pathname).toBe('/topology')
+    expect(screen.queryByText('dashboard data')).toBeNull()
   })
 
   it('keeps the authenticated UI when logout fails', async () => {
@@ -99,5 +125,21 @@ describe('App session boundaries', () => {
     const heading = await screen.findByRole('heading', { name: 'Topology' })
     await waitFor(() => expect(document.activeElement).toBe(heading))
     expect(document.title).toBe('Topology — oonfeeWRT')
+    expect(window.location.pathname).toBe('/topology')
+  })
+
+  it('keeps navigation available when one screen fails to render', async () => {
+    signedIn()
+    mocks.radioCrash = true
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Radios' }))
+    expect(await screen.findByRole('heading', { name: 'Radios unavailable' })).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toMatch(/radio fixture failed/)
+    expect(screen.getByRole('button', { name: 'Dashboard' })).toBeTruthy()
+
+    mocks.radioCrash = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry screen' }))
+    expect(await screen.findByRole('heading', { name: 'Radios & Channel Plan' })).toBeTruthy()
   })
 })
