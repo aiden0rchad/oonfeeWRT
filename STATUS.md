@@ -1,18 +1,20 @@
 # Where this project is
 
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
-through **2026-08-20**, with the earlier Phase-3 hardware endpoint in §5bg, the
+through **2026-08-22**, with the earlier Phase-3 hardware endpoint in §5bg, the
 schema-15/16 source-only checkpoint in §5bh, the read-only live schema-16
 Phase-4 pass under the retained router ACLs in §5bi, the superseded no-change
-checkpoint in §5bj, and the current corrected runtime/recovery plus final
-Phase-3 proof boundary in §5bk. Sections through §5ax record the earlier
+checkpoint in §5bj, the corrected Phase-4 runtime/recovery checkpoint in §5bk,
+and the current fresh-start/schema-17 final-RC boundary in §5bl/FS-118. Sections
+through §5ax record the earlier
 committed/hardware baseline; §5ay is product research, §5az is the two-router
 no-install capability pass, §5ba records the post-audit behavior, §5bb the
 operation-safety pass, §5bc the function-selection cycle, and §5bd is the
 directional-policy/class-C gate; §5be is the gateway proof, §5bf the live
 schema-14 migration, §5bg its cleanup endpoint, §5bh the source checkpoint at
 that time, §5bi the signed-in schema-16 screen pass, §5bj the superseded
-no-change checkpoint, and §5bk the current completion boundary.
+no-change checkpoint, §5bk the Phase-4 completion boundary, and §5bl the current
+validation boundary.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -48,27 +50,29 @@ The hardware suite needs the device and a credential — §7 explains the rotati
 dance, which is the one genuinely fiddly part of this repo:
 
 ```bash
-OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
+OONFEE_TEST_HOST=192.0.2.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=...   go test -tags=integration ./internal/... -timeout 25m
 ```
 
-**Two devices, both freshly inspected and adopted through the controller and
-live-validated through 2026-08-19 (§5bg):**
+**Two devices, both factory-reset, freshly adopted and live-validated through
+2026-08-22 (§5bl and the fresh-start log):**
 
 | | WRT3200ACM | Archer C6 v2 (US) |
 |---|---|---|
-| address | `192.168.1.1` (gateway, WAN to UniFi) | `192.168.1.2`, DHCP off, static |
-| identity (`br-lan`) | `30:23:03:db:be:40` | `c4:e9:84:...` — ask, do not assume |
+| address | gateway management alias | AP management alias; DHCP off, static |
+| identity | TOFU-pinned gateway identity; exact identifier retained locally | TOFU-pinned AP identity; exact identifier retained locally |
 | SoC / target | mvebu/cortexa9 — **class A** | ath79/generic — **class C** |
 | selected functions | **Gateway + AP + Switch** | **AP + Switch** |
 | radios | mwlwifi ×2 | ath10k (5G) + ath9k (2.4G) |
 | firmware | OpenWrt 25.12.5 | OpenWrt 25.12.5 |
 | mesh | **gated off** (driver quirk, §5q) | **Present**, verified working |
-| our footprint | ACL + rpcd login + base WLAN and the retained VLAN2/DHCP/firewall baseline (§5bg) | ACL + rpcd login + base WLAN; VLAN2 truthfully omitted |
+| access payload | one ACL file + one scoped rpcd login; no package/service | one ACL file + one scoped rpcd login; no package/service |
+| applied managed state | two reviewed WLAN sections | two reviewed WLAN sections |
+| optional footprint | `libcap`, `libevent2-7`, `lldpd`; controller-managed `lan1`–`lan4` selection | `libcap`, `libevent2-7`, `lldpd`; controller-managed `eth0.1` selection |
 | airtime-split | absent (dead counters) | **Present** — only device with it |
-| neighbour reports | **Present**, re-adopted after the reset | **Present** |
-| wired layout | VLAN-aware `br-lan`, management on `br-lan.1`; DSA `lan1`–`lan4`, managed tagged VLAN 2 | `eth0.1` / `eth0.2`, legacy swconfig **observe-only** |
-| gateway evidence | active WAN default via `10.7.46.1`; LAN DHCP enabled; test VLAN gateway `192.168.2.1/24`, DHCP `.100`–`.249`/`12h` | no active WAN default; `dhcp.lan.ignore=1`; WAN down |
-| health | online, both radios broadcasting; retain the PMF/mwlwifi warning below | online, both radios broadcasting |
+| LLDP source | **Observed** on `lan1`–`lan4` | **Observed** on `eth0.1` |
+| wired layout | DSA `lan1`–`lan4`; `lan3` is the measured AP downlink | `eth0.1` LAN bridge member; WAN unused |
+| gateway evidence | active WAN default; LAN DHCP authority | no active WAN default; LAN DHCP disabled |
+| health | online, both managed BSSs enabled; retain the PMF/mwlwifi warning below | online, both managed BSSs enabled |
 
 **The oldest open question in this file is closed.** The WRT3200ACM's wedge is
 triggered by **PMF (`ieee80211w`) on the mwlwifi driver**: key installation
@@ -79,26 +83,20 @@ then the wedge back inside two minutes of a single forced roam with PMF on. The
 shipped defect warning now carries that measurement instead of a wiki citation.
 **Keep PMF off on Marvell hardware.**
 
-**The wired topology, corrected 2026-08-16 by looking rather than by trusting
-this file.** It was wrong in two ways that both cost time:
+**Current wired topology, re-established during the 2026-08-22 fresh-start
+run.** Earlier dual-homed and alternate-port descriptions are historical and
+superseded:
 
 | | |
 |---|---|
-| dev Mac | `192.168.1.3` on **en13** — this file said `.181` on `en9` |
-| WRT `lan1` | the dev Mac |
-| WRT `lan3` | the C6's LAN port (`eth0.1`), bridged into `192.168.1.0/24` |
-| WRT `wan` | the UniFi network |
-| **C6 `wan` (`eth0.2`)** | **also the UniFi network, `10.7.46.52`** — undocumented until now |
+| wired test client | WRT `lan2` |
+| WRT `lan3` | C6 LAN member `eth0.1`, on the shared management LAN |
+| WRT `wan` | upstream network |
+| C6 `wan` (`eth0.2`) | unused |
 
-The C6 being **dual-homed** is the part worth knowing. Its WAN is routed rather
-than bridged, so it is not a layer-2 loop — but it is a second path, and it
-means unplugging the WRT-to-C6 cable does not isolate the device the way the
-one-line description implied. The dev Mac cannot reach `10.7.46.52`, so from
-here the C6 still goes away when that cable does; from the UniFi side it does
-not.
-
-Anything that reasons about "what happens if this device loses its cable" has to
-start from this table rather than from the sentence that used to be here.
+LLDP now verifies the same physical relation without turning dynamic FDB aging
+into a permanent claim. The v40 startup and direct-URL check shows only
+the measured C6-to-WRT `lan3` edge, with no reciprocal duplicate.
 
 > ### ⚠ The WRT3200ACM is failing hardware. Do not treat it as a reference device.
 >
@@ -112,7 +110,7 @@ start from this table rather than from the sentence that used to be here.
 > kill the D-state processes — so the only recovery is a hard reset:
 >
 > ```bash
-> ssh root@192.168.1.1 'sync; printf b > /proc/sysrq-trigger'
+> ssh root@192.0.2.1 'sync; printf b > /proc/sysrq-trigger'
 > ```
 >
 > #### The cause — see §5aa, which supersedes what this section used to claim
@@ -138,10 +136,10 @@ start from this table rather than from the sentence that used to be here.
 > #### The failure mode that invalidates a management-plane check
 >
 > Worse than the wedge, and found only by scanning the air from the other
-> device: for roughly **14 hours** the WRT beaconed `wrt-cleanroom` — an SSID
+> device: for roughly **14 hours** the WRT beaconed `<stale lab SSID>` — an SSID
 > that existed in **no configuration anywhere on the device** — while
 > `/etc/config/wireless`, hostapd's running conf, `iwinfo`, ubus **and the
-> kernel's own `iw dev info`** all reported `oonfee-roam`. A `wifi reload` did
+> kernel's own `iw dev info`** all reported `<historical managed SSID>`. A `wifi reload` did
 > not clear it. Only a hard reset did.
 >
 > The stale SSID lived in firmware state nothing in Linux could see. This is the
@@ -157,7 +155,7 @@ start from this table rather than from the sentence that used to be here.
 > measurement**, and anything claiming hardware verification of a wireless
 > property needs a scan from a second device to mean what it says. §5t's
 > neighbour verification is affected: the C6's half was real, the WRT's half was
-> read from hostapd, and for those 14 hours the WRT's `oonfee-roam` was not on
+> read from hostapd, and for those 14 hours the historical managed SSID was not on
 > the air at all.
 >
 > #### Recommendation
@@ -168,61 +166,29 @@ start from this table rather than from the sentence that used to be here.
 > attempt before writing it off; after that it is a hardware replacement. The
 > Archer C6 has run 16+ hours through every experiment here without a stumble.
 
-**Wireless currently on air:**
-
-- `oonfee-roam` on **both** APs, 2.4 + 5 GHz — the controller-managed WLAN,
-  WPA2-PSK with 802.11r/k/v, `mobility_domain=90e4`, and the neighbour lists
-  §5t distributes. Restored to the WRT after the reset by the setup helper.
-- `oonfee-c6-5g` / `-2g` on the C6 — created by hand to enable its radios (stock
-  OpenWrt ships them disabled, and enabling them unsecured would broadcast two
-  open networks). **Their neighbour lists are empty and stay empty**, which is
-  the "never touch an SSID we do not manage" rule visible on hardware.
-- The WRT's stock `default_radio0/1` are back to `disabled=1`. The consequence
-  worth knowing: `oonfee-roam` is now the *first* interface on each of its
-  radios, so its BSSIDs moved from `32:23:03:db:be:43`/`:40` to
-  `30:23:03:db:be:42`/`:41`. The distributor propagated that to the C6 by
-  itself — two updates on a device nobody had touched.
+**Wireless currently configured:** one sanitized WPA2-only lab WLAN on both APs
+and both available bands, with PMF and 802.11r disabled for WRT3200ACM
+compatibility and 802.11k/v enabled. Exact SSIDs, BSSIDs and client identifiers
+remain in ignored local evidence, not this public handoff. The final topology
+pass retained one explicit `hostapd.get_clients` association-coverage warning;
+it did not invent an empty client set.
 
 **Credentials.** Both controller logins are sealed in `.run/oonfeewrt.db` under
 the random data key wrapped by `.run/keyring.json`; adoption never returns the
 password it generates. The database and keyring are therefore one restore pair,
-not interchangeable files. The live schema-14 database now seals WLAN/mesh keys
-and secret-derived ownership verifiers too; §5bf records the migration and scrub
-evidence. After explicit approval, §5bg rotated the managed WLAN key, retired the
-plaintext-sensitive pre-v14 material and created a verified post-cleanup
-database/keyring recovery pair. Nothing tracked in this repository holds the
-live device passwords or live WLAN key and nothing should; §7 has how to check
-or reset a device password by asking the device rather than a document.
+not interchangeable files. The live schema-17 database retains schema 14's
+sealed WLAN/mesh keys and secret-derived ownership verifiers and adds the
+optional-capability rollback ledger. Nothing tracked in this repository holds
+live device passwords, WLAN keys, SSH private keys or raw lab identifiers; §7
+has how to check or reset a device password by asking the device rather than a
+document.
 
-The WRT's record went stale when it was reset, and the recovery ran for real:
-the controller diagnosed it (§5u) with the message it had gained an hour
-earlier, then the setup helper force-un-adopted and re-adopted without being
-told anything about the reset.
-
-**Root has no password on either device, and that is a deliberate hold.**
-Decided 2026-08-16: the lab stays open while the system is being built, and
-device authentication is taken up as its own piece of work once everything else
-is buttoned up — so that it can be *verified* rather than assumed. It is not an
-oversight and it does not need raising again.
-
-Two things follow from it that a reader should know rather than rediscover. It
-is why adoption can bootstrap over SSH with an empty credential, which is how
-both devices were re-adopted for the ACL change without anyone typing a
-password. And the controller's own behaviour here is already built and tested —
-`acceptsAnyPassword` detects it at adoption and warns (§4), the discovery probe
-was redesigned around it (§5a), and none of that is waiting on the hold. What is
-deferred is hardening the *devices*, not the controller's handling of them.
-
-**When that work starts**, the pieces already in place are worth reusing rather
-than rebuilding: the actionable adoption warning, the two-credential split
-(operator for SSH, scoped login for ubus), credential ciphertext in the database
-under the keyring's data key, and §7's check-and-reset procedure. An optional
-SSH private key is now accepted for both adoption and un-adoption and is never
-persisted; it authenticates the
-SSH bootstrap/cleanup only and does not replace the password used for ubus. The
-remaining product question is whether the controller should ever offer to
-*set* a root password. It currently says how to do so and explicitly refuses
-to change `/etc/shadow` itself.
+Both routers now have distinct root passwords set during the isolated
+fresh-start procedure. Empty-password logins were explicitly rejected before
+adoption. Earlier statements that root had no password are historical and
+superseded. The controller still detects and warns about stock passwordless-root
+behavior, never changes `/etc/shadow`, and keeps administrator passwords/private
+keys transient for adoption, cleanup and optional-package actions.
 
 **One habit worth inheriting:** before any experiment that writes to a device's
 network config, arm a restore on the device itself first (§6, "arm the undo
@@ -230,7 +196,11 @@ before the experiment"). It saved this work three times.
 
 ---
 
-## 1. The short version
+## 1. Historical short version — superseded
+
+> This was the Phase-1/2 handoff summary. It is retained for provenance and is
+> not the current completion boundary. Use §0 and §5bl for the schema-17,
+> two-device Phase-4 state.
 
 The design is no longer a design. It was validated against a real
 **Linksys WRT3200ACM running OpenWrt 25.12.5**, which corrected several
@@ -270,26 +240,27 @@ verified against one.
 
 ---
 
-## 2. The test device
+## 2. The reference devices
 
 | | |
 |---|---|
-| Model | Linksys WRT3200ACM, OpenWrt 25.12.5 r33051 (mvebu/cortexa9, class A) |
-| Reached at | `192.168.1.1` over ethernet from the dev Mac at `192.168.1.3` (`en13`) |
-| Root access | SSH key auth works; **root has no password set** |
-| WAN | up, on the UniFi-routed `10.7.46.0/24` |
-| Radios | both enabled, `oonfeewrt-probe-2g` / `oonfeewrt-probe-5g`, WPA2 |
+| Models | Linksys WRT3200ACM (mvebu/cortexa9, class A) and TP-Link Archer C6 v2 (ath79/generic, class C), OpenWrt 25.12.5 |
+| Reached at | sanitized management aliases over the isolated lab LAN |
+| Root access | distinct root passwords set; TOFU SSH identities pinned separately |
+| WAN | WRT gateway up on the upstream network; C6 WAN unused |
+| Radios | both devices expose two enabled managed WPA2 BSSs |
 
-**Our footprint on it right now:** `/usr/share/rpcd/acl.d/oonfeewrt.json`, one
-`rpcd` login (`oonfeewrt`, password sealed in `.run/oonfeewrt.db` under the
-data key wrapped by `.run/keyring.json` — re-adopt if the restore pair is lost;
-see §7), two empty scratch configs, and **nlbwmon** (installed to test the
-tier-2 path; `apk del nlbwmon` removes it).
+**Current footprint on each:** `/usr/share/rpcd/acl.d/oonfeewrt.json`, one scoped
+`rpcd` login, two controller-owned WLAN sections, and the separately authorized
+official-feed packages `libcap`, `libevent2-7`, and `lldpd`. The WRT ledger binds
+`lan1`–`lan4`; the C6 ledger binds `eth0.1`. Removing LLDP requires its reviewed
+rollback before un-adoption. No controller-authored executable runs on either
+router.
 
 Running the hardware tests:
 
 ```bash
-OONFEE_TEST_HOST=192.168.1.1 OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=... \
+OONFEE_TEST_HOST=<router-address> OONFEE_TEST_USER=oonfeewrt OONFEE_TEST_PASS=... \
   go test -tags=integration -p 1 ./internal/... -run Integration -timeout 400s
 ```
 
@@ -548,9 +519,9 @@ tree was clean and pushed to `origin/main`; all Go packages and 107 UI tests
 were green, with `gofmt` and `tools/secret-scan.sh` clean. Use `git status` for
 the current checkout rather than treating this historical line as live state.
 
-**Both devices are adopted and serving.** WRT3200ACM (192.168.1.1, class A) is
-Gateway + AP + Switch; Archer C6 v2 (192.168.1.2, class C) is AP + Switch. The
-schema-14 controller has a durable receipt for each Apply. The WRT is now
+**Historical 2026-08-18 baseline, superseded by §5bl.** WRT3200ACM (class A) was
+Gateway + AP + Switch; Archer C6 v2 (class C) was AP + Switch. The schema-14
+controller had a durable receipt for each Apply. The WRT was
 VLAN-aware and retains the intended VLAN2/DHCP/firewall network from §5be; the
 legacy-swconfig C6 truthfully omits that VLAN while retaining the base site WLAN.
 §5bg deleted the temporary VLAN2 WLAN, restored DHCP `100`/`150`/`12h`, reset
@@ -559,21 +530,21 @@ devices were cleanly un-adopted, inspected and re-adopted in §5bc; if the fleet
 looks empty again, read §5ax's host-routing failure before assuming a device
 defect.
 
-**Schema 16 is the current live store.** §5bf remains the historical schema-14
+**Schema 17 is the current live store.** §5bf remains the historical schema-14
 migration/backup proof and §5bg its cleanup endpoint. §5bh records the later
 source-only checkpoint, §5bi the initial signed-in read-only screen pass, §5bj
-the superseded no-change checkpoint, and §5bk the corrected final boundary. The
-operator subsequently accepted the separately prompted scoped ACL refresh on
-both routers. It installed no package, binary, daemon, service or firmware and
-changed no UCI; no before/after package inventory was captured. No RF scan ran.
-Capability refresh remains optional/default-off for other routers.
+the superseded no-change checkpoint, §5bk the Phase-4 boundary, and §5bl the
+fresh-start/schema-17 boundary. Default adoption installed only the separately
+acknowledged ACL/login payload and no package. The optional/default-off LLDP
+workflow was later authorized, rolled back with hardened verification, and
+reinstalled/configured on both routers.
 
 **One host-level trap, because it cost an entire evening.** Two USB ethernet
-adapters on the same `192.168.1.0/24` make macOS mark the subnet routes
+adapters on the same `192.0.2.0/24` make macOS mark the subnet routes
 `RTF_REJECT`. `curl`, `ping` and Python keep working (blocking connects) while
 every Go dial fails instantly with `no route to host` — so the shell says the
 fleet is fine and the controller cannot see it. Check `netstat -rn -f inet |
-grep 192.168.1` for a `!` flag before believing discovery. §5bd closes the
+grep 192.0.2` for a `!` flag before believing discovery. §5bd closes the
 running-daemon recovery defect: the collector discards its keep-alive transport
 after the first hard poll failure, so the next poll redials on the repaired
 route without creating a login storm. A route that is still rejected by the
@@ -602,14 +573,15 @@ Read **§0** first (the reference hardware lies, and why), then **§6** (the
 mistakes already made and the rules that came out of them). Those two explain
 most of the decisions in the code.
 
-**The current completion boundary.** Everything below this block is standing
-guidance. §5be closes the durable-operation,
+**The current completion boundary is §5bl plus the final fresh-start log rows.**
+Everything below this block is standing guidance. §5be closes the durable-operation,
 authenticated-browser, VLAN/DHCP/firewall LIST, directional-WAN and runtime
 custom-DHCP proofs; §5bf closes live schema-14 promotion and the rebuilt-browser
 reconciliation; §5bg closes that lab cleanup; §5bi records schema-16 promotion
 and the initial signed-in, read-only Phase-4 pass; §5bj is its superseded
 no-change checkpoint; §5bk records the accepted scoped capability refresh and
-the corrected final proof boundary.
+the Phase-4 proof boundary; §5bl and FS-104–FS-118 record the current schema-17
+rollback/reinstall, topology convergence and direct-route proof.
 
 1. **Keep Phase 3's remaining claim narrow.** The latest run put two physical
    iPhones on the same isolated WRT BSS at once and proved distinct DHCP,
@@ -621,13 +593,12 @@ the corrected final proof boundary.
    literal bidirectional peer data-plane isolation claim remains open. §5bk
    records the runtime evidence and cleanup.
 
-2. **Phase 4's current boundary is §5bk.** Schema 16 is live. After the initial
-   read-only pass, the operator separately accepted the scoped capability
-   refresh on both lab routers, enabling additional router-log, topology and
-   fixed-ICMP observations. The refresh remains optional/default-off elsewhere:
-   leaving its box unchecked or cancelling sends no request and keeps the router
-   unchanged. It is an ACL capability grant, not a package, binary, daemon,
-   service, firmware or UCI installation. No RF scan ran.
+2. **Phase 4's current boundary is §5bl.** Schema 17 is live. ACL refresh and
+   official-feed LLDP remain distinct, optional/default-off workflows. Leaving
+   either box unchecked or cancelling sends no mutation request. The ACL path
+   installs no package; LLDP installation/configuration names and records its
+   exact package/service/UCI changes and blocks un-adoption until verified
+   rollback. No RF scan ran merely to prove access.
 
 Then, in order of value:
 
@@ -659,7 +630,7 @@ Then, in order of value:
   the live site model against the real devices without mutating controller or
   router state. The mode-0600 passphrase file and adjacent matching
   `keyring.json` are mandatory; the current read-only tools require a fully
-  scrubbed schema-14 store and do not migrate it. §5av added it, and it
+  current, fully scrubbed schema-17 store and do not migrate it. §5av added it, and it
   immediately found the reference Archer C6 being
   told it had not reported a wired layout it had reported perfectly well — with
   the whole suite green, because no mock in this repo knows what a swconfig
@@ -707,7 +678,7 @@ does not close the later disclosure recorded in §5bf; the current rotation is
 still pending explicit confirmation. The WRT3200ACM was power-cycled to recover
 from the deliberate PMF wedge. Both
 devices were re-adopted on 2026-08-18 after the routing incident in §5ax, are
-named after their models, sit in the `all-aps` group, and carry `oonfee-roam`.
+named after their models, sit in the `all-aps` group, and carry `example-managed-wlan`.
 The second USB ethernet adapter that broke routing has been unplugged.
 
 **One thing still needs the operator, not the next session:**
@@ -1106,7 +1077,7 @@ down**, and it took three outages of the reference device to pin down why.
 | | |
 |---|---|
 | `vlan_filtering` | 0 → 1 |
-| `br-lan` | UP, still holding `192.168.1.1/24` |
+| `br-lan` | UP, still holding `192.0.2.1/24` |
 | `ip neigh show dev br-lan` | **empty — not one neighbour** |
 | the apply engine's verdict | `applied — health passed and confirm landed` |
 | actual reachability | gone, until a pre-armed restore fired |
@@ -1708,7 +1679,7 @@ is the most useful thing in this file.
 **It applied cleanly and did not exist.**
 
     apply: wrt3200acm -> applied (1 changes) health passed and confirm landed
-    on device: oowrt_mesh1_radio0 mode=mesh mesh_id=oonfee-hw-mesh
+    on device: oowrt_mesh1_radio0 mode=mesh mesh_id=example-mesh
     interface modes after the apply: map[phy0-ap0:ap phy1-ap0:ap]
 
 uci accepted the config. The apply's health check passed — it asks whether the
@@ -1795,8 +1766,8 @@ Its wired layout is `bridge="eth0.1" wan="eth0.2"` — swconfig VLANs, not
 the two-cause distinction (§5q) exercised from both sides on real hardware.
 Applied by hand, the interface came up properly:
 
-    phy0-mesh0: joining mesh oonfee-hw-mesh
-    phy0-mesh0: MESH-GROUP-STARTED ssid="oonfee-hw-mesh"
+    phy0-mesh0: joining mesh example-mesh
+    phy0-mesh0: MESH-GROUP-STARTED ssid="example-mesh"
     br-lan: port 4(phy0-mesh0) entered forwarding state
 
 And `iwinfo devices` then lists `phy0-mesh0` alongside the APs — which is
@@ -1823,13 +1794,13 @@ FT keys from the shared passphrase, no key-holder exchange needed.
 apply because the key comes from the handshake:
 
     ft_psk_generate_local=0
-    r0kh=ff:ff:ff:ff:ff:ff * 141f748db78bb03c75216d6248ca68fc
-    r1kh=00:00:00:00:00:00 00:00:00:00:00:00 141f748db78bb03c75216d6248ca68fc
+    r0kh=ff:ff:ff:ff:ff:ff * <redacted-ft-key>
+    r1kh=00:00:00:00:00:00 00:00:00:00:00:00 <redacted-ft-key>
     wpa_key_mgmt=SAE FT-SAE WPA-PSK WPA-PSK-SHA256 FT-PSK
 
 OpenWrt generates wildcard key holders with a key derived from the mobility
 domain and the passphrase. **The identical config on the Archer C6 produced the
-identical key** — `141f748db78bb03c75216d6248ca68fc` on Marvell/mvebu and on
+identical key** — `<redacted-ft-key>` on Marvell/mvebu and on
 Qualcomm/ath79, different drivers, different radio vendors.
 
 That is the whole design working. The controller derives the mobility domain
@@ -1855,11 +1826,11 @@ does.
 
 ### 5s. The roam demo: what it proved, and the trap it found
 
-A real client (an iPhone) on `oonfee-roam`, one SSID across both APs.
+A real client (an iPhone) on `example-managed-wlan`, one SSID across both APs.
 
-**Proved:** the phone held IP `192.168.1.249` throughout, with `DHCPREQUEST`/
+**Proved:** the phone held IP `192.0.2.249` throughout, with `DHCPREQUEST`/
 `ACK` renewals and no fresh `DHCPDISCOVER`. Same lease, same subnet — the L2
-arrangement is right. Both APs carry the same SSID, same `mobility_domain=90e4`,
+arrangement is right. Both APs carry the same SSID and mobility domain,
 same FT key, on all four radios.
 
 **Not proved: an observable fast transition.** A `bss_transition_request` from
@@ -1949,8 +1920,8 @@ hostapd already computes it, correctly, for its own BSS, and hands it over
 verbatim:
 
     ubus call hostapd.phy0-ap1 rrm_nr_get_own
-    { "value": [ "32:23:03:db:be:43", "oonfee-roam",
-                 "322303dbbe43ef1900008024090603022a00" ] }
+    { "value": [ "<ap-bssid>", "example-managed-wlan",
+                 "<sanitized-neighbor-report-hex>" ] }
 
 So the controller reads that and relays the bytes untouched. It never parses or
 builds one. Doing otherwise would put a second regulatory mapping in the system,
@@ -2064,7 +2035,7 @@ Adoption identifies a device by its `br-lan` MAC. The test seed helpers wrote
 MACs as **literals** — one of them the box's WAN-side address, the other a
 radio's — so a seeded row and a real adoption of the same physical box became
 two devices in the inventory, both marked adopted, both pointed at
-`192.168.1.1`. One AP polled twice, against a budget of one request a minute.
+`192.0.2.1`. One AP polled twice, against a budget of one request a minute.
 
 The helpers ask the device now, through the same function the real path uses. A
 helper that computes an identity its own way produces rows that look adopted and
@@ -2103,7 +2074,7 @@ Two APs, two bands each, one SSID, on mvebu/mwlwifi and ath79/ath10k:
 
 | | |
 |---|---|
-| BSSes carrying `oonfee-roam` | 4 |
+| BSSes carrying `example-managed-wlan` | 4 |
 | neighbours each ended up with | 3 — every other BSS, and never itself |
 | second cycle | 0 updated, 4 unchanged |
 | second cycle from a *fresh database* | 0 updated, 4 unchanged |
@@ -2213,7 +2184,7 @@ is that **not one of them was reachable by any test in the repo**.
 #### What was confirmed working
 
 Worth recording, because a pass that only lists faults reads as a broken build.
-The neighbour card rendered exactly as designed — `oonfee-roam` named, "4
+The neighbour card rendered exactly as designed — `example-managed-wlan` named, "4
 already correct", both APs, `knows 3 neighbours` on every BSS. The unmeasured
 class explained itself on the C6 and stayed a bare `A` on the WRT. Both
 re-probes reported `neighbor-report` present and no changes on a second run.
@@ -2246,7 +2217,7 @@ reorder must not advertise that it can, so the absent case is pinned too.
 
 The device panel iterated `stats.aps` — one row per broadcasting interface —
 under a heading that said Radios. On a two-radio AP carrying two SSIDs that
-rendered **four radios**. Two rows read `oonfee-roam` and were distinguishable
+rendered **four radios**. Two rows read `example-managed-wlan` and were distinguishable
 only by a channel number. And the airtime figure appeared **twice per radio**.
 
 That last one is the §5h shape again: one quantity presented as two
@@ -2474,7 +2445,7 @@ test asserted the buggy behaviour** — it checked the key was absent, which is
 what the code did rather than what it should do.
 
 **A device cannot bridge to a network it publishes.** The C6 was in the AP group
-serving `oonfee-roam` and told to join it, so a station came up on the radio
+serving `example-managed-wlan` and told to join it, so a station came up on the radio
 already carrying that SSID and sat at channel 0. Refused now rather than warned
 about, because nothing in that config looks wrong.
 
@@ -2515,10 +2486,10 @@ now explicitly untested here.
 
 ### 5y. Asking the air, and the adoption bug that fell out of it
 
-§0 records a WRT3200ACM that beaconed `wrt-cleanroom` — an SSID present in no
+§0 records a WRT3200ACM that beaconed `example-stale-wlan` — an SSID present in no
 configuration anywhere on the device — for about fourteen hours while
 `/etc/config/wireless`, hostapd's running conf, `iwinfo`, ubus **and the
-kernel's own `iw dev info`** all reported `oonfee-roam`. Every verification this
+kernel's own `iw dev info`** all reported `example-managed-wlan`. Every verification this
 controller had was on the wrong side of the driver.
 
 `internal/onair` is the answer: a second radio. A beacon is a physical thing and
@@ -2584,7 +2555,7 @@ configured band, because "this device has no 5 GHz radio" about hardware sitting
 right there is a claim no apply could ever fix.
 
 End to end: the WRT went from *"device has no 2g radio"* to `applied (2 changes)
-health passed and confirm landed`, with `oonfee-roam` on both radios.
+health passed and confirm landed`, with `example-managed-wlan` on both radios.
 
 ### 5z. The adoption bug, pinned — and what a real roam exposed on the way
 
@@ -2697,9 +2668,9 @@ it, including the working one.**
 
 #### This explains the 14-hour lie
 
-§0's most confusing event — the WRT beaconing `wrt-cleanroom`, an SSID in no
+§0's most confusing event — the WRT beaconing `example-stale-wlan`, an SSID in no
 config anywhere, while `/etc/config`, the hostapd conf, `iwinfo`, ubus and `iw
-dev info` all said `oonfee-roam` — now has a mechanism. The control plane
+dev info` all said `example-managed-wlan` — now has a mechanism. The control plane
 accepted and reported the new config; **phy0's firmware was hung and never
 applied it**, and kept transmitting from the last configuration it had actually
 loaded. Every reader was telling the truth about what it had been told. Only the
@@ -2794,7 +2765,7 @@ Both wedges were preceded by a key-install failure, on the same client, at an
 
 Then, once the radio was already gone, the encryption command itself started
 timing out — `cmd 0x9122=UpdateEncryption timed out`, `failed to remove key (0,
-36:e0:c7:4f:d0:fb) from hardware (-5)`, `cmd 0x9111=SetNewStation timed out`.
+<client-mac>) from hardware (-5)`, `cmd 0x9111=SetNewStation timed out`.
 Four independent bug reports on the mwlwifi and OpenWrt trackers describe the
 same ordering.
 
@@ -2911,8 +2882,8 @@ to stop people acting on folklore must not ship any.
 
 ### 5ac. Foreign SSIDs: the takeover brief, and three defects in the badge
 
-**Done 2026-08-16.** A user noticed the Archer C6 broadcasting `oonfee-c6-2g`
-and `oonfee-c6-5g` and asked why oonfeeWRT did not manage them — "wouldn't it be
+**Done 2026-08-16.** A user noticed the Archer C6 broadcasting `example-operator-2g`
+and `example-operator-5g` and asked why oonfeeWRT did not manage them — "wouldn't it be
 better if all SSIDs were managed?"
 
 **The default is right, and the reason is worth stating plainly.** A section is
@@ -2950,7 +2921,7 @@ could later be restored over whatever the operator has since done to their devic
 Found by review before a user hit them, and all three are §6 entries:
 
 1. **It answered the wrong question.** `managedSSIDs` compared the SSID *string*
-   against the site model, so creating a WLAN named `oonfee-c6-5g` would flip the
+   against the site model, so creating a WLAN named `example-operator-5g` would flip the
    still-foreign, still-broadcasting BSS to "managed" and withdraw its warning —
    while the controller still did not own the section. My own comment called it
    "the honest approximation".
@@ -3004,7 +2975,7 @@ count is now **twenty-three found by looking**.
   cell can hold it, and the count can never quietly drop the fact that more
   exists.
 - **Two networks rendered as one token.** The discovery plan separated CIDRs
-  with a CSS margin, so the DOM said `192.168.1.0/2410.7.42.0/24` — a gap made
+  with a CSS margin, so the DOM said `192.0.2.0/24203.0.113.0/24` — a gap made
   only of CSS disappears in copied text and in a screen reader.
 
 The wireless-uplink card, the per-device override card and the adopt form all
@@ -3641,7 +3612,7 @@ One steer reproduced it immediately:
 
 ```
 16:41:11 nl80211: kernel reports: key addition failed
-16:41:11 AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=ft
+16:41:11 AP-STA-CONNECTED <client-mac> auth_alg=ft
 ```
 
 That is the precondition, on phy0, with `mfp` negotiated. The run then
@@ -3742,7 +3713,7 @@ returned to PMF off and reloaded; the site model is back to Disabled.
 
 Power-cycled 2026-08-17 10:01. The device came back exactly as the pre-staged
 config intended: `ieee80211w=0` both live and committed, **zero**
-`MEMAddrAccess`, both radios `status: ENABLED` and carrying `oonfee-roam` —
+`MEMAddrAccess`, both radios `status: ENABLED` and carrying `example-managed-wlan` —
 phy0-ap0 on channel 36 at 80 MHz, phy1-ap0 on channel 1. So the recovery
 procedure is confirmed end to end: **write the safe config while wedged, then
 pull the power.** Nothing has to be repaired afterwards.
@@ -4575,7 +4546,7 @@ session-bound and the applying session's view proves nothing:
 
 - both options committed and visible on disk
 - **no staged changes left** — nothing stranded in `/tmp/.uci`
-- both radios still broadcasting `oonfee-roam`, ch36 and ch1
+- both radios still broadcasting `example-managed-wlan`, ch36 and ch1
 - `ieee80211r` and `ieee80211w` unchanged — nothing moved that was not asked for
 - `owned_sections` re-hashed with a fresh `applied_at`, and the two devices
   agree on both hashes, which is what identical rendered content should produce
@@ -4668,8 +4639,8 @@ answerable for free, gated behind a tier that exists to pay for per-station
 reads. Only TX retries genuinely needs the focused tier.
 
 A hazard worth keeping: on the same device in the same minute,
-`iwinfo.assoclist` returns `F6:97:77:EB:8E:C9` and `hostapd.get_clients` returns
-`f6:97:77:eb:8e:c9`, and the clients table stores lower case. **A join that does
+`iwinfo.assoclist` returns `<client-mac>` and `hostapd.get_clients` returns
+`<client-mac>`, and the clients table stores lower case. **A join that does
 not normalise misses every row and looks exactly like an empty result** — which
 is the failure the operator was staring at.
 
@@ -4719,7 +4690,7 @@ from what it is sent, so **a partial post blanks the VLAN and the address**.
 #### An evening lost to two cables, and three defects it exposed
 
 The operator reported the devices gone and re-adoption failing. Cause: **two USB
-ethernet adapters on the same `192.168.1.0/24`**, so macOS marked the subnet
+ethernet adapters on the same `192.0.2.0/24`**, so macOS marked the subnet
 routes `RTF_REJECT`. Go's non-blocking `connect()` got `EHOSTUNREACH`
 immediately while `curl`, `ping` and Python — all blocking connects — kept
 working. Every shell tool said the routers were fine; the controller could not
@@ -5117,7 +5088,7 @@ with no package installed:
 | steady state | 0 changes; both radios broadcasting | 0 changes; both radios broadcasting |
 
 The final controller view was 2/2 online. The WRT retained its default route via
-`10.7.46.1`, LAN DHCP `100`/`150`/`12h`, firewall hash and flat bridge membership
+`203.0.113.1`, LAN DHCP `100`/`150`/`12h`, firewall hash and flat bridge membership
 for `lan1`–`lan4`. The C6 retained disabled LAN DHCP, down WAN and active
 read-only swconfig links. Both routers had 0 pending UCI changes. The controller
 database at this checkpoint ended at schema 11 with 2 devices, 4 owned WLAN
@@ -5303,7 +5274,7 @@ zero changes and the WRT as applied with these seven owned creates:
 On the WRT, the operator-owned management conversion had already moved `lan`
 to `br-lan.1`. The controller's VLAN 2 bridge entry then produced a local
 `br-lan.2` endpoint with the physical LAN ports tagged, a static
-`192.168.2.1/24` interface, a live dnsmasq range and the owned firewall4 zone.
+`198.51.100.1/24` interface, a live dnsmasq range and the owned firewall4 zone.
 Runtime nftables inspection proved closed input/forward base policy, exact
 interface dispatch, DHCP UDP 68→67, separate TCP and UDP DNS accepts, the
 modeled `lan2`→`wan` forwarding edge and reject fall-through. This is the
@@ -5315,7 +5286,7 @@ it, exactly as its `observe-only` capability promises.
 `a57fc35e-848e-4913-88c5-4acdd68a587c` published the VLAN2 SSID on the capable
 WRT only; Preview and the durable result truthfully explained the C6 omission
 instead of treating it as failed hardware. A Mac associated to that WLAN,
-received a VLAN2 lease, resolved DNS through `192.168.2.1` and reached the WAN
+received a VLAN2 lease, resolved DNS through `198.51.100.1` and reached the WAN
 through the WRT. The controller remained reachable over the separate wired
 `en9` path throughout.
 
@@ -5330,7 +5301,7 @@ DHCP's off/custom paths were also measured at runtime. Operation
 `f1f05e40-c43a-49e7-a37a-4784c4c6049c` disabled the test network's server and
 the range disappeared from the running dnsmasq configuration. Re-enabling it
 with start `50`, limit `10` and lease `1h` produced the exact
-`192.168.2.50`–`192.168.2.59` pool; the Mac received `192.168.2.54` with an
+`198.51.100.50`–`198.51.100.59` pool; the Mac received `198.51.100.54` with an
 exact 3600-second lease. This closes both §5bd DHCP runtime gaps: the health
 check observes the real service file, and non-default pool/lease plus
 disable/re-enable behavior are hardware-proven.
@@ -5465,18 +5436,18 @@ records the later confirmation and completed actions.
 ### 5bg. Confirmed lab cleanup, WLAN-key rotation and recovery retirement
 
 **Completed on 2026-08-19 after explicit operator confirmation.** The cleanup
-kept the intended `testvlan` network—VLAN 2, `192.168.2.1/24` and zone `lan2`—but
+kept the intended `testvlan` network—VLAN 2, `198.51.100.1/24` and zone `lan2`—but
 deleted the proof-only `oonfee-vlan2-test` WLAN. Its DHCP policy returned from
 start `50`, limit `10`, lease `1h` to the legacy intended start `100`, limit
-`150`, lease `12h`, yielding `192.168.2.100`–`192.168.2.249`. The explicit
+`150`, lease `12h`, yielding `198.51.100.100`–`198.51.100.249`. The explicit
 `lan2` policy row was reset; its effective behavior remains the inherited legacy
 default of forwarding to `wan`, now truthfully reported as `explicit=false`.
 The resulting desired site is 2 networks, 1 WLAN and 1 AP group.
 
-The `oonfee-roam` passphrase was replaced with a generated 32-character
+The `example-managed-wlan` passphrase was replaced with a generated 32-character
 hexadecimal value. The value is not printed here or stored in the repository;
 the operator recovery copy is in macOS Keychain service
-`com.oonfeewrt.wlan.oonfee-roam`. The bound Preview contained exactly six
+`com.oonfeewrt.wlan.example-managed-wlan`. The bound Preview contained exactly six
 changes: two managed-BSS key updates on the C6, and on the WRT one DHCP update,
 two managed-BSS key updates and removal of the temporary BSS. Operation
 `d93695b8-1b31-4550-936a-320dd1cf1bc6` completed with both devices `applied`.
@@ -5489,13 +5460,13 @@ revealing it. Both routers had two radios and two managed BSSes up; no temporary
 BSS remained. The WRT retained all seven intended `testvlan` sections from
 §5be, while the legacy-swconfig C6 retained zero VLAN2 sections. Runtime dnsmasq
 showed the management and `testvlan` servers, with the latter at
-`192.168.2.100`–`192.168.2.249`/`12h`. Both routers had zero pending UCI changes,
+`198.51.100.100`–`198.51.100.249`/`12h`. Both routers had zero pending UCI changes,
 and the controller showed 2/2 devices polling and healthy.
 
-A Mac then joined `oonfee-roam`, received `192.168.1.235`, selected `en0` for
+A Mac then joined `example-managed-wlan`, received `192.0.2.235`, selected `en0` for
 the route, completed one gateway ping, had DNS and received HTTP 200 from a WAN
 probe. Wi-Fi was turned off after that proof and the route returned to wired
-`en9`, avoiding the known duplicate-`192.168.1.0/24` host-route trap.
+`en9`, avoiding the known duplicate-`192.0.2.0/24` host-route trap.
 
 The live controller remained schema 14 with one WLAN row, one WLAN ciphertext
 and zero legacy/plaintext key fields. Bytewise checks found zero plaintext,
@@ -5793,7 +5764,7 @@ scan per stable `(device_id, radio_key)`, preserves pending/running work and
 cascades removed scans' BSS rows.
 
 **The final schema-16 recovery pair is sealed at**
-`.run/recovery-schema16-phase4-complete-20260820-141526/`. The directory is mode
+an ignored schema-16 recovery directory. The directory is mode
 0700 and contains exactly two mode-0600 files, `oonfeewrt.db` and
 `keyring.json`, with SQLite journal mode `DELETE`:
 
@@ -5911,13 +5882,79 @@ install action disabled; cancelling sent no request.
 | healthy runtime PID/checkpoint | PID 37502; `/healthz` returned `ok` at 19:51 PDT |
 | signed-in event-cursor/UI regression pass | **PASS — final embedded UI replayed at 19:42–19:50 PDT** |
 | final desired/recovery counts | networks 3, WLANs 1, firewall rules 0, owned sections 18 (WRT 16 + C6 2), meshes 0; operator Guest/VLAN 3 preserved |
-| schema-16 recovery directory | `.run/recovery-schema16-phase4-final-20260820-195040` (sealed database/keyring pair; downgrade used a copy) |
+| schema-16 recovery directory | an ignored final schema-16 recovery directory (sealed database/keyring pair; downgrade used a copy) |
 | recovery check | `schema=16 devices=2 credentials=2 owned_sections=18 wlans=1 meshes=0` |
 | recovery file SHA-256 values | DB `cc3467ee718759ba66ae3d5cefda7f2637dea60fa0c8588f3e6aaf880a65a470`; keyring `691e6302779c1ed4fc8995990757b17836691b039f3778f8298ad5705de62aaf` |
 | copy-only schema-15 downgrade refusal | exit 1 with `refusing to downgrade`; database/keyring hashes unchanged |
 
 Phase 4 is complete at this corrected runtime and recovery checkpoint. Use the
 artifact fields above, not §5bj's superseded daemon, hashes or recovery pair.
+
+---
+
+### 5bl. Fresh-start validation and optional LLDP package boundary
+
+**Current checkpoint, 2026-08-22.** Both routers were factory-reset, protected
+with distinct administrator passwords, re-adopted through the default-off,
+explicitly acknowledged ACL/login payload, and restored to the reviewed
+WPA2-only lab WLAN. Default adoption installed one ACL file and one scoped
+login, but no package, binary, daemon, service or firmware. The detailed,
+sanitized action/evidence log is `docs/FRESH-START-VALIDATION.md`.
+
+Schema 17's separate, default-off LLDP capability was then proved end to end on
+both routers. The controller displayed the exact official-feed plan, installed
+only `libcap`, `libevent2-7` and `lldpd`, retained the prior disabled/stopped
+service baseline, planned and separately applied only the physical-interface
+selection (`lan1`–`lan4` on the gateway and `eth0.1` on the AP), and exposed a
+read-only diagnostic. Hardened rollback restored and hash-checked the prior UCI
+export, removed only that recorded added set, independently re-read the final
+package/service state, and returned both devices to their exact stock counts
+(174 and 155 packages) with `lldpd` disabled/stopped before deleting each
+ledger row. Clean reinstall/configure/diagnostic passes then restored the
+optional capability. Un-adoption remains blocked while a rollback record
+exists; no generic SSH command, custom feed, firmware or controller-authored
+router executable is exposed.
+
+The v37 signed-in screen sweep passed and exposed one controller UI defect:
+opening `/topology` directly rendered Dashboard. Route initialization was fixed
+and verified in v38. That build also exposed a transient reciprocal LLDP edge at
+startup; fleet convergence closed it, but startup briefly showed five links.
+V39 first proved the corrected four-link startup; FS-117 retains its exact
+intermediate artifact and recovery evidence.
+
+**Final release-candidate checkpoint.** Binary
+`.run/oonfeewrtd-fresh-start-transparent-v40`, embedded version
+`dev-schema17-fresh-start-transparent-v40`, is 15,312,098 bytes with SHA-256
+`9c3a797c1470d8630f42dc77619007370aad553fae00078716a5a5a457c6b4cc`.
+It started at 2026-08-22 08:50:48 PDT; PID 39083 reported health `ok`.
+`schema_version` contains rows 14, 16 and 17; SQLite integrity and foreign keys
+are clean; both LLDP capability ledgers remain present.
+
+The signed-in `/topology` deep link stayed on that route and showed five nodes
+and four current links: gateway→Internet `wan`, AP→gateway `lan3`, and wireless
+test client→gateway `phy0-ap0` measured; wired test client→gateway `lan2`
+ambiguous. No reciprocal gateway→AP edge appeared. After the complete poll,
+`hostapd.get_clients` was `observed` for device 1 (gateway) and `empty` for
+device 2 (AP). The only remaining current coverage gaps are the two truthful
+BusyBox `brctl showmacs` VLAN ambiguities. The LLDP UI reports controller-managed
+`lan1`–`lan4` on the gateway and `eth0.1` on the AP.
+
+Every settled release-candidate gate passed: full Go normal and race suites,
+`go vet`, module-tidiness, `go mod verify`, all 274 UI tests, production UI
+build, bundle budget, diff check, tree and history secret scans, and binary
+reproducibility.
+
+The final-RC recovery directory `.run/recovery-schema17-v40-a3VvOj5a` is mode
+0700 and contains only mode-0600 `oonfeewrt.db` and `keyring.json`. The database
+is 3,198,976 bytes with SHA-256
+`950fca2fef80707b1333b7b240dc1b11875929a0c54ba5f0327e126c29e85762`;
+the keyring is 275 bytes with SHA-256
+`8ee24ba977f355d38b8433ba3112185e8338015927f7f5577828cbc535aaaa80`.
+`recoverycheck` passed with
+`schema=17 devices=2 credentials=2 owned_sections=4 wlans=1 meshes=0`; its
+transient zero-byte WAL and 32,768-byte SHM were removed. Building, restarting,
+checking, and creating the recovery pair changed no router state. This evidence
+is merge-ready, but it is not a tagged or published release.
 
 ---
 
@@ -6291,7 +6328,7 @@ written and believed.
   been written an hour earlier by the same person who had just written this
   rule down. Knowing it is not applying it. Give the action AND an example the
   reader can type; "write it in CIDR form" is not as useful as "for example
-  192.168.20.1/24".
+  198.51.100.1/24".
 - **Check the remedy still works after you change the thing it describes.** Two
   tooltips became false the same morning the code under them changed. A message
   is a claim about behaviour and ages exactly like code, with nothing compiling
@@ -6396,7 +6433,7 @@ written and believed.
   a document:
 
   ```bash
-  curl -s http://192.168.1.1/ubus -d '{"jsonrpc":"2.0","id":1,"method":"call",
+  curl -s http://192.0.2.1/ubus -d '{"jsonrpc":"2.0","id":1,"method":"call",
     "params":["00000000000000000000000000000000","session","login",
     {"username":"oonfeewrt","password":"THE-ONE-YOU-HAVE"}]}'
   ```
@@ -6408,7 +6445,7 @@ written and believed.
   deliberately cannot:
 
   ```bash
-  ssh root@192.168.1.1 "uci get rpcd.oonfeewrt.password"
+  ssh root@192.0.2.1 "uci get rpcd.oonfeewrt.password"
   openssl passwd -6 -salt "<the salt between the 2nd and 3rd \$>" "THE-ONE-YOU-HAVE"
   ```
 
@@ -6418,7 +6455,7 @@ written and believed.
   **To set a known one** (no re-adoption, does not touch the ACL file):
 
   ```bash
-  ssh root@192.168.1.1 "uci set rpcd.oonfeewrt.password='$(openssl passwd -6 'NEW')' \
+  ssh root@192.0.2.1 "uci set rpcd.oonfeewrt.password='$(openssl passwd -6 'NEW')' \
     && uci commit rpcd"
   ```
 
@@ -6463,7 +6500,7 @@ written and believed.
   deliberately does not grant. Re-enable them with:
 
   ```bash
-  ssh root@192.168.1.1 "uci add_list rpcd.oonfeewrt.read=oonfeewrt-probe; uci add_list rpcd.oonfeewrt.write=oonfeewrt-probe; uci commit rpcd"
+  ssh root@192.0.2.1 "uci add_list rpcd.oonfeewrt.read=oonfeewrt-probe; uci add_list rpcd.oonfeewrt.write=oonfeewrt-probe; uci commit rpcd"
   ```
 
 - The older path, if you need it: seeding a device by hand means sealing its
@@ -6483,9 +6520,9 @@ written and believed.
 
   ```bash
   OONFEE_NEIGHBOURS=1 OONFEE_SEED_DIR="$PWD/.run" OONFEE_SEED_PASSFILE=/path/pass \
-    OONFEE_AP1=192.168.1.1 OONFEE_AP2=192.168.1.2 \
+    OONFEE_AP1=192.0.2.1 OONFEE_AP2=192.0.2.2 \
     OONFEE_ADMIN_USER=root OONFEE_ADMIN_PASS= \
-    OONFEE_WLAN_SSID=oonfee-roam OONFEE_WLAN_KEY=... \
+    OONFEE_WLAN_SSID=example-managed-wlan OONFEE_WLAN_KEY=... \
     go test -tags=integration ./internal/daemon/ -run TestIntegrationNeighbours -v
   ```
 

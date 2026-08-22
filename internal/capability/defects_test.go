@@ -39,3 +39,19 @@ func TestTheMarvellPMFDefectIsMeasuredNotHearsay(t *testing.T) {
 		t.Error("no source: every entry needs one a sceptical reader can check")
 	}
 }
+
+func TestWRT3200ACMBoardIdentityFindsDefectsBeforeRadiosAreEnabled(t *testing.T) {
+	r := NewRegistry()
+	r.Board.Model = "Linksys WRT3200ACM"
+	r.Radios = []Radio{{Device: "radio0", Band: "5g"}, {Device: "radio1", Band: "2g"}}
+
+	found := map[string]bool{}
+	for _, defect := range DefectsFor(r) {
+		found[defect.ID] = true
+	}
+	for _, id := range []string{"mwlwifi-80211w-unsupported", "mwlwifi-wpa3-unsupported"} {
+		if !found[id] {
+			t.Errorf("factory-default WRT3200ACM did not surface %s before first Apply", id)
+		}
+	}
+}

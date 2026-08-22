@@ -822,7 +822,17 @@ func reconcileFleetCompetingParents(active []model.TopologyEdge, changes Interva
 	for _, edge := range future {
 		edges = append(edges, edge)
 	}
-	for key := range contradictedAggregateEdgeKeys(edges) {
+	contradicted := contradictedAggregateEdgeKeys(edges)
+	for key := range unrootedAggregateEdgeKeys(edges) {
+		contradicted[key] = true
+	}
+	for key := range unrootedManagedDeviceLLDPEdgeKeys(edges) {
+		contradicted[key] = true
+	}
+	for key := range reciprocalManagedDeviceEdgeKeys(edges) {
+		contradicted[key] = true
+	}
+	for key := range contradicted {
 		edge := future[key]
 		delete(future, key)
 		if edge.ID == 0 || closed[edge.ID] {
@@ -895,6 +905,125 @@ func reconcileFleetCompetingParents(active []model.TopologyEdge, changes Interva
 	})
 	changes.Upsert = upserts
 	return changes, nil
+}
+
+// A managed-device LLDP observation has no inherent direction. Admit it only
+// when its claimed parent already has a path to the proven Internet root. This
+// withholds an AP's startup view of its upstream router until the gateway poll
+// establishes the hierarchy, while retaining rooted downstream links.
+func unrootedManagedDeviceLLDPEdgeKeys(edges []model.TopologyEdge) map[string]bool {
+	depth := managedDeviceRootDepths(edges)
+	unrooted := map[string]bool{}
+	for _, edge := range edges {
+		_, parentRooted := depth[edge.ParentNode]
+		if edge.ID == 0 && strings.HasPrefix(edge.ChildNode, "device:") &&
+			strings.HasPrefix(edge.ParentNode, "device:") && edgeHasLLDP(edge) &&
+			!parentRooted {
+			unrooted[edgeSortKey(edge)] = true
+		}
+	}
+	return unrooted
+}
+
+func managedDeviceRootDepths(edges []model.TopologyEdge) map[string]int {
+	depth := map[string]int{}
+	for _, edge := range edges {
+		if strings.HasPrefix(edge.ChildNode, "device:") && edge.ParentNode == InternetNode {
+			depth[edge.ChildNode] = 0
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, edge := range edges {
+			if !strings.HasPrefix(edge.ChildNode, "device:") ||
+				!strings.HasPrefix(edge.ParentNode, "device:") {
+				continue
+			}
+			parentDepth, rooted := depth[edge.ParentNode]
+			childDepth, seen := depth[edge.ChildNode]
+			if !rooted || seen && childDepth <= parentDepth+1 {
+				continue
+			}
+			depth[edge.ChildNode], changed = parentDepth+1, true
+		}
+	}
+	return depth
+}
+
+func edgeHasLLDP(edge model.TopologyEdge) bool {
+	for _, evidence := range edge.Evidence {
+		if evidence.Kind == "lldp_neighbor" && evidence.Source == SourceLLDP {
+			return true
+		}
+	}
+	return false
+}
+
+// LLDP reports the same physical link from both ends. A parent-child graph may
+// retain only one direction: the device with a proven Internet/default-route
+// attachment is the parent. Without exactly one such root, withholding both
+// directions is safer than inventing a hierarchy from poll order or timestamps.
+func reciprocalManagedDeviceEdgeKeys(edges []model.TopologyEdge) map[string]bool {
+	type direction struct{ child, parent string }
+	directions := map[direction][]model.TopologyEdge{}
+	for _, edge := range edges {
+		if strings.HasPrefix(edge.ChildNode, "device:") &&
+			strings.HasPrefix(edge.ParentNode, "device:") && edgeHasLLDP(edge) {
+			key := direction{edge.ChildNode, edge.ParentNode}
+			directions[key] = append(directions[key], edge)
+		}
+	}
+	depth := managedDeviceRootDepths(edges)
+
+	contradicted := map[string]bool{}
+	seen := map[direction]bool{}
+	for key, forward := range directions {
+		reverseKey := direction{key.parent, key.child}
+		reverse := directions[reverseKey]
+		if len(reverse) == 0 || seen[key] || seen[reverseKey] {
+			continue
+		}
+		seen[key], seen[reverseKey] = true, true
+		childDepth, childRooted := depth[key.child]
+		parentDepth, parentRooted := depth[key.parent]
+		suppressForward := !childRooted || !parentRooted || parentDepth >= childDepth
+		suppressReverse := !childRooted || !parentRooted || childDepth >= parentDepth
+		for _, edge := range forward {
+			if suppressForward {
+				contradicted[edgeSortKey(edge)] = true
+			}
+		}
+		for _, edge := range reverse {
+			if suppressReverse {
+				contradicted[edgeSortKey(edge)] = true
+			}
+		}
+	}
+	return contradicted
+}
+
+// A legacy switch CPU/VLAN port sees traffic from both sides. Until the device
+// carrying that aggregate port has a proven place in the fleet, treating those
+// MACs as its children can invert the whole graph. Keep the evidence withheld;
+// a later physical, wireless/mesh, or Internet placement makes it usable.
+func unrootedAggregateEdgeKeys(edges []model.TopologyEdge) map[string]bool {
+	rooted := map[string]bool{}
+	for _, edge := range edges {
+		if !strings.HasPrefix(edge.ChildNode, "device:") {
+			continue
+		}
+		if edge.ParentNode == InternetNode || edgePortAttachment(edge) == PortAttachmentPhysical ||
+			edge.Medium == "wireless" || edge.Medium == "mesh" {
+			rooted[edge.ChildNode] = true
+		}
+	}
+	unrooted := map[string]bool{}
+	for _, edge := range edges {
+		if edgePortAttachment(edge) == PortAttachmentAggregate && !rooted[edge.ParentNode] {
+			unrooted[edgeSortKey(edge)] = true
+		}
+	}
+	return unrooted
 }
 
 // sameTopologySemantics deliberately ignores interval identity and observation

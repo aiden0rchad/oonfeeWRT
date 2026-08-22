@@ -132,7 +132,9 @@ func (s *Server) handleRadios(w http.ResponseWriter, r *http.Request) {
 		row.Status = &status
 		caps := decodeRadioCapabilities(device.CapsJSON)
 		for _, state := range states {
-			view := radioView{InventoryRadio: state.InventoryRadio, Channels: []channelView{},
+			inventory := state.InventoryRadio
+			inventory.Interfaces = append([]radio.Interface{}, state.Interfaces...)
+			view := radioView{InventoryRadio: inventory, Channels: []channelView{},
 				InventoryObservedAt: state.InventoryObservedAt,
 				ChannelsObservedAt:  state.FrequenciesObservedAt, Stale: status.Stale || !statusKnown,
 				ChannelsKnown: state.FrequenciesKnown, ScanCapability: caps.State(capability.FeatRadioScan).String(),

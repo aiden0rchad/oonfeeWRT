@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -409,5 +410,159 @@ func TestTopologyIngestReconcilesCrossDevicePollSkewMonotonically(t *testing.T) 
 		if edge.ValidFrom != 200 || edge.LastSeen != 200 || edge.Confidence != "ambiguous" {
 			t.Fatalf("non-monotonic competing-parent interval: %+v", edge)
 		}
+	}
+}
+
+func TestTopologyIngestConcurrentStartupSuppressesReciprocalLLDP(t *testing.T) {
+	const (
+		wrtMAC    = "02:00:00:00:00:01"
+		c6MAC     = "02:00:00:00:00:02"
+		wrtClient = "02:00:00:00:00:44"
+		c6Client  = "02:00:00:00:00:55"
+	)
+	adopted := time.Now().Unix()
+	at := int64(1_800_000_000_000)
+	source := func(deviceID int64, name string) model.TopologySourceObservation {
+		return model.TopologySourceObservation{
+			DeviceID: deviceID, Source: name, State: model.TopologySourceObserved, ObservedAt: at,
+		}
+	}
+	snapshot := func(deviceID int64) collector.Snapshot {
+		remote, port, client := wrtMAC, "eth0.1", c6Client
+		if deviceID == 1 {
+			remote, port, client = c6MAC, "lan3", wrtClient
+		}
+		out := collector.Snapshot{
+			DeviceID: deviceID, At: time.UnixMilli(at), APsFresh: true,
+			APs: []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+				client: {Iface: "phy0-ap0"},
+			}}},
+			Topology: collector.TopologySnapshot{
+				Cycle: true,
+				LLDP:  []topology.LLDPLink{{DeviceID: deviceID, Port: port, RemoteMAC: remote}},
+				Sources: []model.TopologySourceObservation{
+					source(deviceID, topology.SourceLLDP),
+					source(deviceID, topology.SourceAssociations),
+				},
+			},
+		}
+		if deviceID == 1 {
+			out.Topology.Uplinks = []topology.Uplink{{DeviceID: 1, Interface: "wan", Active: true}}
+			out.Topology.Sources = append(out.Topology.Sources, source(1, topology.SourceDefaultRoute))
+		}
+		return out
+	}
+
+	for iteration := 0; iteration < 20; iteration++ {
+		db := &fakeTopologyStore{
+			devices: []*store.Device{
+				{ID: 1, MAC: wrtMAC, Role: "gateway",
+					Functions: []string{"gateway", "ap", "switch"}, AdoptedAt: &adopted},
+				{ID: 2, MAC: c6MAC, Role: "ap",
+					Functions: []string{"ap", "switch"}, AdoptedAt: &adopted},
+			},
+			clients: []store.Client{{MAC: wrtClient}, {MAC: c6Client}},
+		}
+		ingest := newTopologyIngestor(db)
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		for _, deviceID := range []int64{1, 2} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs <- ingest.record(context.Background(), snapshot(deviceID))
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(db.active) != 4 {
+			t.Fatalf("iteration %d active links=%d, want 4: %+v", iteration, len(db.active), db.active)
+		}
+		found := map[string]bool{}
+		for _, edge := range db.active {
+			found[edge.ChildNode+"\x00"+edge.ParentNode] = true
+		}
+		if !found["device:"+wrtMAC+"\x00"+topology.InternetNode] ||
+			!found["device:"+c6MAC+"\x00device:"+wrtMAC] ||
+			found["device:"+wrtMAC+"\x00device:"+c6MAC] ||
+			!found["client:"+wrtClient+"\x00device:"+wrtMAC] ||
+			!found["client:"+c6Client+"\x00device:"+c6MAC] {
+			t.Fatalf("iteration %d hierarchy=%v active=%+v", iteration, found, db.active)
+		}
+	}
+}
+
+func TestTopologyIngestStartupCleansPersistedReciprocalLLDP(t *testing.T) {
+	const wrtMAC, c6MAC = "02:00:00:00:00:01", "02:00:00:00:00:02"
+	wrtID, c6ID := int64(1), int64(2)
+	adopted := time.Now().Unix()
+	at := int64(1_800_000_000_000)
+	link := func(id int64, child, parent, port string, deviceID int64, source string) model.TopologyEdge {
+		return model.TopologyEdge{
+			ID: id, ChildNode: child, ParentNode: parent, ParentDeviceID: &deviceID,
+			ParentPort: port, Medium: "wired", Confidence: "measured",
+			ValidFrom: at - 1_000, LastSeen: at - 1,
+			Evidence: []model.TopologyEvidence{{
+				Kind: "lldp_neighbor", Source: source, DeviceID: &deviceID,
+			}},
+			Ambiguities: []string{},
+		}
+	}
+	root := link(420, "device:"+wrtMAC, topology.InternetNode, "wan", wrtID, topology.SourceDefaultRoute)
+	root.ParentDeviceID = nil
+	correct := link(421, "device:"+c6MAC, "device:"+wrtMAC, "lan3", wrtID, topology.SourceLLDP)
+	reverse := link(422, "device:"+wrtMAC, "device:"+c6MAC, "eth0.1", c6ID, topology.SourceLLDP)
+	client := link(423, "client:02:00:00:00:00:55", "device:"+c6MAC, "phy0-ap0", c6ID, topology.SourceAssociations)
+	client.Medium = "wireless"
+	client.ChildMAC = "02:00:00:00:00:55"
+	client.Evidence[0].Kind = "association"
+	client.Evidence[0].Detail = map[string]any{
+		"interface": "phy0-ap0", "observed_mac": "02:00:00:00:00:55",
+	}
+	db := &fakeTopologyStore{
+		devices: []*store.Device{
+			{ID: wrtID, MAC: wrtMAC, Role: "gateway",
+				Functions: []string{"gateway", "ap", "switch"}, AdoptedAt: &adopted},
+			{ID: c6ID, MAC: c6MAC, Role: "ap",
+				Functions: []string{"ap", "switch"}, AdoptedAt: &adopted},
+		},
+		clients: []store.Client{{MAC: "02:00:00:00:00:55"}},
+		active:  []model.TopologyEdge{root, correct, reverse, client}, nextID: 423,
+	}
+	snapshot := collector.Snapshot{
+		DeviceID: c6ID, At: time.UnixMilli(at), APsFresh: true,
+		APs: []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+			"02:00:00:00:00:55": {Iface: "phy0-ap0"},
+		}}},
+		Topology: collector.TopologySnapshot{
+			Cycle: true,
+			LLDP:  []topology.LLDPLink{{DeviceID: c6ID, Port: "eth0.1", RemoteMAC: wrtMAC}},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: c6ID, Source: topology.SourceLLDP, State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: c6ID, Source: topology.SourceAssociations, State: model.TopologySourceObserved, ObservedAt: at},
+			},
+		},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.active) != 3 {
+		t.Fatalf("startup cleanup active=%+v changes=%+v", db.active, db.last)
+	}
+	for _, edge := range db.active {
+		if edge.ChildNode == reverse.ChildNode && edge.ParentNode == reverse.ParentNode {
+			t.Fatalf("persisted reciprocal edge survived: %+v", db.active)
+		}
+	}
+	if len(db.last.Close) != 1 || db.last.Close[0].ID != reverse.ID {
+		t.Fatalf("startup cleanup closed=%+v, want reverse id %d", db.last.Close, reverse.ID)
 	}
 }

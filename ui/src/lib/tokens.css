@@ -185,6 +185,18 @@ a {
   white-space: normal;
 }
 
+.banner-details-hide {
+  display: none;
+}
+
+.banner-details[open] > summary .banner-details-show {
+  display: none;
+}
+
+.banner-details[open] > summary .banner-details-hide {
+  display: inline;
+}
+
 /* Client Observability is one coordinated workspace. On a wide desktop the
  * filters, client list, event spine and analysis are all visible at once;
  * narrower viewports reflow the same accessible regions without fixed widths. */

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { Children, isValidElement, useEffect, useId, useRef, useState } from 'react'
 import type { MouseEventHandler, ReactNode } from 'react'
 import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
 import type { ColumnPrefs } from '../lib/columns'
@@ -256,6 +256,9 @@ export function Unknown({ why }: { why: string }) {
   )
 }
 
+/** Long passive banners collapse automatically. A prompt with any control stays
+ *  open so acknowledgement or recovery actions are never hidden. Native
+ *  details/summary preserves keyboard and expanded-state semantics. */
 export function Banner({
   tone = 'warning',
   children,
@@ -264,6 +267,8 @@ export function Banner({
   children: ReactNode
 }) {
   const colour = tone === 'accent' ? 'var(--accent)' : `var(--${tone})`
+  const text = bannerText(children).replace(/\s+/g, ' ').trim()
+  const collapsible = text.length > 260 && !bannerHasAction(children)
   return (
     <div
       style={{
@@ -277,9 +282,48 @@ export function Banner({
         background: 'var(--surface-1)',
       }}
     >
-      {children}
+      {collapsible ? (
+        <details className="banner-details">
+          <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)', overflowWrap: 'anywhere' }}>
+            {truncateBannerText(text)}{' '}
+            <span className="banner-details-show" style={{ color: colour, fontWeight: 600 }}>Show details</span>
+            <span className="banner-details-hide" style={{ color: colour, fontWeight: 600 }}>Hide details</span>
+          </summary>
+          <div style={{ marginTop: 8, overflowWrap: 'anywhere' }}>{children}</div>
+        </details>
+      ) : children}
     </div>
   )
+}
+
+const BANNER_ACTIONS = new Set(['a', 'button', 'details', 'input', 'select', 'summary', 'textarea'])
+
+function bannerText(node: ReactNode): string {
+  return Children.toArray(node).map((child) => {
+    if (typeof child === 'string' || typeof child === 'number' || typeof child === 'bigint') {
+      return String(child)
+    }
+    if (!isValidElement<{ children?: ReactNode }>(child)) return ''
+    return bannerText(child.props.children)
+  }).join('')
+}
+
+function bannerHasAction(node: ReactNode): boolean {
+  return Children.toArray(node).some((child) => {
+    if (!isValidElement<{ children?: ReactNode; onChange?: unknown; onClick?: unknown; role?: string }>(child)) {
+      return false
+    }
+    const { children, onChange, onClick, role } = child.props
+    return child.type === Button ||
+      (typeof child.type === 'string' && BANNER_ACTIONS.has(child.type)) ||
+      role === 'button' || onChange != null || onClick != null || bannerHasAction(children)
+  })
+}
+
+function truncateBannerText(text: string): string {
+  const clipped = text.slice(0, 160)
+  const boundary = clipped.lastIndexOf(' ')
+  return `${clipped.slice(0, boundary > 80 ? boundary : 160).trimEnd()}…`
 }
 
 /** Column definition for DataGrid. */
@@ -1247,10 +1291,12 @@ export function Toggle({
   label,
   on,
   onChange,
+  disabled = false,
 }: {
   label: string
   on: boolean
   onChange: (v: boolean) => void
+  disabled?: boolean
 }) {
   return (
     <label
@@ -1259,11 +1305,16 @@ export function Toggle({
         alignItems: 'center',
         gap: 6,
         fontSize: 12,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         marginTop: 3,
       }}
     >
-      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       {label}
     </label>
   )

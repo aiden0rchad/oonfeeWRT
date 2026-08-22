@@ -20,6 +20,7 @@ type Enroller interface {
 	Inspect(ctx context.Context, req InspectRequest) (*InspectResult, error)
 	Adopt(ctx context.Context, req AdoptRequest) (*AdoptResult, error)
 	RefreshACL(ctx context.Context, req RefreshACLRequest) (*RefreshACLResult, error)
+	LLDPCapability(ctx context.Context, req LLDPCapabilityRequest) (*LLDPCapabilityResult, error)
 	Unadopt(ctx context.Context, req UnadoptRequest) (*UnadoptResult, error)
 }
 
@@ -41,7 +42,7 @@ type InspectResult struct {
 	Model      string   `json:"model"`
 	Class      string   `json:"class"`
 	Firmware   string   `json:"firmware"`
-	RadioCount int      `json:"radio_count"`
+	RadioCount *int     `json:"radio_count"`
 	LANPorts   []string `json:"lan_ports"`
 	WANPort    string   `json:"wan_port,omitempty"`
 	// SwitchMode is dsa-conditional, observe-only, unknown, or none. Even DSA

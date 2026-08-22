@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,34 @@ func TestCurrentChannelDoesNotEraseUnknownAvailability(t *testing.T) {
 	got := viewChannel(radio.Frequency{Band: "5g", Channel: 149, MHz: mhz}, &mhz)
 	if got.State != "in-use" || !got.InUse || got.Availability != "unknown" || got.Restricted != nil {
 		t.Fatalf("current unknown channel collapsed availability: %+v", got)
+	}
+}
+
+func TestRadiosSerializeUnconfiguredInterfacesAsAnEmptyArray(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	device := h.seedDevice("disabled-radio-ap", true, nil)
+	const observedAt = int64(1_787_100_000_000)
+	h.srv.Fleet = &radioFleetStub{stubFleet: h.fleet,
+		statuses: map[int64]radio.CollectionStatus{device.ID: {ObservedAt: observedAt, LastPollOK: true}},
+		states: map[int64][]radio.LiveState{device.ID: {{
+			InventoryRadio:      radio.InventoryRadio{Key: "radio0", Interfaces: nil},
+			InventoryObservedAt: observedAt,
+		}}}}
+
+	w := h.do(http.MethodGet, "/api/v1/radios", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("radios: %d %s", w.Code, w.Body.String())
+	}
+	var response radiosResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if got := response.Devices[0].Radios[0].Interfaces; got == nil || len(got) != 0 {
+		t.Fatalf("interfaces = %#v, want non-nil empty array", got)
+	}
+	if !strings.Contains(w.Body.String(), `"interfaces":[]`) {
+		t.Fatalf("response flattened empty interfaces to null: %s", w.Body.String())
 	}
 }
 

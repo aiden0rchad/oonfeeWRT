@@ -94,6 +94,18 @@ describe('Radios', () => {
     expect(api.stats).not.toHaveBeenCalled()
   })
 
+  it('keeps a disabled radio with legacy null interfaces renderable', async () => {
+    const disabled = structuredClone(response)
+    ;(disabled.devices[0].radios[0] as unknown as { interfaces: null }).interfaces = null
+    api.radios.mockResolvedValueOnce(disabled)
+
+    render(<Radios />)
+
+    expect((await screen.findAllByText('Gateway AP')).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Scan…' })).toBeNull()
+    expect(screen.getAllByText('Unavailable').length).toBeGreaterThan(0)
+  })
+
   it('retains and labels exact last-good inventory and metrics after a refresh failure', async () => {
     render(<Radios />)
     const table = await screen.findByRole('table', { name: 'Per-radio observability' })

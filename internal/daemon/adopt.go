@@ -319,6 +319,13 @@ func (d *Daemon) Unadopt(ctx context.Context, req api.UnadoptRequest) (*api.Unad
 	if err != nil {
 		return nil, err
 	}
+	capabilities, err := d.Store.CapabilityInstalls(ctx, dev.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(capabilities) != 0 {
+		return nil, fmt.Errorf("daemon: remove the controller-installed %s capability before un-adopting %s; its durable rollback record cannot be discarded", capabilities[0].Capability, dev.Name)
+	}
 	owned, err := d.ownedSections(ctx, dev.ID)
 	if err != nil {
 		return nil, err

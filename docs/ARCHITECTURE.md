@@ -5,15 +5,16 @@
 > your actual target release before relying on them — this document flags uncertain
 > items with **[verify]**.
 
-**Live boundary (2026-08-20):** this architecture describes the schema-16
-repository contract, and the working lab store has been promoted to schema 16.
-A first signed-in, read-only Phase-4 pass exercised both routers under their
-older ACLs. The operator later accepted the separately prompted scoped ACL
-refresh on both routers, enabling additional stock topology, OpenWrt-log and
-fixed-target ICMP observations. The refresh remains optional/default-off for
-other routers; it installs no package, binary, daemon, service or firmware and
-does not change UCI. No before/after package inventory was captured, and no RF
-scan was run.
+**Live boundary (2026-08-22):** the repository contract and working lab store
+are schema 17. Both reference routers were factory-reset and re-adopted only
+after the operator accepted the default-off controller-access-payload
+disclosure. Adoption installed no package, binary, daemon, service or firmware.
+The operator later exercised the separate, default-off official-feed `lldpd`
+workflow on both routers, including exact planning, installation,
+physical-interface configuration, read-only diagnosis, drift-checked rollback
+and clean reinstallation. V39 remains the historical startup-fix checkpoint.
+V40 passed the settled runtime, recovery, regression, secret and reproducibility
+gates as the merge-ready final release candidate; it is not tagged or published.
 
 ---
 
@@ -27,11 +28,11 @@ oonfeeWRT does not maintain OpenWrt. Concretely:
 | Read and write UCI, the same as LuCI does | Patch, fork, or rebuild OpenWrt |
 | Offer optional packages **from the official OpenWrt feeds** only for an explicitly selected feature; never install them by default or to close a validation gate | Host a feed of device-side code we wrote |
 | With explicit opt-in, write or replace one rpcd ACL JSON file in `/usr/share/rpcd/acl.d/` | Install kernel modules, init scripts, or cron jobs of our authorship |
-| Read files and run allow-listed binaries via `file.exec` | Leave persistent state on the device beyond that ACL file and a user account |
+| Read files and run allow-listed binaries via `file.exec` | Leave unreviewed or unrecorded persistent state; every ACL/login, controller-owned UCI section, or optional package/service/configuration change needs explicit ownership and rollback |
 
-**Maximum controller-access footprint: one JSON file and one scoped user
-account.** The UI calls this the optional **oonfeeWRT controller capability
-installation**. Accepting it during adoption installs or replaces that ACL file
+**Maximum default controller-access footprint: one JSON file and one scoped user
+account.** The UI calls this the optional **oonfeeWRT controller access
+payload**. Accepting it during adoption installs or replaces that ACL file
 and may create the login; accepting it later replaces only the ACL file. It
 unlocks controller access to supported topology, radio channel/scan, OpenWrt log
 and fixed-target WAN ICMP observations. It installs no package, binary, daemon,
@@ -39,13 +40,18 @@ service or firmware. Leaving its box unchecked or cancelling leaves the router
 unchanged and keeps dependent observations explicitly unavailable. Everything
 else lives in the controller.
 
+Separately selected official-feed packages are itemized capabilities, not part
+of adoption. Schema 17 records the package manager, before-state, packages
+actually added, service before-state, operation state, and rollback result. A
+device cannot be un-adopted while that record exists.
+
 This forecloses some features — accept it. The alternative is a build system,
 per-architecture packages, a release process tracking every OpenWrt version, and
 a support burden that has killed most projects in this category.
 
 **Corollary:** every capability in this document must be traced to something
-stock OpenWrt or an official-feed package already does. If a design needs code
-on the router, the design is wrong.
+stock OpenWrt or an official-feed package already does. If a design needs
+controller-authored code on the router, the design is wrong.
 
 ---
 
@@ -741,8 +747,10 @@ repaired host route without creating a re-login storm.
      until HA exists; an empty fleet may still adopt AP-only when an external
      gateway owns routing
    - installs no package during the default path. A separate, disabled-by-
-     default option may offer an official-feed package for one named feature,
-     with exact size/dependencies and a plain-English reason
+     default option may offer an official-feed package for one named feature.
+     LLDP uses a package-manager simulation first, binds the reviewed plan, then
+     requires a second acknowledgement before installing `lldpd` and enabling
+     its service
    - after an explicit capability-extension acknowledgment, writes
      `/usr/share/rpcd/acl.d/oonfeewrt.json` **over SSH** (ubus refuses it even
      to root—§2), verified by `sha256sum`
@@ -952,6 +960,8 @@ POST   /api/v1/devices/inspect             ← authenticated ubus-only evidence;
 POST   /api/v1/devices/adopt               ← explicit functions[]; legacy role accepted
 POST   /api/v1/devices/:id/unadopt
 POST   /api/v1/devices/:id/refresh-acl      ← operator SSH credential is one-request-only
+GET    /api/v1/devices/:id/capabilities/lldp ← durable install/configuration state
+POST   /api/v1/devices/:id/capabilities/lldp ← plan, diagnose, install, configure or remove under action-specific acknowledgements
 GET    /api/v1/clients                     ?connection=&network=&ap=
 GET    /api/v1/clients/:mac/observability  ?from=<ms>&to=<ms>
 GET    /api/v1/site                        ← desired state + effective zones[]

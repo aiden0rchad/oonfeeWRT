@@ -6,6 +6,14 @@ import type { Column } from '../components/ui'
 
 type EventScope = 'general' | 'audit'
 
+function clockSkewLabel(milliseconds: number): string {
+  const minutes = Math.round(milliseconds / 60_000)
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`
+  return `${Math.round(hours / 24)} days`
+}
+
 /**
  * The event log.
  *
@@ -134,6 +142,10 @@ export function Logs() {
     gaps: ['router log coverage was not reported by this controller response'],
   }
   const rows = page?.events ?? []
+  const clockSkew = scope === 'general'
+    ? rows.find((event) => event.Source === 'openwrt-logd' && event.IngestedAt > 0 &&
+        Math.abs(event.TS * 1000 - event.IngestedAt) >= 5 * 60_000)
+    : undefined
   const err = failure?.query === query ? failure.message : ''
   const loading = page === null && err === ''
 
@@ -294,6 +306,15 @@ export function Logs() {
             <div style={{ padding: '12px 12px 0' }} role="status">
               <Banner tone="warning">
                 Router log coverage is incomplete. {coverage.gaps.join(' · ')}
+              </Banner>
+            </div>
+          )}
+          {clockSkew && (
+            <div style={{ padding: '12px 12px 0' }} role="status">
+              <Banner tone="warning">
+                Router event time differs from controller receive time by about{' '}
+                {clockSkewLabel(Math.abs(clockSkew.TS * 1000 - clockSkew.IngestedAt))}.
+                Check the router clock or NTP. General events are ordered by their router source time.
               </Banner>
             </div>
           )}

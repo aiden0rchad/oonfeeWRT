@@ -90,7 +90,11 @@ VALUES (?,?,?,?,?,?)
 ON CONFLICT(mac) DO UPDATE SET
   name  = CASE WHEN excluded.name  != '' THEN excluded.name  ELSE clients.name  END,
   ip    = CASE WHEN excluded.ip    != '' THEN excluded.ip    ELSE clients.ip    END,
-  scope = CASE WHEN excluded.scope NOT IN ('', ?) THEN excluded.scope ELSE clients.scope END,
+  scope = CASE
+    WHEN excluded.scope IN ('', ?) THEN clients.scope
+    WHEN excluded.ip = clients.ip AND clients.scope = ? AND excluded.scope = ? THEN clients.scope
+    ELSE excluded.scope
+  END,
   last_seen = excluded.last_seen`)
 	if err != nil {
 		return err
@@ -102,7 +106,7 @@ ON CONFLICT(mac) DO UPDATE SET
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, c.IPv4, c.Scope,
-			now, now, ScopeUnknown); err != nil {
+			now, now, ScopeUnknown, ScopeLocal, ScopeUpstream); err != nil {
 			return fmt.Errorf("store: upsert client %s: %w", c.MAC, err)
 		}
 	}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, api } from './api'
+import { ApiError, api, onControllerRestart } from './api'
 
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -48,6 +48,27 @@ describe('response trust boundary', () => {
       status: 200,
       message: 'server returned an invalid response (200)',
     } satisfies Partial<ApiError>)
+  })
+
+  it('rejects stale data and announces a changed controller process', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response('{"needs_setup":false}', {
+        status: 200, headers: { 'X-OonfeeWRT-Instance': 'process-a' },
+      }))
+      .mockResolvedValueOnce(new Response('{"needs_setup":false}', {
+        status: 200, headers: { 'X-OonfeeWRT-Instance': 'process-b' },
+      }))
+    const restarted = vi.fn()
+    onControllerRestart.add(restarted)
+    try {
+      await expect(api.setupState()).resolves.toEqual({ needs_setup: false })
+      await expect(api.setupState()).rejects.toMatchObject({
+        status: 409, message: 'controller restarted',
+      } satisfies Partial<ApiError>)
+      expect(restarted).toHaveBeenCalledTimes(1)
+    } finally {
+      onControllerRestart.delete(restarted)
+    }
   })
 })
 

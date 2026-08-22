@@ -22,6 +22,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -1037,6 +1038,73 @@ func TestDashboardWirelessTotalMatchesScopedClientRows(t *testing.T) {
 	}
 }
 
+func TestDashboardGatewayUplinkRequiresFreshSuccessfulRouteEvidence(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Date(2026, 8, 21, 5, 30, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	recent := now.Add(-10 * time.Second).Unix()
+	gateway := h.seedDevice("gateway", true, &recent)
+	gateway.Role = "gateway"
+	gateway.Functions = []string{"gateway"}
+	if err := h.db.UpsertDevice(context.Background(), gateway); err != nil {
+		t.Fatal(err)
+	}
+
+	state := model.TopologySourceObservation{
+		DeviceID: gateway.ID, Source: topology.SourceDefaultRoute,
+		State: model.TopologySourceEmpty, ObservedAt: now.UnixMilli(),
+	}
+	if err := h.db.SaveTopologySourceState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	read := func() dashboardGatewayUplink {
+		w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("dashboard: %d %s", w.Code, w.Body.String())
+		}
+		var d dashboard
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		if len(d.GatewayUplinks) != 1 {
+			t.Fatalf("gateway_uplinks = %+v", d.GatewayUplinks)
+		}
+		return d.GatewayUplinks[0]
+	}
+	if got := read(); got.State != "missing" || got.Name != gateway.Name {
+		t.Fatalf("fresh answered-empty route = %+v, want missing", got)
+	}
+
+	edge := model.TopologyEdge{
+		ChildNode: "device:" + gateway.MAC, ParentNode: topology.InternetNode,
+		ParentPort: "wan", Medium: "uplink", Confidence: "measured",
+		ValidFrom: now.UnixMilli(), LastSeen: now.UnixMilli(),
+		Evidence: []model.TopologyEvidence{{
+			Kind: "default_route", Source: topology.SourceDefaultRoute,
+			DeviceID: &gateway.ID, Detail: map[string]any{"interface": "wan", "active": true},
+		}},
+	}
+	if err := h.db.SaveTopologyEdge(context.Background(), &edge); err != nil {
+		t.Fatal(err)
+	}
+	state.State = model.TopologySourceObserved
+	if err := h.db.SaveTopologySourceState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got.State != "up" {
+		t.Fatalf("fresh active route = %+v, want up", got)
+	}
+
+	state.ObservedAt = now.Add(-maxCurrentTopologySourceAge - time.Second).UnixMilli()
+	if err := h.db.SaveTopologySourceState(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got.State != "unknown" {
+		t.Fatalf("stale route evidence = %+v, want unknown", got)
+	}
+}
+
 // A row-scoped count is still only a complete fleet total when every adopted
 // device reported its station set. The known rows remain useful and must keep
 // matching Client Devices, but the dashboard must not present them as a zero or
@@ -1215,6 +1283,13 @@ func TestResponsesAreNotCacheable(t *testing.T) {
 	w := h.do(http.MethodGet, "/api/v1/devices", nil)
 	if got := w.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := w.Header().Get("X-OonfeeWRT-Instance"); got == "" {
+		t.Error("controller instance header is empty")
+	}
+	w2 := h.do(http.MethodGet, "/api/v1/dashboard", nil)
+	if got, want := w2.Header().Get("X-OonfeeWRT-Instance"), w.Header().Get("X-OonfeeWRT-Instance"); got != want {
+		t.Errorf("controller instance changed within one process: %q != %q", got, want)
 	}
 }
 
@@ -2307,6 +2382,9 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 			Err: "Permission denied", Permanent: true},
 		{Object: "iwinfo", Method: "survey", Status: ubus.StatusTimeout,
 			Cause: collector.CauseTransport, Err: "timed out"},
+		{Object: "file", Method: "exec", Target: "/usr/sbin/lldpcli",
+			Status: ubus.StatusNotFound, Cause: collector.CauseUnsupported,
+			Err: "NOT_FOUND", Permanent: true},
 	})
 
 	w := h.do(http.MethodGet, fmt.Sprintf("/api/v1/devices/%d", dev.ID), nil)
@@ -2329,8 +2407,8 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Degraded) != 2 {
-		t.Fatalf("degraded = %+v, want two", got.Degraded)
+	if len(got.Degraded) != 3 {
+		t.Fatalf("degraded = %+v, want three", got.Degraded)
 	}
 	first := got.Degraded[0]
 	if first.Call != "luci-rpc.getWirelessDevices" || !first.Permanent ||
@@ -2350,6 +2428,9 @@ func TestDeviceDetailReportsWhatThePollCouldNotRead(t *testing.T) {
 	if second.Cause != "transport" || second.Permanent || second.Status == nil ||
 		second.Status.Code != 7 || second.Status.Name != "TIMEOUT" {
 		t.Errorf("transient status/cause was flattened or misclassified: %+v", second)
+	}
+	if got.Degraded[2].Call != "file.exec /usr/sbin/lldpcli" {
+		t.Errorf("file.exec command identity was lost: %+v", got.Degraded[2])
 	}
 }
 

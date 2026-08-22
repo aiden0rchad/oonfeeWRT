@@ -1,6 +1,6 @@
 {
 	"oonfeewrt": {
-		"description": "oonfeeWRT controller — read device state and write owned UCI sections. Two rpcd path rules govern the file map below, both verified on hardware: rpcd authorises the requested path and then re-authorises its symlink-resolved target, so both /var and /sys/class requests and their canonical /tmp and /sys/devices targets are required; and '*' crosses '/', so a pattern like /sys/devices/* grants an entire subtree. Prefer ubus objects over file grants wherever the data exists in both. The hostapd rrm_nr_* grants distribute 802.11k neighbour lists, which no AP can learn on its own; note that hostapd's client-affecting methods (bss_transition_request, rrm_beacon_req, del_client beyond an operator's explicit action) are NOT granted — this controller tells APs about each other and leaves the roam decision to the client.",
+		"description": "oonfeeWRT controller — read device state, write controller-owned UCI sections during an acknowledged Apply, and update managed 802.11k neighbour lists at runtime. Two rpcd path rules govern the file map below, both verified on hardware: rpcd authorises the requested path and then re-authorises its symlink-resolved target, so both /var and /sys/class requests and their canonical /tmp and /sys/devices targets are required; and '*' crosses '/', so a pattern like /sys/devices/* grants an entire subtree. Prefer ubus objects over file grants wherever the data exists in both. Client steering and disconnection methods are not granted; the client retains the roam decision.",
 
 		"read": {
 			"ubus": {
@@ -57,15 +57,11 @@
 
 		"write": {
 			"ubus": {
-				"uci": [ "add", "set", "delete", "rename", "order", "revert", "commit", "apply", "confirm", "rollback" ],
-				"network": [ "reload" ],
-				"hostapd.*": [ "del_client", "rrm_nr_set" ],
+				"uci": [ "add", "set", "delete", "revert", "commit", "apply", "confirm" ],
+				"hostapd.*": [ "rrm_nr_set" ],
 				"file": [ "exec" ]
 			},
-			"uci": [ "network", "wireless", "firewall", "dhcp", "system" ],
-			"file": {
-				"/usr/sbin/nlbw -c commit": [ "exec" ]
-			}
+			"uci": [ "network", "wireless", "firewall", "dhcp" ]
 		}
 	},
 

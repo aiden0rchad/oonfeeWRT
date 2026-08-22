@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 16
+const schemaVersion = 17
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -323,6 +323,26 @@ var migrations = map[int][]string{
 		   PRIMARY KEY (scan_id, bssid, mhz)
 		 ) WITHOUT ROWID`,
 	},
+	17: {
+		// Durable device-side capability ownership. A package mutation and a
+		// controller database transaction cannot be atomic, so the state row is
+		// written before SSH starts and retained on uncertainty. ON DELETE
+		// RESTRICT prevents un-adoption from discarding the only rollback record.
+		`CREATE TABLE IF NOT EXISTS device_capability_installs (
+		   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE RESTRICT,
+		   capability TEXT NOT NULL,
+		   package_manager TEXT NOT NULL CHECK (package_manager IN ('apk','opkg')),
+		   requested_packages_json TEXT NOT NULL,
+		   baseline_packages_json TEXT NOT NULL DEFAULT '[]',
+		   added_packages_json TEXT NOT NULL DEFAULT '[]',
+		   services_json TEXT NOT NULL DEFAULT '[]',
+		   state TEXT NOT NULL CHECK (state IN ('installing','installed','removing','error')),
+		   detail TEXT NOT NULL DEFAULT '',
+		   installed_at INTEGER,
+		   updated_at INTEGER NOT NULL,
+		   PRIMARY KEY (device_id, capability)
+		 ) WITHOUT ROWID`,
+	},
 }
 
 // DB is the controller's database handle.
@@ -439,10 +459,8 @@ func OpenReadOnly(ctx context.Context, driverName, path string, protector Secret
 		return closeOnError(fmt.Errorf("store: database is at schema v%d; read-only tools require v%d (start the controller to migrate it)",
 			current, schemaVersion))
 	}
-	if schemaVersion == 16 {
-		if err := verifySchemaV16(ctx, sqldb); err != nil {
-			return closeOnError(err)
-		}
+	if err := verifyCurrentSchema(ctx, sqldb); err != nil {
+		return closeOnError(err)
 	}
 	db := &DB{sql: sqldb, protector: protector}
 	complete, err := db.verifySecretState(ctx)
@@ -613,10 +631,8 @@ func (db *DB) migrate(ctx context.Context) error {
 				return err
 			}
 			if current == schemaVersion {
-				if schemaVersion == 16 {
-					if err := verifySchemaV16(ctx, conn); err != nil {
-						return err
-					}
+				if err := verifyCurrentSchema(ctx, conn); err != nil {
+					return err
 				}
 				if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 					return fmt.Errorf("store: commit migration check: %w", err)
@@ -693,10 +709,8 @@ func (db *DB) migrate(ctx context.Context) error {
 			}
 		}
 	}
-	if schemaVersion == 16 {
-		if err := verifySchemaV16(ctx, conn); err != nil {
-			return err
-		}
+	if err := verifyCurrentSchema(ctx, conn); err != nil {
+		return err
 	}
 	if current < schemaVersion {
 		if _, err := conn.ExecContext(ctx,

@@ -4,9 +4,9 @@
 
 `dryrun`, `optdiff`, `stalecheck`, `livecheck`, `recoverycheck`, and `applyone`
 open controller state through the same schema-14 cryptographic boundary as the
-daemon. The current source schema is **16**: 14 remains the secret-sealing
-epoch, 15 is the cross-feature policy semantic boundary, and 16 is the attested
-observability shape. Set
+daemon. The current source schema is **17**: 14 remains the secret-sealing
+epoch, 15 is the cross-feature policy semantic boundary, 16 is the attested
+observability shape, and 17 adds the optional-capability rollback ledger. Set
 `OONFEE_PASSPHRASE_FILE` to an absolute path naming the controller's mode-0600
 passphrase file. The tools open `keyring.json` next to the database and refuse a
 missing, wrong, or mismatched keyring.
@@ -23,7 +23,7 @@ go run ./tools/applyone /absolute/path/to/oonfeewrt.db DEVICE_HOST
 ```
 
 The first five open SQLite with `mode=ro` plus `query_only`. They require schema
-16 and `secret_state.scrub_complete=1`; they never migrate, finish a scrub or
+17 and `secret_state.scrub_complete=1`; they never migrate, finish a scrub or
 repair a colliding/partial observability table. Start the controller writable
 first when upgrading an older database.
 The first four may read the routers named by the store, but do not stage or
@@ -41,11 +41,11 @@ take a consistent SQLite `.backup` (or stop/checkpoint cleanly) and copy the
 matching `keyring.json`. Do not discover a schema migration during a router
 apply.
 
-The lab has already been promoted from schema 15 to the attested schema 16 and
-validated there; that promotion is no longer pending. For any other older
-store, start the daemon writable and complete/validate migration before using a
-write-capable tool. Source tests alone are not evidence that a particular live
-store has been promoted.
+The lab has already been promoted through the attested schema 16 boundary to
+schema 17 and validated there; that promotion is no longer pending. For any
+other older store, start the daemon writable and complete/validate migration
+before using a write-capable tool. Source tests alone are not evidence that a
+particular live store has been promoted.
 
 Database and keyring are one restore unit. A passphrase cannot recreate the
 keyring's random data key. A database copied alone from a live WAL store may be
@@ -108,14 +108,14 @@ not ship it to production devices.
 Read-only first. This touches nothing:
 
 ```sh
-python3 probe.py 192.168.1.1 --user root --ask-password
+python3 probe.py 192.0.2.1 --user root --ask-password
 ```
 
 Then the important one. This writes, but only to a scratch config no service
 reads:
 
 ```sh
-python3 probe.py 192.168.1.1 --user root --ask-password --write-tests --json report.json
+python3 probe.py 192.0.2.1 --user root --ask-password --write-tests --json report.json
 ```
 
 Useful flags:

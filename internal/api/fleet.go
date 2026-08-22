@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 )
 
 // deviceView is one row of the Devices list.
@@ -146,8 +148,9 @@ type deviceDetail struct {
 	// exchange are both retained so the UI can prescribe different responses.
 	Degraded []degradation `json:"degraded,omitempty"`
 
-	// Broadcasting is every SSID this device is actually putting on the air,
-	// including the ones oonfeeWRT does not manage.
+	// Broadcasting is every BSS hostapd/interface inventory currently reports
+	// enabled, including the ones oonfeeWRT does not manage. It is control-plane
+	// state, not independent on-air scan evidence.
 	//
 	// The controller deliberately never touches config it did not write, so an
 	// AP adopted with SSIDs already on it keeps broadcasting them — correctly,
@@ -279,8 +282,12 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 				if cause == "" {
 					cause = "unknown"
 				}
+				call := g.Object + "." + g.Method
+				if g.Target != "" {
+					call += " " + g.Target
+				}
 				out := degradation{
-					Call:      g.Object + "." + g.Method,
+					Call:      call,
 					Err:       g.Err,
 					Cause:     cause,
 					Permanent: g.Permanent,
@@ -546,6 +553,24 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pollInterval := max(0, min(dev.PollInterval, int(maxPollInterval/time.Second)))
+	installs, err := s.Store.CapabilityInstalls(r.Context(), id)
+	if handleStoreErr(w, err, "device capabilities") {
+		return
+	}
+	packages := []string{}
+	packageNote := "the controller has not installed a package on this router"
+	for _, install := range installs {
+		packages = append(packages, install.AddedPackages...)
+		if install.State == "error" {
+			packageNote = "a capability package action needs review; use the device capability panel before un-adopting"
+		} else if len(install.AddedPackages) == 0 {
+			packageNote = "the controller changed a pre-existing capability service but installed no package"
+		} else {
+			packageNote = "packages added by an explicitly authorized controller capability installation; removal uses its durable rollback record"
+		}
+	}
+	slices.Sort(packages)
+	packages = slices.Compact(packages)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"overhead": o,
 		// DEVICE-BUDGET §7's remaining two fields.
@@ -554,10 +579,8 @@ func (s *Server) handleOverhead(w http.ResponseWriter, r *http.Request) {
 		// It is reported rather than omitted because "we installed nothing on
 		// your router" is the claim ARCHITECTURE §0 makes, and a field that
 		// only appears once it is non-empty cannot be used to check it.
-		"packages": []string{},
-		"packages_note": "the controller installs no packages. Its entire " +
-			"device-side footprint is one ACL file and one login, both listed " +
-			"by un-adopt",
+		"packages":        packages,
+		"packages_note":   packageNote,
 		"poll_interval_s": pollInterval,
 		"poll_interval_note": "0 uses the controller default. An override can " +
 			"only make polling less frequent — a per-device knob that could " +
@@ -891,15 +914,22 @@ type dashboard struct {
 	// the operator owns. UpstreamDevices and UnscopedDevices carry the
 	// remainder so the headline is smaller *and* legible, rather than smaller
 	// for no visible reason.
-	KnownDevices    int `json:"known_devices"`
-	ActiveDevices   int `json:"active_devices"`
-	UpstreamDevices int `json:"upstream_devices"`
-	UnscopedDevices int `json:"unscoped_devices"`
+	KnownDevices    int                      `json:"known_devices"`
+	ActiveDevices   int                      `json:"active_devices"`
+	UpstreamDevices int                      `json:"upstream_devices"`
+	UnscopedDevices int                      `json:"unscoped_devices"`
+	GatewayUplinks  []dashboardGatewayUplink `json:"gateway_uplinks"`
 
 	Focused  int           `json:"focused_devices"`
 	Quiesced int           `json:"quiesced_devices"`
 	Events   []store.Event `json:"recent_events"`
 	Series   int           `json:"series_count"`
+}
+
+type dashboardGatewayUplink struct {
+	DeviceID int64  `json:"device_id"`
+	Name     string `json:"name"`
+	State    string `json:"state"` // up, missing, or unknown
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -931,6 +961,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			d.Quiesced++
 		}
 	}
+	d.GatewayUplinks = s.dashboardGatewayUplinks(ctx, devices, now)
 
 	// This is exactly the Client Devices default scope and presence with its
 	// Wireless connection filter selected. In particular, a private MAC on a
@@ -981,6 +1012,52 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("could not count series", "err", err)
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) dashboardGatewayUplinks(ctx context.Context, devices []*store.Device,
+	now time.Time) []dashboardGatewayUplink {
+	edges, edgeErr := s.Store.TopologyEdgesAt(ctx, 0)
+	states, stateErr := s.Store.TopologySourceStates(ctx)
+	active := map[string]bool{}
+	for _, edge := range edges {
+		if edge.ParentNode == topology.InternetNode {
+			active[edge.ChildNode] = true
+		}
+	}
+	latest := map[int64]model.TopologySourceObservation{}
+	for _, state := range states {
+		if state.Source == topology.SourceDefaultRoute {
+			latest[state.DeviceID] = state
+		}
+	}
+
+	out := []dashboardGatewayUplink{}
+	for _, device := range devices {
+		if !device.Adopted() || !model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
+			continue
+		}
+		entry := dashboardGatewayUplink{DeviceID: device.ID, Name: deviceDisplayName(device), State: "unknown"}
+		state, ok := latest[device.ID]
+		fresh := ok && state.ObservedAt <= now.UnixMilli() &&
+			state.ObservedAt >= now.Add(-maxCurrentTopologySourceAge).UnixMilli()
+		success := state.State == model.TopologySourceObserved || state.State == model.TopologySourceEmpty
+		if edgeErr == nil && stateErr == nil && s.viewDevice(device, now).Status == "online" && fresh && success {
+			mac, err := canonicalTopologyMAC(device.MAC)
+			if err == nil && active["device:"+mac] {
+				entry.State = "up"
+			} else if err == nil {
+				entry.State = "missing"
+			}
+		}
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].DeviceID < out[j].DeviceID
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // wouldAlsoBroadcast names the OTHER devices that would start transmitting a

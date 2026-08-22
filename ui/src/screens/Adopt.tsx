@@ -246,15 +246,17 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             )}
           </div>
           <Section title="Available" items={result.features} />
-          {/* Not "missing": a check that was refused is a different state from
-              a feature the hardware lacks, and only a wider ACL would change
-              it — which is the operator's decision, not ours. */}
+          {/* Not "missing": permission, inactive-interface, idle-counter, and
+              driver-uncertainty outcomes all mean the probe could not prove a
+              result. Each note carries the actual cause and remediation. */}
           <Section
             title="Could not be determined"
             items={result.unobservable}
-            note="These checks were refused rather than answered. Nothing is
-                  rendered from them; widening the ACL is the only thing that
-                  would change that."
+            note="These checks did not produce enough evidence. That can mean
+                  unavailable permission, an inactive interface, idle counters,
+                  or hardware/driver uncertainty. Nothing is inferred or
+                  rendered; widen access only when the corresponding note names
+                  a permission denial."
           />
           <Section
             title="Driver quirks"
@@ -287,11 +289,10 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
             Enter the address of an OpenWrt device and its existing administrator
             login. The controller uses it only for read-only inspection and the
-            one-time adoption transaction, and never stores it. If you opt in,
-            adoption installs the oonfeeWRT controller capability by
-            installing or replacing one rpcd ACL JSON file and creating its own
-            scoped controller login. Adoption does not proceed without this
-            explicit acknowledgement. Removing the device later asks for the
+            one-time adoption transaction, and never stores it. Adoption requires
+            an explicit, default-off acknowledgement before it installs the
+            controller access payload: one rpcd ACL JSON file and one scoped
+            controller login. Removing the device later asks for the
             administrator login again, because a controller that could delete
             its own permissions could also widen them.
           </p>
@@ -512,16 +513,39 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
               style={{ marginTop: 2 }}
             />
             <span>
-              <strong>Add the oonfeeWRT controller capability to this router?</strong>{' '}
-              If accepted, Adopt installs or replaces one rpcd ACL JSON file and
-              creates a scoped controller login. This adds oonfeeWRT access to
-              supported topology, radio channel/scan, OpenWrt log, and fixed-target
-              WAN ICMP observations. Adoption requires this acknowledged capability
-              because the controller needs its scoped login. It installs no package,
-              binary, daemon, service, or firmware. Leaving this unchecked or
-              cancelling leaves the router unchanged and keeps Adopt unavailable.
+              <strong>Install the oonfeeWRT controller access payload?</strong>{' '}
+              This writes one rpcd ACL JSON file and creates one scoped login. It
+              installs no package, binary, daemon, service, or firmware. Leaving it
+              unchecked or cancelling leaves the router unchanged and keeps Adopt
+              unavailable.
             </span>
           </label>
+
+          <details>
+            <summary>Review exact router changes and permissions</summary>
+            <ul style={{ margin: '8px 0 0', paddingLeft: 20, fontSize: 12, lineHeight: 1.5 }}>
+              <li>
+                Writes <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code> and creates
+                the scoped <code>rpcd.oonfeewrt</code> login.
+              </li>
+              <li>
+                Grants read access for supported inventory, topology, radio/scan,
+                OpenWrt log, and fixed-target <code>1.1.1.1</code> ICMP observations.
+              </li>
+              <li>
+                Grants writes only for controller-owned network, wireless, firewall,
+                and DHCP sections after a separate Preview and acknowledged Apply.
+              </li>
+              <li>
+                Allows runtime 802.11k neighbour-list updates on managed WLANs that
+                request them. It cannot disconnect or steer clients.
+              </li>
+              <li>
+                Adoption itself does not change network, WLAN, firewall, or DHCP
+                settings. Those changes require Preview and Apply later.
+              </li>
+            </ul>
+          </details>
 
           <Button
             type="submit"
@@ -569,7 +593,9 @@ function Inspection({ result }: { result: InspectResult }) {
       <strong style={{ fontSize: 12 }}>Read-only inspection complete</strong>
       <Prop label="Model">{result.model || '—'}</Prop>
       <Prop label="Firmware">{result.firmware || '—'}</Prop>
-      <Prop label="Radios">{result.radio_count}</Prop>
+      <Prop label="Radios">
+        {result.radio_count ?? 'Unknown — radio inventory was not observable'}
+      </Prop>
       <Prop label="LAN ports observed">
         {result.lan_ports.length > 0
           ? `${result.lan_ports.length} observed: ${result.lan_ports.join(', ')}`

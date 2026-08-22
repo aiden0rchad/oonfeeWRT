@@ -532,13 +532,16 @@ func TestSourceAwareReconcileRejectsAggregateTransitInEitherPollOrder(t *testing
 
 	t.Run("C6 then WRT", func(t *testing.T) {
 		active := open(t, inferDevice(t, 2, 100), 100)
+		if len(active) != 0 {
+			t.Fatalf("unplaced aggregate parent was rendered: %+v", active)
+		}
 		wrtPoll := inferDevice(t, 1, 200)
 		changes, err := ReconcileIntervalsBySource(active, wrtPoll.Edges, 200, wrtPoll.Sources)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(changes.Close) != 1 || changes.Close[0].ID != active[0].ID || len(changes.Upsert) != 2 {
-			t.Fatalf("persisted aggregate candidate was not replaced: %+v", changes)
+		if len(changes.Close) != 0 || len(changes.Upsert) != 2 {
+			t.Fatalf("physical placement did not replace withheld aggregate evidence: %+v", changes)
 		}
 		for _, edge := range changes.Upsert {
 			if edge.ParentNode == "device:"+c6MAC {
@@ -546,6 +549,46 @@ func TestSourceAwareReconcileRejectsAggregateTransitInEitherPollOrder(t *testing
 			}
 		}
 	})
+}
+
+func TestSourceAwareReconcileKeepsAggregateChildrenOnlyAfterParentIsRooted(t *testing.T) {
+	deviceID := int64(2)
+	aggregate := model.TopologyEdge{
+		ID: 1, ChildNode: "client:02:00:00:00:00:55", ParentNode: "device:" + c6MAC,
+		ParentDeviceID: &deviceID, ParentPort: "eth0.1", Medium: "wired",
+		Confidence: "ambiguous", ValidFrom: 100, LastSeen: 100,
+		Evidence: []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &deviceID,
+			Detail: map[string]any{"attachment": PortAttachmentAggregate},
+		}},
+	}
+	changes, err := reconcileFleetCompetingParents([]model.TopologyEdge{aggregate}, IntervalChanges{}, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Close) != 1 || changes.Close[0].ID != aggregate.ID {
+		t.Fatalf("unrooted aggregate edge stayed active: %+v", changes)
+	}
+
+	wrtID := int64(1)
+	placement := model.TopologyEdge{
+		ID: 2, ChildNode: "device:" + c6MAC, ParentNode: "device:" + wrtMAC,
+		ParentDeviceID: &wrtID, ParentPort: "lan3", Medium: "wired",
+		Confidence: "ambiguous", ValidFrom: 100, LastSeen: 100,
+		Evidence: []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &wrtID,
+			Detail: map[string]any{"attachment": PortAttachmentPhysical},
+		}},
+	}
+	changes, err = reconcileFleetCompetingParents(
+		[]model.TopologyEdge{aggregate, placement}, IntervalChanges{}, 200,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Close) != 0 {
+		t.Fatalf("rooted aggregate child was discarded: %+v", changes)
+	}
 }
 
 func TestSourceAwareReconcileAssociationRejectsAggregateTransit(t *testing.T) {
@@ -700,6 +743,178 @@ func TestSourceAwareReconcileRejectsReverseAggregateDeviceEdgeInEitherPollOrder(
 			t.Fatalf("persisted reverse aggregate edge was not replaced: %+v", changes)
 		}
 	})
+}
+
+func TestSourceAwareReconcileSuppressesReciprocalManagedDeviceLLDPInEitherPollOrder(t *testing.T) {
+	wrtID, c6ID := int64(1), int64(2)
+	root := model.TopologyEdge{
+		ChildNode: "device:" + wrtMAC, ParentNode: InternetNode, ParentPort: "wan",
+		Medium: "uplink", Confidence: "measured", ValidFrom: 100, LastSeen: 100,
+		Evidence: []model.TopologyEvidence{{
+			Kind: "default_route", Source: SourceDefaultRoute, DeviceID: &wrtID,
+		}},
+	}
+	link := func(child, parent, port string, deviceID int64) model.TopologyEdge {
+		return model.TopologyEdge{
+			ChildNode: child, ParentNode: parent, ParentDeviceID: &deviceID,
+			ParentPort: port, Medium: "wired", Confidence: "measured",
+			ValidFrom: 100, LastSeen: 100,
+			Evidence: []model.TopologyEvidence{{
+				Kind: "lldp_neighbor", Source: SourceLLDP, DeviceID: &deviceID,
+			}},
+		}
+	}
+	correct := link("device:"+c6MAC, "device:"+wrtMAC, "lan3", wrtID)
+	reverse := link("device:"+wrtMAC, "device:"+c6MAC, "eth0.1", c6ID)
+	sources := func(deviceID, at int64, names ...string) []model.TopologySourceObservation {
+		out := make([]model.TopologySourceObservation, 0, len(names))
+		for _, name := range names {
+			out = append(out, model.TopologySourceObservation{
+				DeviceID: deviceID, Source: name, State: model.TopologySourceObserved, ObservedAt: at,
+			})
+		}
+		return out
+	}
+	activate := func(edges []model.TopologyEdge) []model.TopologyEdge {
+		for i := range edges {
+			edges[i].ID = int64(i + 1)
+		}
+		return edges
+	}
+	fresh := func(edges ...model.TopologyEdge) []model.TopologyEdge {
+		for i := range edges {
+			edges[i].ID, edges[i].ValidFrom, edges[i].LastSeen = 0, 200, 200
+		}
+		return edges
+	}
+
+	t.Run("gateway poll then AP poll", func(t *testing.T) {
+		first, err := ReconcileIntervalsBySource(nil, []model.TopologyEdge{root, correct}, 100,
+			sources(wrtID, 100, SourceDefaultRoute, SourceLLDP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		active := activate(first.Upsert)
+		second, err := ReconcileIntervalsBySource(active, fresh(reverse), 200,
+			sources(c6ID, 200, SourceLLDP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(second.Upsert) != 0 || len(second.Close) != 0 {
+			t.Fatalf("reverse LLDP survived gateway-first startup: %+v", second)
+		}
+	})
+
+	t.Run("AP poll then gateway poll", func(t *testing.T) {
+		first, err := ReconcileIntervalsBySource(nil, []model.TopologyEdge{reverse}, 100,
+			sources(c6ID, 100, SourceLLDP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(first.Upsert) != 0 || len(first.Close) != 0 {
+			t.Fatalf("unrooted startup LLDP was exposed: %+v", first)
+		}
+		active := activate(first.Upsert)
+		second, err := ReconcileIntervalsBySource(active, fresh(root, correct), 200,
+			sources(wrtID, 200, SourceDefaultRoute, SourceLLDP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(second.Close) != 0 || len(second.Upsert) != 2 {
+			t.Fatalf("gateway poll did not replace startup reverse LLDP: %+v", second)
+		}
+		for _, edge := range second.Upsert {
+			if edge.ChildNode == "device:"+wrtMAC && edge.ParentNode == "device:"+c6MAC {
+				t.Fatalf("reverse LLDP was reopened: %+v", second)
+			}
+		}
+	})
+}
+
+func TestReciprocalManagedDeviceSuppressionPreservesDownstreamEdges(t *testing.T) {
+	wrtID, c6ID := int64(1), int64(2)
+	root := model.TopologyEdge{ChildNode: "device:" + wrtMAC, ParentNode: InternetNode}
+	correct := model.TopologyEdge{
+		ChildNode: "device:" + c6MAC, ParentNode: "device:" + wrtMAC,
+		ParentDeviceID: &wrtID, ParentPort: "lan3", Medium: "wired",
+		Evidence: []model.TopologyEvidence{{
+			Kind: "lldp_neighbor", Source: SourceLLDP, DeviceID: &wrtID,
+		}},
+	}
+	reverse := model.TopologyEdge{
+		ChildNode: "device:" + wrtMAC, ParentNode: "device:" + c6MAC,
+		ParentDeviceID: &c6ID, ParentPort: "eth0.1", Medium: "wired",
+		Evidence: []model.TopologyEvidence{{
+			Kind: "lldp_neighbor", Source: SourceLLDP, DeviceID: &c6ID,
+		}},
+	}
+	client := model.TopologyEdge{
+		ChildNode: "client:02:00:00:00:00:55", ParentNode: "device:" + c6MAC,
+		ParentDeviceID: &c6ID, ParentPort: "phy0-ap0", Medium: "wireless",
+	}
+	got := reciprocalManagedDeviceEdgeKeys([]model.TopologyEdge{root, correct, reverse, client})
+	if len(got) != 1 || !got[edgeSortKey(reverse)] || got[edgeSortKey(correct)] || got[edgeSortKey(client)] {
+		t.Fatalf("rooted reciprocal suppression=%v", got)
+	}
+	got = reciprocalManagedDeviceEdgeKeys([]model.TopologyEdge{correct, reverse, client})
+	if len(got) != 2 || !got[edgeSortKey(correct)] || !got[edgeSortKey(reverse)] || got[edgeSortKey(client)] {
+		t.Fatalf("unrooted reciprocal suppression=%v", got)
+	}
+	unrooted := unrootedManagedDeviceLLDPEdgeKeys([]model.TopologyEdge{reverse, client})
+	if len(unrooted) != 1 || !unrooted[edgeSortKey(reverse)] || unrooted[edgeSortKey(client)] {
+		t.Fatalf("lone unrooted LLDP suppression=%v", unrooted)
+	}
+	unrooted = unrootedManagedDeviceLLDPEdgeKeys([]model.TopologyEdge{root, correct, client})
+	if len(unrooted) != 0 {
+		t.Fatalf("rooted downstream LLDP was suppressed=%v", unrooted)
+	}
+
+	switchID := int64(3)
+	switchNode := "device:02:00:00:00:00:03"
+	upstream := model.TopologyEdge{
+		ChildNode: switchNode, ParentNode: "device:" + wrtMAC,
+		ParentDeviceID: &wrtID, ParentPort: "lan2", Medium: "wired",
+		Evidence: []model.TopologyEvidence{{
+			Kind: "lldp_neighbor", Source: SourceLLDP, DeviceID: &wrtID,
+		}},
+	}
+	downstream := correct
+	downstream.ParentNode, downstream.ParentDeviceID, downstream.ParentPort = switchNode, &switchID, "lan3"
+	downstream.Evidence = []model.TopologyEvidence{{
+		Kind: "lldp_neighbor", Source: SourceLLDP, DeviceID: &switchID,
+	}}
+	reverseDownstream := reverse
+	reverseDownstream.ChildNode, reverseDownstream.ParentNode = switchNode, "device:"+c6MAC
+	for name, edges := range map[string][]model.TopologyEdge{
+		"root-to-leaf order": {root, upstream, downstream, reverseDownstream, client},
+		"leaf-to-root order": {client, reverseDownstream, downstream, upstream, root},
+	} {
+		t.Run(name, func(t *testing.T) {
+			depth := managedDeviceRootDepths(edges)
+			if depth["device:"+wrtMAC] != 0 || depth[switchNode] != 1 || depth["device:"+c6MAC] != 2 {
+				t.Fatalf("transitive root depths=%v", depth)
+			}
+			got := reciprocalManagedDeviceEdgeKeys(edges)
+			if len(got) != 1 || !got[edgeSortKey(reverseDownstream)] || got[edgeSortKey(downstream)] {
+				t.Fatalf("transitive reciprocal suppression=%v", got)
+			}
+			active := append([]model.TopologyEdge(nil), edges...)
+			var reverseID int64
+			for i := range active {
+				active[i].ID, active[i].ValidFrom, active[i].LastSeen = int64(i+1), 100, 100
+				if edgeSortKey(active[i]) == edgeSortKey(reverseDownstream) {
+					reverseID = active[i].ID
+				}
+			}
+			changes, err := reconcileFleetCompetingParents(active, IntervalChanges{}, 200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(changes.Upsert) != 0 || len(changes.Close) != 1 || changes.Close[0].ID != reverseID {
+				t.Fatalf("transitive fleet reconciliation=%+v", changes)
+			}
+		})
+	}
 }
 
 func TestSourceAwareReconcileVersionsCompetingParentSemantics(t *testing.T) {

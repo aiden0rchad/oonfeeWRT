@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError, onUnauthorized } from './lib/api'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { api, ApiError, onControllerRestart, onUnauthorized } from './lib/api'
 import type { Dashboard as DashboardData, Device } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
@@ -28,13 +29,43 @@ const NAV: { id: Screen; label: string; glyph: string }[] = [
   { id: 'logs', label: 'Logs', glyph: '≣' },
 ]
 
+function screenFromPath(pathname: string): Screen {
+  const id = pathname.replace(/^\/+|\/+$/g, '')
+  return NAV.some((item) => item.id === id) ? id as Screen : 'dashboard'
+}
+
+function screenPath(screen: Screen) {
+  return screen === 'dashboard' ? '/' : `/${screen}`
+}
+
+class ScreenBoundary extends Component<{ name: string; children: ReactNode }, { error: string }> {
+  state = { error: '' }
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error: error instanceof Error ? error.message : String(error) }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div style={{ display: 'grid', gap: 12 }}>
+        <h1 style={{ margin: 0, fontSize: 20 }}>{this.props.name} unavailable</h1>
+        <div role="alert"><Banner tone="critical">
+          This screen could not render: {this.state.error}. Other controller screens remain available.
+        </Banner></div>
+        <div><Button onClick={() => this.setState({ error: '' })}>Retry screen</Button></div>
+      </div>
+    )
+  }
+}
+
 export function App() {
   const [ready, setReady] = useState(false)
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
   const [bootstrapErr, setBootstrapErr] = useState('')
   const [needsSetup, setNeedsSetup] = useState(false)
   const [username, setUsername] = useState<string | null>(null)
-  const [screen, setScreen] = useState<Screen>('dashboard')
+  const [screen, setScreen] = useState<Screen>(() => screenFromPath(window.location.pathname))
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
 
   const [dash, setDash] = useState<DashboardData | null>(null)
@@ -54,7 +85,12 @@ export function App() {
     setDevicesLoaded(false)
     setRefreshErrors({})
     setAccountErr('')
-    setScreen('dashboard')
+  }, [])
+
+  const navigate = useCallback((next: Screen) => {
+    const path = screenPath(next)
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setScreen(next)
   }, [])
 
   const dropSession = useCallback(() => {
@@ -74,12 +110,21 @@ export function App() {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
+  useEffect(() => {
+    const followHistory = () => setScreen(screenFromPath(window.location.pathname))
+    window.addEventListener('popstate', followHistory)
+    return () => window.removeEventListener('popstate', followHistory)
+  }, [])
+
   // A 401 anywhere drops us back to the sign-in screen rather than leaving a
   // signed-out page showing whatever it last loaded.
   useEffect(() => {
     onUnauthorized.add(dropSession)
+    const reload = () => window.location.reload()
+    onControllerRestart.add(reload)
     return () => {
       onUnauthorized.delete(dropSession)
+      onControllerRestart.delete(reload)
     }
   }, [dropSession])
 
@@ -265,7 +310,7 @@ export function App() {
               title={n.label}
               aria-label={n.label}
               aria-current={screen === n.id ? 'page' : undefined}
-              onClick={() => setScreen(n.id)}
+              onClick={() => navigate(n.id)}
               style={{
                 width: 36,
                 height: 36,
@@ -304,29 +349,31 @@ export function App() {
               </Banner>
             </div>
           )}
-          {screen === 'dashboard' && (dash
-            ? <Dashboard data={dash} />
-            : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
-          {screen === 'topology' && (
-            <Topology onReviewCapabilities={() => setScreen('devices')} />
-          )}
-          {screen === 'radios' && <Radios />}
-          {screen === 'devices' && devicesLoaded && (
-            <Devices
-              devices={devices}
-              onAdopt={() => setScreen('adopt')}
-              onChanged={refresh}
-            />
-          )}
-          {screen === 'devices' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
-          {screen === 'clients' && <Clients />}
-          {screen === 'policy' && (
-            <PolicyEngine onReviewChanges={() => setScreen('settings')} />
-          )}
-          {screen === 'settings' && devicesLoaded && <Settings devices={devices} />}
-          {screen === 'settings' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
-          {screen === 'adopt' && <Adopt onAdopted={refresh} />}
-          {screen === 'logs' && <Logs />}
+          <ScreenBoundary key={screen} name={NAV.find((item) => item.id === screen)?.label ?? 'Screen'}>
+            {screen === 'dashboard' && (dash
+              ? <Dashboard data={dash} />
+              : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
+            {screen === 'topology' && (
+              <Topology onReviewCapabilities={() => navigate('devices')} />
+            )}
+            {screen === 'radios' && <Radios />}
+            {screen === 'devices' && devicesLoaded && (
+              <Devices
+                devices={devices}
+                onAdopt={() => navigate('adopt')}
+                onChanged={refresh}
+              />
+            )}
+            {screen === 'devices' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
+            {screen === 'clients' && <Clients />}
+            {screen === 'policy' && (
+              <PolicyEngine onReviewChanges={() => navigate('settings')} />
+            )}
+            {screen === 'settings' && devicesLoaded && <Settings devices={devices} />}
+            {screen === 'settings' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
+            {screen === 'adopt' && <Adopt onAdopted={refresh} />}
+            {screen === 'logs' && <Logs />}
+          </ScreenBoundary>
         </main>
       </div>
     </div>

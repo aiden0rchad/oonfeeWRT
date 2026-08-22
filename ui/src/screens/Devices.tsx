@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type {
-  Broadcast, CapEffect, Degradation, Device, DeviceDetail, OverheadReport, Point,
-  ReprobeResult, Series, DeviceFunction,
+  Broadcast,
+  CapEffect,
+  Degradation,
+  Device,
+  DeviceDetail,
+  OverheadReport,
+  Point,
+  ReprobeResult,
+  Series,
+  DeviceFunction,
+  LLDPCapabilityResult,
 } from '../lib/api'
-import {
-  Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button,
-  useColumnPrefs,
-} from '../components/ui'
+import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
 import { live } from '../lib/live'
@@ -41,19 +47,28 @@ export function Devices({
       render: (d) => <Status value={d.status} />,
       sortBy: (d) => d.status,
     },
-    { key: 'name', header: 'Name', render: (d) => d.name || d.mac, sortBy: (d) => d.name },
+    {
+      key: 'name',
+      header: 'Name',
+      render: (d) => d.name || d.mac,
+      sortBy: (d) => d.name,
+    },
     {
       key: 'functions',
       header: 'Functions',
       render: (d) => functionNames(deviceFunctions(d)),
       sortBy: (d) => deviceFunctions(d).join(','),
     },
-    { key: 'host', header: 'Address', render: (d) => d.host, sortBy: (d) => d.host },
+    {
+      key: 'host',
+      header: 'Address',
+      render: (d) => d.host,
+      sortBy: (d) => d.host,
+    },
     {
       key: 'class',
       header: 'Class',
-      render: (d) =>
-        d.class ? d.class : <Unknown why="the capability probe has not classified this device" />,
+      render: (d) => (d.class ? d.class : <Unknown why="the capability probe has not classified this device" />),
       sortBy: (d) => d.class ?? '',
     },
     {
@@ -152,26 +167,24 @@ export function DeviceDetailPanel({
   // different owners — which is exactly the case an SSID-keyed lookup got
   // wrong. Joining the live AP list to the detail response on the SSID string
   // was the same mistake in the other direction.
-  const originOf = new Map(
-    (detail?.broadcasting ?? []).map((b) => [b.iface, b] as const),
-  )
+  const originOf = new Map((detail?.broadcasting ?? []).map((b) => [b.iface, b] as const))
 
   // Hoisted out of the effect so a re-probe can refresh the pane: a probe
   // rewrites the capability record, and leaving the panel showing the previous
   // one is how "I pressed re-probe and nothing happened" happens.
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current
-    const [detailResult, seriesResult] = await Promise.allSettled([
-      api.device(id),
-      api.deviceSeries(id),
-    ])
+    const [detailResult, seriesResult] = await Promise.allSettled([api.device(id), api.deviceSeries(id)])
     if (generation !== loadGeneration.current) return
     if (detailResult.status === 'fulfilled') {
       setErr('')
       setDetail(detailResult.value)
       // Not fatal: a device in the inventory but not yet polled has no
       // overhead to report, which is a real state rather than zero cost.
-      api.overhead(id).then(setOverhead).catch(() => {})
+      api
+        .overhead(id)
+        .then(setOverhead)
+        .catch(() => {})
     } else {
       setErr(detailResult.reason instanceof Error ? detailResult.reason.message : String(detailResult.reason))
     }
@@ -235,7 +248,7 @@ export function DeviceDetailPanel({
       return
     }
     const timer = window.setTimeout(() => {
-      setStats((current) => current === stats ? null : current)
+      setStats((current) => (current === stats ? null : current))
     }, delay)
     return () => window.clearTimeout(timer)
   }, [stats])
@@ -247,7 +260,9 @@ export function DeviceDetailPanel({
   if (err && !detail) {
     return (
       <SlideOver title="Device" onClose={onClose}>
-        <div role="alert"><Banner tone="critical">{err}</Banner></div>
+        <div role="alert">
+          <Banner tone="critical">{err}</Banner>
+        </div>
       </SlideOver>
     )
   }
@@ -261,12 +276,10 @@ export function DeviceDetailPanel({
 
   const quirks = detail.capabilities?.Quirks ?? []
   const degradations = detail.degraded ?? []
-  const standingDegradations = degradations.filter((g) =>
-    g.permanent && ['permission', 'unsupported', 'device'].includes(g.cause),
+  const standingDegradations = degradations.filter(
+    (g) => g.permanent && ['permission', 'unsupported', 'device'].includes(g.cause),
   )
-  const currentPollFailures = degradations.filter((g) =>
-    !standingDegradations.includes(g),
-  )
+  const currentPollFailures = degradations.filter((g) => !standingDegradations.includes(g))
   const degradationRow = (g: Degradation) => (
     <div
       key={g.call}
@@ -277,8 +290,7 @@ export function DeviceDetailPanel({
         paddingLeft: 8,
       }}
     >
-      <code style={{ color: 'var(--text-primary)' }}>{g.call}</code>{' '}
-      — {g.error}
+      <code style={{ color: 'var(--text-primary)' }}>{g.call}</code> — {g.error}
       <div style={{ color: 'var(--text-muted)' }}>
         Cause: {g.cause || 'unknown'}
         {g.status && ` · ubus ${g.status.name} (${g.status.code})`}
@@ -310,43 +322,36 @@ export function DeviceDetailPanel({
           reading that succeeded; this says the newest attempt did not. */}
       {err && (
         <Banner tone="warning">
-          The last refresh failed ({err}). The readings below are from the last
-          one that worked.
+          The last refresh failed ({err}). The readings below are from the last one that worked.
         </Banner>
       )}
       {seriesErr && (
         <Banner tone="warning">
-          Metric catalog refresh failed ({seriesErr}). Core device facts remain
-          available; charts use the last catalog that loaded successfully.
+          Metric catalog refresh failed ({seriesErr}). Core device facts remain available; charts use the last catalog
+          that loaded successfully.
         </Banner>
       )}
       <div style={{ display: 'grid', gap: 6 }}>
         <Prop label="Status">
-          <Status value={detail.status} />
+          <Status value={stats ? 'online' : detail.status} />
         </Prop>
         <Prop label="Name">
           <DeviceName detail={detail} onRenamed={refresh} />
         </Prop>
         <Prop label="Address">{detail.host}</Prop>
         <Prop label="MAC">{detail.mac}</Prop>
-        <Prop label="Firmware">
-          {detail.firmware || <Unknown why="not read yet" />}
-        </Prop>
+        <Prop label="Firmware">{detail.firmware || <Unknown why="not read yet" />}</Prop>
         <Prop label="Class">
           <DeviceClass cls={detail.class} target={detail.capabilities?.Board?.Target} />
         </Prop>
         <Prop label="Functions">
           {functionNames(deviceFunctions(detail))}
-          {!detail.functions && (
-            <span title="derived from this older row's legacy role"> · legacy</span>
-          )}
+          {!detail.functions && <span title="derived from this older row's legacy role"> · legacy</span>}
         </Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
               and would show the tier this panel had before it subscribed. */}
-          {detail.quiesced
-            ? 'paused for an apply'
-            : (stats?.tier ?? detail.tier ?? detail.poll_state)}
+          {detail.quiesced ? 'paused for an apply' : (stats?.tier ?? detail.tier ?? detail.poll_state)}
         </Prop>
         <Prop label="Last seen">
           {stats ? 'just now (live)' : detail.last_seen ? ago(detail.last_seen) : <Unknown why="never polled" />}
@@ -354,9 +359,7 @@ export function DeviceDetailPanel({
         {stats && (
           <>
             <Prop label="Load average">{stats.load1.toFixed(2)}</Prop>
-            {stats.mem_pct !== undefined && (
-              <Prop label="Memory">{stats.mem_pct.toFixed(0)}%</Prop>
-            )}
+            {stats.mem_pct !== undefined && <Prop label="Memory">{stats.mem_pct.toFixed(0)}%</Prop>}
             <Prop label="Clients">
               {stats.clients === null ? (
                 <Unknown why="an access point could not report its client count" />
@@ -380,8 +383,15 @@ export function DeviceDetailPanel({
               airtime figure appeared twice per radio, which reads as two
               measurements of one quantity rather than one channel's occupancy
               reported by each BSS sitting on it. */}
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-            Broadcasting
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Reported enabled BSSs</div>
+          <div
+            style={{
+              color: 'var(--text-muted)',
+              fontSize: 11,
+              marginBottom: 6,
+            }}
+          >
+            Current hostapd/interface state—not an independent on-air scan.
           </div>
           <div style={{ display: 'grid', gap: 6 }}>
             {stats.aps.map((ap) => (
@@ -393,9 +403,7 @@ export function DeviceDetailPanel({
                       {ap.iface} · ch {ap.channel}
                     </span>
                     {originOf.get(ap.iface)?.origin === 'foreign' && (
-                      <span style={{ color: 'var(--warning)', marginLeft: 6 }}>
-                        unmanaged
-                      </span>
+                      <span style={{ color: 'var(--warning)', marginLeft: 6 }}>unmanaged</span>
                     )}
                     {/* No entry is the SAME answer as origin "unknown": the
                         controller has not been told who owns this BSS. It used
@@ -427,11 +435,7 @@ export function DeviceDetailPanel({
                     not already suspicious, and this is the sentence that
                     explains why a button to change it does not exist. */}
                 {originOf.get(ap.iface)?.origin === 'foreign' && (
-                  <TakeoverBriefBlock
-                    deviceID={id}
-                    b={originOf.get(ap.iface)!}
-                    onNoted={load}
-                  />
+                  <TakeoverBriefBlock deviceID={id} b={originOf.get(ap.iface)!} onNoted={load} />
                 )}
               </div>
             ))}
@@ -441,19 +445,20 @@ export function DeviceDetailPanel({
 
       {stats && stats.stations.length > 0 && (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-            Associated now
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Associated now</div>
           <div style={{ display: 'grid', gap: 4 }}>
             {stats.stations.map((st) => (
-              <div key={st.mac} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+              <div
+                key={st.mac}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: 11,
+                }}
+              >
                 <span style={{ color: 'var(--text-secondary)' }}>{st.mac}</span>
                 <span className="num">
-                  {st.signal === null ? (
-                    <Unknown why="this station did not report signal" />
-                  ) : (
-                    `${st.signal} dBm`
-                  )}
+                  {st.signal === null ? <Unknown why="this station did not report signal" /> : `${st.signal} dBm`}
                 </span>
               </div>
             ))}
@@ -463,8 +468,8 @@ export function DeviceDetailPanel({
 
       {!stats && (
         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          Opening this panel subscribes to this device, which raises its poll
-          rate. Live values appear on the next poll — a few seconds.
+          Opening this panel subscribes to this device, which raises its poll rate. Live values appear on the next poll
+          — a few seconds.
         </div>
       )}
 
@@ -553,37 +558,41 @@ export function DeviceDetailPanel({
         <ManagementOverhead
           report={overhead}
           deviceID={id}
-          onChanged={() => api.overhead(id).then(setOverhead).catch(() => {})}
+          onChanged={() =>
+            api
+              .overhead(id)
+              .then(setOverhead)
+              .catch(() => {})
+          }
         />
       )}
 
       {degradations.length > 0 && (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-            What the controller cannot read here
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>What the controller cannot read here</div>
           {standingDegradations.length > 0 && (
             <div style={{ display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 600 }}>
-                Permission or device limits
-              </div>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>Permission or device limits</div>
               {standingDegradations.map(degradationRow)}
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                These are standing limits: retrying the same call will not fix
-                an ACL refusal or an operation the firmware or driver does not
-                provide. Each line says what remains unavailable.
+                These are standing limits: retrying the same call will not fix an ACL refusal or an operation the
+                firmware or driver does not provide. Each line says what remains unavailable.
               </div>
             </div>
           )}
           {currentPollFailures.length > 0 && (
-            <div style={{ display: 'grid', gap: 6, marginTop: standingDegradations.length ? 10 : 0 }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                marginTop: standingDegradations.length ? 10 : 0,
+              }}
+            >
               <div style={{ fontSize: 11, fontWeight: 600 }}>Current poll failures</div>
               {currentPollFailures.map(degradationRow)}
               <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                These failures describe the latest poll, not a confirmed
-                hardware or permission limit. The controller will try again;
-                do not treat the missing values as proof that the device lacks
-                the feature.
+                These failures describe the latest poll, not a confirmed hardware or permission limit. The controller
+                will try again; do not treat the missing values as proof that the device lacks the feature.
               </div>
             </div>
           )}
@@ -591,21 +600,19 @@ export function DeviceDetailPanel({
       )}
 
       <ACLRefresh deviceID={id} onUpdated={refresh} />
+      <LLDPCapability deviceID={id} onUpdated={refresh} />
       <Reprobe deviceID={id} onProbed={refresh} />
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
         <Button onClick={() => setRemoving(true)}>Remove from controller</Button>
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-          Hands the device's configuration back and deletes the controller's
-          login and ACL file.
+          Hands the device's configuration back and deletes the controller's login and ACL file.
         </div>
       </div>
 
       {quirks.length > 0 && (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-            Driver quirks
-          </div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Driver quirks</div>
           <div style={{ display: 'grid', gap: 6 }}>
             {quirks.map((q, i) => (
               <div
@@ -626,8 +633,8 @@ export function DeviceDetailPanel({
             ))}
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-            Metrics derived from these fields are not rendered anywhere. A field
-            that is present and wrong is worse than one that is missing.
+            Metrics derived from these fields are not rendered anywhere. A field that is present and wrong is worse than
+            one that is missing.
           </div>
         </div>
       )}
@@ -703,31 +710,20 @@ function ManagementOverhead({
 
   return (
     <div>
-      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>
-        Management overhead
-      </div>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Management overhead</div>
       <div style={{ display: 'grid', gap: 6 }}>
         <Prop label="Poll interval">
-          {o.quiesced
-            ? 'paused for an apply'
-            : `${o.interval_seconds.toFixed(0)}s (${o.tier})`}
+          {o.quiesced ? 'paused for an apply' : `${o.interval_seconds.toFixed(0)}s (${o.tier})`}
         </Prop>
-        <Prop label="Requests to this device">
-          <span style={{ color: overBudget ? 'var(--warning)' : undefined }}>
-            {o.polls_per_minute.toFixed(2)}/min
-          </span>
+        <Prop label="Scheduled poll rate">
+          <span style={{ color: overBudget ? 'var(--warning)' : undefined }}>{o.polls_per_minute.toFixed(2)}/min</span>
         </Prop>
+        <Prop label="HTTP request rate">{o.requests_per_minute.toFixed(2)}/min</Prop>
         <Prop label="Device CPU used">
           {o.cpu_percent_of_core != null ? (
             <span title={o.cpu_basis}>
-              {o.cpu_percent_of_core < 0.01
-                ? '<0.01'
-                : o.cpu_percent_of_core.toFixed(2)}
-              % of one core
-              <span style={{ color: 'var(--text-muted)' }}>
-                {' '}
-                ({o.cpu_ms_per_poll?.toFixed(1)} ms/poll, derived)
-              </span>
+              {o.cpu_percent_of_core < 0.01 ? '<0.01' : o.cpu_percent_of_core.toFixed(2)}% of one core
+              <span style={{ color: 'var(--text-muted)' }}> ({o.cpu_ms_per_poll?.toFixed(1)} ms/poll, derived)</span>
             </span>
           ) : (
             <Unknown why={o.cpu_basis} />
@@ -739,18 +735,12 @@ function ManagementOverhead({
             a statement about the device, which for any real router is plainly
             false and made the field look broken. */}
         <Prop label="Packages we installed">
-          {report.packages.length === 0 ? (
-            <span title={report.packages_note}>none</span>
-          ) : (
-            report.packages.join(', ')
-          )}
+          {report.packages.length === 0 ? <span title={report.packages_note}>none</span> : report.packages.join(', ')}
         </Prop>
         <Prop label="Data sent">{formatBytes(o.bytes_out)}</Prop>
         <Prop label="Polls">
           {o.polls}
-          {o.failed_polls > 0 && (
-            <span style={{ color: 'var(--warning)' }}> ({o.failed_polls} failed)</span>
-          )}
+          {o.failed_polls > 0 && <span style={{ color: 'var(--warning)' }}> ({o.failed_polls} failed)</span>}
         </Prop>
       </div>
 
@@ -758,7 +748,13 @@ function ManagementOverhead({
           is at or above the default, because a knob that could raise the rate
           would turn the budget into a suggestion no test measures. */}
       <div style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 4 }}>
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--text-secondary)',
+            marginBottom: 4,
+          }}
+        >
           Poll this device less often
         </div>
         <div
@@ -783,10 +779,7 @@ function ManagementOverhead({
                 borderRadius: 4,
                 cursor: saving ? 'default' : 'pointer',
                 border: '1px solid var(--border-strong)',
-                background:
-                  report.poll_interval_s === opt.s
-                    ? 'var(--accent-soft)'
-                    : 'transparent',
+                background: report.poll_interval_s === opt.s ? 'var(--accent-soft)' : 'transparent',
                 color: 'var(--text-primary)',
               }}
             >
@@ -800,22 +793,20 @@ function ManagementOverhead({
           </div>
         )}
         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-          {report.poll_interval_note} Charts get coarser as the interval grows;
-          the online/offline window scales with the effective interval.
+          {report.poll_interval_note} Charts get coarser as the interval grows; the online/offline window scales with
+          the effective interval.
         </div>
       </div>
 
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
-        Budget is one request per minute idle, one per 10 seconds while this
-        panel is open. Opening it raises the rate; closing it lowers it within
-        30 seconds.
+        Budget is one request per minute idle, one per 10 seconds while this panel is open. Opening it raises the rate;
+        closing it lowers it within 30 seconds.
         {o.non_poll_requests > 5 && (
           <>
             {' '}
-            <strong style={{ color: 'var(--warning)' }}>
-              {o.non_poll_requests} requests were not polls
-            </strong>{' '}
-            — that should only be session logins.
+            <strong style={{ color: 'var(--warning)' }}>{o.non_poll_requests} requests were not polls</strong> — this
+            includes session setup and explicit actions such as discovery, capability probes, and RF scans; it is not
+            evidence of unexpected logins by itself.
           </>
         )}
       </div>
@@ -924,7 +915,7 @@ function ChartBlock({
   }, [load])
 
   const points: Point[] = loaded?.data.points ?? []
-  const rangeLabel = (value: 1 | 24 | 168) => value === 1 ? '1 hour' : value === 24 ? '1 day' : '1 week'
+  const rangeLabel = (value: 1 | 24 | 168) => (value === 1 ? '1 hour' : value === 24 ? '1 day' : '1 week')
   return (
     <div>
       <div
@@ -963,7 +954,14 @@ function ChartBlock({
         </span>
       </div>
       {(loading || loadErr) && (
-        <div role={loadErr ? 'alert' : 'status'} style={{ fontSize: 11, color: loadErr ? 'var(--warning)' : 'var(--text-muted)', marginBottom: 5 }}>
+        <div
+          role={loadErr ? 'alert' : 'status'}
+          style={{
+            fontSize: 11,
+            color: loadErr ? 'var(--warning)' : 'var(--text-muted)',
+            marginBottom: 5,
+          }}
+        >
           {loadErr
             ? `Could not refresh ${rangeLabel(range)} data: ${loadErr}.${loaded ? ` Showing the last successful ${rangeLabel(loaded.range)} response.` : ''}`
             : `Loading ${rangeLabel(range)} data…${loaded && loaded.range !== range ? ` Showing ${rangeLabel(loaded.range)} until it arrives.` : ''}`}
@@ -1004,11 +1002,13 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
     setMessage('')
     try {
       const result = await api.refreshACL(deviceID, {
-        username, password, private_key: privateKey || undefined,
+        username,
+        password,
+        private_key: privateKey || undefined,
         acknowledge_router_changes: true,
       })
       setMessage(
-        `Optional oonfeeWRT controller capability installed and verified. ${result.features.length} capabilities are observable.`,
+        `oonfeeWRT controller access payload installed or refreshed and verified. ${result.features.length} capabilities are observable.`,
       )
       onUpdated()
     } catch (reason) {
@@ -1023,33 +1023,31 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
 
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-      <Button onClick={() => {
-        if (open) {
-          setPassword('')
-          setPrivateKey('')
-        }
-        setOpen(!open)
-        setAcknowledged(false)
-      }}>
-        {open ? 'Cancel capability installation' : 'Install optional oonfeeWRT capability'}
+      <Button
+        onClick={() => {
+          if (open) {
+            setPassword('')
+            setPrivateKey('')
+          }
+          setOpen(!open)
+          setAcknowledged(false)
+        }}
+      >
+        {open ? 'Cancel payload review' : 'Review or refresh controller access payload'}
       </Button>
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-        This optional oonfeeWRT controller capability installation installs or replaces one rpcd
-        ACL JSON file on the router:{' '}
-        <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It adds controller access to supported
-        topology, radio channel/scan, OpenWrt log, and fixed-target WAN ICMP observations. It
-        installs no package, binary, daemon, service, or firmware. Leave it off or cancel to keep
-        the router unchanged; observations blocked by the current ACL remain explicit gaps.
+        This default-off action installs the payload if missing or replaces its one rpcd ACL JSON file on the router:{' '}
+        <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It adds controller access to supported observations and
+        permits later acknowledged Apply operations for controller-owned network, wireless, firewall and DHCP sections,
+        plus managed 802.11k neighbour-list updates. It cannot disconnect or steer clients and installs no package,
+        binary, daemon, service, or firmware. Leave it off or cancel to keep the router unchanged; blocked observations
+        remain explicit gaps.
       </div>
       {open && (
         <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
             Device administrator username
-            <input
-              value={username}
-              autoComplete="off"
-              onChange={(event) => setUsername(event.target.value)}
-            />
+            <input value={username} autoComplete="off" onChange={(event) => setUsername(event.target.value)} />
           </label>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
             Device administrator password
@@ -1071,29 +1069,472 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
             />
           </label>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            Credentials are used for this one SSH request only. The password and private key are
-            never stored.
+            Credentials are used for this one SSH request only. The password and private key are never stored.
           </div>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'start', fontSize: 11 }}>
+          <label
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'start',
+              fontSize: 11,
+            }}
+          >
             <input
               type="checkbox"
               checked={acknowledged}
               disabled={busy}
               onChange={(event) => setAcknowledged(event.target.checked)}
             />
-            I understand that accepting installs or replaces the controller&apos;s single rpcd ACL
-            JSON file and adds the optional observation capability described above.
+            I understand that accepting installs the payload if missing or replaces the controller&apos;s single rpcd
+            ACL JSON file and grants the read and write access described above.
           </label>
-          <Button
-            disabled={busy || username.trim() === '' || !acknowledged}
-            onClick={() => void run()}
-          >
-            {busy ? 'Installing capability…' : 'Install controller capability and verify'}
+          <Button disabled={busy || username.trim() === '' || !acknowledged} onClick={() => void run()}>
+            {busy ? 'Installing or refreshing payload…' : 'Install or refresh controller access payload and verify'}
           </Button>
         </div>
       )}
-      {error && <div role="alert" style={{ marginTop: 8 }}><Banner tone="critical">{error}</Banner></div>}
-      {message && <div style={{ marginTop: 8 }}><Banner tone="accent">{message}</Banner></div>}
+      {error && (
+        <div role="alert" style={{ marginTop: 8 }}>
+          <Banner tone="critical">{error}</Banner>
+        </div>
+      )}
+      {message && (
+        <div style={{ marginTop: 8 }}>
+          <Banner tone="accent">{message}</Banner>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: () => void }) {
+  const [status, setStatus] = useState<LLDPCapabilityResult | null>(null)
+  const [open, setOpen] = useState(false)
+  const [username, setUsername] = useState('root')
+  const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
+  const [indexAck, setIndexAck] = useState(false)
+  const [changeAck, setChangeAck] = useState(false)
+  const [diagnosticAck, setDiagnosticAck] = useState(false)
+  const [configReadAck, setConfigReadAck] = useState(false)
+  const [configChangeAck, setConfigChangeAck] = useState(false)
+  const [configPlan, setConfigPlan] = useState<LLDPCapabilityResult | null>(null)
+  const [plan, setPlan] = useState<LLDPCapabilityResult | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const load = useCallback(() => {
+    api
+      .lldpCapability(deviceID)
+      .then(setStatus)
+      .catch((reason) => {
+        setError(reason instanceof Error ? reason.message : String(reason))
+      })
+  }, [deviceID])
+
+  useEffect(load, [load])
+  const installed = status != null && status.state !== 'not_installed'
+  const planningRemoval = installed
+
+  const credentials = () => ({
+    username,
+    password,
+    private_key: privateKey || undefined,
+  })
+
+  const resolvePlan = async () => {
+    if (!planningRemoval && !indexAck) return
+    setBusy(true)
+    setError('')
+    setPlan(null)
+    setChangeAck(false)
+    try {
+      setPlan(
+        await api.changeLLDPCapability(deviceID, {
+          action: planningRemoval ? 'plan_remove' : 'plan_install',
+          ...credentials(),
+          acknowledge_package_index_refresh: planningRemoval ? undefined : true,
+        }),
+      )
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setPassword('')
+      setPrivateKey('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const applyPlan = async () => {
+    if (!plan?.plan_hash || !changeAck) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.changeLLDPCapability(deviceID, {
+        action: planningRemoval ? 'remove' : 'install',
+        ...credentials(),
+        plan_hash: plan.plan_hash,
+        acknowledge_router_changes: true,
+        acknowledge_package_index_refresh: planningRemoval ? undefined : true,
+      })
+      setStatus(next)
+      setPlan(null)
+      setOpen(false)
+      onUpdated()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      load()
+    } finally {
+      setPassword('')
+      setPrivateKey('')
+      setIndexAck(false)
+      setChangeAck(false)
+      setBusy(false)
+    }
+  }
+
+  const diagnose = async () => {
+    if (!diagnosticAck) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.changeLLDPCapability(deviceID, {
+        action: 'diagnose',
+        ...credentials(),
+        acknowledge_read_only_diagnostics: true,
+      })
+      setStatus(next)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setPassword('')
+      setPrivateKey('')
+      setDiagnosticAck(false)
+      setBusy(false)
+    }
+  }
+
+  const resolveConfigPlan = async () => {
+    if (!configReadAck) return
+    setBusy(true)
+    setError('')
+    setConfigPlan(null)
+    setConfigChangeAck(false)
+    try {
+      setConfigPlan(
+        await api.changeLLDPCapability(deviceID, {
+          action: 'plan_configure',
+          ...credentials(),
+          acknowledge_read_only_diagnostics: true,
+        }),
+      )
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setPassword('')
+      setPrivateKey('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const applyConfigPlan = async () => {
+    if (!configPlan?.plan_hash || !configChangeAck) return
+    setBusy(true)
+    setError('')
+    try {
+      const next = await api.changeLLDPCapability(deviceID, {
+        action: 'configure',
+        ...credentials(),
+        plan_hash: configPlan.plan_hash,
+        acknowledge_router_changes: true,
+      })
+      setStatus(next)
+      setConfigPlan(null)
+      onUpdated()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      load()
+    } finally {
+      setPassword('')
+      setPrivateKey('')
+      setConfigReadAck(false)
+      setConfigChangeAck(false)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 600 }}>Optional LLDP topology capability</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+        {installed
+          ? `Controller record: ${status?.state}. Added packages: ${status?.added_packages.join(', ') || 'none (lldpd existed before)'}.`
+          : 'Not installed by this controller. Current topology remains fail-closed when stock firmware cannot identify the wired peer.'}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+        Installing adds the official OpenWrt <code>lldpd</code> package and any dependencies shown in the exact
+        package-manager plan, then enables and starts <code>lldpd</code>. It installs no controller binary or firmware.
+        Removal uses the durable baseline, removes the exact controller-added package set, keeps every pre-existing
+        package, and restores the prior
+        <code>lldpd</code> service state.
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <Button
+          onClick={() => {
+            setOpen(!open)
+            setPlan(null)
+            setError('')
+            setIndexAck(false)
+            setChangeAck(false)
+            setConfigReadAck(false)
+            setConfigChangeAck(false)
+            setConfigPlan(null)
+            if (open) {
+              setPassword('')
+              setPrivateKey('')
+            }
+          }}
+        >
+          {open ? 'Cancel LLDP capability review' : installed ? 'Review LLDP rollback' : 'Review LLDP installation'}
+        </Button>
+      </div>
+      {open && (
+        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            Device administrator username
+            <input value={username} autoComplete="off" onChange={(event) => setUsername(event.target.value)} />
+          </label>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            Device administrator password
+            <input
+              type="password"
+              value={password}
+              autoComplete="off"
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
+            SSH private key (optional)
+            <textarea
+              value={privateKey}
+              autoComplete="off"
+              spellCheck={false}
+              rows={4}
+              onChange={(event) => setPrivateKey(event.target.value)}
+            />
+          </label>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            Credentials remain only in this open review and may be reused for its plan/apply pair. They are never stored
+            and are cleared when the review closes or after a router change.
+          </div>
+          {installed && (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Interface configuration:{' '}
+                {status?.configuration_state === 'configured'
+                  ? `controller-managed (${status.configured_interfaces?.join(', ')})`
+                  : status?.configuration_state === 'incomplete'
+                    ? 'an earlier configuration action did not complete; rollback baseline retained'
+                    : 'OpenWrt package default (physical neighbor discovery is not yet verified)'}
+                .
+              </div>
+              {status?.configuration_state !== 'configured' && (
+                <>
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'start',
+                      fontSize: 11,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={configReadAck}
+                      disabled={busy}
+                      onChange={(event) => setConfigReadAck(event.target.checked)}
+                    />
+                    <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                      I authorize reading the current <code>lldpd</code> UCI export and wired bridge members to produce
+                      an exact configuration plan. This read changes nothing.
+                    </span>
+                  </label>
+                  <Button
+                    disabled={busy || username.trim() === '' || !configReadAck}
+                    onClick={() => void resolveConfigPlan()}
+                  >
+                    {busy ? 'Resolving interface plan…' : 'Show exact LLDP interface plan'}
+                  </Button>
+                </>
+              )}
+              <label
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'start',
+                  fontSize: 11,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={diagnosticAck}
+                  disabled={busy}
+                  onChange={(event) => setDiagnosticAck(event.target.checked)}
+                />
+                <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                  I authorize a read-only inspection of the router&apos;s <code>lldpd</code> configuration, runtime
+                  interfaces, and reported neighbors. It changes no router setting, package, or service; the controller
+                  records only that this diagnostic ran.
+                </span>
+              </label>
+              <Button disabled={busy || username.trim() === '' || !diagnosticAck} onClick={() => void diagnose()}>
+                {busy ? 'Inspecting LLDP runtime…' : 'Inspect LLDP runtime (read only)'}
+              </Button>
+              {configPlan?.plan && (
+                <>
+                  <div style={{ fontSize: 11, fontWeight: 600 }}>Exact LLDP interface configuration plan</div>
+                  <pre
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      maxHeight: 220,
+                      overflow: 'auto',
+                      padding: 8,
+                      border: '1px solid var(--border)',
+                      borderRadius: 4,
+                    }}
+                  >
+                    {configPlan.plan}
+                  </pre>
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'start',
+                      fontSize: 11,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={configChangeAck}
+                      disabled={busy}
+                      onChange={(event) => setConfigChangeAck(event.target.checked)}
+                    />
+                    <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                      I reviewed this exact plan and authorize replacing only <code>lldpd.config.interface</code>,
+                      committing only <code>/etc/config/lldpd</code>, and restarting only <code>lldpd</code>. The exact
+                      current UCI export is retained for drift-checked rollback.
+                    </span>
+                  </label>
+                  <Button disabled={busy || !configChangeAck} onClick={() => void applyConfigPlan()}>
+                    {busy ? 'Applying LLDP interface plan…' : 'Apply LLDP interface configuration'}
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+          {!planningRemoval && (
+            <label
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'start',
+                fontSize: 11,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={indexAck}
+                disabled={busy}
+                onChange={(event) => setIndexAck(event.target.checked)}
+              />
+              <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                I authorize refreshing the router&apos;s package index cache to resolve the exact <code>lldpd</code>{' '}
+                installation plan. This installs no package or service.
+              </span>
+            </label>
+          )}
+          <Button
+            disabled={busy || username.trim() === '' || (!planningRemoval && !indexAck)}
+            onClick={() => void resolvePlan()}
+          >
+            {busy
+              ? 'Resolving package plan…'
+              : planningRemoval
+                ? 'Show exact rollback plan'
+                : 'Refresh index and show exact install plan'}
+          </Button>
+          {plan?.plan && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600 }}>
+                Exact {planningRemoval ? 'rollback' : 'installation'} plan from {plan.package_manager}
+              </div>
+              <pre
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  padding: 8,
+                  border: '1px solid var(--border)',
+                  borderRadius: 4,
+                }}
+              >
+                {plan.plan}
+              </pre>
+              <label
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'start',
+                  fontSize: 11,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={changeAck}
+                  disabled={busy}
+                  onChange={(event) => setChangeAck(event.target.checked)}
+                />
+                <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                  I reviewed this exact plan and authorize{' '}
+                  {planningRemoval
+                    ? 'removing only the controller-owned LLDP capability and restoring the recorded service baseline.'
+                    : 'installing these packages, refreshing the router package index once more immediately beforehand to revalidate this plan, and enabling and starting the lldpd service.'}
+                </span>
+              </label>
+              <Button disabled={busy || !changeAck} onClick={() => void applyPlan()}>
+                {busy ? 'Applying…' : planningRemoval ? 'Remove LLDP capability' : 'Install LLDP capability'}
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+      {status?.detail && (
+        <div role="alert" style={{ marginTop: 8 }}>
+          <Banner tone="critical">{status.detail}</Banner>
+        </div>
+      )}
+      {status?.diagnostics && (
+        <details style={{ marginTop: 8 }}>
+          <summary>LLDP runtime diagnostic</summary>
+          <pre
+            style={{
+              whiteSpace: 'pre-wrap',
+              maxHeight: 260,
+              overflow: 'auto',
+              padding: 8,
+              border: '1px solid var(--border)',
+              borderRadius: 4,
+            }}
+          >
+            {status.diagnostics}
+          </pre>
+        </details>
+      )}
+      {error && (
+        <div role="alert" style={{ marginTop: 8 }}>
+          <Banner tone="critical">{error}</Banner>
+        </div>
+      )}
     </div>
   )
 }
@@ -1139,9 +1580,8 @@ function Reprobe({ deviceID, onProbed }: { deviceID: number; onProbed: () => voi
         {busy ? 'Probing…' : 'Re-probe capabilities'}
       </Button>
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-        Re-reads what this device can do. Runs automatically after a firmware
-        change; do it by hand after installing a package or widening the ACL.
-        It is a burst of reads, so polling pauses while it runs.
+        Re-reads what this device can do. Runs automatically after a firmware change; do it by hand after installing a
+        package or widening the ACL. It is a burst of reads, so polling pauses while it runs.
       </div>
 
       {err && (
@@ -1179,17 +1619,14 @@ function Reprobe({ deviceID, onProbed }: { deviceID: number; onProbed: () => voi
             >
               <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                 <code style={{ color: 'var(--text-primary)' }}>{c.name}</code>
-                <span style={{ color: effectTone(c.effect) }}>
-                  {effectLabel(c.effect)}
-                </span>
+                <span style={{ color: effectTone(c.effect) }}>{effectLabel(c.effect)}</span>
               </div>
               <div style={{ color: 'var(--text-secondary)' }}>{c.detail}</div>
             </div>
           ))}
           {res && res.actionable === 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              None of these change what this device can be sent — they are
-              changes in what the controller can see.
+              None of these change what this device can be sent — they are changes in what the controller can see.
             </div>
           )}
         </div>
@@ -1254,13 +1691,12 @@ export function DeviceClass({ cls, target }: { cls?: string | null; target?: str
     <span>
       ?{' '}
       <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-        {target ? `— ${target} ` : ''}has not been measured, so this device is
-        polled at the conservative default and no CPU cost is claimed for it
+        {target ? `— ${target} ` : ''}has not been measured, so this device is polled at the conservative default and no
+        CPU cost is claimed for it
       </span>
     </span>
   )
 }
-
 
 /**
  * What it would take to bring a foreign SSID under management — and the reason
@@ -1277,15 +1713,7 @@ export function DeviceClass({ cls, target }: { cls?: string | null; target?: str
  * device. The other half is the note: most foreign SSIDs should simply be left
  * alone, and someone who has decided that deserves to stop being asked.
  */
-function TakeoverBriefBlock({
-  deviceID,
-  b,
-  onNoted,
-}: {
-  deviceID: number
-  b: Broadcast
-  onNoted: () => void
-}) {
+function TakeoverBriefBlock({ deviceID, b, onNoted }: { deviceID: number; b: Broadcast; onNoted: () => void }) {
   const [open, setOpen] = useState(false)
   const [note, setNote] = useState(b.brief?.note ?? '')
   const [saving, setSaving] = useState(false)
@@ -1295,9 +1723,8 @@ function TakeoverBriefBlock({
   return (
     <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
       <div>
-        oonfeeWRT did not create this network — it is section{' '}
-        <code>{b.section || 'unknown'}</code> on the device, from before adoption
-        or made by hand. The controller leaves config it did not write alone.
+        oonfeeWRT did not create this network — it is section <code>{b.section || 'unknown'}</code> on the device, from
+        before adoption or made by hand. The controller leaves config it did not write alone.
       </div>
       {brief?.note && (
         <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>
@@ -1335,9 +1762,8 @@ function TakeoverBriefBlock({
           ) : (
             <>
               <div>
-                Run this on the device. oonfeeWRT will not do it for you: it
-                would mean deleting config it did not write, and then it could
-                not put it back.
+                Run this on the device. oonfeeWRT will not do it for you: it would mean deleting config it did not
+                write, and then it could not put it back.
               </div>
               <pre
                 style={{
@@ -1360,8 +1786,8 @@ function TakeoverBriefBlock({
           )}
 
           <div>
-            Or leave it alone and say why — it stops being an open question and
-            the reason survives for whoever looks next.
+            Or leave it alone and say why — it stops being an open question and the reason survives for whoever looks
+            next.
           </div>
           <div style={{ display: 'flex', gap: 6 }}>
             <input
@@ -1417,13 +1843,7 @@ function TakeoverBriefBlock({
  * useful reading of an empty box, and it is adoption's own fallback chain, so
  * "undo my rename" needs no separate control.
  */
-function DeviceName({
-  detail,
-  onRenamed,
-}: {
-  detail: DeviceDetail
-  onRenamed: () => void
-}) {
+function DeviceName({ detail, onRenamed }: { detail: DeviceDetail; onRenamed: () => void }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(detail.name)
   const [busy, setBusy] = useState(false)
@@ -1492,7 +1912,11 @@ function DeviceName({
       <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
         Leave it empty to go back to the name the device reports for itself.
       </span>
-      {err && <span role="alert" style={{ fontSize: 11, color: 'var(--critical)' }}>{err}</span>}
+      {err && (
+        <span role="alert" style={{ fontSize: 11, color: 'var(--critical)' }}>
+          {err}
+        </span>
+      )}
     </span>
   )
 }

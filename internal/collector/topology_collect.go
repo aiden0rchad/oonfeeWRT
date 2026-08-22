@@ -56,7 +56,8 @@ func (p *poller) topologyBridgeList() []string {
 func (p *poller) needTopology() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.topologyAt.IsZero() || p.c.now().Sub(p.topologyAt) >= rediscoverInterval
+	return p.topologyAt.IsZero() || p.c.now().Sub(p.topologyAt) >= rediscoverInterval ||
+		(!p.ifaceRefetchAt.IsZero() && !p.c.now().Before(p.ifaceRefetchAt))
 }
 
 func (s *Snapshot) prepareTopology(calls []call) {

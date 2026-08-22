@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 const maxTopologyHistory = 31 * 24 * time.Hour
 const maxTopologyHistoryEdges = 10_000
+const maxTopologyLastKnownAge = 24 * time.Hour
 const minTopologyUnixMillis int64 = 1_000_000_000_000
 const maxCurrentTopologySourceAge = 31 * time.Minute
 
@@ -48,6 +50,7 @@ type topologyResponse struct {
 	Truncated bool               `json:"truncated"`
 	Nodes     []topologyNodeView `json:"nodes"`
 	Edges     []topologyEdgeView `json:"edges"`
+	LastKnown []topologyEdgeView `json:"last_known_edges,omitempty"`
 	Gaps      []string           `json:"gaps"`
 }
 
@@ -74,8 +77,23 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if responseAt == 0 {
 		responseAt = s.now().UnixMilli()
 	}
+	var lastKnown []model.TopologyEdge
+	if !exists {
+		lastKnown, err = s.Store.LatestClosedTopologyEdgesSince(r.Context(), responseAt-maxTopologyLastKnownAge.Milliseconds())
+		if handleStoreErr(w, err, "last-known topology") {
+			return
+		}
+		activeChildren, connected := map[string]bool{}, map[string]bool{}
+		for _, edge := range edges {
+			activeChildren[edge.ChildNode], connected[edge.ChildNode], connected[edge.ParentNode] = true, true, true
+		}
+		lastKnown = slices.DeleteFunc(lastKnown, func(edge model.TopologyEdge) bool {
+			return activeChildren[edge.ChildNode] || !connected[edge.ParentNode] ||
+				!strings.HasPrefix(edge.ChildNode, "device:") || !strings.HasPrefix(edge.ParentNode, "device:")
+		})
+	}
 	truncated := exists && at < s.now().Add(-maxTopologyHistory).UnixMilli()
-	s.writeTopology(w, r, responseAt, responseAt, !exists, truncated, edges)
+	s.writeTopology(w, r, responseAt, responseAt, !exists, truncated, edges, lastKnown)
 }
 
 func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +121,7 @@ func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	retentionTruncated := from < s.now().Add(-maxTopologyHistory).UnixMilli()
-	s.writeTopology(w, r, to, from, false, queryTruncated || retentionTruncated, edges)
+	s.writeTopology(w, r, to, from, false, queryTruncated || retentionTruncated, edges, nil)
 }
 
 func topologyTimeParam(r *http.Request, name string) (int64, bool) {
@@ -116,24 +134,22 @@ func topologyTimeParam(r *http.Request, name string) (int64, bool) {
 }
 
 func (s *Server) writeTopology(w http.ResponseWriter, r *http.Request, at, coverageAt int64,
-	includeLive, truncated bool, edges []model.TopologyEdge) {
+	includeLive, truncated bool, edges, lastKnown []model.TopologyEdge) {
 	nodes, err := s.topologyNodes(r, edges, includeLive, at)
 	if handleStoreErr(w, err, "topology nodes") {
 		return
 	}
 	views := make([]topologyEdgeView, 0, len(edges))
+	lastKnownViews := make([]topologyEdgeView, 0, len(lastKnown))
 	var gaps []string
 	for _, edge := range edges {
-		views = append(views, topologyEdgeView{
-			ID: edge.ID, ChildID: edge.ChildNode, ParentID: edge.ParentNode,
-			ParentDeviceID: edge.ParentDeviceID, ParentPort: edge.ParentPort,
-			Medium: edge.Medium, Confidence: edge.Confidence,
-			ValidFrom: edge.ValidFrom, ValidTo: edge.ValidTo, LastSeen: edge.LastSeen,
-			Evidence: edge.Evidence, Ambiguities: edge.Ambiguities,
-		})
+		views = append(views, topologyEdgeViewFromModel(edge))
 		for _, ambiguity := range edge.Ambiguities {
 			gaps = append(gaps, fmt.Sprintf("edge:%d: %s", edge.ID, ambiguity))
 		}
+	}
+	for _, edge := range lastKnown {
+		lastKnownViews = append(lastKnownViews, topologyEdgeViewFromModel(edge))
 	}
 	if includeLive {
 		states, err := s.Store.TopologySourceStates(r.Context())
@@ -176,8 +192,18 @@ func (s *Server) writeTopology(w http.ResponseWriter, r *http.Request, at, cover
 	gaps = uniqueTopologyStrings(gaps)
 	writeJSON(w, http.StatusOK, topologyResponse{
 		At: at, Complete: len(gaps) == 0, Truncated: truncated,
-		Nodes: nodes, Edges: views, Gaps: gaps,
+		Nodes: nodes, Edges: views, LastKnown: lastKnownViews, Gaps: gaps,
 	})
+}
+
+func topologyEdgeViewFromModel(edge model.TopologyEdge) topologyEdgeView {
+	return topologyEdgeView{
+		ID: edge.ID, ChildID: edge.ChildNode, ParentID: edge.ParentNode,
+		ParentDeviceID: edge.ParentDeviceID, ParentPort: edge.ParentPort,
+		Medium: edge.Medium, Confidence: edge.Confidence,
+		ValidFrom: edge.ValidFrom, ValidTo: edge.ValidTo, LastSeen: edge.LastSeen,
+		Evidence: edge.Evidence, Ambiguities: edge.Ambiguities,
+	}
 }
 
 func (s *Server) topologyNodes(r *http.Request, edges []model.TopologyEdge, includeLive bool,

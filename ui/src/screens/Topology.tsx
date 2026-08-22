@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../lib/api'
 import type { TopologyEdge, TopologyNode, TopologySnapshot } from '../lib/api'
 import { Banner, Button, Card, Stat, Status } from '../components/ui'
@@ -45,6 +45,17 @@ function ConfidenceLegendItem({ confidence }: { confidence: Confidence }) {
   )
 }
 
+function LastKnownLegendItem() {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      <svg aria-hidden width="28" height="8" viewBox="0 0 28 8">
+        <line x1="1" y1="4" x2="27" y2="4" stroke="var(--text-muted)" strokeWidth="3" strokeDasharray="7 5" />
+      </svg>
+      last known
+    </span>
+  )
+}
+
 /** Separate simultaneous candidate-parent lines so they cannot hide behind
  * each other or run through an intermediate node. */
 export function edgeLaneOffsets(edges: TopologyEdge[]) {
@@ -60,19 +71,24 @@ export function edgeLaneOffsets(edges: TopologyEdge[]) {
       ),
     )
     candidates.forEach((edge, index) => {
-      offsets.set(edge.id, (index - (candidates.length - 1) / 2) * 180)
+      offsets.set(edge.id, (index - (candidates.length - 1) / 2) * 24)
     })
   }
   return offsets
 }
 
 /** A deterministic, dependency-free tidy layout. Disconnected and cyclic
- * nodes remain visible instead of being silently dropped. */
+ * nodes remain visible instead of being silently dropped. Unplaced nodes use
+ * a separate lane so they cannot look like peers of the Internet root. */
 export function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
   const ids = new Set(nodes.map((node) => node.id))
+  const connected = new Set(edges.flatMap((edge) => [edge.parent_id, edge.child_id]))
+  const placedNodes = nodes.filter((node) => connected.has(node.id))
+  const unplacedNodes = nodes.filter((node) => !connected.has(node.id))
   const children = new Set(edges.map((edge) => edge.child_id))
-  const roots = nodes.filter((node) => !children.has(node.id)).map((node) => node.id)
-  if (roots.length === 0) roots.push(...nodes.map((node) => node.id))
+  const roots = placedNodes.filter((node) => !children.has(node.id)).map((node) => node.id)
+  const cyclic = roots.length === 0 && placedNodes.length > 0
+  if (cyclic) roots.push(...placedNodes.map((node) => node.id))
   roots.sort()
 
   const depth = new Map<string, number>(roots.map((id) => [id, 0]))
@@ -81,7 +97,7 @@ export function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
       `${b.parent_id}\u0000${b.child_id}\u0000${b.id}`,
     ),
   )
-  for (let pass = 0; pass < nodes.length; pass += 1) {
+  for (let pass = 0; !cyclic && pass < placedNodes.length; pass += 1) {
     let changed = false
     for (const edge of ordered) {
       const parentDepth = depth.get(edge.parent_id)
@@ -94,26 +110,79 @@ export function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
     }
     if (!changed) break
   }
-  for (const node of nodes) if (!depth.has(node.id)) depth.set(node.id, 0)
+  for (const node of placedNodes) if (!depth.has(node.id)) depth.set(node.id, 0)
 
   const levels = new Map<number, TopologyNode[]>()
-  for (const node of nodes) {
-    const level = Math.min(depth.get(node.id) ?? 0, Math.max(nodes.length - 1, 0))
+  for (const node of placedNodes) {
+    const level = Math.min(depth.get(node.id) ?? 0, Math.max(placedNodes.length - 1, 0))
     levels.set(level, [...(levels.get(level) ?? []), node])
   }
   const positions = new Map<string, Position>()
-  const width = 1000
+  const unplacedStartX = unplacedNodes.length > 0 ? 820 : null
+  const placedWidth = unplacedStartX ?? 1000
+  const width = unplacedStartX == null ? 1000 : 1100
   for (const [level, members] of [...levels.entries()].sort((a, b) => a[0] - b[0])) {
     members.sort((a, b) => a.id.localeCompare(b.id))
     members.forEach((node, index) => {
       positions.set(node.id, {
-        x: ((index + 1) * width) / (members.length + 1),
-        y: 56 + level * 132,
+        x: 40 + ((index + 1) * (placedWidth - 80)) / (members.length + 1),
+        y: 64 + level * 150,
       })
     })
   }
+  unplacedNodes.sort((a, b) => a.id.localeCompare(b.id))
+  unplacedNodes.forEach((node, index) => {
+    positions.set(node.id, { x: 960, y: 76 + index * 90 })
+  })
   const maxDepth = Math.max(0, ...levels.keys())
-  return { positions, width, height: Math.max(180, 112 + maxDepth * 132) }
+  const placedHeight = 128 + maxDepth * 150
+  const unplacedHeight = unplacedNodes.length > 0 ? 126 + (unplacedNodes.length - 1) * 90 : 0
+  return {
+    positions,
+    width,
+    height: Math.max(190, placedHeight, unplacedHeight),
+    unplaced: unplacedNodes.map((node) => node.id),
+    unplacedStartX,
+  }
+}
+
+export function topologyEdgeRoute(parent: Position, child: Position, lane = 0) {
+  const startY = parent.y + 38
+  const endY = child.y - 38
+  if (endY > startY + 12) {
+    const middleY = (startY + endY) / 2 + lane
+    const vertical = Math.abs(parent.x - child.x) < 40
+    return {
+      path: `M ${parent.x} ${startY} V ${middleY} H ${child.x} V ${endY}`,
+      label: {
+        x: vertical ? parent.x : (parent.x + child.x) / 2,
+        y: vertical ? (middleY + endY) / 2 : middleY,
+      },
+    }
+  }
+  const sideY = Math.max(parent.y, child.y) + 48 + lane
+  return {
+    path: `M ${parent.x} ${parent.y + 34} V ${sideY} H ${child.x} V ${child.y + 34}`,
+    label: { x: (parent.x + child.x) / 2, y: sideY },
+  }
+}
+
+export function topologyNodeLabelLines(name: string) {
+  if (name.length <= 24) return [name]
+  const split = name.lastIndexOf(' ', 24)
+  const cut = split > 0 ? split : 24
+  const rest = name.slice(cut).trim()
+  return [name.slice(0, cut), rest.length <= 24 ? rest : `${rest.slice(0, 23)}…`]
+}
+
+export function topologyLastKnownRoute(parent: Position, child: Position, dividerX = 820) {
+  const startX = parent.x + 88
+  const endX = child.x - 88
+  const bendX = Math.min(endX - 28, Math.max(startX + 28, dividerX - 20))
+  return {
+    path: `M ${startX} ${parent.y} H ${bendX} V ${child.y} H ${endX}`,
+    label: { x: (startX + bendX) / 2, y: parent.y },
+  }
 }
 
 function when(ms?: number) {
@@ -173,6 +242,15 @@ function topologyCapabilityDeviceCount(gaps: string[]) {
   return devices.size
 }
 
+function lldpCapabilityDeviceCount(gaps: string[]) {
+  const devices = new Set<string>()
+  for (const gap of gaps) {
+    const match = gap.match(/^device:(\d+)\/lldp:/i)
+    if (match) devices.add(match[1])
+  }
+  return devices.size
+}
+
 export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () => void } = {}) {
   const [mode, setMode] = useState<Mode>('current')
   const [historyRange, setHistoryRange] = useState<HistoryRange>({ kind: 'preset', hours: 24 })
@@ -190,7 +268,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const [zoom, setZoom] = useState(1)
   const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null)
   const [selectedDeviceID, setSelectedDeviceID] = useState<number | null>(null)
+  const [panning, setPanning] = useState(false)
   const generation = useRef(0)
+  const pan = useRef<{ pointerID: number; x: number; y: number; left: number; top: number; moved: boolean } | null>(null)
   const rangeKey = historyRange.kind === 'preset'
     ? `preset:${historyRange.hours}`
     : `custom:${historyRange.from}:${historyRange.to}`
@@ -231,6 +311,39 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const bounds = loaded?.query === query ? loaded : null
   const error = failure?.query === query ? failure.message : ''
   const loading = loadingQuery === query
+
+  const startPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as Element).closest('button, [role="button"], input, select, summary')) return
+    pan.current = {
+      pointerID: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: event.currentTarget.scrollLeft,
+      top: event.currentTarget.scrollTop,
+      moved: false,
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    setPanning(true)
+  }
+
+  const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = pan.current
+    if (!drag || drag.pointerID !== event.pointerId) return
+    const x = event.clientX - drag.x
+    const y = event.clientY - drag.y
+    if (!drag.moved && Math.hypot(x, y) < 4) return
+    drag.moved = true
+    event.preventDefault()
+    event.currentTarget.scrollLeft = drag.left - x
+    event.currentTarget.scrollTop = drag.top - y
+  }
+
+  const stopPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pan.current?.pointerID !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture?.(event.pointerId)
+    pan.current = null
+    setPanning(false)
+  }
 
   const selectHistoryRange = (value: HistoryPreset) => {
     setRangeChoice(value)
@@ -280,6 +393,13 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
       && (medium === 'all' || edge.medium === medium)
       && (vlan === 'all' || edgeVLAN(edge) === vlan),
   ), [confidence, intervalEdges, medium, vlan])
+  const visibleLastKnown = useMemo(() => mode === 'current'
+    ? (data?.last_known_edges ?? []).filter((edge) =>
+      (confidence === 'all' || edge.confidence === confidence)
+        && (medium === 'all' || edge.medium === medium)
+        && (vlan === 'all' || edgeVLAN(edge) === vlan),
+    )
+    : [], [confidence, data, medium, mode, vlan])
   const visibleNodeIDs = useMemo(() => {
     if (mode === 'current') {
       return new Set((data?.nodes ?? []).map((node) => node.id))
@@ -311,6 +431,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     : []
   const capabilityDeviceCount = mode === 'current' && data
     ? topologyCapabilityDeviceCount(data.gaps)
+    : 0
+  const lldpDeviceCount = mode === 'current' && data
+    ? lldpCapabilityDeviceCount(data.gaps)
     : 0
 
   return (
@@ -416,6 +539,18 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
           </div>
         </Banner>
       )}
+      {lldpDeviceCount > 0 && (
+        <Banner tone="accent">
+          <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              LLDP evidence is unavailable on {lldpDeviceCount} {lldpDeviceCount === 1 ? 'router' : 'routers'}.
+              The optional official OpenWrt <code>lldpd</code> capability can add wired peer and port evidence.
+              It is never installed automatically: review the exact package-manager plan and rollback first.
+            </div>
+            {onReviewCapabilities && <Button onClick={onReviewCapabilities}>Review LLDP capability</Button>}
+          </div>
+        </Banner>
+      )}
       {data && !data.complete && (
         <Banner>
           <div role="status">
@@ -467,6 +602,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
             <ConfidenceLegendItem confidence="measured" />
             <ConfidenceLegendItem confidence="inferred" />
             <ConfidenceLegendItem confidence="ambiguous" />
+            {mode === 'current' && (data?.last_known_edges?.length ?? 0) > 0 && <LastKnownLegendItem />}
           </div>
         )}
       >
@@ -520,63 +656,131 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
             />
           </label>
         )}
+        {mode === 'current' && visibleLastKnown.length > 0 && (
+          <div role="note" style={{ color: 'var(--text-secondary)', fontSize: 11, marginBottom: 10 }}>
+            Dashed gray links are expired placements, not current proof.{' '}
+            {visibleLastKnown.map((edge) => {
+              const child = nodeByID.get(edge.child_id)?.name ?? edge.child_id
+              const parent = nodeByID.get(edge.parent_id)?.name ?? edge.parent_id
+              return `${child} → ${parent}${edge.parent_port ? ` ${edge.parent_port}` : ''} ended ${when(edge.valid_to ?? edge.last_seen)}`
+            }).join(' · ')}
+          </div>
+        )}
         {loading && !data ? (
           <div role="status" style={{ color: 'var(--text-secondary)' }}>Loading topology…</div>
         ) : data && data.nodes.length > 0 ? (
-          <div style={{ overflowX: 'auto', position: 'relative' }}>
+          <div
+            role="region"
+            aria-label="Topology graph viewport"
+            onPointerDown={startPan}
+            onPointerMove={movePan}
+            onPointerUp={stopPan}
+            onPointerCancel={stopPan}
+            style={{
+              overflow: 'auto', position: 'relative', width: '100%', maxWidth: '100%', maxHeight: 520, minWidth: 0,
+              cursor: panning ? 'grabbing' : 'grab', userSelect: 'none', touchAction: 'none',
+            }}
+          >
             <svg
-              aria-label={`${visibleNodes.length} topology nodes and ${visibleEdges.length} links`}
+              aria-label={`${visibleNodes.length} topology nodes and ${visibleEdges.length} links${visibleLastKnown.length ? `, plus ${visibleLastKnown.length} last-known placement` : ''}`}
               role="group"
               viewBox={`0 0 ${layout.width} ${layout.height}`}
-              style={{ width: `${zoom * 100}%`, minWidth: 620, maxHeight: 520 * zoom }}
+              style={{ display: 'block', width: `${zoom * 100}%`, minWidth: 620, maxWidth: 'none', height: 'auto', margin: zoom < 1 ? '0 auto' : 0 }}
             >
+              {layout.unplacedStartX != null && (
+                <g aria-hidden>
+                  <line
+                    x1={layout.unplacedStartX} y1="24"
+                    x2={layout.unplacedStartX} y2={layout.height - 24}
+                    stroke="var(--border-strong)"
+                    strokeDasharray="5 6"
+                  />
+                  <text
+                    x={layout.unplacedStartX + 20} y="28"
+                    fill="var(--text-secondary)" fontSize="11" fontWeight="600"
+                  >
+                    Unplaced · no current link evidence
+                  </text>
+                </g>
+              )}
+              {visibleLastKnown.map((edge) => {
+                const parent = layout.positions.get(edge.parent_id)
+                const child = layout.positions.get(edge.child_id)
+                if (!parent || !child) return null
+                const route = topologyLastKnownRoute(parent, child, layout.unplacedStartX ?? 820)
+                return (
+                  <g key={`last-known-path-${edge.id}`} aria-hidden>
+                    <path d={route.path} fill="none" stroke="var(--surface-1)" strokeWidth="9" strokeLinejoin="round" />
+                    <path d={route.path} fill="none" stroke="var(--text-muted)" strokeWidth="3" strokeDasharray="7 5" strokeLinejoin="round" />
+                  </g>
+                )
+              })}
               {visibleEdges.map((edge) => {
                 const parent = layout.positions.get(edge.parent_id)
                 const child = layout.positions.get(edge.child_id)
                 if (!parent || !child) return null
                 const visual = edgeVisuals[edge.confidence]
-                const bend = edgeOffsets.get(edge.id) ?? 0
-                const midY = (parent.y + child.y) / 2
-                const path = `M ${parent.x} ${parent.y + 25} C ${parent.x + bend} ${midY}, ${child.x + bend} ${midY}, ${child.x} ${child.y - 25}`
+                const route = topologyEdgeRoute(parent, child, edgeOffsets.get(edge.id) ?? 0)
                 return (
-                  <g key={edge.id}>
+                  <g key={`edge-path-${edge.id}`}>
                     <path
-                      d={path}
+                      d={route.path}
                       fill="none"
                       stroke="var(--surface-1)"
-                      strokeWidth={visual.width + 5}
+                      strokeWidth={visual.width + 8}
                       strokeLinecap="round"
+                      strokeLinejoin="round"
                     />
                     <path
-                      d={path}
+                      d={route.path}
                       fill="none"
                       stroke={visual.stroke}
                       strokeWidth={visual.width}
                       strokeDasharray={visual.dash}
                       strokeLinecap="round"
+                      strokeLinejoin="round"
                     />
-                    {edge.parent_port && (
-                      <text
-                        x={(parent.x + child.x) / 2 + bend}
-                        y={midY - 6}
-                        textAnchor="middle"
-                        fill="var(--text-primary)"
-                        stroke="var(--surface-1)"
-                        strokeWidth="4"
-                        paintOrder="stroke"
-                        strokeLinejoin="round"
-                        fontSize="11"
-                        fontWeight="600"
-                      >
-                        {edge.parent_port}
-                      </text>
-                    )}
+                  </g>
+                )
+              })}
+              {visibleLastKnown.map((edge) => {
+                const parent = layout.positions.get(edge.parent_id)
+                const child = layout.positions.get(edge.child_id)
+                if (!parent || !child) return null
+                const route = topologyLastKnownRoute(parent, child, layout.unplacedStartX ?? 820)
+                const label = `last known${edge.parent_port ? ` · ${edge.parent_port}` : ''}`
+                const labelWidth = Math.max(72, label.length * 6.5 + 16)
+                return (
+                  <g key={`last-known-label-${edge.id}`} transform={`translate(${route.label.x},${route.label.y})`} aria-hidden>
+                    <rect x={-labelWidth / 2} y="-11" width={labelWidth} height="22" rx="7" fill="var(--surface-1)" stroke="var(--text-muted)" />
+                    <text textAnchor="middle" y="4" fill="var(--text-secondary)" fontSize="10" fontWeight="600">{label}</text>
+                  </g>
+                )
+              })}
+              {visibleEdges.map((edge) => {
+                if (!edge.parent_port) return null
+                const parent = layout.positions.get(edge.parent_id)
+                const child = layout.positions.get(edge.child_id)
+                if (!parent || !child) return null
+                const visual = edgeVisuals[edge.confidence]
+                const route = topologyEdgeRoute(parent, child, edgeOffsets.get(edge.id) ?? 0)
+                const portWidth = Math.max(38, edge.parent_port.length * 7 + 14)
+                return (
+                  <g key={`edge-label-${edge.id}`} transform={`translate(${route.label.x},${route.label.y})`}>
+                    <rect
+                      x={-portWidth / 2} y="-11" width={portWidth} height="22" rx="7"
+                      fill="var(--surface-1)" stroke={visual.stroke} strokeWidth="1.5"
+                    />
+                    <text textAnchor="middle" y="4" fill="var(--text-primary)" fontSize="11" fontWeight="600">
+                      {edge.parent_port}
+                    </text>
                   </g>
                 )
               })}
               {visibleNodes.map((node) => {
                 const pos = layout.positions.get(node.id)
                 if (!pos) return null
+                const labelLines = topologyNodeLabelLines(node.name)
                 return (
                   <g
                     key={node.id}
@@ -595,15 +799,17 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                     style={{ cursor: 'pointer' }}
                   >
                     <rect
-                      x="-70" y="-25" width="140" height="50" rx="8"
+                      x="-88" y="-34" width="176" height="68" rx="9"
                       fill={node.synthetic ? 'var(--accent-soft)' : 'var(--surface-2)'}
                       stroke={node.online === false ? 'var(--critical)' : 'var(--border-strong)'}
                       strokeDasharray={node.kind === 'client' ? '4 3' : undefined}
                     />
-                    <text textAnchor="middle" y="-2" fill="var(--text-primary)" fontSize="12" fontWeight="600">
-                      {node.name.length > 20 ? `${node.name.slice(0, 18)}…` : node.name}
+                    <text textAnchor="middle" fill="var(--text-primary)" fontSize="12" fontWeight="600">
+                      {labelLines.map((line, index) => (
+                        <tspan key={line} x="0" y={labelLines.length > 1 ? -9 + index * 14 : -2}>{line}</tspan>
+                      ))}
                     </text>
-                    <text textAnchor="middle" y="15" fill="var(--text-secondary)" fontSize="10">
+                    <text textAnchor="middle" y={labelLines.length > 1 ? 20 : 15} fill="var(--text-secondary)" fontSize="10">
                       {node.kind}{node.online === false ? ' · offline' : ''}
                     </text>
                   </g>
@@ -614,6 +820,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
               <Button aria-label="Zoom out topology" onClick={() => setZoom((value) => Math.max(.75, value - .25))}>−</Button>
               <Button aria-label="Reset topology zoom" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</Button>
               <Button aria-label="Zoom in topology" onClick={() => setZoom((value) => Math.min(2, value + .25))}>+</Button>
+              <span style={{ alignSelf: 'center', color: 'var(--text-muted)', fontSize: 11 }}>Drag background to pan</span>
             </div>
           </div>
         ) : data?.complete ? (

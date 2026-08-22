@@ -7,37 +7,38 @@
 # roam onto phy0 was forced with a BSS transition request.
 #
 # Filtered to wifi and firmware lines; ssh/dropbear noise removed.
+# Client MACs, accounting-session IDs, and neighbor-report bytes use stable aliases.
 
-Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: associated (aid 1)
-Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=open
-Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb RADIUS: starting accounting session A92673AED91FCC88
-Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb WPA: pairwise key handshake completed (RSN)
-Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 36:e0:c7:4f:d0:fb
-Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: authenticated
-Mon Aug 17 16:38:52 2026 daemon.notice hostapd: phy0-ap0: BSS-TM-QUERY 36:e0:c7:4f:d0:fb reason=32 neighbor=000000000300f41b02000000260c69bde01ef532a4
-Mon Aug 17 16:39:31 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 36:e0:c7:4f:d0:fb
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 IEEE 802.11: associated (aid 1)
+Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 02:00:00:00:00:01 auth_alg=open
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 RADIUS: starting accounting session EXAMPLE-SESSION-1
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:38:33 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 02:00:00:00:00:01
+Mon Aug 17 16:38:33 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 IEEE 802.11: authenticated
+Mon Aug 17 16:38:52 2026 daemon.notice hostapd: phy0-ap0: BSS-TM-QUERY 02:00:00:00:00:01 reason=32 neighbor=<sanitized-neighbor-report>
+Mon Aug 17 16:39:31 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 02:00:00:00:00:01
 Mon Aug 17 16:39:33 2026 kern.debug kernel: [53244.375152] ieee80211 phy0: staid 1 deleted
-Mon Aug 17 16:39:36 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: deauthenticated due to local deauth request
-Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: associated (aid 1)
-Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED f6:97:77:eb:8e:c9 auth_alg=open
-Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 RADIUS: starting accounting session 2CCA971E26568E76
-Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 WPA: pairwise key handshake completed (RSN)
-Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED f6:97:77:eb:8e:c9
-Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: authenticated
+Mon Aug 17 16:39:36 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 IEEE 802.11: deauthenticated due to local deauth request
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 IEEE 802.11: associated (aid 1)
+Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 02:00:00:00:00:02 auth_alg=open
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 RADIUS: starting accounting session EXAMPLE-SESSION-2
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:39:50 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 02:00:00:00:00:02
+Mon Aug 17 16:39:50 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 IEEE 802.11: authenticated
 Mon Aug 17 16:41:11 2026 daemon.err hostapd: phy0-ap0: nl80211: kernel reports: key addition failed
-Mon Aug 17 16:41:11 2026 daemon.info hostapd: phy0-ap0: STA 36:e0:c7:4f:d0:fb IEEE 802.11: associated (aid 2)
-Mon Aug 17 16:41:11 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 36:e0:c7:4f:d0:fb auth_alg=ft
-Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 36:e0:c7:4f:d0:fb
+Mon Aug 17 16:41:11 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:01 IEEE 802.11: associated (aid 2)
+Mon Aug 17 16:41:11 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 02:00:00:00:00:01 auth_alg=ft
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 02:00:00:00:00:01
 Mon Aug 17 16:41:48 2026 kern.debug kernel: [53378.672076] ieee80211 phy0: staid 2 deleted
-Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d IEEE 802.11: associated (aid 2)
-Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 04:2e:c1:6d:f4:0d auth_alg=open
-Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d RADIUS: starting accounting session 07DFC813CE07FF75
-Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d WPA: pairwise key handshake completed (RSN)
-Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 04:2e:c1:6d:f4:0d
-Mon Aug 17 16:41:49 2026 daemon.info hostapd: phy0-ap0: STA 04:2e:c1:6d:f4:0d IEEE 802.11: authenticated
-Mon Aug 17 16:41:55 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED f6:97:77:eb:8e:c9
-Mon Aug 17 16:41:55 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: disassociated due to inactivity
-Mon Aug 17 16:41:56 2026 daemon.info hostapd: phy0-ap0: STA f6:97:77:eb:8e:c9 IEEE 802.11: deauthenticated due to inactivity (timer DEAUTH/REMOVE)
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:03 IEEE 802.11: associated (aid 2)
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: AP-STA-CONNECTED 02:00:00:00:00:03 auth_alg=open
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:03 RADIUS: starting accounting session EXAMPLE-SESSION-3
+Mon Aug 17 16:41:48 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:03 WPA: pairwise key handshake completed (RSN)
+Mon Aug 17 16:41:48 2026 daemon.notice hostapd: phy0-ap0: EAPOL-4WAY-HS-COMPLETED 02:00:00:00:00:03
+Mon Aug 17 16:41:49 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:03 IEEE 802.11: authenticated
+Mon Aug 17 16:41:55 2026 daemon.notice hostapd: phy0-ap0: AP-STA-DISCONNECTED 02:00:00:00:00:02
+Mon Aug 17 16:41:55 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 IEEE 802.11: disassociated due to inactivity
+Mon Aug 17 16:41:56 2026 daemon.info hostapd: phy0-ap0: STA 02:00:00:00:00:02 IEEE 802.11: deauthenticated due to inactivity (timer DEAUTH/REMOVE)
 Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.033636] ieee80211 phy0: cmd 0x9111=SetNewStation timed out
 Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.039527] ieee80211 phy0: return code: 0x1111
 Mon Aug 17 16:42:16 2026 kern.err kernel: [53407.044104] ieee80211 phy0: timeout: 0x1111

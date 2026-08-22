@@ -950,6 +950,14 @@ def handle_one(req):
     sess, obj, meth, args = (list(p) + [{}] * 4)[:4]
     args = args or {}
 
+    # uhttpd's HTTP ubus bridge owns this reserved field: it injects the
+    # session from params[0] and rejects callers that also put it in args.
+    # Mirror that boundary so direct-ubus-shaped requests fail in tests exactly
+    # as they do on stock OpenWrt.
+    if "ubus_rpc_session" in args:
+        return {"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32602, "message": "invalid parameters"}}
+
     if obj == "session" and meth == "login":
         if args.get("username") in reject_logins:
             return err(rid, 6)   # injected fault, see __test.reject_login

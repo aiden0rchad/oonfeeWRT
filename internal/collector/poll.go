@@ -150,6 +150,7 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 			snap.topologyFailed(spec.topologySource, cause)
 			d := Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
+				Target: degradationTarget(spec.inv),
 				Status: res.Status, Cause: cause,
 				Err:       res.Err.Error(),
 				Permanent: ubus.IsPermanent(res.Err),
@@ -169,7 +170,8 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 			snap.topologyFailed(spec.topologySource, CauseDecode)
 			d := Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
-				Cause: CauseDecode, Err: fmt.Sprintf("decode: %v", err),
+				Target: degradationTarget(spec.inv),
+				Cause:  CauseDecode, Err: fmt.Sprintf("decode: %v", err),
 			}
 			snap.Degraded = append(snap.Degraded, d)
 			if !spec.optional {
@@ -249,7 +251,8 @@ func (p *poller) pollAux(ctx context.Context, c *ubus.Client, target Target,
 		if result.Err != nil {
 			snap.Degraded = append(snap.Degraded, Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method, Status: result.Status,
-				Cause: degradationCause(result.Err, result.Status), Err: result.Err.Error(),
+				Target: degradationTarget(spec.inv),
+				Cause:  degradationCause(result.Err, result.Status), Err: result.Err.Error(),
 				Permanent: ubus.IsPermanent(result.Err),
 			})
 			continue
@@ -257,7 +260,8 @@ func (p *poller) pollAux(ctx context.Context, c *ubus.Client, target Target,
 		if err := spec.decode(result.Data, &snap); err != nil {
 			snap.Degraded = append(snap.Degraded, Degradation{
 				Object: spec.inv.Object, Method: spec.inv.Method,
-				Cause: CauseDecode, Err: fmt.Sprintf("decode: %v", err),
+				Target: degradationTarget(spec.inv),
+				Cause:  CauseDecode, Err: fmt.Sprintf("decode: %v", err),
 			})
 		}
 	}

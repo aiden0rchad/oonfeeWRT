@@ -142,6 +142,7 @@ type Collector struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	started bool
+	after   func(time.Duration, func()) *time.Timer
 }
 
 // New builds a Collector. Nothing polls until Start.
@@ -164,7 +165,10 @@ func New(sink Sink, opts Options) *Collector {
 	if opts.Log == nil {
 		opts.Log = slog.Default()
 	}
-	return &Collector{opts: opts, sink: sink, log: opts.Log, pollers: map[int64]*poller{}}
+	return &Collector{
+		opts: opts, sink: sink, log: opts.Log, pollers: map[int64]*poller{},
+		after: time.AfterFunc,
+	}
 }
 
 // Start begins polling. Devices added later start immediately.
@@ -342,7 +346,10 @@ func (c *Collector) Quiesce(deviceID int64) (release func()) {
 //
 // Found on hardware the first time the mesh health readout met a real device.
 //
-// Cheap: it does not fetch anything, it just makes the next scheduled poll ask.
+// Cheap: it does not fetch anything itself. It wakes the poller because the
+// apply-completion wake can win the race and start before this invalidation;
+// waiting for the next widened/focused interval would temporarily pair fresh
+// BSS state with stale section provenance.
 func (c *Collector) Rediscover(deviceID int64) {
 	c.mu.Lock()
 	p := c.pollers[deviceID]
@@ -351,9 +358,12 @@ func (c *Collector) Rediscover(deviceID int64) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.ifaceAt = time.Time{}
 	p.ifaceRefetchAt = p.c.now().Add(ifaceSettleDelay)
+	p.topologyAt = time.Time{}
+	p.mu.Unlock()
+	p.poke()
+	p.c.after(ifaceSettleDelay, p.poke)
 }
 
 // ifaceSettleDelay is how long after an apply to re-read the interface list a
@@ -409,10 +419,10 @@ type Overhead struct {
 	// RequestsPerMinute is the rate actually observed, which is the number the
 	// budget is written in.
 	RequestsPerMinute float64 `json:"requests_per_minute"`
-	// NonPollRequests is every request that was not a poll — session logins,
-	// and anything that escaped the batch. Logins amortise to nothing; a number
-	// that grows with the poll count means a call is being made outside the
-	// batch, which is a defect and not a rate to be averaged away.
+	// NonPollRequests is every request that was not a scheduled poll. It includes
+	// session setup and explicit actions such as discovery, capability probes,
+	// and RF scans. Growth while no action is running can still expose an
+	// accidental call outside the poll batch, but the count alone is not proof.
 	NonPollRequests int64 `json:"non_poll_requests"`
 	Quiesced        bool  `json:"quiesced"`
 
@@ -461,8 +471,9 @@ func (c *Collector) Degraded(deviceID int64) ([]Degradation, bool) {
 	return out, true
 }
 
-// Broadcasting is every BSS the last poll saw on this device, including the
-// ones this controller does not manage.
+// Broadcasting is every BSS the last poll saw in hostapd/interface inventory,
+// including the ones this controller does not manage. It does not claim that
+// another radio independently heard the beacon.
 //
 // Worth surfacing precisely because the controller leaves foreign config alone:
 // an AP adopted with SSIDs already on it keeps broadcasting them, correctly and
@@ -794,9 +805,8 @@ func (c *Collector) Overhead(deviceID int64) (Overhead, bool) {
 		o.Requests += p.client.Requests()
 		o.BytesOut += p.client.BytesOut()
 	}
-	// Requests beyond one per poll: session logins, and anything that escaped
-	// the batch. The second is a defect, so the number is worth surfacing
-	// rather than folding into a rate that hides it.
+	// Requests beyond one per poll include session setup and explicit actions.
+	// Keep the count visible; callers must not infer the cause from it alone.
 	o.NonPollRequests = o.Requests - o.Polls
 	if o.NonPollRequests < 0 {
 		o.NonPollRequests = 0

@@ -47,9 +47,14 @@ func (d *Daemon) Inspect(ctx context.Context, req api.InspectRequest) (*api.Insp
 	evidence := inspectGatewayEvidence(ctx, c, caps.Ports.WAN)
 	supported, recommended, unknown := assessFunctions(caps, evidence)
 
+	var radioCount *int
+	if caps.RadioInventory.Decided() {
+		n := len(caps.Radios)
+		radioCount = &n
+	}
 	out := &api.InspectResult{
 		MAC: mac, Model: caps.Board.Model, Class: string(caps.Class),
-		Firmware: caps.Board.Release, RadioCount: len(caps.Radios),
+		Firmware: caps.Board.Release, RadioCount: radioCount,
 		LANPorts: append([]string{}, caps.Ports.LAN...), WANPort: caps.Ports.WAN,
 		SwitchMode:           switchMode(caps),
 		FunctionsSupported:   append([]string{}, supported...),

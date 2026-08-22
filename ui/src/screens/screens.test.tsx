@@ -23,6 +23,7 @@ const api = {
   deleteWLAN: vi.fn(),
   saveGroup: vi.fn(),
   deleteGroup: vi.fn(),
+  setOverride: vi.fn(),
   noteForeign: vi.fn(),
   lastNeighbours: vi.fn(),
   events: vi.fn(),
@@ -38,6 +39,8 @@ const api = {
   overhead: vi.fn(),
   reprobe: vi.fn(),
   refreshACL: vi.fn(),
+  lldpCapability: vi.fn(),
+  changeLLDPCapability: vi.fn(),
   distributeNeighbours: vi.fn(),
   meshHealth: vi.fn(),
   saveUplink: vi.fn(),
@@ -146,7 +149,9 @@ describe('Discover', () => {
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     render(<Discover onPick={vi.fn()} />)
 
-    const scan = await screen.findByRole('button', { name: 'Scan' }) as HTMLButtonElement
+    const scan = (await screen.findByRole('button', {
+      name: 'Scan',
+    })) as HTMLButtonElement
     expect(scan.disabled).toBe(true)
     expect(screen.getByText(/found no eligible local addresses/i)).toBeTruthy()
     fireEvent.click(scan)
@@ -157,12 +162,27 @@ describe('Discover', () => {
     const onPick = vi.fn()
     api.scanPlan.mockResolvedValue({ networks: ['192.168.1.0/24'], hosts: 1 })
     api.scan.mockResolvedValue({
-      found: [{
-        host: '192.168.1.1', port: 80, scheme: 'http', verdict: 'openwrt',
-        signals: { objects: 12, radios: 2, gateway: true, dhcp: true, wireless: true },
-        known_device_id: 4, known_name: 'main-router',
-      }],
-      swept: 1, answered: 1, networks: ['192.168.1.0/24'], elapsed_ms: 4,
+      found: [
+        {
+          host: '192.168.1.1',
+          port: 80,
+          scheme: 'http',
+          verdict: 'openwrt',
+          signals: {
+            objects: 12,
+            radios: 2,
+            gateway: true,
+            dhcp: true,
+            wireless: true,
+          },
+          known_device_id: 4,
+          known_name: 'main-router',
+        },
+      ],
+      swept: 1,
+      answered: 1,
+      networks: ['192.168.1.0/24'],
+      elapsed_ms: 4,
     })
 
     render(<Discover onPick={onPick} />)
@@ -181,43 +201,51 @@ describe('Discover', () => {
 
   it('reports an unroutable sweep without claiming the subnet is empty', async () => {
     api.scanPlan.mockResolvedValue({
-      networks: ['192.168.1.0/24'], hosts: 254,
+      networks: ['192.168.1.0/24'],
+      hosts: 254,
     })
     api.scan.mockResolvedValue({
-      found: [], swept: 254, answered: 0,
-      networks: ['192.168.1.0/24'], elapsed_ms: 3,
-      failures: [{
-        network: '192.168.1.0/24', reason: 'unreachable', attempts: 254,
-      }],
+      found: [],
+      swept: 254,
+      answered: 0,
+      networks: ['192.168.1.0/24'],
+      elapsed_ms: 3,
+      failures: [
+        {
+          network: '192.168.1.0/24',
+          reason: 'unreachable',
+          attempts: 254,
+        },
+      ],
     })
 
     render(<Discover onPick={vi.fn()} />)
     await waitFor(() => expect(screen.getByText('Scan')).toBeTruthy())
     fireEvent.click(screen.getByText('Scan'))
 
-    await waitFor(() =>
-      expect(screen.getByText(/could not route to any address/i)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getAllByText(/could not route to any address/i)).not.toHaveLength(0))
     expect(screen.getByText(/does not establish whether devices are present/i)).toBeTruthy()
     expect(screen.queryByText(/Nothing on .* answered as an OpenWrt device/i)).toBeNull()
   })
 
   it('keeps a successfully completed empty sweep as an empty result', async () => {
     api.scanPlan.mockResolvedValue({
-      networks: ['192.168.1.0/24'], hosts: 254,
+      networks: ['192.168.1.0/24'],
+      hosts: 254,
     })
     api.scan.mockResolvedValue({
-      found: [], swept: 254, answered: 0,
-      networks: ['192.168.1.0/24'], elapsed_ms: 1200,
+      found: [],
+      swept: 254,
+      answered: 0,
+      networks: ['192.168.1.0/24'],
+      elapsed_ms: 1200,
     })
 
     render(<Discover onPick={vi.fn()} />)
     await waitFor(() => expect(screen.getByText('Scan')).toBeTruthy())
     fireEvent.click(screen.getByText('Scan'))
 
-    await waitFor(() =>
-      expect(screen.getByText(/Nothing on .* answered as an OpenWrt device/i)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/Nothing on .* answered as an OpenWrt device/i)).toBeTruthy())
     expect(screen.queryByText(/could not route to any address/i)).toBeNull()
   })
 })
@@ -234,6 +262,8 @@ describe('Adopt', () => {
       class: 'C',
       firmware: 'OpenWrt',
       features: [],
+      unobservable: ['iwinfo-survey'],
+      notes: ['channel utilization is unknown because the radio is inactive'],
     })
 
     render(<Adopt onAdopted={vi.fn()} />)
@@ -241,10 +271,8 @@ describe('Adopt', () => {
     await screen.findByText(/found no eligible local addresses/i)
     await screen.findByText(/Starting a new device ecosystem/i)
     const protocol = screen.getByRole('group', { name: 'Protocol' })
-    expect(within(protocol).getByRole('button', { name: 'http' }).getAttribute('aria-pressed'))
-      .toBe('true')
-    expect(within(protocol).getByRole('button', { name: 'https' }).getAttribute('aria-pressed'))
-      .toBe('false')
+    expect(within(protocol).getByRole('button', { name: 'http' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(protocol).getByRole('button', { name: 'https' }).getAttribute('aria-pressed')).toBe('false')
     fireEvent.change(screen.getByLabelText('Address'), {
       target: { value: '192.0.2.7' },
     })
@@ -255,18 +283,27 @@ describe('Adopt', () => {
       target: { value: key },
     })
 
-    const submit = screen.getByRole('button', { name: 'Adopt' }) as HTMLButtonElement
+    const submit = screen.getByRole('button', {
+      name: 'Adopt',
+    }) as HTMLButtonElement
     expect(screen.getByText(/SSH key does not replace it/)).toBeTruthy()
     expect(submit.disabled).toBe(true)
     const optIn = screen.getByRole('checkbox', {
-      name: /Add the oonfeeWRT controller capability to this router/i,
+      name: /Install the oonfeeWRT controller access payload/i,
     })
     const disclosure = optIn.closest('label')?.textContent
-    expect(disclosure).toMatch(/installs or replaces one rpcd ACL JSON file/i)
-    expect(disclosure).toMatch(/topology, radio channel\/scan, OpenWrt log, and fixed-target WAN ICMP/i)
+    expect(disclosure).toMatch(/writes one rpcd ACL JSON file and creates one scoped login/i)
     expect(disclosure).toMatch(/installs no package, binary, daemon, service, or firmware/i)
     expect(disclosure).toMatch(/unchecked or cancelling leaves the router unchanged/i)
     expect(disclosure).toMatch(/keeps Adopt unavailable/i)
+    const permissionDetails = screen
+      .getByText('Review exact router changes and permissions')
+      .closest('details')?.textContent
+    expect(permissionDetails).toMatch(/\/usr\/share\/rpcd\/acl\.d\/oonfeewrt\.json/i)
+    expect(permissionDetails).toMatch(/controller-owned network, wireless, firewall, and DHCP/i)
+    expect(permissionDetails).toMatch(/runtime 802\.11k neighbour-list updates/i)
+    expect(permissionDetails).toMatch(/cannot disconnect or steer clients/i)
+    expect(permissionDetails).toMatch(/require Preview and Apply later/i)
     fireEvent.click(optIn)
     expect(submit.disabled).toBe(false)
     fireEvent.click(submit)
@@ -282,32 +319,63 @@ describe('Adopt', () => {
       acknowledge_router_changes: true,
     })
     await waitFor(() => expect(screen.getByText(/is now managed/)).toBeTruthy())
+    expect(screen.getByText(/inactive interface, idle counters/)).toBeTruthy()
+    expect(screen.getByText(/widen access only when.*permission denial/)).toBeTruthy()
+    expect(screen.queryByText(/widening the ACL is the only thing/)).toBeNull()
     expect(screen.queryByDisplayValue(key)).toBeNull()
     expect(screen.getByText(/password and private key.*not stored/i)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Adopt another device' }))
     await screen.findByText(/found no eligible local addresses/i)
     expect((screen.getByLabelText('Address') as HTMLInputElement).value).toBe('')
     expect((screen.getByLabelText('Device username') as HTMLInputElement).value).toBe('root')
-    expect((screen.getByRole('checkbox', { name: /^Access point\b/ }) as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByRole('checkbox', {
-      name: /Add the oonfeeWRT controller capability to this router/i,
-    }) as HTMLInputElement).checked).toBe(false)
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: /^Access point\b/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true)
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: /Install the oonfeeWRT controller access payload/i,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false)
   })
 
   it('inspects first, recommends measured combined functions, and preserves the legacy role', async () => {
     api.devices.mockResolvedValue({ devices: [] })
     api.scanPlan.mockResolvedValue({ networks: ['192.168.1.0/24'], hosts: 1 })
     api.scan.mockResolvedValue({
-      found: [{
-        host: '192.168.1.1', port: 80, scheme: 'http', verdict: 'openwrt',
-        signals: { objects: 15, radios: 2, gateway: true, dhcp: true, wireless: true },
-      }],
-      swept: 1, answered: 1, networks: ['192.168.1.0/24'], elapsed_ms: 5,
+      found: [
+        {
+          host: '192.168.1.1',
+          port: 80,
+          scheme: 'http',
+          verdict: 'openwrt',
+          signals: {
+            objects: 15,
+            radios: 2,
+            gateway: true,
+            dhcp: true,
+            wireless: true,
+          },
+        },
+      ],
+      swept: 1,
+      answered: 1,
+      networks: ['192.168.1.0/24'],
+      elapsed_ms: 5,
     })
     api.inspectDevice.mockResolvedValue({
-      mac: 'aa:bb:cc:dd:ee:01', model: 'Linksys WRT3200ACM', class: 'A',
-      firmware: 'OpenWrt 25.12.5', radio_count: 2,
-      lan_ports: ['lan1', 'lan2', 'lan3', 'lan4'], wan_port: 'wan',
+      mac: 'aa:bb:cc:dd:ee:01',
+      model: 'Linksys WRT3200ACM',
+      class: 'A',
+      firmware: 'OpenWrt 25.12.5',
+      radio_count: 2,
+      lan_ports: ['lan1', 'lan2', 'lan3', 'lan4'],
+      wan_port: 'wan',
       switch_mode: 'dsa-conditional',
       functions_supported: ['gateway', 'ap', 'switch'],
       functions_recommended: ['gateway', 'ap', 'switch'],
@@ -317,9 +385,14 @@ describe('Adopt', () => {
       },
     })
     api.adopt.mockResolvedValue({
-      device_id: 1, mac: 'aa:bb:cc:dd:ee:01', name: 'WRT3200ACM',
-      model: 'Linksys WRT3200ACM', class: 'A', firmware: 'OpenWrt 25.12.5',
-      functions: ['gateway', 'ap', 'switch'], features: [],
+      device_id: 1,
+      mac: 'aa:bb:cc:dd:ee:01',
+      name: 'WRT3200ACM',
+      model: 'Linksys WRT3200ACM',
+      class: 'A',
+      firmware: 'OpenWrt 25.12.5',
+      functions: ['gateway', 'ap', 'switch'],
+      features: [],
     })
 
     render(<Adopt onAdopted={vi.fn()} />)
@@ -328,7 +401,13 @@ describe('Adopt', () => {
 
     expect(await screen.findByText(/Possible gateway found/i)).toBeTruthy()
     expect((screen.getByRole('checkbox', { name: /^Gateway\b/ }) as HTMLInputElement).checked).toBe(false)
-    expect((screen.getByRole('checkbox', { name: /^Access point\b/ }) as HTMLInputElement).checked).toBe(true)
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: /^Access point\b/,
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true)
     expect(screen.getByRole('group', { name: 'Device functions' })).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Device password (for ubus)'), {
@@ -341,18 +420,29 @@ describe('Adopt', () => {
     expect(screen.getAllByText(/Gateway recommendation evidence/).length).toBe(2)
     expect(screen.getByText(/DSA detected.*existing VLAN-aware LAN bridge/)).toBeTruthy()
     for (const label of ['Gateway', 'Access point', 'Switch']) {
-      expect((screen.getByRole('checkbox', { name: new RegExp(`^${label}\\b`) }) as HTMLInputElement).checked).toBe(true)
+      expect(
+        (
+          screen.getByRole('checkbox', {
+            name: new RegExp(`^${label}\\b`),
+          }) as HTMLInputElement
+        ).checked,
+      ).toBe(true)
     }
     const gatewayLabel = screen.getByRole('checkbox', { name: /^Gateway\b/ }).closest('label')
     expect(gatewayLabel?.textContent).toMatch(/Gateway\s*· recommended/)
     expect(gatewayLabel?.textContent).not.toMatch(/observed/i)
     expect(api.inspectDevice).toHaveBeenCalledWith({
-      host: '192.168.1.1', username: 'root', password: 'router-password', scheme: 'http',
+      host: '192.168.1.1',
+      username: 'root',
+      password: 'router-password',
+      scheme: 'http',
     })
 
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: /Add the oonfeeWRT controller capability to this router/i,
-    }))
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /Install the oonfeeWRT controller access payload/i,
+      }),
+    )
     fireEvent.click(screen.getByRole('button', { name: 'Adopt' }))
     await waitFor(() => expect(api.adopt).toHaveBeenCalledTimes(1))
     expect(api.adopt.mock.calls[0][0]).toMatchObject({
@@ -362,47 +452,108 @@ describe('Adopt', () => {
     })
   })
 
+  it('renders an unreadable radio inventory as unknown, never zero', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    api.inspectDevice.mockResolvedValue({
+      mac: 'aa:bb:cc:dd:ee:01',
+      model: 'Router',
+      class: 'A',
+      firmware: 'OpenWrt',
+      radio_count: null,
+      lan_ports: [],
+      switch_mode: 'unknown',
+      functions_supported: [],
+      functions_recommended: [],
+      functions_unknown: ['ap'],
+      gateway_evidence: {
+        active_wan_default_route: null,
+        lan_dhcp_enabled: null,
+      },
+    })
+    render(<Adopt onAdopted={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.1' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+    expect(await screen.findByText('Unknown — radio inventory was not observable')).toBeTruthy()
+    expect(screen.queryByText('0')).toBeNull()
+  })
+
   it('never applies a late inspection result to a different router', async () => {
     api.devices.mockResolvedValue({ devices: [] })
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     let resolveFirst!: (value: unknown) => void
     api.inspectDevice
-      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
       .mockResolvedValueOnce({
-        mac: 'bb:bb:bb:bb:bb:bb', model: 'Router B', class: 'C', firmware: 'OpenWrt',
-        radio_count: 1, lan_ports: [], wan_port: '', switch_mode: 'observe-only',
-        functions_supported: ['ap'], functions_recommended: ['ap'],
-        gateway_evidence: { active_wan_default_route: false, lan_dhcp_enabled: false },
+        mac: 'bb:bb:bb:bb:bb:bb',
+        model: 'Router B',
+        class: 'C',
+        firmware: 'OpenWrt',
+        radio_count: 1,
+        lan_ports: [],
+        wan_port: '',
+        switch_mode: 'observe-only',
+        functions_supported: ['ap'],
+        functions_recommended: ['ap'],
+        gateway_evidence: {
+          active_wan_default_route: false,
+          lan_dhcp_enabled: false,
+        },
       })
 
     render(<Adopt onAdopted={vi.fn()} />)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.10' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.10' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.11' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.11' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('Router B')).toBeTruthy()
-    await act(async () => resolveFirst({
-      mac: 'aa:aa:aa:aa:aa:aa', model: 'Router A', class: 'A', firmware: 'OpenWrt',
-      radio_count: 2, lan_ports: ['lan1'], wan_port: 'wan', switch_mode: 'dsa-conditional',
-      functions_supported: ['gateway'], functions_recommended: ['gateway'],
-      gateway_evidence: { active_wan_default_route: true, lan_dhcp_enabled: true },
-    }))
+    await act(async () =>
+      resolveFirst({
+        mac: 'aa:aa:aa:aa:aa:aa',
+        model: 'Router A',
+        class: 'A',
+        firmware: 'OpenWrt',
+        radio_count: 2,
+        lan_ports: ['lan1'],
+        wan_port: 'wan',
+        switch_mode: 'dsa-conditional',
+        functions_supported: ['gateway'],
+        functions_recommended: ['gateway'],
+        gateway_evidence: {
+          active_wan_default_route: true,
+          lan_dhcp_enabled: true,
+        },
+      }),
+    )
 
     expect(screen.queryByText('Router A')).toBeNull()
     expect(screen.getByText('Router B')).toBeTruthy()
-    expect(api.inspectDevice.mock.calls.map(([request]) => request.host)).toEqual([
-      '192.0.2.10', '192.0.2.11',
-    ])
+    expect(api.inspectDevice.mock.calls.map(([request]) => request.host)).toEqual(['192.0.2.10', '192.0.2.11'])
   })
 
   it('labels a supported C6 gateway function as available when routing and DHCP are not observed', async () => {
     api.devices.mockResolvedValue({ devices: [{ adopted: true }] })
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     api.inspectDevice.mockResolvedValue({
-      mac: 'aa:bb:cc:dd:ee:02', model: 'TP-Link Archer C6', class: 'C',
-      firmware: 'OpenWrt 25.12.5', radio_count: 2,
-      lan_ports: ['lan1', 'lan2', 'lan3', 'lan4'], wan_port: 'wan',
+      mac: 'aa:bb:cc:dd:ee:02',
+      model: 'TP-Link Archer C6',
+      class: 'C',
+      firmware: 'OpenWrt 25.12.5',
+      radio_count: 2,
+      lan_ports: ['lan1', 'lan2', 'lan3', 'lan4'],
+      wan_port: 'wan',
       switch_mode: 'observe-only',
       functions_supported: ['gateway', 'ap', 'switch'],
       functions_recommended: ['ap', 'switch'],
@@ -413,13 +564,17 @@ describe('Adopt', () => {
     })
 
     render(<Adopt onAdopted={vi.fn()} />)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.168.1.2' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.168.1.2' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('TP-Link Archer C6')).toBeTruthy()
     expect(screen.getByText('Not observed')).toBeTruthy()
     expect(screen.getByText('Not enabled')).toBeTruthy()
-    const gateway = screen.getByRole('checkbox', { name: /^Gateway\b/ }) as HTMLInputElement
+    const gateway = screen.getByRole('checkbox', {
+      name: /^Gateway\b/,
+    }) as HTMLInputElement
     expect(gateway.checked).toBe(false)
     expect(gateway.closest('label')?.textContent).toMatch(/Gateway\s*· available/)
     expect(gateway.closest('label')?.textContent).not.toMatch(/observed/i)
@@ -430,25 +585,38 @@ describe('Adopt', () => {
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     api.inspectDevice.mockRejectedValue(new ApiError(404, 'inspection is unavailable'))
     api.adopt.mockResolvedValue({
-      device_id: 8, mac: 'aa:bb:cc:dd:ee:08', name: 'external-gateway-ap',
-      model: 'OpenWrt AP', class: 'C', firmware: 'OpenWrt', features: [],
+      device_id: 8,
+      mac: 'aa:bb:cc:dd:ee:08',
+      name: 'external-gateway-ap',
+      model: 'OpenWrt AP',
+      class: 'C',
+      firmware: 'OpenWrt',
+      features: [],
     })
 
     render(<Adopt onAdopted={vi.fn()} />)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.8' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.8' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText(/You can still adopt directly/i)).toBeTruthy()
-    const adopt = screen.getByRole('button', { name: 'Adopt' }) as HTMLButtonElement
+    const adopt = screen.getByRole('button', {
+      name: 'Adopt',
+    }) as HTMLButtonElement
     expect(adopt.disabled).toBe(true)
-    fireEvent.click(screen.getByRole('checkbox', {
-      name: /Add the oonfeeWRT controller capability to this router/i,
-    }))
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /Install the oonfeeWRT controller access payload/i,
+      }),
+    )
     expect(adopt.disabled).toBe(false)
     fireEvent.click(adopt)
     await waitFor(() => expect(api.adopt).toHaveBeenCalledTimes(1))
     expect(api.adopt.mock.calls[0][0]).toMatchObject({
-      functions: ['ap'], role: 'ap', acknowledge_router_changes: true,
+      functions: ['ap'],
+      role: 'ap',
+      acknowledge_router_changes: true,
     })
   })
 
@@ -456,8 +624,12 @@ describe('Adopt', () => {
     api.devices.mockResolvedValue({ devices: [{ adopted: true }] })
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     api.inspectDevice.mockResolvedValue({
-      mac: 'aa:bb:cc:dd:ee:02', model: 'Archer C6', class: 'C',
-      firmware: 'OpenWrt', radio_count: 2, lan_ports: ['lan1', 'lan2'],
+      mac: 'aa:bb:cc:dd:ee:02',
+      model: 'Archer C6',
+      class: 'C',
+      firmware: 'OpenWrt',
+      radio_count: 2,
+      lan_ports: ['lan1', 'lan2'],
       switch_mode: 'observe-only',
       functions_supported: ['ap', 'switch'],
       functions_recommended: ['ap', 'switch'],
@@ -468,7 +640,9 @@ describe('Adopt', () => {
     })
 
     render(<Adopt onAdopted={vi.fn()} />)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.2' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.2' },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('2 observed: lan1, lan2')).toBeTruthy()
@@ -482,7 +656,9 @@ describe('Adopt', () => {
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     render(<Adopt onAdopted={vi.fn()} />)
     await screen.findByText(/Starting a new device ecosystem/i)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.9' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.9' },
+    })
     fireEvent.click(screen.getByRole('checkbox', { name: /^Access point\b/ }))
 
     expect(screen.getByRole('alert').textContent).toMatch(/at least one device function/i)
@@ -494,7 +670,9 @@ describe('Adopt', () => {
     api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
     render(<Adopt onAdopted={vi.fn()} />)
     await screen.findByText(/Starting a new device ecosystem/i)
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.10' } })
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.10' },
+    })
 
     const form = screen.getByRole('button', { name: 'Adopt' }).closest('form')
     expect(form).toBeTruthy()
@@ -528,9 +706,7 @@ describe('Clients', () => {
 
     // Turn a page, then change a filter.
     fireEvent.click(screen.getByText('Next'))
-    await waitFor(() =>
-      expect(api.clients.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(0),
-    )
+    await waitFor(() => expect(api.clients.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(0))
     fireEvent.click(screen.getByText('upstream'))
 
     await waitFor(() => {
@@ -592,20 +768,28 @@ describe('Clients', () => {
           { value: 'upstream', count: 1 },
         ],
       },
-      clients: [{
-        mac: 'aa:bb:cc:dd:ee:01', name: 'initial-local', first_seen: 1,
-        last_seen: 2, blocked: false, connection: 'unknown', online: true,
-        scope: 'local',
-      }],
+      clients: [
+        {
+          mac: 'aa:bb:cc:dd:ee:01',
+          name: 'initial-local',
+          first_seen: 1,
+          last_seen: 2,
+          blocked: false,
+          connection: 'unknown',
+          online: true,
+          scope: 'local',
+        },
+      ],
     })
     let resolveRefresh!: (page: typeof initial) => void
     let resolveFiltered!: (page: typeof initial) => void
-    const refresh = new Promise<typeof initial>((resolve) => { resolveRefresh = resolve })
-    const filtered = new Promise<typeof initial>((resolve) => { resolveFiltered = resolve })
-    api.clients
-      .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(refresh)
-      .mockReturnValueOnce(filtered)
+    const refresh = new Promise<typeof initial>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const filtered = new Promise<typeof initial>((resolve) => {
+      resolveFiltered = resolve
+    })
+    api.clients.mockResolvedValueOnce(initial).mockReturnValueOnce(refresh).mockReturnValueOnce(filtered)
 
     let unmount = () => {}
     try {
@@ -626,26 +810,44 @@ describe('Clients', () => {
       expect(screen.getByText('Loading clients…')).toBeTruthy()
 
       await act(async () => {
-        resolveFiltered(clientPage({
-          ...initial,
-          clients: [{
-            mac: 'aa:bb:cc:dd:ee:02', name: 'current-upstream', first_seen: 1,
-            last_seen: 2, blocked: false, connection: 'unknown', online: true,
-            scope: 'upstream',
-          }],
-        }))
+        resolveFiltered(
+          clientPage({
+            ...initial,
+            clients: [
+              {
+                mac: 'aa:bb:cc:dd:ee:02',
+                name: 'current-upstream',
+                first_seen: 1,
+                last_seen: 2,
+                blocked: false,
+                connection: 'unknown',
+                online: true,
+                scope: 'upstream',
+              },
+            ],
+          }),
+        )
       })
       expect(screen.getByText('current-upstream')).toBeTruthy()
 
       await act(async () => {
-        resolveRefresh(clientPage({
-          ...initial,
-          clients: [{
-            mac: 'aa:bb:cc:dd:ee:03', name: 'stale-local', first_seen: 1,
-            last_seen: 2, blocked: false, connection: 'unknown', online: true,
-            scope: 'local',
-          }],
-        }))
+        resolveRefresh(
+          clientPage({
+            ...initial,
+            clients: [
+              {
+                mac: 'aa:bb:cc:dd:ee:03',
+                name: 'stale-local',
+                first_seen: 1,
+                last_seen: 2,
+                blocked: false,
+                connection: 'unknown',
+                online: true,
+                scope: 'local',
+              },
+            ],
+          }),
+        )
       })
       expect(screen.queryByText('stale-local')).toBeNull()
       expect(screen.getByText('current-upstream')).toBeTruthy()
@@ -714,12 +916,20 @@ describe('Clients', () => {
     api.clients.mockResolvedValue(
       clientPage({
         total: 1,
-        scope_note: 'Unknown can mean network.interface.dump could not be read. Open Devices and check What the controller cannot read here.',
-        clients: [{
-          mac: 'aa:bb:cc:dd:ee:03', name: 'unplaced', first_seen: 1,
-          last_seen: 2, blocked: false, connection: 'unknown', online: true,
-          scope: 'unknown',
-        }],
+        scope_note:
+          'Unknown can mean network.interface.dump could not be read. Open Devices and check What the controller cannot read here.',
+        clients: [
+          {
+            mac: 'aa:bb:cc:dd:ee:03',
+            name: 'unplaced',
+            first_seen: 1,
+            last_seen: 2,
+            blocked: false,
+            connection: 'unknown',
+            online: true,
+            scope: 'unknown',
+          },
+        ],
       }),
     )
     render(<Clients />)
@@ -734,9 +944,16 @@ describe('Clients', () => {
   it('uses one joined response and one cursor for client, AP, site, events and path', async () => {
     const base = 1_787_140_800_000
     const client = {
-      mac: 'aa:bb:cc:dd:ee:44', name: 'timeline-laptop', first_seen: 1,
-      last_seen: 2, blocked: false, connection: 'wireless' as const, online: true,
-      scope: 'local' as const, signal: -58, device_id: 2,
+      mac: 'aa:bb:cc:dd:ee:44',
+      name: 'timeline-laptop',
+      first_seen: 1,
+      last_seen: 2,
+      blocked: false,
+      connection: 'wireless' as const,
+      online: true,
+      scope: 'local' as const,
+      signal: -58,
+      device_id: 2,
     }
     api.clients.mockResolvedValue(clientPage({ total: 1, clients: [client] }))
     api.clientObservability.mockResolvedValue({
@@ -749,82 +966,186 @@ describe('Clients', () => {
       ap_device_at: [2, 2, 3],
       metrics: [
         {
-          id: 'client:sta_rssi', scope: 'client', kind: 'sta_rssi', label: 'Signal', unit: 'dBm',
+          id: 'client:sta_rssi',
+          scope: 'client',
+          kind: 'sta_rssi',
+          label: 'Signal',
+          unit: 'dBm',
           values: [-70, -55, -58],
-          mins: [-74, -57, -61], maxs: [-66, -53, -56], counts: [4, 4, 4],
-          availability: { state: 'available', source: 'rollup_5m', observed_points: 3, expected_points: 3, gaps: [] },
+          mins: [-74, -57, -61],
+          maxs: [-66, -53, -56],
+          counts: [4, 4, 4],
+          availability: {
+            state: 'available',
+            source: 'rollup_5m',
+            observed_points: 3,
+            expected_points: 3,
+            gaps: [],
+          },
         },
         {
-          id: 'client:sta_experience_wifi_v1', scope: 'client', kind: 'sta_experience_wifi_v1',
-          label: 'WiFi experience', unit: 'score', values: [null, 91, null],
+          id: 'client:sta_experience_wifi_v1',
+          scope: 'client',
+          kind: 'sta_experience_wifi_v1',
+          label: 'WiFi experience',
+          unit: 'score',
+          values: [null, 91, null],
           availability: {
-            state: 'partial', source: 'derived:5m', observed_points: 1, expected_points: 3,
-            gaps: [{ from: base, to: base + 300_000 }, { from: base + 600_000, to: base + 900_000 }],
+            state: 'partial',
+            source: 'derived:5m',
+            observed_points: 1,
+            expected_points: 3,
+            gaps: [
+              { from: base, to: base + 300_000 },
+              { from: base + 600_000, to: base + 900_000 },
+            ],
             reason: 'wifi-v1 requires all inputs',
           },
         },
         {
-          id: 'ap:2:sys_load1', scope: 'ap', kind: 'sys_load1', label: 'AP load', unit: 'load',
-          device_id: 2, device_name: 'Hall AP', values: [.2, .4, null],
-          availability: { state: 'partial', source: 'rollup_5m', observed_points: 2, expected_points: 3, gaps: [{ from: base + 600_000, to: base + 900_000 }] },
-        },
-        {
-          id: 'ap:2:radio_utilization_pct:radio1', scope: 'ap', kind: 'radio_utilization_pct',
-          label: 'Channel utilization', unit: '%', device_id: 2, device_name: 'Hall AP',
-          key: 'radio1',
-          values: [null, null, null],
+          id: 'ap:2:sys_load1',
+          scope: 'ap',
+          kind: 'sys_load1',
+          label: 'AP load',
+          unit: 'load',
+          device_id: 2,
+          device_name: 'Hall AP',
+          values: [0.2, 0.4, null],
           availability: {
-            state: 'unavailable', source: 'rollup_5m', observed_points: 0, expected_points: 3,
-            gaps: [{ from: base, to: base + 900_000 }],
-            reason: 'no stored stable-radio channel-utilization rollup exists for this known radio in the requested interval',
+            state: 'partial',
+            source: 'rollup_5m',
+            observed_points: 2,
+            expected_points: 3,
+            gaps: [{ from: base + 600_000, to: base + 900_000 }],
           },
         },
         {
-          id: 'site:1:site_wan_latency_ms', scope: 'site', kind: 'site_wan_latency_ms',
-          label: 'ICMP latency to 1.1.1.1', unit: 'ms', device_id: 1, device_name: 'Gateway', values: [8, 9, 10],
-          availability: { state: 'available', source: 'rollup_5m', observed_points: 3, expected_points: 3, gaps: [] },
+          id: 'ap:2:radio_utilization_pct:radio1',
+          scope: 'ap',
+          kind: 'radio_utilization_pct',
+          label: 'Channel utilization',
+          unit: '%',
+          device_id: 2,
+          device_name: 'Hall AP',
+          key: 'radio1',
+          values: [null, null, null],
+          availability: {
+            state: 'unavailable',
+            source: 'rollup_5m',
+            observed_points: 0,
+            expected_points: 3,
+            gaps: [{ from: base, to: base + 900_000 }],
+            reason:
+              'no stored stable-radio channel-utilization rollup exists for this known radio in the requested interval',
+          },
+        },
+        {
+          id: 'site:1:site_wan_latency_ms',
+          scope: 'site',
+          kind: 'site_wan_latency_ms',
+          label: 'ICMP latency to 1.1.1.1',
+          unit: 'ms',
+          device_id: 1,
+          device_name: 'Gateway',
+          values: [8, 9, 10],
+          availability: {
+            state: 'available',
+            source: 'rollup_5m',
+            observed_points: 3,
+            expected_points: 3,
+            gaps: [],
+          },
         },
       ],
       events: [
         {
-          id: 4392, ts: base + 60_000, category: 'client', severity: 'info', event: 'client.connect',
-          detail: {}, source: 'openwrt-log', source_id: '4392', source_boot: 'boot:1',
-          ingested_at: base + 61_000, client_mac: client.mac, action: 'connect', in_iface: 'phy0-ap0',
+          id: 4392,
+          ts: base + 60_000,
+          category: 'client',
+          severity: 'info',
+          event: 'client.connect',
+          detail: {},
+          source: 'openwrt-log',
+          source_id: '4392',
+          source_boot: 'boot:1',
+          ingested_at: base + 61_000,
+          client_mac: client.mac,
+          action: 'connect',
+          in_iface: 'phy0-ap0',
         },
         {
-          id: 4393, ts: base + 60_000, category: 'client', severity: 'info', event: 'client.connect',
-          detail: {}, source: 'openwrt-log', source_id: '4393', source_boot: 'boot:1',
-          ingested_at: base + 62_000, client_mac: client.mac, action: 'reconnect', in_iface: 'lan1',
+          id: 4393,
+          ts: base + 60_000,
+          category: 'client',
+          severity: 'info',
+          event: 'client.connect',
+          detail: {},
+          source: 'openwrt-log',
+          source_id: '4393',
+          source_boot: 'boot:1',
+          ingested_at: base + 62_000,
+          client_mac: client.mac,
+          action: 'reconnect',
+          in_iface: 'lan1',
         },
       ],
       paths: [
         {
-          from: base, to: base + 300_000, complete: false, gaps: ['no observed edge medium'],
-          paths: [{ node_ids: ['client:x', 'device:2', 'device:1', 'synthetic:internet'], labels: ['timeline-laptop', 'Hall AP', 'Gateway', 'Internet'], mediums: null as never, confidence: 'measured' }],
+          from: base,
+          to: base + 300_000,
+          complete: false,
+          gaps: ['no observed edge medium'],
+          paths: [
+            {
+              node_ids: ['client:x', 'device:2', 'device:1', 'synthetic:internet'],
+              labels: ['timeline-laptop', 'Hall AP', 'Gateway', 'Internet'],
+              mediums: null as never,
+              confidence: 'measured',
+            },
+          ],
         },
         {
-          from: base + 300_000, to: base + 900_000, complete: true, gaps: [],
-          paths: [{ node_ids: ['client:x', 'device:3', 'device:1', 'synthetic:internet'], labels: ['timeline-laptop', 'Other AP', 'Gateway', 'Internet'], mediums: ['wireless', 'wired', 'uplink'], confidence: 'measured' }],
+          from: base + 300_000,
+          to: base + 900_000,
+          complete: true,
+          gaps: [],
+          paths: [
+            {
+              node_ids: ['client:x', 'device:3', 'device:1', 'synthetic:internet'],
+              labels: ['timeline-laptop', 'Other AP', 'Gateway', 'Internet'],
+              mediums: ['wireless', 'wired', 'uplink'],
+              confidence: 'measured',
+            },
+          ],
         },
       ],
       gaps: ['historical topology source coverage is unavailable'],
       experience_formula: {
-        name: 'wifi-v1', weights: { rssi: .45, retry_delta: .35, tx_fail_delta: .2 },
+        name: 'wifi-v1',
+        weights: { rssi: 0.45, retry_delta: 0.35, tx_fail_delta: 0.2 },
         missing_policy: 'null when any input is missing; weights are never renormalized',
       },
       data_contract: {
-        metric_source: 'rollup_5m', raw_samples_persisted: false,
-        event_time_resolution_ms: 1000, events_truncated: false,
+        metric_source: 'rollup_5m',
+        raw_samples_persisted: false,
+        event_time_resolution_ms: 1000,
+        events_truncated: false,
         topology_source: 'persisted validity intervals',
       },
     })
 
     render(<Clients />)
-    const opener = await screen.findByRole('button', { name: 'Open observability for timeline-laptop' })
+    const opener = await screen.findByRole('button', {
+      name: 'Open observability for timeline-laptop',
+    })
     opener.focus()
     fireEvent.click(opener)
-    const analysis = await screen.findByRole('region', { name: 'Client analysis' })
-    const eventPane = screen.getByRole('complementary', { name: 'Event spine' })
+    const analysis = await screen.findByRole('region', {
+      name: 'Client analysis',
+    })
+    const eventPane = screen.getByRole('complementary', {
+      name: 'Event spine',
+    })
     expect(screen.getByRole('region', { name: 'Client filters' })).toBeTruthy()
     expect(screen.getByRole('region', { name: 'Client list' })).toBeTruthy()
     expect(eventPane).toBeTruthy()
@@ -843,7 +1164,9 @@ describe('Clients', () => {
     fireEvent.change(slider, { target: { value: base + 160_000 } })
     expect(within(analysis).getByText('timeline-laptop → Hall AP → Gateway → Internet')).toBeTruthy()
     expect(within(analysis).getByText(/no observed link/)).toBeTruthy()
-    const signal = within(analysis).getByRole('region', { name: 'Signal metric' })
+    const signal = within(analysis).getByRole('region', {
+      name: 'Signal metric',
+    })
     expect(within(signal).getByText('Avg -70 dBm')).toBeTruthy()
     const tooltip = within(signal).getByRole('tooltip')
     expect(tooltip.textContent).toContain(new Date(base).toLocaleString())
@@ -852,10 +1175,14 @@ describe('Clients', () => {
     expect(tooltip.textContent).toMatch(/Source samples: 4/)
     expect(signal.querySelector('[data-rollup-band="true"]')).toBeTruthy()
     fireEvent.click(within(signal).getByRole('button', { name: 'Table' }))
-    const table = within(signal).getByRole('table', { name: 'Signal rollup table' })
+    const table = within(signal).getByRole('table', {
+      name: 'Signal rollup table',
+    })
     expect(within(table).getByRole('columnheader', { name: 'Minimum' })).toBeTruthy()
     expect(within(table).getByText('-74 dBm')).toBeTruthy()
-    const unavailableRadio = within(analysis).getByRole('region', { name: 'Channel utilization metric' })
+    const unavailableRadio = within(analysis).getByRole('region', {
+      name: 'Channel utilization metric',
+    })
     expect(within(unavailableRadio).getByText('Hall AP · radio1')).toBeTruthy()
     expect(within(unavailableRadio).getByText(/no stored stable-radio channel-utilization rollup/)).toBeTruthy()
     expect(api.clientObservability).toHaveBeenCalledTimes(1)
@@ -869,8 +1196,12 @@ describe('Clients', () => {
     // Regression: equal-second events have distinct persisted identities. The
     // shared cursor still moves to their common time, but the clicked row and
     // its detail must not collapse to the first event at that timestamp.
-    const firstEvent = within(eventPane).getByRole('button', { name: /client\.connect.*#4392/ })
-    const secondEvent = within(eventPane).getByRole('button', { name: /client\.connect.*#4393/ })
+    const firstEvent = within(eventPane).getByRole('button', {
+      name: /client\.connect.*#4392/,
+    })
+    const secondEvent = within(eventPane).getByRole('button', {
+      name: /client\.connect.*#4393/,
+    })
     fireEvent.click(secondEvent)
     expect(api.clientObservability).toHaveBeenCalledTimes(1)
     expect(secondEvent.getAttribute('aria-pressed')).toBe('true')
@@ -897,12 +1228,20 @@ describe('Clients', () => {
       pageLoad++
       return clientPage({
         total: 1,
-        clients: [{
-          mac, name: 'moving-client', first_seen: 1, last_seen: 2,
-          blocked: false, connection: 'wireless', online: true, scope: 'local',
-          // Deliberately stale/different: the joined timeline owns the lease.
-          device_id: pageLoad === 1 ? 90 : 91,
-        }],
+        clients: [
+          {
+            mac,
+            name: 'moving-client',
+            first_seen: 1,
+            last_seen: 2,
+            blocked: false,
+            connection: 'wireless',
+            online: true,
+            scope: 'local',
+            // Deliberately stale/different: the joined timeline owns the lease.
+            device_id: pageLoad === 1 ? 90 : 91,
+          },
+        ],
       })
     })
     let joinedLoad = 0
@@ -922,23 +1261,31 @@ describe('Clients', () => {
         gaps: ['historical router-log source coverage is unavailable'],
         experience_formula: {
           name: 'wifi-v1' as const,
-          weights: { rssi: .45, retry_delta: .35, tx_fail_delta: .2 },
+          weights: { rssi: 0.45, retry_delta: 0.35, tx_fail_delta: 0.2 },
           missing_policy: 'null when any input is missing',
         },
         data_contract: {
-          metric_source: 'rollup_5m', raw_samples_persisted: false as const,
-          event_time_resolution_ms: 1000, events_truncated: false,
+          metric_source: 'rollup_5m',
+          raw_samples_persisted: false as const,
+          event_time_resolution_ms: 1000,
+          events_truncated: false,
           topology_source: 'persisted validity intervals',
         },
       }
     })
     const release2 = vi.fn()
     const release3 = vi.fn()
-    live.watch.mockImplementation((id) => id === 2 ? release2 : release3)
+    live.watch.mockImplementation((id) => (id === 2 ? release2 : release3))
 
     const view = render(<Clients />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Open observability for moving-client' }))
-    const eventPane = await screen.findByRole('complementary', { name: 'Event spine' })
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Open observability for moving-client',
+      }),
+    )
+    const eventPane = await screen.findByRole('complementary', {
+      name: 'Event spine',
+    })
     await waitFor(() => expect(live.watch.mock.calls.map(([id]) => id)).toEqual([2]))
     expect(within(eventPane).getByText(/No sourced client event was returned/)).toBeTruthy()
     const firstRange = api.clientObservability.mock.calls[0]
@@ -986,7 +1333,14 @@ describe('Settings — mesh editor', () => {
     ],
     groups: [{ id: 1, name: 'all', device_ids: [] }],
     networks: [
-      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+      {
+        id: 1,
+        name: 'lan',
+        vlan: 1,
+        cidr: '192.168.1.1/24',
+        zone: 'lan',
+        enabled: true,
+      },
     ],
     problems: [],
     overrides: [],
@@ -1044,7 +1398,8 @@ describe('Settings — mesh editor', () => {
 
   it('requires an explicit control to make an encrypted mesh open', async () => {
     api.saveMesh.mockResolvedValue({
-      mesh: { ...site.meshes[0], has_key: false }, problems: [],
+      mesh: { ...site.meshes[0], has_key: false },
+      problems: [],
     })
     render(<Settings devices={[]} />)
     await waitFor(() => expect(screen.getByText('backhaul')).toBeTruthy())
@@ -1056,7 +1411,10 @@ describe('Settings — mesh editor', () => {
     fireEvent.click(screen.getByText('Save'))
 
     await waitFor(() => expect(api.saveMesh).toHaveBeenCalled())
-    expect(api.saveMesh.mock.calls[0][0]).toMatchObject({ clear_key: true, key: '' })
+    expect(api.saveMesh.mock.calls[0][0]).toMatchObject({
+      clear_key: true,
+      key: '',
+    })
   })
 
   // An open mesh has to be visible as open in the LIST, not only in the editor.
@@ -1075,36 +1433,56 @@ describe('Settings — mesh editor', () => {
     fireEvent.click(await screen.findByText('Add a mesh'))
 
     const editor = screen.getByText('New mesh backhaul').closest('section') as HTMLElement
-    const save = within(editor).getByRole('button', { name: 'Save' }) as HTMLButtonElement
+    const save = within(editor).getByRole('button', {
+      name: 'Save',
+    }) as HTMLButtonElement
     expect(save.disabled).toBe(true)
 
-    fireEvent.change(within(editor).getByLabelText('Mesh ID'), { target: { value: '   ' } })
+    fireEvent.change(within(editor).getByLabelText('Mesh ID'), {
+      target: { value: '   ' },
+    })
     expect(save.disabled).toBe(true)
-    fireEvent.change(within(editor).getByLabelText('Mesh ID'), { target: { value: 'backhaul-2' } })
+    fireEvent.change(within(editor).getByLabelText('Mesh ID'), {
+      target: { value: 'backhaul-2' },
+    })
     expect(save.disabled).toBe(false)
   })
 
   it('requires a named confirmation and surfaces a mesh deletion failure', async () => {
     let rejectDelete!: (error: Error) => void
-    api.deleteMesh.mockReturnValue(new Promise((_, reject) => {
-      rejectDelete = reject
-    }))
+    api.deleteMesh.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectDelete = reject
+      }),
+    )
     render(<Settings devices={[]} />)
 
     const card = (await screen.findByText('Mesh backhauls')).closest('section') as HTMLElement
     fireEvent.click(within(card).getByRole('button', { name: 'Delete mesh backhaul' }))
     expect(api.deleteMesh).not.toHaveBeenCalled()
 
-    const confirm = within(card).getByRole('button', { name: 'Delete “backhaul”' })
+    const confirm = within(card).getByRole('button', {
+      name: 'Delete “backhaul”',
+    })
     fireEvent.click(confirm)
     await waitFor(() => expect(api.deleteMesh).toHaveBeenCalledWith(1))
-    expect((within(card).getByRole('button', { name: 'Deleting…' }) as HTMLButtonElement).disabled)
-      .toBe(true)
+    expect(
+      (
+        within(card).getByRole('button', {
+          name: 'Deleting…',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true)
 
     await act(async () => rejectDelete(new Error('mesh deletion failed')))
     expect(await within(card).findByText('mesh deletion failed')).toBeTruthy()
-    expect((within(card).getByRole('button', { name: 'Delete “backhaul”' }) as HTMLButtonElement).disabled)
-      .toBe(false)
+    expect(
+      (
+        within(card).getByRole('button', {
+          name: 'Delete “backhaul”',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false)
   })
 })
 
@@ -1112,17 +1490,36 @@ describe('Settings — desired-state controls', () => {
   const site = {
     name: 'Site',
     uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
-    wlans: [{
-      id: 1, ssid: 'oonfee-roam', network_id: 1, group_id: 1,
-      bands: ['5g'], security_mode: 'psk2', pmf: '1', has_key: true, enabled: true,
-      roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: true },
-      hidden: false, isolate: false, max_assoc: 0, allow_uplink: false,
-    }],
+    wlans: [
+      {
+        id: 1,
+        ssid: 'oonfee-roam',
+        network_id: 1,
+        group_id: 1,
+        bands: ['5g'],
+        security_mode: 'psk2',
+        pmf: '1',
+        has_key: true,
+        enabled: true,
+        roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: true },
+        hidden: false,
+        isolate: false,
+        max_assoc: 0,
+        allow_uplink: false,
+      },
+    ],
     meshes: [],
     uplinks: [],
     groups: [{ id: 1, name: 'all', device_ids: [] }],
     networks: [
-      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+      {
+        id: 1,
+        name: 'lan',
+        vlan: 1,
+        cidr: '192.168.1.1/24',
+        zone: 'lan',
+        enabled: true,
+      },
     ],
     zones: [],
     problems: [],
@@ -1138,31 +1535,49 @@ describe('Settings — desired-state controls', () => {
 
   it('requires a named confirmation and surfaces a WLAN deletion failure', async () => {
     let rejectDelete!: (error: Error) => void
-    api.deleteWLAN.mockReturnValue(new Promise((_, reject) => {
-      rejectDelete = reject
-    }))
+    api.deleteWLAN.mockReturnValue(
+      new Promise((_, reject) => {
+        rejectDelete = reject
+      }),
+    )
     render(<Settings devices={[]} />)
 
     const card = (await screen.findByText('Add a WLAN')).closest('section') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Delete wireless network oonfee-roam' }))
+    fireEvent.click(
+      within(card).getByRole('button', {
+        name: 'Delete wireless network oonfee-roam',
+      }),
+    )
     expect(api.deleteWLAN).not.toHaveBeenCalled()
 
     fireEvent.click(within(card).getByRole('button', { name: 'Delete “oonfee-roam”' }))
     await waitFor(() => expect(api.deleteWLAN).toHaveBeenCalledWith(1))
-    expect((within(card).getByRole('button', { name: 'Deleting…' }) as HTMLButtonElement).disabled)
-      .toBe(true)
+    expect(
+      (
+        within(card).getByRole('button', {
+          name: 'Deleting…',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true)
     await act(async () => rejectDelete(new Error('WLAN deletion failed')))
     expect(await within(card).findByText('WLAN deletion failed')).toBeTruthy()
-    expect((within(card).getByRole('button', { name: 'Delete “oonfee-roam”' }) as HTMLButtonElement).disabled)
-      .toBe(false)
+    expect(
+      (
+        within(card).getByRole('button', {
+          name: 'Delete “oonfee-roam”',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false)
   })
 
   it('serializes rapid membership changes from the latest desired membership', async () => {
     let finishFirst!: () => void
     api.saveGroup
-      .mockReturnValueOnce(new Promise((resolve) => {
-        finishFirst = () => resolve({})
-      }))
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishFirst = () => resolve({})
+        }),
+      )
       .mockResolvedValueOnce({})
     const devices = [
       { id: 1, name: 'AP one', adopted: true },
@@ -1173,11 +1588,19 @@ describe('Settings — desired-state controls', () => {
     fireEvent.click(await screen.findByLabelText('AP one'))
     fireEvent.click(screen.getByLabelText('AP two'))
     await waitFor(() => expect(api.saveGroup).toHaveBeenCalledTimes(1))
-    expect(api.saveGroup.mock.calls[0][0]).toEqual({ id: 1, device_ids: [1] })
+    expect(api.saveGroup.mock.calls[0][0]).toEqual({
+      id: 1,
+      name: 'all',
+      device_ids: [1],
+    })
 
     await act(async () => finishFirst())
     await waitFor(() => expect(api.saveGroup).toHaveBeenCalledTimes(2))
-    expect(api.saveGroup.mock.calls[1][0]).toEqual({ id: 1, device_ids: [1, 2] })
+    expect(api.saveGroup.mock.calls[1][0]).toEqual({
+      id: 1,
+      name: 'all',
+      device_ids: [1, 2],
+    })
   })
 
   it('keeps inline network controls from opening the network editor', async () => {
@@ -1208,9 +1631,45 @@ describe('Settings — desired-state controls', () => {
     ]
     for (const [groupName, buttonName] of selected) {
       const group = screen.getByRole('group', { name: groupName })
-      expect(within(group).getByRole('button', { name: buttonName }).getAttribute('aria-pressed'))
-        .toBe('true')
+      expect(within(group).getByRole('button', { name: buttonName }).getAttribute('aria-pressed')).toBe('true')
     }
+  })
+
+  it('keeps an override toggle at the requested value while its refresh is pending', async () => {
+    const overridden = {
+      ...site,
+      overrides: [
+        {
+          device_id: 1,
+          wlan_id: 1,
+          key: 'disabled',
+          value: '1',
+          describe: 'oonfee-roam is not published here',
+        },
+      ],
+    }
+    const cleared = { ...site, overrides: [] }
+    api.site.mockResolvedValueOnce(overridden).mockResolvedValueOnce(cleared)
+    let finish!: () => void
+    api.setOverride.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = () => resolve({})
+      }),
+    )
+    render(<Settings devices={[{ id: 1, name: 'AP one', adopted: true }] as never} />)
+
+    const toggle = (await screen.findByLabelText('Do not publish here')) as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    fireEvent.click(toggle)
+    expect(toggle.checked).toBe(false)
+    expect(toggle.disabled).toBe(true)
+    expect(api.setOverride).toHaveBeenCalledWith(1, 1, 'disabled', '')
+
+    await act(async () => finish())
+    await waitFor(() => {
+      expect(toggle.checked).toBe(false)
+      expect(toggle.disabled).toBe(false)
+    })
   })
 })
 
@@ -1239,6 +1698,13 @@ describe('Devices — re-probe panel', () => {
     api.device.mockResolvedValue(detail)
     api.deviceSeries.mockResolvedValue({ series: {} })
     api.overhead.mockRejectedValue(new Error('none'))
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'not_installed',
+      requested_packages: ['lldpd'],
+      added_packages: [],
+    })
     // Every chart on this panel renders its empty state, which is what the
     // focused-tier test below is about.
     api.stats.mockRejectedValue(new Error('none'))
@@ -1256,17 +1722,58 @@ describe('Devices — re-probe panel', () => {
 
   it('renders an omitted live station signal as unavailable, not zero dBm', async () => {
     await openPanel()
-    act(() => pushLive({
-      type: 'stats', device_id: 1, ts: Math.floor(Date.now() / 1000), tier: 'focused', uptime: 100,
-      load1: 0.1, poll_ms: 5, clients: 1, degraded: 0, aps: [],
-      stations: [{
-        mac: '00:11:22:33:44:55', iface: 'phy0-ap0', signal: null,
-        rx_kbit: null, tx_kbit: null, connected_seconds: 10,
-      }],
-    }))
+    act(() =>
+      pushLive({
+        type: 'stats',
+        device_id: 1,
+        ts: Math.floor(Date.now() / 1000),
+        tier: 'focused',
+        uptime: 100,
+        load1: 0.1,
+        poll_ms: 5,
+        clients: 1,
+        degraded: 0,
+        aps: [],
+        stations: [
+          {
+            mac: '00:11:22:33:44:55',
+            iface: 'phy0-ap0',
+            signal: null,
+            rx_kbit: null,
+            tx_kbit: null,
+            connected_seconds: 10,
+          },
+        ],
+      }),
+    )
     expect(screen.getByText('Associated now')).toBeTruthy()
     expect(screen.getByTitle('this station did not report signal')).toBeTruthy()
     expect(screen.queryByText('0 dBm')).toBeNull()
+  })
+
+  it('lets a fresh live poll supersede a stale offline detail response', async () => {
+    api.device.mockResolvedValue({ ...detail, status: 'offline' })
+    await openPanel()
+    const panel = screen.getByRole('dialog', { name: 'ap-1' })
+    expect(within(panel).getByText('offline')).toBeTruthy()
+
+    act(() =>
+      pushLive({
+        type: 'stats',
+        device_id: 1,
+        ts: Math.floor(Date.now() / 1000),
+        tier: 'focused',
+        uptime: 100,
+        load1: 0.1,
+        poll_ms: 5,
+        clients: 0,
+        degraded: 0,
+        aps: [],
+        stations: [],
+      }),
+    )
+    expect(within(panel).getByText('online')).toBeTruthy()
+    expect(within(panel).queryByText('offline')).toBeNull()
   })
 
   it('keeps core device facts visible when the optional series catalog fails', async () => {
@@ -1278,17 +1785,64 @@ describe('Devices — re-probe panel', () => {
     expect(within(panel).getByText(/Metric catalog refresh failed \(series unavailable\)/)).toBeTruthy()
   })
 
+  it('does not mislabel explicit non-poll actions as unexpected logins', async () => {
+    api.overhead.mockResolvedValue({
+      overhead: {
+        device_id: 1,
+        tier: 'focused',
+        interval_seconds: 10,
+        requests: 145,
+        polls_per_minute: 5.9,
+        bytes_out: 1024,
+        polls: 100,
+        failed_polls: 0,
+        since: 1,
+        requests_per_minute: 6.2,
+        non_poll_requests: 45,
+        quiesced: false,
+        cpu_ms_per_poll: 5,
+        cpu_percent_of_core: 0.01,
+        cpu_basis: 'measured',
+      },
+      packages: [],
+      packages_note: 'none installed',
+      poll_interval_s: 0,
+      poll_interval_note: 'controller default',
+    })
+    await openPanel()
+
+    expect(screen.getByText('Scheduled poll rate')).toBeTruthy()
+    expect(screen.getByText('HTTP request rate')).toBeTruthy()
+    expect(screen.getByText(/includes session setup and explicit actions/)).toBeTruthy()
+    expect(screen.queryByText(/should only be session logins/)).toBeNull()
+  })
+
   it('expires an old live frame instead of leaving departed stations associated now', async () => {
     await openPanel()
-    act(() => pushLive({
-      type: 'stats', device_id: 1, ts: Math.floor(Date.now() / 1000) - 31,
-      tier: 'focused', uptime: 100, load1: 0.1, poll_ms: 5,
-      clients: 1, degraded: 0, aps: [],
-      stations: [{
-        mac: '00:11:22:33:44:55', iface: 'phy0-ap0', signal: -42,
-        rx_kbit: 1, tx_kbit: 1, connected_seconds: 10,
-      }],
-    }))
+    act(() =>
+      pushLive({
+        type: 'stats',
+        device_id: 1,
+        ts: Math.floor(Date.now() / 1000) - 31,
+        tier: 'focused',
+        uptime: 100,
+        load1: 0.1,
+        poll_ms: 5,
+        clients: 1,
+        degraded: 0,
+        aps: [],
+        stations: [
+          {
+            mac: '00:11:22:33:44:55',
+            iface: 'phy0-ap0',
+            signal: -42,
+            rx_kbit: 1,
+            tx_kbit: 1,
+            connected_seconds: 10,
+          },
+        ],
+      }),
+    )
 
     await waitFor(() => expect(screen.queryByText('Associated now')).toBeNull())
     expect(screen.queryByText('just now (live)')).toBeNull()
@@ -1326,9 +1880,7 @@ describe('Devices — re-probe panel', () => {
     })
     await openPanel()
 
-    await waitFor(() =>
-      expect(screen.getByText(/recorded only while this panel is open/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/recorded only while this panel is open/)).toBeTruthy())
     // And it must not repeat the advice that cannot work.
     const note = screen.getByText(/recorded only while this panel is open/)
     expect(note.textContent).toMatch(/waiting with it closed will not fill this in/i)
@@ -1344,9 +1896,7 @@ describe('Devices — re-probe panel', () => {
     })
     await openPanel()
 
-    await waitFor(() =>
-      expect(screen.getByText(/as hostapd advertises it to clients/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/as hostapd advertises it to clients/)).toBeTruthy())
     // Both are drawn, and each says what it measures: they agree to within 1.6
     // points on average but diverge by up to 16 in a single bucket, so neither
     // substitutes for the other and a reader must be able to tell them apart.
@@ -1367,9 +1917,7 @@ describe('Devices — re-probe panel', () => {
     })
     await openPanel()
 
-    await waitFor(() =>
-      expect(screen.getAllByText(/Channel utilization — phy/).length).toBe(2),
-    )
+    await waitFor(() => expect(screen.getAllByText(/Channel utilization — phy/).length).toBe(2))
     expect(screen.getAllByText(/Channel occupancy \(survey\) — phy/).length).toBe(2)
     // Named by radio, so nothing implies the reading belongs to one SSID.
     expect(screen.getByText(/Channel utilization — phy0$/)).toBeTruthy()
@@ -1378,36 +1926,37 @@ describe('Devices — re-probe panel', () => {
 
   async function openPanel() {
     const { Devices } = await import('./Devices')
-    render(
-      <Devices
-        devices={[{ ...detail, quiesced: false } as never]}
-        onAdopt={() => {}}
-        onChanged={() => {}}
-      />,
-    )
+    render(<Devices devices={[{ ...detail, quiesced: false } as never]} onAdopt={() => {}} onChanged={() => {}} />)
     fireEvent.click(screen.getByText('ap-1'))
     await waitFor(() => expect(screen.getByText('Re-probe capabilities')).toBeTruthy())
   }
 
   it('refreshes the scoped ACL with an ephemeral administrator credential', async () => {
     api.refreshACL.mockResolvedValue({
-      device_id: 1, name: 'ap-1', acl_updated: true, controller_verified: true,
-      features: ['radio-freqlist', 'router-log'], unobservable: [],
+      device_id: 1,
+      name: 'ap-1',
+      acl_updated: true,
+      controller_verified: true,
+      features: ['radio-freqlist', 'router-log'],
+      unobservable: [],
     })
     await openPanel()
     expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy()
-    expect(screen.getByText(/optional oonfeeWRT controller capability installation/i)).toBeTruthy()
-    expect(screen.getByText(/topology, radio channel\/scan, OpenWrt log, and fixed-target WAN ICMP/i)).toBeTruthy()
+    expect(
+      screen.getByText(/default-off action installs the payload if missing or replaces its one rpcd ACL JSON file/i),
+    ).toBeTruthy()
+    expect(screen.getByText(/controller-owned network, wireless, firewall and DHCP/i)).toBeTruthy()
+    expect(screen.getByText(/cannot disconnect or steer clients/i)).toBeTruthy()
     expect(screen.getByText(/installs no package, binary, daemon, service, or firmware/i)).toBeTruthy()
     expect(screen.getByText(/Leave it off or cancel to keep the router unchanged/i)).toBeTruthy()
     expect(screen.getByText(/remain explicit gaps/i)).toBeTruthy()
-    fireEvent.click(screen.getByText('Install optional oonfeeWRT capability'))
+    fireEvent.click(screen.getByText('Review or refresh controller access payload'))
     fireEvent.change(screen.getByLabelText('Device administrator password'), {
       target: { value: 'cancelled-password' },
     })
-    fireEvent.click(screen.getByText('Cancel capability installation'))
+    fireEvent.click(screen.getByText('Cancel payload review'))
     expect(api.refreshACL).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText('Install optional oonfeeWRT capability'))
+    fireEvent.click(screen.getByText('Review or refresh controller access payload'))
     expect((screen.getByLabelText('Device administrator password') as HTMLInputElement).value).toBe('')
     fireEvent.change(screen.getByLabelText('Device administrator username'), {
       target: { value: 'admin' },
@@ -1418,9 +1967,11 @@ describe('Devices — re-probe panel', () => {
     fireEvent.change(screen.getByLabelText('SSH private key (optional)'), {
       target: { value: 'sentinel-key' },
     })
-    const submit = screen.getByRole('button', { name: 'Install controller capability and verify' }) as HTMLButtonElement
+    const submit = screen.getByRole('button', {
+      name: 'Install or refresh controller access payload and verify',
+    }) as HTMLButtonElement
     const acknowledgement = screen.getByRole('checkbox', {
-      name: /accepting installs or replaces the controller's single rpcd ACL JSON file/i,
+      name: /accepting installs the payload if missing or replaces the controller's single rpcd ACL JSON file/i,
     }) as HTMLInputElement
     expect(acknowledgement.checked).toBe(false)
     expect(submit.disabled).toBe(true)
@@ -1429,21 +1980,347 @@ describe('Devices — re-probe panel', () => {
     fireEvent.click(acknowledgement)
     expect(submit.disabled).toBe(false)
     fireEvent.click(submit)
-    await waitFor(() => expect(api.refreshACL).toHaveBeenCalledWith(1, {
-      username: 'admin', password: 'sentinel-password', private_key: 'sentinel-key',
-      acknowledge_router_changes: true,
-    }))
-    expect(await screen.findByText(/Optional oonfeeWRT controller capability installed and verified/)).toBeTruthy()
+    await waitFor(() =>
+      expect(api.refreshACL).toHaveBeenCalledWith(1, {
+        username: 'admin',
+        password: 'sentinel-password',
+        private_key: 'sentinel-key',
+        acknowledge_router_changes: true,
+      }),
+    )
+    expect(
+      await screen.findByText(/oonfeeWRT controller access payload installed or refreshed and verified/),
+    ).toBeTruthy()
     expect(screen.queryByDisplayValue('sentinel-password')).toBeNull()
     expect(screen.queryByDisplayValue('sentinel-key')).toBeNull()
     expect(acknowledgement.checked).toBe(false)
     expect(submit.disabled).toBe(true)
   })
 
+  it('shows an exact LLDP package plan before accepting a separate install acknowledgement', async () => {
+    api.changeLLDPCapability
+      .mockResolvedValueOnce({
+        device_id: 1,
+        name: 'ap-1',
+        state: 'install_planned',
+        package_manager: 'apk',
+        requested_packages: ['lldpd'],
+        added_packages: [],
+        plan: '(1/1) Installing lldpd',
+        plan_hash: 'plan-1',
+        service_enabled: false,
+        service_running: false,
+      })
+      .mockResolvedValueOnce({
+        device_id: 1,
+        name: 'ap-1',
+        state: 'installed',
+        package_manager: 'apk',
+        requested_packages: ['lldpd'],
+        added_packages: ['lldpd'],
+        service_enabled: true,
+        service_running: true,
+      })
+    await openPanel()
+    expect(await screen.findByText(/Not installed by this controller/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Review LLDP installation'))
+    const planButton = screen.getByRole('button', {
+      name: 'Refresh index and show exact install plan',
+    }) as HTMLButtonElement
+    expect(planButton.disabled).toBe(true)
+    const indexAcknowledgement = screen.getByRole('checkbox', {
+      name: /authorize refreshing the router's package index cache/i,
+    })
+    expect(indexAcknowledgement.parentElement?.querySelector(':scope > span code')?.textContent).toBe('lldpd')
+    fireEvent.click(indexAcknowledgement)
+    fireEvent.click(planButton)
+    expect(await screen.findByText('(1/1) Installing lldpd')).toBeTruthy()
+    expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+      1,
+      1,
+      expect.objectContaining({
+        action: 'plan_install',
+        acknowledge_package_index_refresh: true,
+      }),
+    )
+    const install = screen.getByRole('button', {
+      name: 'Install LLDP capability',
+    }) as HTMLButtonElement
+    expect(install.disabled).toBe(true)
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize installing.*refreshing.*once more immediately beforehand/i,
+      }),
+    )
+    fireEvent.click(install)
+    await waitFor(() =>
+      expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+        2,
+        1,
+        expect.objectContaining({
+          action: 'install',
+          plan_hash: 'plan-1',
+          acknowledge_router_changes: true,
+          acknowledge_package_index_refresh: true,
+        }),
+      ),
+    )
+  })
+
+  it('clears rejected LLDP package-plan credentials before a retry', async () => {
+    api.changeLLDPCapability.mockRejectedValueOnce(new Error('authentication failed')).mockResolvedValueOnce({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'install_planned',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: [],
+      plan: '(1/1) Installing lldpd',
+      plan_hash: 'plan-1',
+      service_enabled: false,
+      service_running: false,
+    })
+    await openPanel()
+    fireEvent.click(await screen.findByText('Review LLDP installation'))
+    fireEvent.change(screen.getByLabelText('Device administrator password'), {
+      target: { value: 'stale-password' },
+    })
+    fireEvent.change(screen.getByLabelText('SSH private key (optional)'), {
+      target: { value: 'stale-key' },
+    })
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize refreshing the router's package index cache/i,
+      }),
+    )
+    const showPlan = screen.getByRole('button', {
+      name: 'Refresh index and show exact install plan',
+    })
+    fireEvent.click(showPlan)
+
+    expect(await screen.findByText('authentication failed')).toBeTruthy()
+    expect(screen.queryByDisplayValue('stale-password')).toBeNull()
+    expect(screen.queryByDisplayValue('stale-key')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Device administrator password'), {
+      target: { value: 'replacement-password' },
+    })
+    fireEvent.change(screen.getByLabelText('SSH private key (optional)'), {
+      target: { value: 'replacement-key' },
+    })
+    fireEvent.click(showPlan)
+    await waitFor(() =>
+      expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+        2,
+        1,
+        expect.objectContaining({
+          action: 'plan_install',
+          password: 'replacement-password',
+          private_key: 'replacement-key',
+        }),
+      ),
+    )
+    expect(screen.getByDisplayValue('replacement-password')).toBeTruthy()
+    expect(screen.getByDisplayValue('replacement-key')).toBeTruthy()
+  })
+
+  it('requires separate consent for read-only LLDP runtime diagnostics', async () => {
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+    })
+    api.changeLLDPCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      diagnostics: 'RUNTIME_INTERFACES\n{}',
+    })
+    await openPanel()
+    fireEvent.click(await screen.findByText('Review LLDP rollback'))
+    const inspect = screen.getByRole('button', {
+      name: 'Inspect LLDP runtime (read only)',
+    }) as HTMLButtonElement
+    expect(inspect.disabled).toBe(true)
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize a read-only inspection/i,
+      }),
+    )
+    fireEvent.click(inspect)
+    await waitFor(() =>
+      expect(api.changeLLDPCapability).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          action: 'diagnose',
+          acknowledge_read_only_diagnostics: true,
+        }),
+      ),
+    )
+    expect(await screen.findByText('LLDP runtime diagnostic')).toBeTruthy()
+  })
+
+  it('shows and separately authorizes an exact LLDP interface configuration plan', async () => {
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      configuration_state: 'package_default',
+    })
+    api.changeLLDPCapability
+      .mockResolvedValueOnce({
+        device_id: 1,
+        name: 'ap-1',
+        state: 'configure_planned',
+        package_manager: 'apk',
+        requested_packages: ['lldpd'],
+        added_packages: ['lldpd'],
+        configuration_state: 'planned',
+        configured_interfaces: ['lan1', 'lan3'],
+        plan: 'Replace only lldpd.config.interface with: lan1, lan3.',
+        plan_hash: 'config-1',
+      })
+      .mockResolvedValueOnce({
+        device_id: 1,
+        name: 'ap-1',
+        state: 'installed',
+        package_manager: 'apk',
+        requested_packages: ['lldpd'],
+        added_packages: ['lldpd'],
+        configuration_state: 'configured',
+        configured_interfaces: ['lan1', 'lan3'],
+      })
+    await openPanel()
+    fireEvent.click(await screen.findByText('Review LLDP rollback'))
+    fireEvent.change(screen.getByLabelText('Device administrator password'), {
+      target: { value: 'sentinel-password' },
+    })
+    expect(screen.getByText(/Credentials remain only in this open review/)).toBeTruthy()
+    const showPlan = screen.getByRole('button', {
+      name: 'Show exact LLDP interface plan',
+    }) as HTMLButtonElement
+    expect(showPlan.disabled).toBe(true)
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize reading the current lldpd UCI export/i,
+      }),
+    )
+    fireEvent.click(showPlan)
+    expect(await screen.findByText(/Replace only lldpd.config.interface with: lan1, lan3/)).toBeTruthy()
+    expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+      1,
+      1,
+      expect.objectContaining({
+        action: 'plan_configure',
+        password: 'sentinel-password',
+        acknowledge_read_only_diagnostics: true,
+      }),
+    )
+    expect(screen.getByDisplayValue('sentinel-password')).toBeTruthy()
+    const apply = screen.getByRole('button', {
+      name: 'Apply LLDP interface configuration',
+    }) as HTMLButtonElement
+    expect(apply.disabled).toBe(true)
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize replacing only lldpd.config.interface/i,
+      }),
+    )
+    fireEvent.click(apply)
+    await waitFor(() =>
+      expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+        2,
+        1,
+        expect.objectContaining({
+          action: 'configure',
+          password: 'sentinel-password',
+          plan_hash: 'config-1',
+          acknowledge_router_changes: true,
+        }),
+      ),
+    )
+    expect(screen.queryByDisplayValue('sentinel-password')).toBeNull()
+  })
+
+  it('clears rejected LLDP interface-plan credentials before a retry', async () => {
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      configuration_state: 'package_default',
+    })
+    api.changeLLDPCapability.mockRejectedValueOnce(new Error('authentication failed')).mockResolvedValueOnce({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'configure_planned',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      configuration_state: 'planned',
+      configured_interfaces: ['lan1'],
+      plan: 'Replace only lldpd.config.interface with: lan1.',
+      plan_hash: 'config-1',
+    })
+    await openPanel()
+    fireEvent.click(await screen.findByText('Review LLDP rollback'))
+    fireEvent.change(screen.getByLabelText('Device administrator password'), {
+      target: { value: 'stale-password' },
+    })
+    fireEvent.change(screen.getByLabelText('SSH private key (optional)'), {
+      target: { value: 'stale-key' },
+    })
+    fireEvent.click(
+      screen.getByRole('checkbox', {
+        name: /authorize reading the current lldpd UCI export/i,
+      }),
+    )
+    const showPlan = screen.getByRole('button', {
+      name: 'Show exact LLDP interface plan',
+    })
+    fireEvent.click(showPlan)
+
+    expect(await screen.findByText('authentication failed')).toBeTruthy()
+    expect(screen.queryByDisplayValue('stale-password')).toBeNull()
+    expect(screen.queryByDisplayValue('stale-key')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Device administrator password'), {
+      target: { value: 'replacement-password' },
+    })
+    fireEvent.change(screen.getByLabelText('SSH private key (optional)'), {
+      target: { value: 'replacement-key' },
+    })
+    fireEvent.click(showPlan)
+    await waitFor(() =>
+      expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
+        2,
+        1,
+        expect.objectContaining({
+          action: 'plan_configure',
+          password: 'replacement-password',
+          private_key: 'replacement-key',
+        }),
+      ),
+    )
+    expect(screen.getByDisplayValue('replacement-password')).toBeTruthy()
+    expect(screen.getByDisplayValue('replacement-key')).toBeTruthy()
+  })
+
   it('clears the ACL refresh credential and consent after a failed request', async () => {
     api.refreshACL.mockRejectedValue(new Error('verification failed'))
     await openPanel()
-    fireEvent.click(screen.getByText('Install optional oonfeeWRT capability'))
+    fireEvent.click(screen.getByText('Review or refresh controller access payload'))
     fireEvent.change(screen.getByLabelText('Device administrator password'), {
       target: { value: 'failed-password' },
     })
@@ -1451,10 +2328,10 @@ describe('Devices — re-probe panel', () => {
       target: { value: 'failed-key' },
     })
     const acknowledgement = screen.getByRole('checkbox', {
-      name: /accepting installs or replaces the controller's single rpcd ACL JSON file/i,
+      name: /accepting installs the payload if missing or replaces the controller's single rpcd ACL JSON file/i,
     }) as HTMLInputElement
     const submit = screen.getByRole('button', {
-      name: 'Install controller capability and verify',
+      name: 'Install or refresh controller access payload and verify',
     }) as HTMLButtonElement
     fireEvent.click(acknowledgement)
     fireEvent.click(submit)
@@ -1559,13 +2436,7 @@ describe('Devices — re-probe panel', () => {
     })
     const onChanged = vi.fn()
     const { Devices } = await import('./Devices')
-    render(
-      <Devices
-        devices={[{ ...detail, quiesced: false } as never]}
-        onAdopt={() => {}}
-        onChanged={onChanged}
-      />,
-    )
+    render(<Devices devices={[{ ...detail, quiesced: false } as never]} onAdopt={() => {}} onChanged={onChanged} />)
     fireEvent.click(screen.getByText('ap-1'))
     fireEvent.click(await screen.findByText('Re-probe capabilities'))
 
@@ -1589,9 +2460,7 @@ describe('Devices — re-probe panel', () => {
     await openPanel()
     fireEvent.click(screen.getByText('Re-probe capabilities'))
 
-    await waitFor(() =>
-      expect(screen.getByText(/reported no radios/i)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/reported no radios/i)).toBeTruthy())
   })
 })
 
@@ -1620,7 +2489,14 @@ describe('Settings — neighbour reports', () => {
     meshes: [],
     groups: [{ id: 1, name: 'all', device_ids: [] }],
     networks: [
-      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+      {
+        id: 1,
+        name: 'lan',
+        vlan: 1,
+        cidr: '192.168.1.1/24',
+        zone: 'lan',
+        enabled: true,
+      },
     ],
     problems: [],
     overrides: [],
@@ -1687,7 +2563,13 @@ describe('Settings — neighbour reports', () => {
           unchanged: 0,
           skipped: 'this device has not been shown to accept neighbour lists — re-adopt it',
         },
-        { device_id: 3, name: 'ap-gone', updated: 0, unchanged: 0, error: 'could not reach this device' },
+        {
+          device_id: 3,
+          name: 'ap-gone',
+          updated: 0,
+          unchanged: 0,
+          error: 'could not reach this device',
+        },
       ],
     })
 
@@ -1718,9 +2600,7 @@ describe('Settings — neighbour reports', () => {
     await waitFor(() => expect(screen.getByText(/Neighbour reports/)).toBeTruthy())
     fireEvent.click(screen.getByText('Distribute now'))
 
-    await waitFor(() =>
-      expect(screen.getByText(/already up to date/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/already up to date/)).toBeTruthy())
     expect(screen.getByText(/4 already correct/)).toBeTruthy()
   })
 })
@@ -1751,9 +2631,7 @@ describe('Devices — the unmeasured class', () => {
     expect(screen.queryByText(/has not been measured/)).toBeNull()
     // Unknown carries its reason in a title attribute, not in text — the whole
     // point being that the em dash is never mistaken for a value.
-    expect(container.querySelector('[title]')?.getAttribute('title')).toMatch(
-      /not classified this device/,
-    )
+    expect(container.querySelector('[title]')?.getAttribute('title')).toMatch(/not classified this device/)
   })
 })
 
@@ -1797,7 +2675,14 @@ describe('Settings — wireless uplinks', () => {
     uplinks: [],
     groups: [{ id: 1, name: 'all', device_ids: [] }],
     networks: [
-      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+      {
+        id: 1,
+        name: 'lan',
+        vlan: 1,
+        cidr: '192.168.1.1/24',
+        zone: 'lan',
+        enabled: true,
+      },
     ],
     problems: [],
     overrides: [],
@@ -1806,10 +2691,20 @@ describe('Settings — wireless uplinks', () => {
   }
 
   const wlan = (over: Record<string, unknown> = {}) => ({
-    id: 1, ssid: 'oonfee-roam', network_id: 1, group_id: 1,
-    bands: ['5g'], security_mode: 'psk2', pmf: '1', has_key: true, enabled: true,
+    id: 1,
+    ssid: 'oonfee-roam',
+    network_id: 1,
+    group_id: 1,
+    bands: ['5g'],
+    security_mode: 'psk2',
+    pmf: '1',
+    has_key: true,
+    enabled: true,
     roaming: { ft: true, ft_over_ds: true, kv: true, ft_with_psk2: true },
-    hidden: false, isolate: false, max_assoc: 0, allow_uplink: false,
+    hidden: false,
+    isolate: false,
+    max_assoc: 0,
+    allow_uplink: false,
     ...over,
   })
 
@@ -1818,16 +2713,17 @@ describe('Settings — wireless uplinks', () => {
   // warning unactionable: it told an operator to turn PMF off on hardware that
   // cannot do it, with nowhere to do so.
   it('lets PMF be changed, and hides it where WPA3 mandates it', async () => {
-    api.site.mockResolvedValue({ ...base, wlans: [wlan({ security_mode: 'psk2' })] })
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ security_mode: 'psk2' })],
+    })
     api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
     await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
 
     // The row's own Edit button; the SSID text is not the control.
     fireEvent.click(screen.getAllByText('Edit')[0])
-    await waitFor(() =>
-      expect(screen.getByText('Protected management frames')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
     expect(screen.getByText('Isolate clients on this access point')).toBeTruthy()
     expect(screen.getByText(/Verify client behavior after applying/i)).toBeTruthy()
     expect(screen.getByText(/different APs still need additional switch or bridge policy/i)).toBeTruthy()
@@ -1838,25 +2734,19 @@ describe('Settings — wireless uplinks', () => {
     // WPA3 mandates PMF and the renderer forces it back on regardless, so
     // offering a choice it would override is worse than offering none.
     fireEvent.click(screen.getByText('WPA3 only'))
-    await waitFor(() =>
-      expect(screen.queryByText('Protected management frames')).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByText('Protected management frames')).toBeNull())
 
     // Enhanced open mandates PMF exactly as WPA3 does, so the control is
     // hidden for the same reason. Untested, this guard could be reverted
     // silently and an "owe" WLAN would store pmf="0" while the device got 2.
     fireEvent.click(screen.getByText('Enhanced open'))
-    await waitFor(() =>
-      expect(screen.queryByText('Protected management frames')).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByText('Protected management frames')).toBeNull())
 
     // Open has no RSN at all, so there is nothing to protect. This is the case
     // that used to leave a WLAN carrying the pmf="1" every draft is created
     // with, rendered onto the device where nobody could see or clear it.
     fireEvent.click(screen.getByText('Open'))
-    await waitFor(() =>
-      expect(screen.queryByText('Protected management frames')).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByText('Protected management frames')).toBeNull())
 
     // Back to WPA2 and choose Disabled — the state the lab device is in, and
     // the one that makes the next step interesting.
@@ -1867,9 +2757,7 @@ describe('Settings — wireless uplinks', () => {
     // Transitional WPA2/WPA3 keeps the control but must not offer Disabled:
     // that silently removes the WPA3 half of a network still advertising it.
     fireEvent.click(screen.getByText('WPA2/WPA3'))
-    await waitFor(() =>
-      expect(screen.getByText('Protected management frames')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
     expect(screen.queryByText('Disabled')).toBeNull()
     expect(screen.getByText('Required')).toBeTruthy()
 
@@ -1881,8 +2769,7 @@ describe('Settings — wireless uplinks', () => {
     const saved = api.saveWLAN.mock.calls.at(-1)?.[0] as { pmf?: string }
     if (saved.pmf === '0') {
       throw new Error(
-        'saved pmf="0" for a WPA2/WPA3 network, which the picker does not ' +
-          'offer and the renderer would override',
+        'saved pmf="0" for a WPA2/WPA3 network, which the picker does not ' + 'offer and the renderer would override',
       )
     }
   })
@@ -1893,20 +2780,19 @@ describe('Settings — wireless uplinks', () => {
   // the apply preview names a section and an option count, never a value, so
   // the downgrade appeared nowhere.
   it('keeps a deliberate PMF choice across a mode detour', async () => {
-    api.site.mockResolvedValue({ ...base, wlans: [wlan({ security_mode: 'psk2' })] })
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ security_mode: 'psk2' })],
+    })
     api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
     await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
     fireEvent.click(screen.getAllByText('Edit')[0])
-    await waitFor(() =>
-      expect(screen.getByText('Protected management frames')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
 
     fireEvent.click(screen.getByText('Required'))
     fireEvent.click(screen.getByText('Open'))
-    await waitFor(() =>
-      expect(screen.queryByText('Protected management frames')).toBeNull(),
-    )
+    await waitFor(() => expect(screen.queryByText('Protected management frames')).toBeNull())
     fireEvent.click(screen.getByText('WPA2 only'))
     await waitFor(() => expect(screen.getByText('Disabled')).toBeTruthy())
 
@@ -1914,9 +2800,7 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() => expect(api.saveWLAN).toHaveBeenCalled())
     const saved = api.saveWLAN.mock.calls.at(-1)?.[0] as { pmf?: string }
     if (saved.pmf !== '2') {
-      throw new Error(
-        `a detour through Open turned a deliberate "Required" into pmf="${saved.pmf}"`,
-      )
+      throw new Error(`a detour through Open turned a deliberate "Required" into pmf="${saved.pmf}"`)
     }
   })
 
@@ -1936,9 +2820,7 @@ describe('Settings — wireless uplinks', () => {
     render(<Settings devices={[]} />)
     await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
     fireEvent.click(screen.getAllByText('Edit')[0])
-    await waitFor(() =>
-      expect(screen.getByText('Protected management frames')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
 
     // Saving without touching PMF must not write back the unshowable value.
     fireEvent.click(screen.getByText('Save'))
@@ -1972,8 +2854,7 @@ describe('Settings — wireless uplinks', () => {
           {
             device_id: 1,
             name: 'ap-192-168-1-1',
-            error:
-              'could not list wireless interfaces: ubus iwinfo.devices: access denied',
+            error: 'could not list wireless interfaces: ubus iwinfo.devices: access denied',
           },
         ],
       },
@@ -2001,7 +2882,10 @@ describe('Settings — wireless uplinks', () => {
   })
 
   it('offers the add form once a network accepts bridges', async () => {
-    api.site.mockResolvedValue({ ...base, wlans: [wlan({ allow_uplink: true })] })
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ allow_uplink: true })],
+    })
     render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
 
     await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
@@ -2042,9 +2926,7 @@ describe('Settings — wireless uplinks', () => {
     await waitFor(() => expect(screen.getByText('Remove')).toBeTruthy())
     fireEvent.click(screen.getByText('Remove'))
 
-    await waitFor(() =>
-      expect(screen.getByText(/removes the station interface/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/removes the station interface/)).toBeTruthy())
   })
   // There was no control for a network's firewall zone at all, and
   // store.SaveNetwork used to default it to "lan" — so every network the
@@ -2056,8 +2938,22 @@ describe('Settings — wireless uplinks', () => {
       ...base,
       wlans: [],
       networks: [
-        { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
-        { id: 2, name: 'testvlan', vlan: 2, cidr: '192.168.2.1/24', zone: 'lan', enabled: true },
+        {
+          id: 1,
+          name: 'lan',
+          vlan: 1,
+          cidr: '192.168.1.1/24',
+          zone: 'lan',
+          enabled: true,
+        },
+        {
+          id: 2,
+          name: 'testvlan',
+          vlan: 2,
+          cidr: '192.168.2.1/24',
+          zone: 'lan',
+          enabled: true,
+        },
       ],
     })
     api.saveNetwork.mockResolvedValue({})
@@ -2102,7 +2998,14 @@ describe('Settings — wireless uplinks', () => {
         { name: 'trusted', forward_to: ['guest', 'wan'], explicit: true },
       ],
       networks: [
-        { id: 2, name: 'iot', vlan: 20, cidr: '10.0.20.1/24', zone: 'iot', enabled: true },
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 20,
+          cidr: '10.0.20.1/24',
+          zone: 'iot',
+          enabled: true,
+        },
       ],
     })
     render(<Settings devices={[]} />)
@@ -2123,8 +3026,22 @@ describe('Settings — wireless uplinks', () => {
       ...base,
       wlans: [],
       networks: [
-        { id: 2, name: 'iot', vlan: 20, cidr: '10.0.20.1/24', zone: 'wan!', enabled: true },
-        { id: 3, name: '20_guest', vlan: 30, cidr: '10.0.30.1/24', zone: '20_guest', enabled: true },
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 20,
+          cidr: '10.0.20.1/24',
+          zone: 'wan!',
+          enabled: true,
+        },
+        {
+          id: 3,
+          name: '20_guest',
+          vlan: 30,
+          cidr: '10.0.30.1/24',
+          zone: '20_guest',
+          enabled: true,
+        },
       ],
     })
     render(<Settings devices={[]} />)
@@ -2146,7 +3063,14 @@ describe('Settings — wireless uplinks', () => {
       ...base,
       wlans: [],
       networks: [
-        { id: 2, name: 'testvlan', vlan: 2, cidr: '192.168.2.1/24', zone: 'iot', enabled: true },
+        {
+          id: 2,
+          name: 'testvlan',
+          vlan: 2,
+          cidr: '192.168.2.1/24',
+          zone: 'iot',
+          enabled: true,
+        },
       ],
     })
     api.saveNetwork.mockResolvedValue({})
@@ -2181,11 +3105,17 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 2, name: 'iot', vlan: 20, cidr: '10.0.20.1/24', zone: 'iot',
-        dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
-        enabled: true,
-      }],
+      networks: [
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 20,
+          cidr: '10.0.20.1/24',
+          zone: 'iot',
+          dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
+          enabled: true,
+        },
+      ],
     })
     api.saveNetwork.mockResolvedValue({})
     render(<Settings devices={[]} />)
@@ -2208,7 +3138,10 @@ describe('Settings — wireless uplinks', () => {
 
     await waitFor(() => expect(api.saveNetwork).toHaveBeenCalled())
     expect(api.saveNetwork.mock.calls[0][0].dhcp).toEqual({
-      enabled: true, start: 30, limit: 50, leasetime: '2h',
+      enabled: true,
+      start: 30,
+      limit: 50,
+      leasetime: '2h',
     })
   })
 
@@ -2216,11 +3149,17 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan',
-        dhcp: { enabled: true, start: 100, limit: 150, leasetime: '12h' },
-        enabled: true,
-      }],
+      networks: [
+        {
+          id: 1,
+          name: 'lan',
+          vlan: 1,
+          cidr: '192.168.1.1/24',
+          zone: 'lan',
+          dhcp: { enabled: true, start: 100, limit: 150, leasetime: '12h' },
+          enabled: true,
+        },
+      ],
     })
     render(<Settings devices={[]} />)
 
@@ -2237,18 +3176,30 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 2, name: 'iot', vlan: 20, cidr: '10.0.20.1/24', zone: 'iot',
-        dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
-        enabled: true,
-      }],
+      networks: [
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 20,
+          cidr: '10.0.20.1/24',
+          zone: 'iot',
+          dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
+          enabled: true,
+        },
+      ],
     })
     api.preview.mockResolvedValue({
-      devices: [{
-        device_id: 1, name: 'gateway', role: 'gateway', blocked: false,
-        touches_traversal: false, driver_defects: [],
-        changes: [{ config: 'dhcp', section: 'oowrt_dhcp_iot', action: 'update' }],
-      }],
+      devices: [
+        {
+          device_id: 1,
+          name: 'gateway',
+          role: 'gateway',
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
+          changes: [{ config: 'dhcp', section: 'oowrt_dhcp_iot', action: 'update' }],
+        },
+      ],
       site_errors: [],
     })
     api.saveNetwork.mockResolvedValue({})
@@ -2277,11 +3228,17 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 2, name: 'small', vlan: 20, cidr: '10.0.20.1/25', zone: 'small',
-        dhcp: { enabled: true, start: 100, limit: 30, leasetime: '12h' },
-        enabled: true,
-      }],
+      networks: [
+        {
+          id: 2,
+          name: 'small',
+          vlan: 20,
+          cidr: '10.0.20.1/25',
+          zone: 'small',
+          dhcp: { enabled: true, start: 100, limit: 30, leasetime: '12h' },
+          enabled: true,
+        },
+      ],
     })
     render(<Settings devices={[]} />)
 
@@ -2289,20 +3246,32 @@ describe('Settings — wireless uplinks', () => {
     const warning = await within(screen.getByRole('dialog')).findByRole('alert')
     expect(warning.textContent ?? '').toMatch(/do not fit this \/25/i)
     expect(warning.textContent ?? '').toMatch(/Applying is blocked/i)
-    expect((within(screen.getByRole('dialog')).getByText('Save').closest('button') as HTMLButtonElement).disabled).toBe(true)
+    expect((within(screen.getByRole('dialog')).getByText('Save').closest('button') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
   })
 
   it('requires an explicit customize-or-disable choice for an invalid legacy DHCP pool', async () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 2, name: 'legacy-small', vlan: 20, cidr: '10.0.20.1/25', zone: 'legacy-small',
-        dhcp: {
-          enabled: true, start: 100, limit: 150, leasetime: '12h', legacy_default: true,
+      networks: [
+        {
+          id: 2,
+          name: 'legacy-small',
+          vlan: 20,
+          cidr: '10.0.20.1/25',
+          zone: 'legacy-small',
+          dhcp: {
+            enabled: true,
+            start: 100,
+            limit: 150,
+            leasetime: '12h',
+            legacy_default: true,
+          },
+          enabled: true,
         },
-        enabled: true,
-      }],
+      ],
     })
     api.saveNetwork.mockResolvedValue({})
     render(<Settings devices={[]} />)
@@ -2319,7 +3288,10 @@ describe('Settings — wireless uplinks', () => {
     fireEvent.click(within(dialog).getByText('Save'))
     await waitFor(() => expect(api.saveNetwork).toHaveBeenCalled())
     expect(api.saveNetwork.mock.calls[0][0].dhcp).toEqual({
-      enabled: false, start: 100, limit: 150, leasetime: '12h',
+      enabled: false,
+      start: 100,
+      limit: 150,
+      leasetime: '12h',
     })
   })
 
@@ -2327,11 +3299,17 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{
-        id: 2, name: 'iot', vlan: 20, cidr: '10.0.20.1/24', zone: 'iot',
-        dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
-        enabled: true,
-      }],
+      networks: [
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 20,
+          cidr: '10.0.20.1/24',
+          zone: 'iot',
+          dhcp: { enabled: true, start: 20, limit: 80, leasetime: '30m' },
+          enabled: true,
+        },
+      ],
     })
     render(<Settings devices={[]} />)
 
@@ -2359,7 +3337,16 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{ id: 2, name: 'iot', vlan: 4, cidr: '10.0.4.1/24', zone: 'iot', enabled: true }],
+      networks: [
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 4,
+          cidr: '10.0.4.1/24',
+          zone: 'iot',
+          enabled: true,
+        },
+      ],
     })
     render(<Settings devices={[]} />)
     fireEvent.click(await screen.findByText('iot'))
@@ -2367,9 +3354,7 @@ describe('Settings — wireless uplinks', () => {
     fireEvent.change(within(dialog).getByLabelText('Address'), {
       target: { value: '10.0.4.1' },
     })
-    await waitFor(() =>
-      expect(dialog.textContent ?? '').toMatch(/not an IPv4 network in CIDR form/i),
-    )
+    await waitFor(() => expect(dialog.textContent ?? '').toMatch(/not an IPv4 network in CIDR form/i))
     // And it says what to type, not just what is wrong.
     expect(dialog.textContent ?? '').toMatch(/Saving is blocked/)
     expect(dialog.textContent ?? '').toMatch(/Write it as address\/prefix/)
@@ -2382,7 +3367,16 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({
       ...base,
       wlans: [],
-      networks: [{ id: 2, name: 'iot', vlan: 2, cidr: '10.0.2.1/24', zone: 'iot', enabled: true }],
+      networks: [
+        {
+          id: 2,
+          name: 'iot',
+          vlan: 2,
+          cidr: '10.0.2.1/24',
+          zone: 'iot',
+          enabled: true,
+        },
+      ],
     })
     render(<Settings devices={[]} />)
     const field = await screen.findByLabelText('Firewall zone for iot')
@@ -2393,6 +3387,10 @@ describe('Settings — wireless uplinks', () => {
 })
 
 describe('Devices — BSS provenance', () => {
+  beforeEach(() => {
+    api.stats.mockRejectedValue(new Error('none'))
+  })
+
   // A BSS the detail response does not mention must not render as one we
   // manage. The list is painted from the live frame while provenance comes
   // from the REST detail refreshed every 30s, so a missing entry is reachable
@@ -2400,18 +3398,29 @@ describe('Devices — BSS provenance', () => {
   // a daemon restart, every foreign SSID read as managed.
   it('treats a BSS with no provenance entry as unknown, not as ours', async () => {
     const dev = {
-      id: 1, mac: 'aa:bb:cc:dd:ee:01', name: 'ap-1', host: '192.168.1.1',
-      role: 'ap', adopted: true, online: true, class: 'A',
+      id: 1,
+      mac: 'aa:bb:cc:dd:ee:01',
+      name: 'ap-1',
+      host: '192.168.1.1',
+      role: 'ap',
+      adopted: true,
+      online: true,
+      class: 'A',
     }
     api.device.mockResolvedValue({
       ...dev,
-      capabilities: null, interfaces: [], radios: [], stations: [],
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
       broadcast_known: true,
       // phy1-ap0 is deliberately ABSENT here while the live frame carries it.
       broadcasting: [
         {
-          ssid: 'oonfee-roam', iface: 'phy0-ap1',
-          section: 'oowrt_wlan1_radio0', origin: 'ours',
+          ssid: 'oonfee-roam',
+          iface: 'phy0-ap1',
+          section: 'oowrt_wlan1_radio0',
+          origin: 'ours',
         },
       ],
     })
@@ -2419,17 +3428,9 @@ describe('Devices — BSS provenance', () => {
     api.overhead.mockRejectedValue(new Error('none'))
 
     const { Devices } = await import('./Devices')
-    render(
-      <Devices
-        devices={[{ ...dev, quiesced: false } as never]}
-        onAdopt={() => {}}
-        onChanged={() => {}}
-      />,
-    )
+    render(<Devices devices={[{ ...dev, quiesced: false } as never]} onAdopt={() => {}} onChanged={() => {}} />)
     fireEvent.click(screen.getByText('ap-1'))
-    await waitFor(() =>
-      expect(screen.getByText('Re-probe capabilities')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Re-probe capabilities')).toBeTruthy())
 
     // The live frame carries BOTH BSSes; the detail response knows only one.
     await act(async () => {
@@ -2444,54 +3445,99 @@ describe('Devices — BSS provenance', () => {
         clients: 0,
         degraded: 0,
         aps: [
-          { iface: 'phy0-ap1', ssid: 'oonfee-roam', channel: 36, freq: 5180, clients: 0 },
-          { iface: 'phy1-ap0', ssid: 'somebody-elses', channel: 1, freq: 2412, clients: 0 },
+          {
+            iface: 'phy0-ap1',
+            ssid: 'oonfee-roam',
+            channel: 36,
+            freq: 5180,
+            clients: 0,
+          },
+          {
+            iface: 'phy1-ap0',
+            ssid: 'somebody-elses',
+            channel: 1,
+            freq: 2412,
+            clients: 0,
+          },
         ],
         stations: [],
       })
     })
 
     await waitFor(() => expect(screen.getByText('somebody-elses')).toBeTruthy())
+    expect(screen.getByText('Reported enabled BSSs')).toBeTruthy()
+    expect(screen.getByText(/not an independent on-air scan/i)).toBeTruthy()
 
     // The unknown one must carry the marker. Without it the row renders exactly
     // like the managed BSS above it, which is the bug.
     const marks = document.querySelectorAll('[title*="not established"]')
     if (marks.length === 0) {
-      throw new Error(
-        'a BSS with no provenance entry rendered bare, identically to one ' +
-          'oonfeeWRT manages',
-      )
+      throw new Error('a BSS with no provenance entry rendered bare, identically to one ' + 'oonfeeWRT manages')
     }
   })
 
   it('labels the note that records why a foreign network stays unmanaged', async () => {
     const dev = {
-      id: 1, mac: 'aa:bb:cc:dd:ee:01', name: 'ap-1', host: '192.168.1.1',
-      role: 'ap', adopted: true, online: true, class: 'A',
+      id: 1,
+      mac: 'aa:bb:cc:dd:ee:01',
+      name: 'ap-1',
+      host: '192.168.1.1',
+      role: 'ap',
+      adopted: true,
+      online: true,
+      class: 'A',
     }
     api.device.mockResolvedValue({
       ...dev,
-      capabilities: null, interfaces: [], radios: [], stations: [],
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
       broadcast_known: true,
-      broadcasting: [{
-        ssid: 'guest-old', iface: 'phy0-ap0', section: 'guest_old', origin: 'foreign',
-        brief: {
-          section: 'guest_old', ssid: 'guest-old', iface: 'phy0-ap0',
-          safe_to_disable: false, refusal: 'Leave this operator-owned network unchanged.',
+      broadcasting: [
+        {
+          ssid: 'guest-old',
+          iface: 'phy0-ap0',
+          section: 'guest_old',
+          origin: 'foreign',
+          brief: {
+            section: 'guest_old',
+            ssid: 'guest-old',
+            iface: 'phy0-ap0',
+            safe_to_disable: false,
+            refusal: 'Leave this operator-owned network unchanged.',
+          },
         },
-      }],
+      ],
     })
     api.deviceSeries.mockResolvedValue({ series: {} })
     api.overhead.mockRejectedValue(new Error('none'))
     render(<Devices devices={[{ ...dev, quiesced: false } as never]} />)
     fireEvent.click(screen.getByText('ap-1'))
     await waitFor(() => expect(screen.getByText('Re-probe capabilities')).toBeTruthy())
-    act(() => pushLive({
-      type: 'stats', device_id: 1, ts: Math.floor(Date.now() / 1000),
-      tier: 'focused', uptime: 1, load1: 0, poll_ms: 1, clients: 0, degraded: 0,
-      aps: [{ iface: 'phy0-ap0', ssid: 'guest-old', channel: 1, freq: 2412, clients: 0 }],
-      stations: [],
-    }))
+    act(() =>
+      pushLive({
+        type: 'stats',
+        device_id: 1,
+        ts: Math.floor(Date.now() / 1000),
+        tier: 'focused',
+        uptime: 1,
+        load1: 0,
+        poll_ms: 1,
+        clients: 0,
+        degraded: 0,
+        aps: [
+          {
+            iface: 'phy0-ap0',
+            ssid: 'guest-old',
+            channel: 1,
+            freq: 2412,
+            clients: 0,
+          },
+        ],
+        stations: [],
+      }),
+    )
 
     fireEvent.click(await screen.findByText('What would it take to manage this?'))
     expect(screen.getByLabelText('Reason for leaving guest-old unmanaged')).toBeTruthy()
@@ -2500,38 +3546,49 @@ describe('Devices — BSS provenance', () => {
 
 describe('Devices — poll degradation', () => {
   const dev = {
-    id: 5, mac: 'aa:bb:cc:dd:ee:05', name: 'degraded-ap', host: '192.168.1.5',
-    role: 'ap', adopted: true, online: true, class: 'A',
+    id: 5,
+    mac: 'aa:bb:cc:dd:ee:05',
+    name: 'degraded-ap',
+    host: '192.168.1.5',
+    role: 'ap',
+    adopted: true,
+    online: true,
+    class: 'A',
   }
 
   function openWith(degraded: unknown[]) {
     api.device.mockResolvedValue({
       ...dev,
-      capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true, degraded,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
+      degraded,
     })
     api.deviceSeries.mockResolvedValue({ series: {} })
     api.overhead.mockRejectedValue(new Error('none'))
-    render(
-      <Devices
-        devices={[{ ...dev, quiesced: false } as never]}
-        onAdopt={() => {}}
-        onChanged={() => {}}
-      />,
-    )
+    render(<Devices devices={[{ ...dev, quiesced: false } as never]} onAdopt={() => {}} onChanged={() => {}} />)
     fireEvent.click(screen.getByText('degraded-ap'))
   }
 
   it('separates standing permission limits from a transient transport failure', async () => {
     openWith([
       {
-        call: 'luci-rpc.getWirelessDevices', error: 'Permission denied',
-        cause: 'permission', status: { code: 6, name: 'PERMISSION_DENIED' },
-        permanent: true, costs: 'mesh peers cannot be separated from clients',
+        call: 'luci-rpc.getWirelessDevices',
+        error: 'Permission denied',
+        cause: 'permission',
+        status: { code: 6, name: 'PERMISSION_DENIED' },
+        permanent: true,
+        costs: 'mesh peers cannot be separated from clients',
       },
       {
-        call: 'iwinfo.survey', error: 'timed out', cause: 'transport',
-        status: { code: 7, name: 'TIMEOUT' }, permanent: false,
+        call: 'iwinfo.survey',
+        error: 'timed out',
+        cause: 'transport',
+        status: { code: 7, name: 'TIMEOUT' },
+        permanent: false,
         costs: 'channel utilization is unavailable',
       },
     ])
@@ -2547,7 +3604,9 @@ describe('Devices — poll degradation', () => {
   it('does not call a non-retryable protocol failure a device limitation', async () => {
     openWith([
       {
-        call: 'iwinfo.survey', error: 'malformed response', cause: 'protocol',
+        call: 'iwinfo.survey',
+        error: 'malformed response',
+        cause: 'protocol',
         permanent: true,
       },
     ])
@@ -2561,8 +3620,13 @@ describe('Devices — poll degradation', () => {
 
 describe('Unadopt', () => {
   const dev = {
-    id: 4, mac: 'aa:bb:cc:dd:ee:04', name: 'ap-c6', host: '192.168.1.2',
-    role: 'ap', adopted: true, online: true,
+    id: 4,
+    mac: 'aa:bb:cc:dd:ee:04',
+    name: 'ap-c6',
+    host: '192.168.1.2',
+    role: 'ap',
+    adopted: true,
+    online: true,
   }
 
   // Un-adopt is the most destructive thing the controller does and the one
@@ -2570,30 +3634,36 @@ describe('Unadopt', () => {
   // fact, while the safer apply path got a full preview and a confirmation.
   it('names the sections it will revert, before anything is done', async () => {
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0', 'wireless.oowrt_wlan1_radio1'],
     })
     const { Unadopt } = await import('./Unadopt')
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
 
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
     expect(screen.getAllByText('wireless.oowrt_wlan1_radio1').length).toBeGreaterThan(0)
   })
 
   it('distinguishes a known-empty ownership ledger from an unreadable one', async () => {
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
     })
     const { Unadopt } = await import('./Unadopt')
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
 
-    await waitFor(() =>
-      expect(screen.getByText(/has no recorded sections/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/has no recorded sections/)).toBeTruthy())
     fireEvent.click(screen.getByText(/reverts the sections above/))
     for (const label of ['Remove completely', 'Revert config only']) {
       const button = screen.getByText(label).closest('button')!
@@ -2608,15 +3678,18 @@ describe('Unadopt', () => {
   // of, immediately before an irreversible step.
   it('says when the section list could not be read', async () => {
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: false,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: false,
     })
     const { Unadopt } = await import('./Unadopt')
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
 
-    await waitFor(() =>
-      expect(screen.getByText(/could not be read/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/could not be read/)).toBeTruthy())
     expect(screen.getByText(/not the same as owning none/)).toBeTruthy()
 
     fireEvent.click(screen.getByText(/reverts the sections above/))
@@ -2632,15 +3705,18 @@ describe('Unadopt', () => {
   // more. Both destructive buttons stay disabled until it is ticked.
   it('will not remove anything until the operator confirms', async () => {
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0'],
     })
     const { Unadopt } = await import('./Unadopt')
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
 
     const remove = screen.getByText('Remove completely').closest('button')!
     const revert = screen.getByText('Revert config only').closest('button')!
@@ -2658,8 +3734,13 @@ describe('Unadopt', () => {
   it('passes an optional SSH key to complete removal and clears it afterwards', async () => {
     const key = '-----BEGIN OPENSSH PRIVATE KEY-----\nunadopt-key-sentinel\n-----END OPENSSH PRIVATE KEY-----'
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0'],
     })
     api.unadopt.mockResolvedValue({
@@ -2674,9 +3755,7 @@ describe('Unadopt', () => {
     const { Unadopt } = await import('./Unadopt')
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={() => {}} onCancel={() => {}} />)
 
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
     fireEvent.change(screen.getByLabelText('Password'), {
       target: { value: 'router-password' },
     })
@@ -2699,16 +3778,19 @@ describe('Unadopt', () => {
   // Reaches the form, confirms, and presses the destructive button.
   async function attemptRemoval() {
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0'],
     })
     const { Unadopt } = await import('./Unadopt')
     const onDone = vi.fn()
     render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />)
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
     fireEvent.click(screen.getByText(/reverts the sections above/))
     await waitFor(() => {
       const r = screen.getByText('Remove completely').closest('button')!
@@ -2726,24 +3808,21 @@ describe('Unadopt', () => {
   // the inventory: it stayed listed, polled and counted forever, and the only
   // way out was a hand-written API call.
   it('offers a way out when the device cannot be reached at all', async () => {
-    api.unadopt.mockRejectedValueOnce(
-      new Error("the device's SSH host key changed"),
-    )
+    api.unadopt.mockRejectedValueOnce(new Error("the device's SSH host key changed"))
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText(/SSH host key changed/)).toBeTruthy(),
-    )
-    const forceBtn = screen
-      .getByText('Remove from the inventory anyway')
-      .closest('button')!
+    await waitFor(() => expect(screen.getByText(/SSH host key changed/)).toBeTruthy())
+    const forceBtn = screen.getByText('Remove from the inventory anyway').closest('button')!
     if (!forceBtn.disabled) {
       throw new Error('forced removal was available without its own confirmation')
     }
 
     api.unadopt.mockResolvedValueOnce({
-      removed_from_inventory: true, footprint_remains: true,
-      reverted_sections: 0, login_removed: false, acl_removed: false,
+      removed_from_inventory: true,
+      footprint_remains: true,
+      reverted_sections: 0,
+      login_removed: false,
+      acl_removed: false,
       residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
       errors: ['removal was forced, so the footprint was NOT removed'],
     })
@@ -2775,16 +3854,11 @@ describe('Unadopt', () => {
       footprint_remains: false,
       needs_operator_credential: false,
       residue: ['config section wireless.oowrt_wlan1_radio1'],
-      cleanup_commands: [
-        'uci -q delete wireless.oowrt_wlan1_radio1',
-        'uci commit wireless',
-      ],
+      cleanup_commands: ['uci -q delete wireless.oowrt_wlan1_radio1', 'uci commit wireless'],
     })
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText(/configuration or the controller footprint remains/i)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/configuration or the controller footprint remains/i)).toBeTruthy())
     expect(screen.queryByText(/Nothing of ours is left/)).toBeNull()
     expect(screen.getByText('wireless.oowrt_wlan1_radio1')).toBeTruthy()
     expect(screen.getByText(/Configuration hand-back was not proved complete/)).toBeTruthy()
@@ -2798,9 +3872,7 @@ describe('Unadopt', () => {
     api.unadopt.mockRejectedValueOnce(new Error('first failure'))
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText('Remove from the inventory anyway')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Remove from the inventory anyway')).toBeTruthy())
     fireEvent.click(screen.getByText(/footprint stays on the device/))
     await waitFor(() => {
       const b = screen.getByText('Remove from the inventory anyway').closest('button')!
@@ -2831,8 +3903,11 @@ describe('Unadopt', () => {
       status: 502,
       message: 'adoption: un-adopt completed with 1 error(s)',
       body: {
-        removed_from_inventory: true, footprint_remains: true,
-        reverted_sections: 1, login_removed: false, acl_removed: false,
+        removed_from_inventory: true,
+        footprint_remains: true,
+        reverted_sections: 1,
+        login_removed: false,
+        acl_removed: false,
         needs_operator_credential: false,
         residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
         cleanup_commands: [
@@ -2849,9 +3924,7 @@ describe('Unadopt', () => {
     api.unadopt.mockRejectedValueOnce(err)
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy())
     expect(screen.getByText(/Read-only file system/)).toBeTruthy()
     expect(screen.getByText(/uci -q delete rpcd\.oonfeewrt/)).toBeTruthy()
     expect(screen.getByText(/rm -f '.*oonfeewrt\.json'/)).toBeTruthy()
@@ -2869,23 +3942,28 @@ describe('Unadopt', () => {
   // place it can be caught.
   it('tells the fleet list about a removal even when dismissed by unmounting', async () => {
     api.unadopt.mockResolvedValueOnce({
-      removed_from_inventory: true, footprint_remains: false,
-      reverted_sections: 1, login_removed: true, acl_removed: true,
-      needs_operator_credential: false, errors: [],
+      removed_from_inventory: true,
+      footprint_remains: false,
+      reverted_sections: 1,
+      login_removed: true,
+      acl_removed: true,
+      needs_operator_credential: false,
+      errors: [],
     })
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0'],
     })
     const { Unadopt } = await import('./Unadopt')
     const onDone = vi.fn()
-    const { unmount } = render(
-      <Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />,
-    )
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    const { unmount } = render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />)
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
     fireEvent.click(screen.getByText(/reverts the sections above/))
     await waitFor(() => {
       const r = screen.getByText('Remove completely').closest('button')!
@@ -2909,26 +3987,31 @@ describe('Unadopt', () => {
   // would pass whether or not the flag is cleared.
   it('refreshes the fleet once, not twice, when Close is used', async () => {
     api.unadopt.mockResolvedValueOnce({
-      removed_from_inventory: true, footprint_remains: false,
-      reverted_sections: 1, login_removed: true, acl_removed: true,
-      needs_operator_credential: false, errors: [],
+      removed_from_inventory: true,
+      footprint_remains: false,
+      reverted_sections: 1,
+      login_removed: true,
+      acl_removed: true,
+      needs_operator_credential: false,
+      errors: [],
     })
     api.device.mockResolvedValue({
-      ...dev, capabilities: null, interfaces: [], radios: [], stations: [],
-      broadcast_known: false, owned_sections_known: true,
+      ...dev,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
       owned_sections: ['wireless.oowrt_wlan1_radio0'],
     })
     const { Unadopt } = await import('./Unadopt')
     let teardown = () => {}
     const onDone = vi.fn(() => teardown())
-    const r = render(
-      <Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />,
-    )
+    const r = render(<Unadopt deviceID={4} deviceName="ap-c6" onDone={onDone} onCancel={() => {}} />)
     teardown = r.unmount
 
-    await waitFor(() =>
-      expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('wireless.oowrt_wlan1_radio0')).toBeTruthy())
     fireEvent.click(screen.getByText(/reverts the sections above/))
     await waitFor(() => {
       const b = screen.getByText('Remove completely').closest('button')!
@@ -2954,8 +4037,11 @@ describe('Unadopt', () => {
       status: 502,
       message: 'adoption: un-adopt completed with 1 error(s)',
       body: {
-        removed_from_inventory: true, footprint_remains: false,
-        reverted_sections: 1, login_removed: true, acl_removed: true,
+        removed_from_inventory: true,
+        footprint_remains: false,
+        reverted_sections: 1,
+        login_removed: true,
+        acl_removed: true,
         needs_operator_credential: false,
         errors: ['revert wireless.oowrt_wlan1_radio1: Permission denied'],
         error: 'adoption: un-adopt completed with 1 error(s)',
@@ -2964,9 +4050,7 @@ describe('Unadopt', () => {
     api.unadopt.mockRejectedValueOnce(err)
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText(/Permission denied/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/Permission denied/)).toBeTruthy())
     expect(screen.getByText(/Nothing of ours is left on it/)).toBeTruthy()
   })
 
@@ -2979,8 +4063,11 @@ describe('Unadopt', () => {
       status: 502,
       message: 'boom',
       body: {
-        removed_from_inventory: false, footprint_remains: true,
-        reverted_sections: 2, login_removed: false, acl_removed: false,
+        removed_from_inventory: false,
+        footprint_remains: true,
+        reverted_sections: 2,
+        login_removed: false,
+        acl_removed: false,
         needs_operator_credential: false,
         residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
         errors: ['uci commit rpcd: Read-only file system'],
@@ -2990,9 +4077,7 @@ describe('Unadopt', () => {
     api.unadopt.mockRejectedValueOnce(err)
     await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText(/did not finish/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/did not finish/)).toBeTruthy())
     expect(screen.queryByText(/needs the device's administrator credential/)).toBeNull()
   })
 
@@ -3001,16 +4086,17 @@ describe('Unadopt', () => {
   // onDone ran the moment the request returned, and it unmounts the panel.
   it('keeps the report on screen after the row is gone', async () => {
     api.unadopt.mockResolvedValueOnce({
-      removed_from_inventory: true, footprint_remains: true,
-      reverted_sections: 2, login_removed: false, acl_removed: false,
+      removed_from_inventory: true,
+      footprint_remains: true,
+      reverted_sections: 2,
+      login_removed: false,
+      acl_removed: false,
       residue: ['/usr/share/rpcd/acl.d/oonfeewrt.json'],
       errors: [],
     })
     const onDone = await attemptRemoval()
 
-    await waitFor(() =>
-      expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeTruthy())
     expect(onDone).not.toHaveBeenCalled()
 
     // "Supply the credential and try again" is advice only while there is
@@ -3032,10 +4118,16 @@ describe('Logs', () => {
   it('distinguishes observed-empty router logs from missing coverage', async () => {
     api.devices.mockResolvedValue({ devices: [] })
     api.events.mockResolvedValueOnce({
-      events: [], total: 0, limit: 100, scope: 'general', next_before: null,
+      events: [],
+      total: 0,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
       facets: { category: [], severity: [] },
       coverage: {
-        complete: false, expected_devices: 1, observed_devices: 0,
+        complete: false,
+        expected_devices: 1,
+        observed_devices: 0,
         gaps: ['router log coverage has not been observed on AP one'],
       },
     })
@@ -3047,9 +4139,18 @@ describe('Logs', () => {
     unmount()
 
     api.events.mockResolvedValueOnce({
-      events: [], total: 0, limit: 100, scope: 'general', next_before: null,
+      events: [],
+      total: 0,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
       facets: { category: [], severity: [] },
-      coverage: { complete: true, expected_devices: 1, observed_devices: 1, gaps: [] },
+      coverage: {
+        complete: true,
+        expected_devices: 1,
+        observed_devices: 1,
+        gaps: [],
+      },
     })
     render(<Logs />)
     expect(await screen.findByText('No general events were observed.')).toBeTruthy()
@@ -3057,12 +4158,56 @@ describe('Logs', () => {
   })
 
   const ev = (over: Record<string, unknown> = {}) => ({
-    ID: 1, TS: 1755400000, DeviceID: null, Category: 'device', Severity: 'info',
-    Event: 'device.reachable', Detail: {}, Source: 'controller', SourceID: '',
-    SourceBoot: '', IngestedAt: 1755400000000, ClientMAC: '', Action: '',
-    Direction: '', InIface: '', OutIface: '', SrcIP: '', DstIP: '',
-    SrcPort: null, DstPort: null, ZoneIn: '', ZoneOut: '', PolicyID: null,
+    ID: 1,
+    TS: 1755400000,
+    DeviceID: null,
+    Category: 'device',
+    Severity: 'info',
+    Event: 'device.reachable',
+    Detail: {},
+    Source: 'controller',
+    SourceID: '',
+    SourceBoot: '',
+    IngestedAt: 1755400000000,
+    ClientMAC: '',
+    Action: '',
+    Direction: '',
+    InIface: '',
+    OutIface: '',
+    SrcIP: '',
+    DstIP: '',
+    SrcPort: null,
+    DstPort: null,
+    ZoneIn: '',
+    ZoneOut: '',
+    PolicyID: null,
     ...over,
+  })
+
+  it('discloses router clock skew instead of silently presenting misleading event times', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockResolvedValue({
+      events: [ev({ Source: 'openwrt-logd', IngestedAt: 1755486400000 })],
+      total: 1,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
+      facets: { category: [], severity: [] },
+      coverage: {
+        complete: true,
+        expected_devices: 1,
+        observed_devices: 1,
+        gaps: [],
+      },
+    })
+
+    render(<Logs />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent ?? '').toMatch(
+        /Router event time differs.*24 hours.*ordered by their router source time/i,
+      )
+    })
   })
 
   // Every device event carries a device_id, the API has always returned it, and
@@ -3076,10 +4221,17 @@ describe('Logs', () => {
     })
     api.events.mockResolvedValue({
       events: [
-        ev({ ID: 1, DeviceID: 7, Event: 'device.unreachable', Severity: 'warning' }),
+        ev({
+          ID: 1,
+          DeviceID: 7,
+          Event: 'device.unreachable',
+          Severity: 'warning',
+        }),
         ev({ ID: 2, DeviceID: null, Event: 'auth.login', Category: 'audit' }),
       ],
-      total: 2, limit: 100, offset: 0,
+      total: 2,
+      limit: 100,
+      offset: 0,
       facets: { category: [], severity: [] },
     })
     render(<Logs />)
@@ -3099,13 +4251,22 @@ describe('Logs', () => {
           Event: 'config.apply',
           Detail: {
             omissions: [
-              { WLAN: 'lan', Reason: 'VLAN 1 and untagged traffic are the device’s existing LAN, which oonfeeWRT does not own and will not rewrite.' },
-              { WLAN: 'lan', Reason: 'another long sentence that has no business being in a table cell at all' },
+              {
+                WLAN: 'lan',
+                Reason:
+                  'VLAN 1 and untagged traffic are the device’s existing LAN, which oonfeeWRT does not own and will not rewrite.',
+              },
+              {
+                WLAN: 'lan',
+                Reason: 'another long sentence that has no business being in a table cell at all',
+              },
             ],
           },
         }),
       ],
-      total: 1, limit: 100, offset: 0,
+      total: 1,
+      limit: 100,
+      offset: 0,
       facets: { category: [], severity: [] },
     })
     render(<Logs />)
@@ -3124,7 +4285,9 @@ describe('Logs', () => {
         ev({ ID: 11, Event: 'routine.info', Severity: 'info' }),
         ev({ ID: 12, Event: 'current.error', Severity: 'error' }),
       ],
-      total: 2, limit: 100, offset: 0,
+      total: 2,
+      limit: 100,
+      offset: 0,
       facets: {
         category: [{ value: 'device', count: 2 }],
         severity: [
@@ -3135,12 +4298,13 @@ describe('Logs', () => {
     }
     let resolveRefresh!: (page: typeof initial) => void
     let resolveError!: (page: typeof initial) => void
-    const refresh = new Promise<typeof initial>((resolve) => { resolveRefresh = resolve })
-    const error = new Promise<typeof initial>((resolve) => { resolveError = resolve })
-    api.events
-      .mockResolvedValueOnce(initial)
-      .mockReturnValueOnce(refresh)
-      .mockReturnValueOnce(error)
+    const refresh = new Promise<typeof initial>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const error = new Promise<typeof initial>((resolve) => {
+      resolveError = resolve
+    })
+    api.events.mockResolvedValueOnce(initial).mockReturnValueOnce(refresh).mockReturnValueOnce(error)
 
     let unmount = () => {}
     try {
@@ -3193,9 +4357,7 @@ describe('Logs', () => {
       expect(screen.queryByText('stale.info')).toBeNull()
       expect(screen.queryByText('stale.extra')).toBeNull()
       expect(screen.getByText('Events (1)')).toBeTruthy()
-      expect(
-        screen.getAllByRole('row').filter((row) => row.hasAttribute('data-row')),
-      ).toHaveLength(1)
+      expect(screen.getAllByRole('row').filter((row) => row.hasAttribute('data-row'))).toHaveLength(1)
     } finally {
       unmount()
       vi.useRealTimers()
@@ -3207,12 +4369,16 @@ describe('Logs', () => {
     api.devices.mockResolvedValue({ devices: [] })
     const page = {
       events: [ev({ ID: 21, Event: 'slow.but.valid' })],
-      total: 1, limit: 100, offset: 0,
+      total: 1,
+      limit: 100,
+      offset: 0,
       facets: { category: [], severity: [] },
     }
     let resolvePage!: (value: typeof page) => void
     api.events.mockReturnValue(
-      new Promise<typeof page>((resolve) => { resolvePage = resolve }),
+      new Promise<typeof page>((resolve) => {
+        resolvePage = resolve
+      }),
     )
 
     let unmount = () => {}
@@ -3237,60 +4403,101 @@ describe('Logs', () => {
   })
 
   it('uses scoped keyset pages and opens exact enriched event detail', async () => {
-    api.devices.mockResolvedValue({ devices: [{ id: 7, name: 'hallway-ap', adopted: true }] })
+    api.devices.mockResolvedValue({
+      devices: [{ id: 7, name: 'hallway-ap', adopted: true }],
+    })
     const newest = ev({
-      ID: 31, DeviceID: 7, Event: 'client.connect', Category: 'client',
-      Source: 'openwrt-logd', SourceID: '87', SourceBoot: 'boot:123',
-      ClientMAC: 'aa:bb:cc:dd:ee:ff', Action: 'connect', InIface: 'phy0-ap0',
-      SrcIP: '192.168.2.100', SrcPort: 5353, DstIP: '192.168.2.1', DstPort: 53,
-      ZoneIn: 'guest', PolicyID: 4, Detail: { hostname: 'laptop', raw: 'sanitized' },
+      ID: 31,
+      DeviceID: 7,
+      Event: 'client.connect',
+      Category: 'client',
+      Source: 'openwrt-logd',
+      SourceID: '87',
+      SourceBoot: 'boot:123',
+      ClientMAC: 'aa:bb:cc:dd:ee:ff',
+      Action: 'connect',
+      InIface: 'phy0-ap0',
+      SrcIP: '192.168.2.100',
+      SrcPort: 5353,
+      DstIP: '192.168.2.1',
+      DstPort: 53,
+      ZoneIn: 'guest',
+      PolicyID: 4,
+      Detail: { hostname: 'laptop', raw: 'sanitized' },
     })
     const older = ev({ ID: 30, TS: 1755399999, Event: 'older.general' })
     api.events
       .mockResolvedValueOnce({
-        events: [newest], total: 2, limit: 100, scope: 'general',
+        events: [newest],
+        total: 2,
+        limit: 100,
+        scope: 'general',
         next_before: { ts: newest.TS, id: newest.ID },
         facets: { category: [], severity: [] },
       })
       .mockResolvedValueOnce({
-        events: [older], total: 2, limit: 100, scope: 'general', next_before: null,
+        events: [older],
+        total: 2,
+        limit: 100,
+        scope: 'general',
+        next_before: null,
         facets: { category: [], severity: [] },
       })
       .mockResolvedValueOnce({
         events: [ev({ ID: 40, Category: 'audit', Event: 'auth.login' })],
-        total: 1, limit: 100, scope: 'audit', next_before: null,
+        total: 1,
+        limit: 100,
+        scope: 'audit',
+        next_before: null,
         facets: { category: [], severity: [] },
       })
     api.eventDetail.mockResolvedValue(newest)
 
     render(<Logs />)
     await waitFor(() => expect(screen.getByText('client.connect')).toBeTruthy())
-    expect(api.events).toHaveBeenLastCalledWith(expect.objectContaining({
-      scope: 'general', before: null,
-    }))
+    expect(api.events).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scope: 'general',
+        before: null,
+      }),
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
     await waitFor(() => expect(screen.getByText('older.general')).toBeTruthy())
-    expect(api.events).toHaveBeenLastCalledWith(expect.objectContaining({
-      scope: 'general', before: { ts: newest.TS, id: newest.ID },
-    }))
+    expect(api.events).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scope: 'general',
+        before: { ts: newest.TS, id: newest.ID },
+      }),
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Audit' }))
     await waitFor(() => expect(screen.getByText('auth.login')).toBeTruthy())
-    expect(api.events).toHaveBeenLastCalledWith(expect.objectContaining({
-      scope: 'audit', before: null,
-    }))
+    expect(api.events).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scope: 'audit',
+        before: null,
+      }),
+    )
 
     api.events.mockResolvedValueOnce({
-      events: [newest], total: 1, limit: 100, scope: 'general', next_before: null,
+      events: [newest],
+      total: 1,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
       facets: { category: [], severity: [] },
     })
     fireEvent.click(screen.getByRole('button', { name: 'General' }))
     await waitFor(() => expect(screen.getByText('client.connect')).toBeTruthy())
-    const view = screen.getByRole('button', { name: /View event 31: client\.connect/ })
+    const view = screen.getByRole('button', {
+      name: /View event 31: client\.connect/,
+    })
     fireEvent.click(view)
     await waitFor(() => expect(api.eventDetail).toHaveBeenCalledWith(31))
-    const detail = await screen.findByRole('dialog', { name: /client.connect · event 31/ })
+    const detail = await screen.findByRole('dialog', {
+      name: /client.connect · event 31/,
+    })
     await waitFor(() => expect(detail.contains(document.activeElement)).toBe(true))
     expect(screen.getAllByText('hallway-ap')).toHaveLength(2)
     expect(screen.getByText('openwrt-logd')).toBeTruthy()
@@ -3312,6 +4519,7 @@ describe('Dashboard', () => {
     active_devices: 5,
     upstream_devices: 4,
     unscoped_devices: 3,
+    gateway_uplinks: [{ device_id: 1, name: 'Gateway', state: 'up' }],
     focused_devices: 0,
     quiesced_devices: 0,
     series_count: 70,
@@ -3365,18 +4573,51 @@ describe('Dashboard', () => {
 
   it('withholds a fleet total when any device station set is unknown', async () => {
     const { Dashboard } = await import('./Dashboard')
-    render(<Dashboard data={{
-      ...data,
-      wireless_clients: 1,
-      wireless_clients_complete: false,
-      wireless_clients_unknown_on: ['upstairs-ap'],
-    } as never} />)
+    render(
+      <Dashboard
+        data={
+          {
+            ...data,
+            wireless_clients: 1,
+            wireless_clients_complete: false,
+            wireless_clients_unknown_on: ['upstairs-ap'],
+          } as never
+        }
+      />,
+    )
 
     const card = screen.getByText('Wireless clients').parentElement
     expect(card?.children[1]?.textContent).toBe('—')
     expect(card?.textContent).toContain('1 matching row identified; full total unavailable')
     expect(screen.getByText('upstairs-ap')).toBeTruthy()
     expect(screen.getByText(/false zero or dip/)).toBeTruthy()
+  })
+
+  it('warns only when an online gateway freshly reports no WAN route', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    const { rerender } = render(
+      <Dashboard
+        data={
+          {
+            ...data,
+            gateway_uplinks: [{ device_id: 1, name: 'Gateway', state: 'missing' }],
+          } as never
+        }
+      />,
+    )
+
+    expect(screen.getByRole('alert').textContent).toContain('No active WAN/default route was observed on Gateway')
+    rerender(
+      <Dashboard
+        data={
+          {
+            ...data,
+            gateway_uplinks: [{ device_id: 1, name: 'Gateway', state: 'unknown' }],
+          } as never
+        }
+      />,
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 
@@ -3388,7 +4629,14 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     meshes: [],
     groups: [{ id: 1, name: 'all', device_ids: [] }],
     networks: [
-      { id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true },
+      {
+        id: 1,
+        name: 'lan',
+        vlan: 1,
+        cidr: '192.168.1.1/24',
+        zone: 'lan',
+        enabled: true,
+      },
     ],
     problems: [],
     overrides: [],
@@ -3423,9 +4671,20 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     preview_token: 'pv-current',
     devices: [
       {
-        device_id: 1, name: 'ap-wrt', role: 'ap', functions: ['ap', 'switch'],
-        changes: [{ config: 'wireless', section: 's', action: 'update', options: ['x'] }],
-        blocked: false, touches_traversal: false,
+        device_id: 1,
+        name: 'ap-wrt',
+        role: 'ap',
+        functions: ['ap', 'switch'],
+        changes: [
+          {
+            config: 'wireless',
+            section: 's',
+            action: 'update',
+            options: ['x'],
+          },
+        ],
+        blocked: false,
+        touches_traversal: false,
         cautions: [] as string[],
         driver_defects: defects,
       },
@@ -3447,9 +4706,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   }
 
   it('clears the old plan while re-previewing and keeps it cleared on failure', async () => {
-    api.preview
-      .mockResolvedValueOnce(previewWith([]))
-      .mockRejectedValueOnce(new Error('preview unavailable'))
+    api.preview.mockResolvedValueOnce(previewWith([])).mockRejectedValueOnce(new Error('preview unavailable'))
     render(<Settings devices={[]} />)
 
     fireEvent.click(await screen.findByText('Preview changes'))
@@ -3464,9 +4721,11 @@ describe('Settings — the hazard a rollback cannot undo', () => {
 
   it('ignores a preview response that finishes after the model changes', async () => {
     let finishPreview!: (result: ReturnType<typeof previewWith>) => void
-    api.preview.mockReturnValue(new Promise((resolve) => {
-      finishPreview = resolve
-    }))
+    api.preview.mockReturnValue(
+      new Promise((resolve) => {
+        finishPreview = resolve
+      }),
+    )
     api.saveNetwork.mockResolvedValue({})
     render(<Settings devices={[]} />)
 
@@ -3480,8 +4739,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await act(async () => finishPreview(previewWith([])))
     expect(screen.queryByText('ap-wrt')).toBeNull()
     if (!applyBtn().disabled) throw new Error('a stale response re-enabled Apply')
-    expect((screen.getByText('Preview changes').closest('button') as HTMLButtonElement).disabled)
-      .toBe(false)
+    expect((screen.getByText('Preview changes').closest('button') as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('shows additive functions in the per-device apply preview', async () => {
@@ -3491,10 +4749,17 @@ describe('Settings — the hazard a rollback cannot undo', () => {
 
   it('preserves bundled behavior for a legacy preview with only a role', async () => {
     api.preview.mockResolvedValue({
-      devices: [{
-        device_id: 1, name: 'old-gateway', role: 'gateway', changes: [],
-        blocked: false, touches_traversal: false, driver_defects: [],
-      }],
+      devices: [
+        {
+          device_id: 1,
+          name: 'old-gateway',
+          role: 'gateway',
+          changes: [],
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
+        },
+      ],
       site_errors: [],
     })
     render(<Settings devices={[]} />)
@@ -3504,10 +4769,18 @@ describe('Settings — the hazard a rollback cannot undo', () => {
 
   it('does not widen an explicitly empty preview through its legacy role', async () => {
     api.preview.mockResolvedValue({
-      devices: [{
-        device_id: 1, name: 'invalid-gateway', role: 'gateway', functions: [], changes: [],
-        blocked: false, touches_traversal: false, driver_defects: [],
-      }],
+      devices: [
+        {
+          device_id: 1,
+          name: 'invalid-gateway',
+          role: 'gateway',
+          functions: [],
+          changes: [],
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
+        },
+      ],
       site_errors: [],
     })
     render(<Settings devices={[]} />)
@@ -3528,16 +4801,19 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.preview.mockResolvedValue({
       devices: [
         {
-          device_id: 1, name: 'ap-1', role: 'ap', changes: [],
-          blocked: false, touches_traversal: false, driver_defects: [],
+          device_id: 1,
+          name: 'ap-1',
+          role: 'ap',
+          changes: [],
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
           omitted: ['home: device has no 6g radio'],
           cautions: [
             'roam: this device will join roam as a wireless bridge. If it is ' +
               'ALSO connected by ethernet to the same network, that is a layer-2 loop',
           ],
-          undetermined: [
-            'oowrt_up1_radio1: the existing wireless uplink section is left exactly as it is',
-          ],
+          undetermined: ['oowrt_up1_radio1: the existing wireless uplink section is left exactly as it is'],
         },
       ],
       site_errors: [],
@@ -3548,8 +4824,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
 
     // The hazard is present, and is NOT under the heading that calls it fine.
-    await waitFor(() =>
-      expect(screen.getAllByText(/layer-2 loop/).length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText(/layer-2 loop/).length).toBeGreaterThan(0))
     expect(screen.getByText(/worth a look first/)).toBeTruthy()
     expect(screen.queryByText(/hardware or firmware cannot take it/)).toBeNull()
 
@@ -3574,11 +4849,25 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.preview.mockResolvedValue({
       devices: [
         {
-          device_id: 1, name: 'ap-wrt', role: 'ap', blocked: false,
-          touches_traversal: false, driver_defects: [],
+          device_id: 1,
+          name: 'ap-wrt',
+          role: 'ap',
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
           changes: [
-            { config: 'network', section: 'oowrt_bv20', action: 'remove', option: 'ports' },
-            { config: 'network', section: 'oowrt_bv20', action: 'update', options: ['device', 'vlan'] },
+            {
+              config: 'network',
+              section: 'oowrt_bv20',
+              action: 'remove',
+              option: 'ports',
+            },
+            {
+              config: 'network',
+              section: 'oowrt_bv20',
+              action: 'update',
+              options: ['device', 'vlan'],
+            },
           ],
         },
       ],
@@ -3604,9 +4893,19 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.preview.mockResolvedValue({
       devices: [
         {
-          device_id: 1, name: 'ap-wrt', role: 'ap', blocked: false,
-          touches_traversal: false, driver_defects: [],
-          changes: [{ config: 'wireless', section: 'oowrt_wlan9_radio0', action: 'remove' }],
+          device_id: 1,
+          name: 'ap-wrt',
+          role: 'ap',
+          blocked: false,
+          touches_traversal: false,
+          driver_defects: [],
+          changes: [
+            {
+              config: 'wireless',
+              section: 'oowrt_wlan9_radio0',
+              action: 'remove',
+            },
+          ],
         },
       ],
       site_errors: [],
@@ -3619,7 +4918,10 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   })
 
   const applyBtn = () =>
-    screen.getAllByText(/^Apply/).map((n) => n.closest('button')!).find(Boolean)!
+    screen
+      .getAllByText(/^Apply/)
+      .map((n) => n.closest('button')!)
+      .find(Boolean)!
 
   // The screen already stops for touches_traversal — editing the path the
   // controller reaches a device through — and tells the reader a rollback
@@ -3630,9 +4932,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   it('will not apply a change that is known to kill the radio until acknowledged', async () => {
     await previewThen([defect()])
 
-    await waitFor(() =>
-      expect(screen.getByText(/take the radio down until someone power-cycles it/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/take the radio down until someone power-cycles it/)).toBeTruthy())
     if (!applyBtn().disabled) {
       throw new Error('Apply was enabled for a change measured to kill the radio')
     }
@@ -3652,11 +4952,9 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     hazardous.devices[0].cautions = ['wireless uplink may form a layer-2 loop']
     api.preview.mockResolvedValue(hazardous)
     api.applySite.mockRejectedValue(
-      new ApiError(
-        409,
-        'the preview is stale; Preview again before applying; nothing was written',
-        { write_state: 'none' },
-      ),
+      new ApiError(409, 'the preview is stale; Preview again before applying; nothing was written', {
+        write_state: 'none',
+      }),
     )
     render(<Settings devices={[]} />)
     fireEvent.click(await screen.findByText('Preview changes'))
@@ -3669,15 +4967,15 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     })
     fireEvent.click(applyBtn())
 
-    await waitFor(() => expect(api.applySite).toHaveBeenCalledWith({
-      operation_id: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-      ),
-      preview_token: 'pv-current',
-      acknowledge_traversal: true,
-      acknowledge_driver_risk: true,
-      acknowledge_cautions: true,
-    }))
+    await waitFor(() =>
+      expect(api.applySite).toHaveBeenCalledWith({
+        operation_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+        preview_token: 'pv-current',
+        acknowledge_traversal: true,
+        acknowledge_driver_risk: true,
+        acknowledge_cautions: true,
+      }),
+    )
     expect(await screen.findByText(/preview is stale/i)).toBeTruthy()
     if (!applyBtn().disabled) throw new Error('rejected preview remained applicable')
 
@@ -3691,10 +4989,12 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   it('disables Apply when any selected device could not be planned', async () => {
     api.preview.mockResolvedValue({
       ...previewWith([]),
-      devices: [{
-        ...previewWith([]).devices[0],
-        error: 'could not reach this device',
-      }],
+      devices: [
+        {
+          ...previewWith([]).devices[0],
+          error: 'could not reach this device',
+        },
+      ],
     })
     render(<Settings devices={[]} />)
     fireEvent.click(await screen.findByText('Preview changes'))
@@ -3707,7 +5007,10 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.applySite.mockRejectedValue(new TypeError('Failed to fetch'))
     api.applyOperation.mockResolvedValue({
       operation_id: '01962c09-7d62-7cd7-a1c2-450eba830892',
-      state: 'completed', created_at: 1, started_at: 2, finished_at: 3,
+      state: 'completed',
+      created_at: 1,
+      started_at: 2,
+      finished_at: 3,
       write_state: 'possible',
       result: {
         operation_id: '01962c09-7d62-7cd7-a1c2-450eba830892',
@@ -3722,11 +5025,11 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     })
     fireEvent.click(applyBtn())
 
-    expect(await screen.findByText('Applied to 1 device.')).toBeTruthy()
+    expect(await screen.findByText('Previous result: 1 change applied to 1 device.')).toBeTruthy()
     expect(api.applyOperation).toHaveBeenCalledTimes(1)
     const sent = api.applySite.mock.calls[0][0].operation_id
     expect(api.applyOperation).toHaveBeenCalledWith(sent)
-    expect(localStorage.getItem('oonfee_last_apply_operation')).toBe(sent)
+    expect(localStorage.getItem('oonfee_last_apply_operation')).toBeNull()
     expect(screen.queryByText(/result unknown/i)).toBeNull()
     expect(screen.queryByText(/Nothing above has touched a device/)).toBeNull()
     expect(screen.getByText(/Durable write state: possible/)).toBeTruthy()
@@ -3737,16 +5040,25 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.applySite.mockRejectedValue(new SyntaxError('Unexpected end of JSON input'))
     api.applyOperation.mockImplementation(async (id: string) => ({
       operation_id: id,
-      state: 'failed', created_at: 1, started_at: 2, finished_at: 3,
+      state: 'failed',
+      created_at: 1,
+      started_at: 2,
+      finished_at: 3,
       write_state: 'possible',
       devices: [],
       error: 'apply stopped after ap-wrt',
       result: {
         operation_id: id,
-        devices: [{
-          device_id: 1, name: 'ap-wrt', outcome: 'reverted',
-          router_outcome: 'reverted', changes: 1, reason: 'health check failed',
-        }],
+        devices: [
+          {
+            device_id: 1,
+            name: 'ap-wrt',
+            outcome: 'reverted',
+            router_outcome: 'reverted',
+            changes: 1,
+            reason: 'health check failed',
+          },
+        ],
         aborted: true,
         aborted_after: 'ap-wrt',
       },
@@ -3774,11 +5086,19 @@ describe('Settings — the hazard a rollback cannot undo', () => {
       finished_at: 3,
       write_state: 'possible',
       error: 'controller restarted while this Apply was running',
-      devices: [{
-        ordinal: 0, device_id: 1, device_mac: '60:38:e0:00:00:01',
-        device_name: 'ap-wrt', state: 'unknown', write_state: 'possible',
-        router_outcome: 'unknown', outcome: 'unknown', changes: 1,
-      }],
+      devices: [
+        {
+          ordinal: 0,
+          device_id: 1,
+          device_mac: '60:38:e0:00:00:01',
+          device_name: 'ap-wrt',
+          state: 'unknown',
+          write_state: 'possible',
+          router_outcome: 'unknown',
+          outcome: 'unknown',
+          changes: 1,
+        },
+      ],
     })
 
     render(<Settings devices={[]} />)
@@ -3794,12 +5114,29 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     expect(screen.getByRole('button', { name: 'Check status' })).toBeTruthy()
   })
 
+  it('clears a retained Apply reference that belongs to a different controller database', async () => {
+    const id = '01962c09-7d62-7cd7-a1c2-450eba830892'
+    localStorage.setItem('oonfee_last_apply_operation', id)
+    api.applyOperation.mockRejectedValue(new ApiError(404, 'apply operation not found'))
+
+    render(<Settings devices={[]} />)
+
+    expect(await screen.findByText(/Cleared a saved Apply reference/)).toBeTruthy()
+    expect(localStorage.getItem('oonfee_last_apply_operation')).toBeNull()
+    expect(screen.queryByText(id)).toBeNull()
+    expect(screen.getByText(/Nothing above has touched a device/)).toBeTruthy()
+  })
+
   it('polls a retained running operation until its terminal result is durable', async () => {
     const id = '01962c09-7d62-7cd7-a1c2-450eba830892'
     localStorage.setItem('oonfee_last_apply_operation', id)
     const terminal = {
-      operation_id: id, state: 'completed' as const, created_at: 1, started_at: 2,
-      finished_at: 3, write_state: 'possible' as const,
+      operation_id: id,
+      state: 'completed' as const,
+      created_at: 1,
+      started_at: 2,
+      finished_at: 3,
+      write_state: 'possible' as const,
       result: {
         operation_id: id,
         devices: [{ device_id: 1, name: 'ap-wrt', outcome: 'applied', changes: 1 }],
@@ -3813,7 +5150,10 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     })
     api.applyOperation
       .mockResolvedValueOnce({
-        operation_id: id, state: 'running', created_at: 1, started_at: 2,
+        operation_id: id,
+        state: 'running',
+        created_at: 1,
+        started_at: 2,
       })
       .mockReturnValueOnce(terminalResponse)
 
@@ -3821,18 +5161,53 @@ describe('Settings — the hazard a rollback cannot undo', () => {
 
     expect(await screen.findByText(/request was accepted and its durable status above is authoritative/)).toBeTruthy()
     expect(screen.queryByText(/Nothing above has touched a device/)).toBeNull()
-    await waitFor(() => expect(api.applyOperation).toHaveBeenCalledTimes(2), { timeout: 2500 })
+    await waitFor(() => expect(api.applyOperation).toHaveBeenCalledTimes(2), {
+      timeout: 2500,
+    })
     finish()
-    expect(await screen.findByText('Applied to 1 device.')).toBeTruthy()
+    expect(await screen.findByText('Previous result: 1 change applied to 1 device.')).toBeTruthy()
+    expect(localStorage.getItem('oonfee_last_apply_operation')).toBeNull()
     expect(screen.getByRole('status').textContent ?? '').toMatch(/completed/i)
+  })
+
+  it('hides a completed previous Apply when a new Preview is loaded', async () => {
+    const id = '01962c09-7d62-7cd7-a1c2-450eba830892'
+    localStorage.setItem('oonfee_last_apply_operation', id)
+    api.applyOperation.mockResolvedValue({
+      operation_id: id,
+      state: 'completed',
+      created_at: 1,
+      finished_at: 2,
+      write_state: 'possible',
+      devices: [],
+      result: {
+        operation_id: id,
+        devices: [{ device_id: 1, name: 'ap-wrt', outcome: 'applied', changes: 1 }],
+        aborted: false,
+      },
+    })
+    api.preview.mockResolvedValue(previewWith([]))
+
+    render(<Settings devices={[]} />)
+
+    expect(await screen.findByText('Previous Apply operation')).toBeTruthy()
+    expect(localStorage.getItem('oonfee_last_apply_operation')).toBeNull()
+    fireEvent.click(screen.getByText('Preview changes'))
+    await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(id)).toBeNull()
+    expect(screen.getByText(/Nothing above has touched a device/)).toBeTruthy()
   })
 
   it('does not call an interrupted queued operation a possible router write', async () => {
     const id = '01962c09-7d62-7cd7-a1c2-450eba830892'
     localStorage.setItem('oonfee_last_apply_operation', id)
     api.applyOperation.mockResolvedValue({
-      operation_id: id, state: 'unknown', created_at: 1, finished_at: 2,
-      write_state: 'none', devices: [],
+      operation_id: id,
+      state: 'unknown',
+      created_at: 1,
+      finished_at: 2,
+      write_state: 'none',
+      devices: [],
       error: 'controller restarted before this queued Apply started',
     })
 
@@ -3844,9 +5219,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   })
 
   it('preserves a completed Apply result when only the automatic refresh fails', async () => {
-    api.preview
-      .mockResolvedValueOnce(previewWith([]))
-      .mockRejectedValueOnce(new Error('refresh offline'))
+    api.preview.mockResolvedValueOnce(previewWith([])).mockRejectedValueOnce(new Error('refresh offline'))
     api.applySite.mockResolvedValue({
       devices: [{ device_id: 1, name: 'ap-wrt', outcome: 'applied', changes: 1 }],
       aborted: false,
@@ -3858,9 +5231,28 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     })
     fireEvent.click(applyBtn())
 
-    expect(await screen.findByText('Applied to 1 device.')).toBeTruthy()
+    expect(await screen.findByText('1 change applied to 1 device.')).toBeTruthy()
     const warning = await screen.findByText(/Refresh failed: refresh offline/i)
     expect(warning.textContent ?? '').not.toMatch(/nothing was written|result unknown/i)
+  })
+
+  it('distinguishes changed devices from devices that already matched', async () => {
+    api.preview.mockResolvedValue(previewWith([]))
+    api.applySite.mockResolvedValue({
+      devices: [
+        { device_id: 1, name: 'ap-wrt', outcome: 'applied', changes: 2 },
+        { device_id: 2, name: 'ap-c6', outcome: 'applied', changes: 0 },
+      ],
+      aborted: false,
+    })
+    render(<Settings devices={[]} />)
+    fireEvent.click(await screen.findByText('Preview changes'))
+    await waitFor(() => {
+      if (applyBtn().disabled) throw new Error('preview did not enable Apply')
+    })
+    fireEvent.click(applyBtn())
+
+    expect(await screen.findByText('2 changes applied to 1 device; 1 device already matched.')).toBeTruthy()
   })
 
   // The same reset, for the acknowledgement that already existed. Covered
@@ -3871,9 +5263,20 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.preview.mockResolvedValue({
       devices: [
         {
-          device_id: 1, name: 'ap-gw', role: 'gateway',
-          changes: [{ config: 'network', section: 's', action: 'update', options: ['x'] }],
-          blocked: false, touches_traversal: true, driver_defects: [],
+          device_id: 1,
+          name: 'ap-gw',
+          role: 'gateway',
+          changes: [
+            {
+              config: 'network',
+              section: 's',
+              action: 'update',
+              options: ['x'],
+            },
+          ],
+          blocked: false,
+          touches_traversal: true,
+          driver_defects: [],
         },
       ],
       site_errors: [],
@@ -3883,9 +5286,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     fireEvent.click(screen.getByText('Preview changes'))
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
 
-    await waitFor(() =>
-      expect(screen.getByText(/apply the network changes/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/apply the network changes/)).toBeTruthy())
     fireEvent.click(screen.getByText(/apply the network changes/))
     await waitFor(() => {
       if (applyBtn().disabled) throw new Error('still disabled after acknowledging')
@@ -3927,9 +5328,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     // transient state and says nothing about the acknowledgement — which is
     // exactly how the first version of this test passed with the reset removed.
     await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2))
-    await waitFor(() =>
-      expect(screen.getByText('Preview changes')).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText('Preview changes')).toBeTruthy())
     if (!applyBtn().disabled) {
       throw new Error('a stale acknowledgement carried to a fresh preview')
     }
