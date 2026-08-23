@@ -10,7 +10,7 @@
 # Pinned to the BUILD platform on purpose: without it, buildx runs this whole
 # stage under QEMU once per target arch, and `npm ci` under emulation is both
 # slow and flaky. The output is static assets, so it is arch-independent.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS ui
+FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS ui
 WORKDIR /src/ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
@@ -24,7 +24,7 @@ RUN npm run build
 # GOOS/GOARCH below, which is what decision D3 (CGO off) buys us. Leaving this
 # unpinned would emulate the whole toolchain and make TARGETOS/TARGETARCH a
 # no-op, since they would just restate the emulated platform.
-FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -40,19 +40,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # see the /data note below.
 RUN mkdir -p /emptydirs/data /emptydirs/tmp
 
-# ---- stage 2b: timezone database ------------------------------------------
-# tzdata is a separate package; the alpine BASE image ships no /usr/share/
-# zoneinfo, so copying it straight from `alpine:3.20` fails the build outright.
-# Alternative worth taking once cmd/oonfeewrtd exists: a blank `time/tzdata`
-# import embeds the database in the binary (~450 KB) and removes this stage.
-FROM alpine:3.20 AS tz
-RUN apk add --no-cache tzdata
-
 # ---- stage 3: runtime -----------------------------------------------------
 FROM scratch
-# CA roots (device HTTPS + webhook notifications) and timezone data (schedules).
+# CA roots support device HTTPS and webhook notifications.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=tz /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /oonfeewrtd /oonfeewrtd
 
 # scratch has no /data, so Docker would create the mount point as root:root and
@@ -68,3 +59,4 @@ ENV OONFEE_DATA_DIR=/data \
     OONFEE_LISTEN=:8080
 EXPOSE 8080
 ENTRYPOINT ["/oonfeewrtd"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/oonfeewrtd", "-healthcheck"]

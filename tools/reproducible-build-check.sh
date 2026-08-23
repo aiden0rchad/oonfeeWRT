@@ -34,7 +34,7 @@ toolchain=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)
   echo "release check: go.mod must pin a toolchain" >&2
   exit 1
 }
-grep -Fq "golang:$toolchain-alpine AS build" deploy/Dockerfile || {
+grep -Eq "golang:$toolchain-alpine@sha256:[0-9a-f]{64} AS build" deploy/Dockerfile || {
   echo "release check: deploy/Dockerfile Go image does not match go.mod toolchain go$toolchain" >&2
   exit 1
 }

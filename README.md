@@ -5,8 +5,13 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** Phase 4's schema-17 fresh-start hardware flow is verified. The v40
-final release candidate is merge-ready; it is not tagged or published.
+**Status:** Phase 4's schema-17 fresh-start hardware flow is verified. Tagged
+artifacts are produced by the [Release workflow](.github/workflows/release.yml)
+only after its binary and multi-platform container jobs pass. [GitHub
+Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the source of
+truth for whether `v0.1.0-rc.1` is published. Once it appears there, follow
+[`docs/INSTALL.md`](docs/INSTALL.md); clean-install verification is reported
+separately after the published artifacts are tested.
 
 **Current validation checkpoint (2026-08-22):** both test routers were factory
 reset, re-adopted through the default-off ACL/login disclosure, and restored to
@@ -36,10 +41,10 @@ access-controlled final-RC recovery pair independently passed
 owned sections, one WLAN and no mesh; its passphrase and lab identifiers are
 intentionally excluded from the repository.
 
-This is final release-candidate evidence, not a tagged or published release.
-Building, restarting, checking, and copying recovery evidence changed no router
-state. FS-117 retains the superseded v39 runtime checkpoint rather than erasing
-that history.
+This v40 artifact is local release-candidate evidence, not itself a Git tag or
+published release asset. Building, restarting, checking, and copying recovery
+evidence changed no router state. FS-117 retains the superseded v39 runtime
+checkpoint rather than erasing that history.
 
 The Phase-4 completion and hardening work was merged through
 [PR #1](https://github.com/aiden0rchad/oonfeewrt/pull/1) as `ee15e2f`. At that
@@ -55,10 +60,10 @@ asserts exactly that against real hardware. Devices are adopted, polled, charted
 and applied to today, on a Linksys WRT3200ACM and a TP-Link Archer C6 running
 OpenWrt 25.12.5.
 
-What that does **not** mean: it has never run on more than two devices, several
-features have never met the hardware they are for, and nothing here has been
-packaged or released. The section below says exactly which parts are unverified,
-and it is worth reading before the install instructions rather than after.
+What that does **not** mean: it has never run on more than two devices, and
+several features have never met the hardware they are for. Packaging the release
+candidate does not close those proof gaps. The section below says exactly which
+parts are unverified, and it is worth reading before installation.
 
 ---
 
@@ -236,6 +241,10 @@ The controller is required; router packages are optional and default-off. Every
 step below is what the code actually does today, verified against stock OpenWrt
 25.12.5 on two hardware classes.
 
+For checksummed release binaries, the multi-platform container, persistence,
+backup, upgrade and reverse-proxy instructions, use
+[`docs/INSTALL.md`](docs/INSTALL.md). The shorter path below builds from source.
+
 ### The router: no controller-authored executable
 
 There is no oonfeeWRT package, custom feed, init script, firmware, or agent. A
@@ -393,6 +402,7 @@ the proxy sends `X-Forwarded-Proto: https`.
 
 | File | What's in it |
 |---|---|
+| [`docs/INSTALL.md`](docs/INSTALL.md) | Binary and container installation, exact router opt-ins, persistence, TLS and recovery |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Components, transport, data model, provisioning + rollback, telemetry, capability probing |
 | [`docs/DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | Target hardware classes, hard resource budgets, where the cost actually is |
 | [`docs/PARITY-MATRIX.md`](docs/PARITY-MATRIX.md) | Every UniFi screen → OpenWrt source → verdict, with dependency tier |

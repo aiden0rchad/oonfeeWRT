@@ -30,3 +30,4 @@ __pycache__/
 # Go
 *.test
 /oonfeewrtd
+/dist/

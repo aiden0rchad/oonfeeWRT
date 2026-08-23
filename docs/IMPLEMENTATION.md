@@ -24,7 +24,7 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
 | D8 | **Optional router packages are two-stage, per-feature root actions.** Resolve and display the package manager's exact plan, bind it, then require a second unchecked acknowledgement. Persist the before-state and actual package diff; rollback removes that exact added set while preserving pre-existing packages, and un-adoption stays blocked until rollback succeeds. Adoption never selects a package. The first capability is official-feed `lldpd`. | previously documented future tier-2 flow |
 
-### Current live checkpoint (2026-08-22)
+### Hardware validation checkpoint (2026-08-22)
 
 The build expects schema **17**. Do not collapse its four recent compatibility
 epochs: v14 is the one-time secret-sealing/scrub boundary, v15 makes the
@@ -45,7 +45,12 @@ not stored. Final release-candidate artifact
 `dev-schema17-fresh-start-transparent-v40` (15,312,098 bytes; SHA-256
 `9c3a797c1470d8630f42dc77619007370aad553fae00078716a5a5a457c6b4cc`)
 passed the signed-in deep-link, settled regression, recovery, secret and
-reproducibility gates. It is merge-ready, not tagged or published.
+reproducibility gates. This v40 artifact is a merge-ready local evidence
+checkpoint, not itself a Git tag or published release asset. Publication is
+performed by the tag-triggered Release workflow; [GitHub
+Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the source of
+truth. A clean-install pass is not part of the v40 claim and must be recorded
+after testing downloaded release artifacts.
 
 ---
 
