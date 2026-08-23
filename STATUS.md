@@ -5,7 +5,7 @@ through **2026-08-22**, with the earlier Phase-3 hardware endpoint in §5bg, the
 schema-15/16 source-only checkpoint in §5bh, the read-only live schema-16
 Phase-4 pass under the retained router ACLs in §5bi, the superseded no-change
 checkpoint in §5bj, the corrected Phase-4 runtime/recovery checkpoint in §5bk,
-and the current fresh-start/schema-17 final-RC boundary in §5bl/FS-118. Sections
+and the fresh-start/schema-17 hardware boundary in §5bl/FS-118. Sections
 through §5ax record the earlier
 committed/hardware baseline; §5ay is product research, §5az is the two-router
 no-install capability pass, §5ba records the post-audit behavior, §5bb the
@@ -17,6 +17,13 @@ no-change checkpoint, §5bk the Phase-4 completion boundary, and §5bl the curre
 validation boundary.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
+
+This handoff records source and hardware evidence; it does not infer release
+publication from a branch or tag. The tag-triggered Release workflow publishes
+the binaries and container, and [GitHub
+Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the publication
+source of truth. A clean-install pass is claimed only after downloaded release
+artifacts have been tested and that result is recorded.
 
 ---
 
@@ -5953,8 +5960,9 @@ the keyring is 275 bytes with SHA-256
 `recoverycheck` passed with
 `schema=17 devices=2 credentials=2 owned_sections=4 wlans=1 meshes=0`; its
 transient zero-byte WAL and 32,768-byte SHM were removed. Building, restarting,
-checking, and creating the recovery pair changed no router state. This evidence
-is merge-ready, but it is not a tagged or published release.
+checking, and creating the recovery pair changed no router state. This v40
+evidence was a merge-ready local checkpoint; it is not itself a Git tag or
+published release asset.
 
 ---
 

@@ -4,8 +4,9 @@ SHELL := /bin/sh
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf dev)
 IMAGE ?= oonfeewrt:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
+RELEASE_DIR ?= dist
 
-.PHONY: help ui build test check image release-check
+.PHONY: help ui build test check image release release-check
 
 help:
 	@printf '%s\n' \
@@ -14,6 +15,7 @@ help:
 		'make test                            run Go and UI tests' \
 		'make check                           run the local release gates' \
 		'make image                           build the amd64/arm64 OCI image' \
+		'make release RELEASE_VERSION=        package four release binaries' \
 		'make release-check RELEASE_VERSION=  require a clean, reproducible release tree'
 
 ui:
@@ -41,6 +43,12 @@ check: ui
 image:
 	docker buildx build --platform $(PLATFORMS) \
 		--build-arg VERSION=$(VERSION) -f deploy/Dockerfile -t $(IMAGE) .
+
+release:
+	@test -n "$(RELEASE_VERSION)" || { \
+		echo 'release: set RELEASE_VERSION (for example v0.1.0-rc.1)' >&2; exit 2; \
+	}
+	./tools/release-build.sh "$(RELEASE_VERSION)" "$(RELEASE_DIR)"
 
 release-check:
 	@test -n "$(RELEASE_VERSION)" || { \

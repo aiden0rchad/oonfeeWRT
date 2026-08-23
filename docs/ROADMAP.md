@@ -294,8 +294,12 @@ UI, in under a minute, and have it verifiably enforced.
 
 The screens that make people *enjoy* the tool.
 
-**Live status through 2026-08-22: both explicit capability paths are exercised;
-release hardening remains open.** The controller is promoted to schema 17. An
+**Hardware status through 2026-08-22: both explicit capability paths are
+exercised.** The controller is promoted to schema 17. Release publication is a
+separate tag-triggered workflow; [GitHub
+Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is its source of
+truth, and this roadmap does not claim that published artifacts have passed a
+clean installation. An
 initial signed-in schema-16 pass
 used the routers' older ACLs; that no-router-change checkpoint was superseded
 when the operator explicitly acknowledged ACL refresh for both routers at
@@ -385,8 +389,9 @@ or site latency/loss—without touching a terminal and without inventing a metri
 the hardware did not supply.
 
 > **Status: hardware-verified with the optional ACL and LLDP capability paths
-> explicitly exercised; final release-candidate gates pass.** The result is
-> merge-ready, not tagged or published. The schema-17 joined
+> explicitly exercised; final release-candidate gates pass.** The v40 result is
+> a merge-ready local evidence checkpoint, not itself a Git tag or published
+> release asset. The schema-17 joined
 > surface, topology/history, Radios, General
 > Logs and Audit interaction are live-rendered. ACL refresh remains default-off.
 > The separate LLDP workflow proved exact official-feed plans, installation,

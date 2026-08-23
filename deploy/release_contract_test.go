@@ -15,6 +15,9 @@ func TestReleaseBuildContract(t *testing.T) {
 		"ARG TARGETOS TARGETARCH VERSION=dev",
 		"go build -trimpath -buildvcs=false",
 		"-buildid= -X main.version=$VERSION",
+		"node:22-alpine@sha256:",
+		"golang:1.26.6-alpine@sha256:",
+		`HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/oonfeewrtd", "-healthcheck"]`,
 	} {
 		if !strings.Contains(string(dockerfile), required) {
 			t.Errorf("Dockerfile lost release build contract %q", required)
@@ -31,7 +34,7 @@ func TestReleaseBuildContract(t *testing.T) {
 	}
 	for _, required := range []string{
 		".git/", ".run/", "data/", "**/passphrase", "**/keyring.json", "**/*.db", "**/*.db-*", "**/*.key", "**/*.pem",
-		".env", ".env.*", "**/.env", "**/.env.*", "**/node_modules/", "ui/dist/",
+		".env", ".env.*", "**/.env", "**/.env.*", "**/node_modules/", "ui/dist/", "dist/",
 	} {
 		if !lines[required] {
 			t.Errorf(".dockerignore does not exclude %q", required)
@@ -41,27 +44,28 @@ func TestReleaseBuildContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"keyring.json", "*.db", "*.db-*", ".env", ".env.*"} {
+	for _, secret := range []string{"keyring.json", "*.db", "*.db-*", ".env", ".env.*", "/dist/"} {
 		if !strings.Contains(string(gitignore), secret+"\n") {
 			t.Errorf(".gitignore does not exclude %q", secret)
 		}
-	}
-
-	info, err := os.Stat("../tools/reproducible-build-check.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Error("reproducible-build-check.sh is not executable")
 	}
 
 	makefile, err := os.ReadFile("../Makefile")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []string{"ui:", "build: ui", "test: ui", "check: ui", "image:", "release-check:"} {
+	for _, target := range []string{"ui:", "build: ui", "test: ui", "check: ui", "image:", "release:", "release-check:"} {
 		if !strings.Contains(string(makefile), target) {
 			t.Errorf("Makefile lost documented target %q", target)
+		}
+	}
+	for _, script := range []string{"../tools/release-build.sh", "../tools/reproducible-build-check.sh"} {
+		info, err := os.Stat(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Errorf("%s is not executable", script)
 		}
 	}
 	if _, err := os.Stat("../ui/dist/.gitkeep"); err != nil {
