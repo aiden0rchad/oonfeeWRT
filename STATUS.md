@@ -5,7 +5,7 @@ through **2026-08-22**, with the earlier Phase-3 hardware endpoint in §5bg, the
 schema-15/16 source-only checkpoint in §5bh, the read-only live schema-16
 Phase-4 pass under the retained router ACLs in §5bi, the superseded no-change
 checkpoint in §5bj, the corrected Phase-4 runtime/recovery checkpoint in §5bk,
-and the fresh-start/schema-17 hardware boundary in §5bl/FS-118. Sections
+and the fresh-start/schema-17 release boundary in §5bl/FS-120. Sections
 through §5ax record the earlier
 committed/hardware baseline; §5ay is product research, §5az is the two-router
 no-install capability pass, §5ba records the post-audit behavior, §5bb the
@@ -18,12 +18,11 @@ validation boundary.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
-This handoff records source and hardware evidence; it does not infer release
-publication from a branch or tag. The tag-triggered Release workflow publishes
-the binaries and container, and [GitHub
-Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the publication
-source of truth. A clean-install pass is claimed only after downloaded release
-artifacts have been tested and that result is recorded.
+This handoff records source, hardware, and release evidence.
+[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
+was published by the tag-triggered workflow and independently re-downloaded for
+the clean, zero-device verification recorded in FS-119. The post-release
+SQLite-sidecar hardening in FS-120 is newer than that immutable tag.
 
 ---
 
@@ -587,8 +586,10 @@ custom-DHCP proofs; §5bf closes live schema-14 promotion and the rebuilt-browse
 reconciliation; §5bg closes that lab cleanup; §5bi records schema-16 promotion
 and the initial signed-in, read-only Phase-4 pass; §5bj is its superseded
 no-change checkpoint; §5bk records the accepted scoped capability refresh and
-the Phase-4 proof boundary; §5bl and FS-104–FS-118 record the current schema-17
-rollback/reinstall, topology convergence and direct-route proof.
+the Phase-4 proof boundary; §5bl and FS-104–FS-118 record the schema-17
+rollback/reinstall, topology convergence and direct-route proof, while
+FS-119–FS-120 record publication, clean installation, and post-release
+permission hardening.
 
 1. **Keep Phase 3's remaining claim narrow.** The latest run put two physical
    iPhones on the same isolated WRT BSS at once and proved distinct DHCP,

@@ -295,11 +295,9 @@ UI, in under a minute, and have it verifiably enforced.
 The screens that make people *enjoy* the tool.
 
 **Hardware status through 2026-08-22: both explicit capability paths are
-exercised.** The controller is promoted to schema 17. Release publication is a
-separate tag-triggered workflow; [GitHub
-Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is its source of
-truth, and this roadmap does not claim that published artifacts have passed a
-clean installation. An
+exercised.** The controller is promoted to schema 17. The tag-triggered workflow
+published `v0.1.0-rc.1`; its public binary archives and multi-platform container
+passed the zero-device clean installation recorded in FS-119. An
 initial signed-in schema-16 pass
 used the routers' older ACLs; that no-router-change checkpoint was superseded
 when the operator explicitly acknowledged ACL refresh for both routers at
