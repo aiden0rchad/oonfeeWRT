@@ -18,8 +18,17 @@ CREATE TABLE IF NOT EXISTS admins (
   username   TEXT NOT NULL UNIQUE,
   pass_hash  TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  last_login INTEGER
+  last_login INTEGER,
+  role       TEXT NOT NULL DEFAULT 'owner'
+             CHECK (role IN ('owner','admin','operator','viewer')),
+  enabled    INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  deleted_at INTEGER
 );
+-- SQLite's NOCASE collation is deliberately ASCII-only. New account names use
+-- the same ASCII grammar, and this index also makes legacy case collisions a
+-- migration error instead of choosing one account silently.
+CREATE UNIQUE INDEX IF NOT EXISTS admins_username_nocase
+  ON admins (username COLLATE NOCASE);
 
 -- ===== inventory =====
 CREATE TABLE IF NOT EXISTS devices (
@@ -354,3 +363,39 @@ CREATE TABLE IF NOT EXISTS device_capability_installs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (device_id, capability)
 ) WITHOUT ROWID;
+
+-- ===== controller-host speed tests (migration v18) =====
+-- No device reference exists: these jobs run in the controller process and
+-- make no router management call. Terminal rows are capped by the store.
+CREATE TABLE IF NOT EXISTS speed_tests (
+  id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('queued','running','cancelling','completed','failed')),
+  phase TEXT NOT NULL,
+  progress_percent INTEGER NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
+  provider TEXT NOT NULL,
+  method TEXT NOT NULL,
+  provenance TEXT NOT NULL CHECK (provenance = 'controller-host'),
+  endpoint TEXT NOT NULL,
+  estimated_bytes INTEGER NOT NULL CHECK (estimated_bytes > 0),
+  actor_admin_id INTEGER NOT NULL,
+  actor_username TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  finished_at INTEGER,
+  plan_id TEXT NOT NULL CHECK (length(plan_id) > 0),
+  download_mbps REAL,
+  upload_mbps REAL,
+  idle_latency_ms REAL,
+  idle_jitter_ms REAL,
+  loaded_latency_ms REAL,
+  loaded_jitter_ms REAL,
+  bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+  bytes_uploaded INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  CHECK (started_at IS NULL OR started_at >= created_at),
+  CHECK (finished_at IS NULL OR finished_at >= created_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS speed_tests_one_active
+  ON speed_tests (provenance) WHERE state IN ('queued','running','cancelling');
+CREATE INDEX IF NOT EXISTS speed_tests_history
+  ON speed_tests (created_at DESC, id DESC);

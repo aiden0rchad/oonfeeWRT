@@ -1,0 +1,8 @@
+# Exact immutable false-positive: a feature label parsed as a credential.
+8974791802a814840419216a308f636e32a048a6:STATUS.md:generic-api-key:607
+ee15e2f95a0622b2caa87248fdd69ce3919dc42c:STATUS.md:generic-api-key:607
+
+# Exact immutable fingerprints of router credentials that were published and
+# subsequently rotated. Do not add global file, path, or rule exclusions here.
+02e99d0126712302c5a4713c2b9909eb9487a6f8:internal/api/api_test.go:generic-api-key:1747
+d8ac6ff41bb509fd9710d764a65c62b2947ff471:internal/collector/collector_test.go:generic-api-key:1044

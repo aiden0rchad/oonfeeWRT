@@ -51,6 +51,9 @@ const api = {
   scan: vi.fn(),
   inspectDevice: vi.fn(),
   adopt: vi.fn(),
+  speedTests: vi.fn(),
+  startSpeedTest: vi.fn(),
+  cancelSpeedTest: vi.fn(),
 }
 
 vi.mock('../lib/api', () => ({
@@ -103,6 +106,7 @@ vi.mock('../lib/live', () => ({
 api.devices.mockResolvedValue({ devices: [] })
 // The 802.11k card asks what the last automatic cycle did, on mount.
 api.lastNeighbours.mockResolvedValue({ ran: false })
+api.speedTests.mockReturnValue(new Promise(() => {}))
 
 // Dynamic, like the screens below: the mock factory defines ApiError, and the
 // panel checks `e instanceof ApiError` before trusting a body, so a test that
@@ -291,19 +295,33 @@ describe('Adopt', () => {
     const optIn = screen.getByRole('checkbox', {
       name: /Install the oonfeeWRT controller access payload/i,
     })
-    const disclosure = optIn.closest('label')?.textContent
-    expect(disclosure).toMatch(/writes one rpcd ACL JSON file and creates one scoped login/i)
-    expect(disclosure).toMatch(/installs no package, binary, daemon, service, or firmware/i)
-    expect(disclosure).toMatch(/unchecked or cancelling leaves the router unchanged/i)
-    expect(disclosure).toMatch(/keeps Adopt unavailable/i)
-    const permissionDetails = screen
-      .getByText('Review exact router changes and permissions')
-      .closest('details')?.textContent
+    const acknowledgement = optIn.closest('label')?.textContent
+    expect(acknowledgement).toMatch(/unchecked or cancelling leaves the router unchanged/i)
+    expect(acknowledgement).toMatch(/keeps Adopt unavailable/i)
+    const payloadNotice = screen.getByRole('group', {
+      name: 'Warning: Optional controller access payload',
+    })
+    expect(within(payloadNotice).getByText(/adds one scoped rpcd ACL file and login/i)).toBeTruthy()
+    expect(within(payloadNotice).getByText(/installs no package, binary, daemon, service, or firmware/i)).toBeTruthy()
+    const capabilityDetails = within(payloadNotice)
+      .getByText('What adoption installs and rolls back')
+      .closest('details') as HTMLDetailsElement
+    const reviewPayload = within(payloadNotice).getByRole('button', {
+      name: 'Review exact router changes',
+    })
+    expect(capabilityDetails.open).toBe(false)
+    expect(reviewPayload.closest('details')).toBeNull()
+    expect(optIn.closest('details')).toBeNull()
+    fireEvent.click(reviewPayload)
+    expect(capabilityDetails.open).toBe(true)
+    expect(reviewPayload.getAttribute('aria-pressed')).toBe('true')
+    const permissionDetails = capabilityDetails.textContent
     expect(permissionDetails).toMatch(/\/usr\/share\/rpcd\/acl\.d\/oonfeewrt\.json/i)
     expect(permissionDetails).toMatch(/controller-owned network, wireless, firewall, and DHCP/i)
     expect(permissionDetails).toMatch(/runtime 802\.11k neighbour-list updates/i)
     expect(permissionDetails).toMatch(/cannot disconnect or steer clients/i)
     expect(permissionDetails).toMatch(/require Preview and Apply later/i)
+    expect(permissionDetails).toMatch(/Rollback asks for the device administrator login again/i)
     fireEvent.click(optIn)
     expect(submit.disabled).toBe(false)
     fireEvent.click(submit)
@@ -1493,7 +1511,7 @@ describe('Settings — desired-state controls', () => {
     wlans: [
       {
         id: 1,
-        ssid: 'oonfee-roam',
+        ssid: 'fixture-roam',
         network_id: 1,
         group_id: 1,
         bands: ['5g'],
@@ -1545,12 +1563,12 @@ describe('Settings — desired-state controls', () => {
     const card = (await screen.findByText('Add a WLAN')).closest('section') as HTMLElement
     fireEvent.click(
       within(card).getByRole('button', {
-        name: 'Delete wireless network oonfee-roam',
+        name: 'Delete wireless network fixture-roam',
       }),
     )
     expect(api.deleteWLAN).not.toHaveBeenCalled()
 
-    fireEvent.click(within(card).getByRole('button', { name: 'Delete “oonfee-roam”' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete “fixture-roam”' }))
     await waitFor(() => expect(api.deleteWLAN).toHaveBeenCalledWith(1))
     expect(
       (
@@ -1564,7 +1582,7 @@ describe('Settings — desired-state controls', () => {
     expect(
       (
         within(card).getByRole('button', {
-          name: 'Delete “oonfee-roam”',
+          name: 'Delete “fixture-roam”',
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(false)
@@ -1621,7 +1639,7 @@ describe('Settings — desired-state controls', () => {
     render(<Settings devices={[]} />)
     expect(await screen.findByLabelText('New AP group name')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Edit wireless network oonfee-roam' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Edit wireless network fixture-roam' }))
     const selected = [
       ['Bands', '5 GHz'],
       ['Security', 'WPA2 only'],
@@ -1644,7 +1662,7 @@ describe('Settings — desired-state controls', () => {
           wlan_id: 1,
           key: 'disabled',
           value: '1',
-          describe: 'oonfee-roam is not published here',
+          describe: 'fixture-roam is not published here',
         },
       ],
     }
@@ -1676,7 +1694,7 @@ describe('Settings — desired-state controls', () => {
 describe('Devices — re-probe panel', () => {
   const detail = {
     id: 1,
-    mac: '60:38:e0:00:00:01',
+    mac: '02:00:00:00:00:01',
     name: 'ap-1',
     host: '192.168.1.1',
     role: 'ap',
@@ -2020,10 +2038,15 @@ describe('Devices — re-probe panel', () => {
         added_packages: ['lldpd'],
         service_enabled: true,
         service_running: true,
-      })
+    })
     await openPanel()
-    expect(await screen.findByText(/Not installed by this controller/)).toBeTruthy()
-    fireEvent.click(screen.getByText('Review LLDP installation'))
+    expect(await screen.findByText(/Adds measured wired-neighbour discovery/)).toBeTruthy()
+    const capabilityDetails = screen.getByText('What this installs and rolls back').closest('details') as HTMLDetailsElement
+    const review = screen.getByText('Review LLDP installation')
+    expect(capabilityDetails.open).toBe(false)
+    expect(review.closest('details')).toBeNull()
+    fireEvent.click(review)
+    expect(capabilityDetails.open).toBe(true)
     const planButton = screen.getByRole('button', {
       name: 'Refresh index and show exact install plan',
     }) as HTMLButtonElement
@@ -2046,12 +2069,14 @@ describe('Devices — re-probe panel', () => {
     const install = screen.getByRole('button', {
       name: 'Install LLDP capability',
     }) as HTMLButtonElement
+    const changeAcknowledgement = screen.getByRole('checkbox', {
+      name: /authorize installing.*refreshing.*once more immediately beforehand/i,
+    })
+    expect(screen.getByText('(1/1) Installing lldpd').closest('.notice-disclosure')).toBeNull()
+    expect(changeAcknowledgement.closest('.notice-disclosure')).toBeNull()
+    expect(install.closest('.notice-disclosure')).toBeNull()
     expect(install.disabled).toBe(true)
-    fireEvent.click(
-      screen.getByRole('checkbox', {
-        name: /authorize installing.*refreshing.*once more immediately beforehand/i,
-      }),
-    )
+    fireEvent.click(changeAcknowledgement)
     fireEvent.click(install)
     await waitFor(() =>
       expect(api.changeLLDPCapability).toHaveBeenNthCalledWith(
@@ -2467,7 +2492,7 @@ describe('Devices — re-probe panel', () => {
 describe('Settings — neighbour reports', () => {
   const wlan = (over: Record<string, unknown> = {}) => ({
     id: 1,
-    ssid: 'oonfee-roam',
+    ssid: 'fixture-roam',
     network_id: 1,
     group_id: 1,
     bands: ['2g', '5g'],
@@ -2525,7 +2550,7 @@ describe('Settings — neighbour reports', () => {
     // Scoped to the card: the SSID also appears in the WLAN list above, and a
     // document-wide match would pass even if the card named nothing.
     const card = screen.getByText(/Neighbour reports/).closest('section') as HTMLElement
-    expect(within(card).getByText('oonfee-roam')).toBeTruthy()
+    expect(within(card).getByText('fixture-roam')).toBeTruthy()
     expect((screen.getByText('Distribute now') as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -2537,7 +2562,7 @@ describe('Settings — neighbour reports', () => {
   it('separates a device that failed from one that was skipped', async () => {
     api.site.mockResolvedValue(siteWith([wlan()]))
     api.distributeNeighbours.mockResolvedValue({
-      ssids: ['oonfee-roam'],
+      ssids: ['fixture-roam'],
       updated: 2,
       unchanged: 0,
       devices: [
@@ -2549,8 +2574,8 @@ describe('Settings — neighbour reports', () => {
           bsses: [
             {
               iface: 'phy0-ap1',
-              ssid: 'oonfee-roam',
-              bssid: '32:23:03:db:be:43',
+              ssid: 'fixture-roam',
+              bssid: '02:00:00:ab:51:43',
               neighbours: 3,
               changed: true,
             },
@@ -2590,7 +2615,7 @@ describe('Settings — neighbour reports', () => {
   it('says so plainly when everything was already correct', async () => {
     api.site.mockResolvedValue(siteWith([wlan()]))
     api.distributeNeighbours.mockResolvedValue({
-      ssids: ['oonfee-roam'],
+      ssids: ['fixture-roam'],
       updated: 0,
       unchanged: 4,
       devices: [],
@@ -2642,9 +2667,9 @@ describe('Devices — column preferences', () => {
   // than an absent one.
   const device = {
     id: 1,
-    mac: '30:23:03:db:be:40',
+    mac: '02:00:00:ab:51:40',
     name: 'ap-one',
-    host: '192.168.1.1',
+    host: '192.0.2.1',
     class: 'A',
     firmware: 'OpenWrt 25.12.5',
     online: true,
@@ -2692,7 +2717,7 @@ describe('Settings — wireless uplinks', () => {
 
   const wlan = (over: Record<string, unknown> = {}) => ({
     id: 1,
-    ssid: 'oonfee-roam',
+    ssid: 'fixture-roam',
     network_id: 1,
     group_id: 1,
     bands: ['5g'],
@@ -2719,7 +2744,7 @@ describe('Settings — wireless uplinks', () => {
     })
     api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
-    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('fixture-roam').length).toBeGreaterThan(0))
 
     // The row's own Edit button; the SSID text is not the control.
     fireEvent.click(screen.getAllByText('Edit')[0])
@@ -2786,7 +2811,7 @@ describe('Settings — wireless uplinks', () => {
     })
     api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
-    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('fixture-roam').length).toBeGreaterThan(0))
     fireEvent.click(screen.getAllByText('Edit')[0])
     await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
 
@@ -2818,7 +2843,7 @@ describe('Settings — wireless uplinks', () => {
     })
     api.saveWLAN.mockResolvedValue({})
     render(<Settings devices={[]} />)
-    await waitFor(() => expect(screen.getAllByText('oonfee-roam').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('fixture-roam').length).toBeGreaterThan(0))
     fireEvent.click(screen.getAllByText('Edit')[0])
     await waitFor(() => expect(screen.getByText('Protected management frames')).toBeTruthy())
 
@@ -2904,7 +2929,7 @@ describe('Settings — wireless uplinks', () => {
     render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
 
     await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
-    expect(screen.getByText(/joins oonfee-roam on 5g/)).toBeTruthy()
+    expect(screen.getByText(/joins fixture-roam on 5g/)).toBeTruthy()
     expect(screen.getByText(/loop rather than redundancy/)).toBeTruthy()
     expect(screen.queryByText('Add uplink')).toBeNull()
   })
@@ -3417,7 +3442,7 @@ describe('Devices — BSS provenance', () => {
       // phy1-ap0 is deliberately ABSENT here while the live frame carries it.
       broadcasting: [
         {
-          ssid: 'oonfee-roam',
+          ssid: 'fixture-roam',
           iface: 'phy0-ap1',
           section: 'oowrt_wlan1_radio0',
           origin: 'ours',
@@ -3447,7 +3472,7 @@ describe('Devices — BSS provenance', () => {
         aps: [
           {
             iface: 'phy0-ap1',
-            ssid: 'oonfee-roam',
+            ssid: 'fixture-roam',
             channel: 36,
             freq: 5180,
             clients: 0,
@@ -4511,6 +4536,7 @@ describe('Logs', () => {
 })
 
 describe('Dashboard', () => {
+  const speedPlanID = `sha256:${'a'.repeat(64)}`
   const data = {
     devices: { total: 2, online: 2, offline: 0, pending: 0, unknown: 0 },
     wireless_clients: 0,
@@ -4571,6 +4597,20 @@ describe('Dashboard', () => {
     expect(screen.getByText(/uplink-side and unplaced rows do not/)).toBeTruthy()
   })
 
+  it('keeps count methodology compact until requested', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    expect(screen.getByText(/Counts use current, scoped evidence/)).toBeTruthy()
+    const summary = screen.getByText('How these counts are calculated').closest('summary') as HTMLElement
+    const disclosure = summary.closest('details') as HTMLDetailsElement
+    expect(disclosure.open).toBe(false)
+
+    fireEvent.click(summary)
+    expect(disclosure.open).toBe(true)
+    expect(screen.getByText('Hide count definitions')).toBeTruthy()
+  })
+
   it('withholds a fleet total when any device station set is unknown', async () => {
     const { Dashboard } = await import('./Dashboard')
     render(
@@ -4619,6 +4659,266 @@ describe('Dashboard', () => {
     )
     expect(screen.queryByRole('alert')).toBeNull()
   })
+
+  it('shows WAN provenance and never turns unavailable metrics into zero', async () => {
+    const now = Date.now() - 120_000
+    const metric = (kind: string, value: number | null, status = 'fresh') => ({
+      kind,
+      unit: kind.includes('bps') ? 'B/s' : kind.includes('loss') ? 'percent' : 'ms',
+      meaning: `${kind} from the selected gateway`,
+      status,
+      value,
+      as_of: value == null ? null : now,
+      points: value == null ? [] : [{ ts: now - 300_000, value: value / 2 }, { ts: now, value }],
+    })
+    const { Dashboard } = await import('./Dashboard')
+    render(
+      <Dashboard data={{
+        ...data,
+        wan: {
+          target: '1.1.1.1',
+          probe: 'icmp',
+          freshness: 'fresh',
+          as_of: now,
+          gateway: { device_id: 1, name: 'Gateway', route_interface: 'wan', series_key: null },
+          resolution: '5m',
+          bucket_ms: 300_000,
+          from: now - 21_600_000,
+          to: now,
+          metrics: {
+            download_bps: metric('download_bps', null, 'unavailable'),
+            upload_bps: metric('upload_bps', 1_000_000, 'last_observed'),
+            latency_ms: metric('latency_ms', 12.4),
+            loss_pct: metric('loss_pct', 0),
+            reachable: metric('reachable', 1),
+          },
+        },
+      } as never} />,
+    )
+
+    expect(screen.getByText('Default route · wan')).toBeTruthy()
+    expect(screen.getByText('ICMP reachability to 1.1.1.1')).toBeTruthy()
+    expect(screen.getByText('Reachable')).toBeTruthy()
+    expect(screen.getByText('8.0 Mbps')).toBeTruthy()
+    expect(screen.getByText(/Last observed 2m ago/)).toBeTruthy()
+    expect(screen.getByText('12.4 ms')).toBeTruthy()
+    expect(screen.getByText('0.0%')).toBeTruthy()
+    expect(screen.getByText('Download traffic').parentElement?.textContent).not.toContain('0 bps')
+    expect(screen.getByText(/measures reachability, not gateway uptime/)).toBeTruthy()
+  })
+
+  it('keeps the selected active gateway healthy when another gateway has no route', async () => {
+    const metric = { kind: '', unit: '', meaning: '', status: 'unavailable', value: null, as_of: null, points: [] }
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      gateway_uplinks: [
+        { device_id: 1, name: 'Backup', state: 'missing' },
+        { device_id: 2, name: 'Primary', state: 'up' },
+      ],
+      wan: {
+        target: '1.1.1.1', probe: 'icmp', freshness: 'fresh', as_of: null,
+        gateway: { device_id: 2, name: 'Primary', route_interface: 'wan', series_key: null },
+        resolution: '5m', bucket_ms: 300_000, from: 0, to: 0,
+        metrics: { download_bps: metric, upload_bps: metric, latency_ms: metric, loss_pct: metric, reachable: metric },
+      },
+    } as never} />)
+
+    expect(screen.getByText('Route active')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toContain('Backup')
+  })
+
+  it('requires explicit data-use consent before starting a controller speed test', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    api.speedTests.mockResolvedValueOnce({
+      jobs: [], active: null,
+      limits: { max_history: 20 },
+      test: {
+        plan_id: speedPlanID,
+        provider: 'librespeed', method: 'embedded HTTP', provenance: 'controller-host',
+        endpoint: 'https://speed.example', download_endpoint: 'https://speed.example/down',
+        upload_endpoint: 'https://speed.example/up', estimated_bytes: 500_000_000, max_duration_seconds: 90,
+      },
+      disclosure: {
+        vantage_point: 'controller-host', router_management_calls: false, router_changes: false,
+        saturation_warning: 'May temporarily saturate the gateway/WAN.',
+        privacy: "Test requests and the controller host's public IP are visible to the provider; measurements remain in the controller database.",
+      },
+    })
+    api.startSpeedTest.mockResolvedValue({
+      id: '0123456789abcdef0123456789abcdef', state: 'queued', phase: 'queued', progress_percent: 0,
+      provider: 'ookla', method: 'cli', provenance: 'controller-host', endpoint: '',
+      estimated_bytes: 500_000_000, created_at: 1, bytes_downloaded: 0, bytes_uploaded: 0,
+    })
+    render(<Dashboard data={data as never} />)
+    await waitFor(() => expect(api.speedTests).toHaveBeenCalledWith(20))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review speed test' }))
+    expect(screen.getByText('librespeed')).toBeTruthy()
+    expect(screen.getByText('https://speed.example')).toBeTruthy()
+    expect(screen.getByText('https://speed.example/down')).toBeTruthy()
+    expect(screen.getByText('https://speed.example/up')).toBeTruthy()
+    expect(screen.getByText('embedded HTTP')).toBeTruthy()
+    expect(screen.getByText(/public IP are visible to the provider/)).toBeTruthy()
+    expect(screen.getByText(/approximately 500 MB plus protocol overhead/)).toBeTruthy()
+    expect(screen.getAllByText('false')).toHaveLength(2)
+    const consent = screen.getByRole('checkbox', {
+      name: /may use data and temporarily saturate the connection/i,
+    }) as HTMLInputElement
+    const start = screen.getByRole('button', { name: 'Start speed test' }) as HTMLButtonElement
+    expect(start.disabled).toBe(true)
+    fireEvent.click(consent)
+    expect(start.disabled).toBe(false)
+    fireEvent.click(start)
+    await waitFor(() => expect(api.startSpeedTest).toHaveBeenCalledWith(speedPlanID, true))
+  })
+
+  it('never invents absent safety disclosures or enables Start for a partial plan', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    api.speedTests.mockResolvedValueOnce({
+      jobs: [], active: null, limits: { max_history: 20 },
+      test: {
+        plan_id: speedPlanID,
+        provider: 'librespeed', method: 'embedded HTTP', provenance: 'controller-host',
+        endpoint: 'https://speed.example', download_endpoint: 'https://speed.example/down',
+        upload_endpoint: 'https://speed.example/up', estimated_bytes: 15_000_000, max_duration_seconds: 30,
+      },
+      disclosure: {
+        vantage_point: 'controller-host',
+        router_management_calls: undefined,
+        router_changes: undefined,
+        saturation_warning: 'May saturate the WAN.',
+        privacy: '',
+      },
+    } as never)
+    render(<Dashboard data={data as never} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review speed test' }))
+    await screen.findByText(/safety disclosures are unavailable or incomplete/)
+    expect(screen.getAllByText('Unavailable')).toHaveLength(2)
+    expect(screen.getByText('Privacy disclosure unavailable.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: /may use data/i }))
+    expect((screen.getByRole('button', { name: 'Start speed test' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(api.startSpeedTest).not.toHaveBeenCalled()
+  })
+
+  it('refreshes server truth when another tab wins the start race', async () => {
+    const plan = {
+      test: {
+        plan_id: speedPlanID,
+        provider: 'librespeed', method: 'embedded', provenance: 'controller-host',
+        endpoint: 'https://speed.example', download_endpoint: 'https://speed.example/down',
+        upload_endpoint: 'https://speed.example/up', estimated_bytes: 400_000_000, max_duration_seconds: 90,
+      },
+      limits: { max_history: 20 },
+      disclosure: {
+        vantage_point: 'controller-host', router_management_calls: false, router_changes: false,
+        saturation_warning: 'May saturate the WAN.', privacy: 'Public IP is visible to the provider.',
+      },
+    }
+    const active = {
+      id: '44444444444444444444444444444444', state: 'running', phase: 'latency', progress_percent: 15,
+      provider: 'librespeed', method: 'embedded', provenance: 'controller-host', endpoint: 'speed.example',
+      estimated_bytes: 400_000_000, created_at: Date.now(), bytes_downloaded: 0, bytes_uploaded: 0,
+    }
+    const completed = {
+      ...active,
+      state: 'completed', phase: 'complete', progress_percent: 100, finished_at: Date.now(),
+    }
+    api.speedTests
+      .mockResolvedValueOnce({ ...plan, jobs: [], active: null })
+      .mockResolvedValueOnce({ ...plan, jobs: [active], active })
+      .mockResolvedValueOnce({ ...plan, jobs: [completed], active: null })
+    api.startSpeedTest.mockRejectedValue(new Error('a speed test is already active'))
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review speed test' }))
+    await screen.findByText('librespeed')
+    fireEvent.click(screen.getByRole('checkbox', { name: /may use data/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start speed test' }))
+
+    const progress = await screen.findByRole('progressbar', { name: 'Controller speed test progress' })
+    expect(progress.getAttribute('aria-valuetext')).toContain('latency')
+    expect(api.speedTests).toHaveBeenCalledTimes(2)
+    const retry = await screen.findByRole('button', { name: 'Start speed test' }, { timeout: 2_500 }) as HTMLButtonElement
+    const freshConsent = screen.getByRole('checkbox', { name: /may use data/i }) as HTMLInputElement
+    expect(freshConsent.checked).toBe(false)
+    expect(retry.disabled).toBe(true)
+  })
+
+  it('shows controller provenance, progress, cancellation and result history', async () => {
+    const active = {
+      id: '11111111111111111111111111111111', state: 'running', phase: 'download', progress_percent: 42,
+      provider: 'librespeed', method: 'embedded', provenance: 'controller-host', endpoint: 'speed.example',
+      estimated_bytes: 400_000_000, created_at: 10, started_at: 11,
+      download_mbps: 321.4, bytes_downloaded: 30_000_000, bytes_uploaded: 0,
+    }
+    const completed = {
+      id: '22222222222222222222222222222222', state: 'completed', phase: 'complete', progress_percent: 100,
+      provider: 'librespeed', method: 'embedded', provenance: 'controller-host', endpoint: 'speed.example',
+      estimated_bytes: 400_000_000, created_at: 1, started_at: 2, finished_at: 3,
+      download_mbps: 200, upload_mbps: 40, idle_latency_ms: 9, idle_jitter_ms: 1.5,
+      loaded_latency_ms: null, loaded_jitter_ms: null,
+      bytes_downloaded: 200_000_000, bytes_uploaded: 40_000_000,
+    }
+    api.speedTests.mockResolvedValueOnce({
+      jobs: [active, completed], active,
+      limits: { max_history: 20 },
+    })
+    api.cancelSpeedTest.mockResolvedValue({ ...active, state: 'cancelling', phase: 'cancelling' })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    const progress = await screen.findByRole('progressbar', { name: 'Controller speed test progress' })
+    expect(progress.getAttribute('aria-valuenow')).toBe('42')
+    expect(screen.getByText(/librespeed.*embedded.*controller-host.*download.*speed\.example/)).toBeTruthy()
+    expect(screen.getByText('Loaded latency')).toBeTruthy()
+    expect(screen.getByText(/200\.0 Mbps ↓.*40\.0 Mbps ↑.*9\.0 ms/)).toBeTruthy()
+    expect(screen.getByText(/— loaded latency.*— loaded jitter/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(api.cancelSpeedTest).toHaveBeenCalledWith(active.id))
+  })
+
+  it('does not let an older poll erase a newer cancellation state', async () => {
+    const active = {
+      id: '33333333333333333333333333333333', state: 'running', phase: 'upload', progress_percent: 70,
+      provider: 'librespeed', method: 'embedded', provenance: 'controller-host', endpoint: 'speed.example',
+      estimated_bytes: 400_000_000, created_at: 10, started_at: 11,
+      bytes_downloaded: 30_000_000, bytes_uploaded: 10_000_000,
+    }
+    const collection = {
+      jobs: [active], active, limits: { max_history: 20 },
+      test: {
+        plan_id: speedPlanID,
+        provider: 'librespeed', method: 'embedded', provenance: 'controller-host',
+        endpoint: 'https://speed.example', download_endpoint: 'https://speed.example/down',
+        upload_endpoint: 'https://speed.example/up', estimated_bytes: 400_000_000, max_duration_seconds: 90,
+      },
+      disclosure: {
+        vantage_point: 'controller-host', router_management_calls: false, router_changes: false,
+        saturation_warning: '', privacy: '',
+      },
+    }
+    let resolveLate!: (value: unknown) => void
+    const late = new Promise((resolve) => { resolveLate = resolve })
+    api.speedTests.mockResolvedValueOnce(collection).mockReturnValueOnce(late)
+    api.cancelSpeedTest.mockResolvedValue({ ...active, state: 'cancelling', phase: 'cancelling' })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+    await screen.findByRole('progressbar', { name: 'Controller speed test progress' })
+    await waitFor(() => expect(api.speedTests).toHaveBeenCalledTimes(2), { timeout: 1_500 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(api.cancelSpeedTest).toHaveBeenCalledWith(active.id))
+    await act(async () => {
+      resolveLate({ ...collection, jobs: [], active: null })
+      await Promise.resolve()
+    })
+
+    const progress = screen.getByRole('progressbar', { name: 'Controller speed test progress' })
+    expect(progress.getAttribute('aria-valuetext')).toContain('cancelling')
+  })
 })
 
 describe('Settings — the hazard a rollback cannot undo', () => {
@@ -4645,7 +4945,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
   }
 
   const defect = (over: Record<string, unknown> = {}) => ({
-    wlan: 'oonfee-roam',
+    wlan: 'fixture-roam',
     defect_id: 'mwlwifi-80211w-unsupported',
     summary: '802.11w is not properly supported by this radio driver',
     detail: 'measured: the firmware stops answering 85s after a fast transition',
@@ -5090,7 +5390,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
         {
           ordinal: 0,
           device_id: 1,
-          device_mac: '60:38:e0:00:00:01',
+          device_mac: '02:00:00:00:00:01',
           device_name: 'ap-wrt',
           state: 'unknown',
           write_state: 'possible',

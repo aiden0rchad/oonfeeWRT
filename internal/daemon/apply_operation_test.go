@@ -22,7 +22,7 @@ func operationApplyFixture(t *testing.T) (*Daemon, *store.Device, *api.PreviewRe
 	t.Helper()
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:20:01", "operation-ap", addr,
+	dev := seedAP(t, d, "02:00:00:00:20:01", "operation-ap", addr,
 		capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 		bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {

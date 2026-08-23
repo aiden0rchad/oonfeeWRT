@@ -1,0 +1,18 @@
+[extend]
+useDefault = true
+
+# Exact synthetic fixtures and redaction examples. Matching the whole line keeps
+# a changed or newly introduced value detectable.
+[[allowlists]]
+description = "Known non-secret test and documentation sentinels"
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = [
+  '''^[[:space:]]*const secret = "wlan-api-redacted-placeholder-5vT2"$''',
+  '''^[[:space:]]*PreviewToken: "pv1_placeholder", DeviceIDs: \[\]int64\{7, 3, 7\},$''',
+  '''^[[:space:]]*PreviewToken: "pv1_placeholder", DeviceIDs: \[\]int64\{3, 7\},$''',
+  '''^[[:space:]]*secret := "sentinel-passphrase-3dF8"$''',
+  '''^[[:space:]]*const secret = "live-stale-redacted-placeholder-8mR4"$''',
+  '''^[[:space:]]*"unquoted password secret sentinel", "unquoted passphrase secret sentinel", "ymfzawmtc2vjcmv0lxnlbnrpbmvs",$''',
+  '''^[[:space:]]*"argon-hash-secret-sentinel", "sha512-crypt-secret-sentinel", "\$6\$rounds=5000",$''',
+]

@@ -1,6 +1,13 @@
 .git/
 .run/
 data/
+local-backups/
+**/.oonfeewrt-recovery/
+*.oowrtbak
+oonfeewrt-diagnostics-*.zip
+diagnostics-*.zip
+**/.oonfeewrt-backup-*.db.tmp
+*-before-factory-reset.tar*
 passphrase
 **/passphrase
 **/keyring.json

@@ -6,7 +6,7 @@ import type {
   Discovered,
   InspectResult,
 } from '../lib/api'
-import { Button, Field, TextAreaField, Banner, Card, Prop } from '../components/ui'
+import { Button, Field, TextAreaField, Banner, Card, Notice, Prop } from '../components/ui'
 import type { DeviceRole } from '../lib/api'
 import { Discover } from './Discover'
 
@@ -80,6 +80,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [inspection, setInspection] = useState<InspectResult | null>(null)
   const [inspectBusy, setInspectBusy] = useState(false)
   const [inspectErr, setInspectErr] = useState('')
+  const [payloadReviewOpen, setPayloadReviewOpen] = useState(false)
   const [routerChangesAccepted, setRouterChangesAccepted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -216,6 +217,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     setScheme('http')
     setFunctions(['ap'])
     setPossibleGateway(false)
+    setPayloadReviewOpen(false)
     setRouterChangesAccepted(false)
     setErr('')
     setResult(null)
@@ -287,14 +289,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
       <Card title="Adopt a device">
         <div style={{ display: 'grid', gap: 12 }}>
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
-            Enter the address of an OpenWrt device and its existing administrator
-            login. The controller uses it only for read-only inspection and the
-            one-time adoption transaction, and never stores it. Adoption requires
-            an explicit, default-off acknowledgement before it installs the
-            controller access payload: one rpcd ACL JSON file and one scoped
-            controller login. Removing the device later asks for the
-            administrator login again, because a controller that could delete
-            its own permissions could also widen them.
+            Enter the OpenWrt device address and its existing administrator login.
+            The controller uses these credentials only for inspection and this
+            adoption attempt; it never stores them.
           </p>
 
           {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
@@ -495,6 +492,55 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             the one-time SSH bootstrap. Neither credential is stored.
           </div>
 
+          <Notice
+            tone="warning"
+            component="Optional controller access payload"
+            summary="Adoption adds one scoped rpcd ACL file and login. It installs no package, binary, daemon, service, or firmware."
+            defaultOpen={payloadReviewOpen}
+            closedLabel="What adoption installs and rolls back"
+            openLabel="Hide exact router changes"
+            actions={(
+              <Button
+                aria-pressed={payloadReviewOpen}
+                onClick={() => setPayloadReviewOpen((current) => !current)}
+              >
+                {payloadReviewOpen ? 'Close payload review' : 'Review exact router changes'}
+              </Button>
+            )}
+            details={(
+              <>
+                <strong>Exact adoption changes</strong>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.5 }}>
+                  <li>
+                    Writes <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code> and creates
+                    the scoped <code>rpcd.oonfeewrt</code> login.
+                  </li>
+                  <li>
+                    Grants read access for supported inventory, topology, radio/scan,
+                    OpenWrt log, and fixed-target <code>1.1.1.1</code> ICMP observations.
+                  </li>
+                  <li>
+                    Grants writes only for controller-owned network, wireless, firewall,
+                    and DHCP sections after a separate Preview and acknowledged Apply.
+                  </li>
+                  <li>
+                    Allows runtime 802.11k neighbour-list updates on managed WLANs that
+                    request them. It cannot disconnect or steer clients.
+                  </li>
+                  <li>
+                    Adoption itself does not change network, WLAN, firewall, or DHCP
+                    settings. Those changes require Preview and Apply later.
+                  </li>
+                </ul>
+                <p style={{ margin: '8px 0 0' }}>
+                  Rollback asks for the device administrator login again, removes only
+                  this ACL file and scoped login, and leaves controller-managed network
+                  configuration for a separately reviewed rollback.
+                </p>
+              </>
+            )}
+          />
+
           <label
             style={{
               display: 'grid',
@@ -514,38 +560,10 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             />
             <span>
               <strong>Install the oonfeeWRT controller access payload?</strong>{' '}
-              This writes one rpcd ACL JSON file and creates one scoped login. It
-              installs no package, binary, daemon, service, or firmware. Leaving it
-              unchecked or cancelling leaves the router unchanged and keeps Adopt
-              unavailable.
+              Leaving this acknowledgement unchecked or cancelling leaves the router
+              unchanged and keeps Adopt unavailable.
             </span>
           </label>
-
-          <details>
-            <summary>Review exact router changes and permissions</summary>
-            <ul style={{ margin: '8px 0 0', paddingLeft: 20, fontSize: 12, lineHeight: 1.5 }}>
-              <li>
-                Writes <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code> and creates
-                the scoped <code>rpcd.oonfeewrt</code> login.
-              </li>
-              <li>
-                Grants read access for supported inventory, topology, radio/scan,
-                OpenWrt log, and fixed-target <code>1.1.1.1</code> ICMP observations.
-              </li>
-              <li>
-                Grants writes only for controller-owned network, wireless, firewall,
-                and DHCP sections after a separate Preview and acknowledged Apply.
-              </li>
-              <li>
-                Allows runtime 802.11k neighbour-list updates on managed WLANs that
-                request them. It cannot disconnect or steer clients.
-              </li>
-              <li>
-                Adoption itself does not change network, WLAN, firewall, or DHCP
-                settings. Those changes require Preview and Apply later.
-              </li>
-            </ul>
-          </details>
 
           <Button
             type="submit"

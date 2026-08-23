@@ -13,7 +13,7 @@ import type {
   DeviceFunction,
   LLDPCapabilityResult,
 } from '../lib/api'
-import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, useColumnPrefs } from '../components/ui'
+import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, Notice, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
 import { live } from '../lib/live'
@@ -1265,21 +1265,33 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
 
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-      <div style={{ fontSize: 12, fontWeight: 600 }}>Optional LLDP topology capability</div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
-        {installed
-          ? `Controller record: ${status?.state}. Added packages: ${status?.added_packages.join(', ') || 'none (lldpd existed before)'}.`
-          : 'Not installed by this controller. Current topology remains fail-closed when stock firmware cannot identify the wired peer.'}
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
-        Installing adds the official OpenWrt <code>lldpd</code> package and any dependencies shown in the exact
-        package-manager plan, then enables and starts <code>lldpd</code>. It installs no controller binary or firmware.
-        Removal uses the durable baseline, removes the exact controller-added package set, keeps every pre-existing
-        package, and restores the prior
-        <code>lldpd</code> service state.
-      </div>
-      <div style={{ marginTop: 8 }}>
-        <Button
+      <Notice
+        tone={installed ? 'accent' : 'warning'}
+        component="Optional LLDP topology capability"
+        summary={installed
+          ? 'LLDP wired-neighbour discovery is available. Review its controller-recorded package and service baseline before changing or removing it.'
+          : 'Adds measured wired-neighbour discovery by installing OpenWrt lldpd. No router change occurs until an exact plan is accepted.'}
+        defaultOpen={open}
+        closedLabel="What this installs and rolls back"
+        openLabel="Hide capability details"
+        details={(
+          <>
+            <p style={{ margin: 0 }}>
+              Installing adds the official OpenWrt <code>lldpd</code> package and dependencies shown in the exact
+              package-manager plan, then enables and starts <code>lldpd</code>. It installs no controller binary or firmware.
+              Removal uses the durable baseline, removes the exact controller-added package set, keeps every pre-existing
+              package, and restores the prior <code>lldpd</code> service state.
+            </p>
+            {installed && (
+              <p style={{ margin: '8px 0 0' }}>
+                Controller record: {status?.state}. Controller-added packages:{' '}
+                {status?.added_packages.join(', ') || 'none; lldpd existed before adoption'}.
+              </p>
+            )}
+          </>
+        )}
+        actions={<Button
+          aria-pressed={open}
           onClick={() => {
             setOpen(!open)
             setPlan(null)
@@ -1296,8 +1308,8 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
           }}
         >
           {open ? 'Cancel LLDP capability review' : installed ? 'Review LLDP rollback' : 'Review LLDP installation'}
-        </Button>
-      </div>
+        </Button>}
+      />
       {open && (
         <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>

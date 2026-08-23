@@ -362,7 +362,12 @@ func levelFor(e capability.Effect) slog.Level {
 // will try again, and a probe that retries in a loop against a device that is
 // refusing is the opposite of a budget.
 func (d *Daemon) reprobeAfterFirmwareChange(deviceID int64, mac, from, to string) {
+	release, ok := d.beginAutomaticReprobeOperation()
+	if !ok {
+		return
+	}
 	go func() {
+		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), reprobeTimeout)
 		defer cancel()
 
@@ -391,4 +396,11 @@ func (d *Daemon) reprobeAfterFirmwareChange(deviceID int64, mac, from, to string
 				"device", mac, "from", from, "to", to)
 		}
 	}()
+}
+
+func (d *Daemon) beginAutomaticReprobeOperation() (func(), bool) {
+	if d.api == nil {
+		return func() {}, true
+	}
+	return d.api.BeginCapabilityOperation()
 }

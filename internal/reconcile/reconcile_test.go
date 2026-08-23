@@ -595,7 +595,7 @@ func TestFlattenHandlesEveryTypeADeviceReturns(t *testing.T) {
 		".index":     float64(1),
 		".type":      "wifi-iface",
 		".name":      "default_radio0",
-		"ssid":       "oonfeewrt-probe-5g",
+		"ssid":       "fixture-probe-5g",
 		"disabled":   "0",
 		"maclist":    []any{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"},
 		"absent":     nil,
@@ -605,7 +605,7 @@ func TestFlattenHandlesEveryTypeADeviceReturns(t *testing.T) {
 		".index":     "1",
 		".type":      "wifi-iface",
 		".name":      "default_radio0",
-		"ssid":       "oonfeewrt-probe-5g",
+		"ssid":       "fixture-probe-5g",
 		"disabled":   "0",
 		"maclist":    "aa:bb:cc:dd:ee:ff 11:22:33:44:55:66",
 		"absent":     "",
@@ -923,7 +923,7 @@ func TestDriftIsNotReportedForOurOwnPendingEdit(t *testing.T) {
 		Config: "wireless", Type: "wifi-iface", Name: "oowrt_wlan1_radio0",
 		Values: map[string]string{
 			render.OwnershipTag: "1",
-			"ssid":              "oonfee-roam",
+			"ssid":              "fixture-roam",
 			"ieee80211w":        "1", // what the operator has just asked for
 		},
 	}
@@ -931,7 +931,7 @@ func TestDriftIsNotReportedForOurOwnPendingEdit(t *testing.T) {
 	existing := render.Existing{Configs: map[string]map[string]map[string]string{
 		"wireless": {"oowrt_wlan1_radio0": {
 			render.OwnershipTag: "1",
-			"ssid":              "oonfee-roam",
+			"ssid":              "fixture-roam",
 			"ieee80211w":        "0", // what is actually on the device
 		}},
 	}}

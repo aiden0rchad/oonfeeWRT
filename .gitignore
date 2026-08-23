@@ -19,6 +19,14 @@ probe-*.json
 data/
 .run/
 /local-backups/
+**/.oonfeewrt-recovery/
+
+# Exported support/recovery artifacts can contain private controller or network
+# metadata. Keep downloaded bundles and interrupted local snapshots out of Git.
+*.oowrtbak
+oonfeewrt-diagnostics-*.zip
+diagnostics-*.zip
+.oonfeewrt-backup-*.db.tmp
 
 # Local OpenWrt configuration archives contain credentials and private keys.
 /*-before-factory-reset.tar*

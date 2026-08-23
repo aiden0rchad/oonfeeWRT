@@ -64,6 +64,11 @@ func (s *Server) handleNeighbours(w http.ResponseWriter, r *http.Request) {
 				"distribute neighbour lists across")
 		return
 	}
+	release, ok := s.beginOperation(w, operationNeighbourReconcile)
+	if !ok {
+		return
+	}
+	defer release()
 	res, err := s.Neighbours(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

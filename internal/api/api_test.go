@@ -1325,6 +1325,18 @@ func TestMalformedBodiesAreRejected(t *testing.T) {
 	}
 }
 
+func TestSetupRejectsNoncanonicalUsernameWithoutCreatingAnAccount(t *testing.T) {
+	h := newHarness(t)
+	w := h.do(http.MethodPost, "/api/v1/setup",
+		map[string]string{"username": ".admin", "password": testPassword})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "username must start") {
+		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+	}
+	if count, err := h.db.AdminCount(context.Background()); err != nil || count != 0 {
+		t.Fatalf("AdminCount=%d err=%v", count, err)
+	}
+}
+
 // The password hash must never leave the server, in any response.
 func TestNoPasswordHashEscapes(t *testing.T) {
 	h := newHarness(t)
@@ -1342,6 +1354,38 @@ func TestNoPasswordHashEscapes(t *testing.T) {
 		if strings.Contains(w.Body.String(), "$argon2id$") {
 			t.Errorf("%s contains something that looks like a password hash", path)
 		}
+	}
+}
+
+func TestLoginRehashIsNotReportedAsAUserPasswordChange(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	weak, err := secrets.HashPassword([]byte(testPassword),
+		secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.db.SQL().ExecContext(context.Background(),
+		`UPDATE admins SET pass_hash=? WHERE username='admin'; DELETE FROM events`, weak); err != nil {
+		t.Fatal(err)
+	}
+	h.cookies = nil
+	h.csrf = ""
+	if w := h.do(http.MethodPost, "/api/v1/login",
+		map[string]string{"username": "admin", "password": testPassword}); w.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", w.Code, w.Body.String())
+	}
+	var rehashed, changed int
+	if err := h.db.SQL().QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE event='auth.account_password_rehashed'`).Scan(&rehashed); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.SQL().QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM events WHERE event IN ('auth.account_password_changed','auth.password_changed')`).Scan(&changed); err != nil {
+		t.Fatal(err)
+	}
+	if rehashed != 1 || changed != 0 {
+		t.Fatalf("rehash events=%d password-change events=%d", rehashed, changed)
 	}
 }
 
@@ -1371,8 +1415,8 @@ func TestClientsGrid(t *testing.T) {
 
 	dev := h.seedDevice("ap-c", true, nil)
 	if err := h.db.UpsertClients(ctx, []store.SeenClient{
-		{MAC: "aa:bb:cc:11:22:33", Name: "laptop", IPv4: "192.168.1.130"},
-		{MAC: "aa:bb:cc:44:55:66", Name: "iot-plug", IPv4: "192.168.1.131"},
+		{MAC: "aa:bb:cc:11:22:33", Name: "laptop", IPv4: "192.0.2.130"},
+		{MAC: "aa:bb:cc:44:55:66", Name: "iot-plug", IPv4: "192.0.2.131"},
 	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -2510,7 +2554,7 @@ func TestUplinkResponsesCarryBothHazards(t *testing.T) {
 		Options: model.WLANOptions{AllowUplink: true}}
 	_ = h.db.SaveWLAN(ctx, w)
 	at := int64(1)
-	dev := &store.Device{MAC: "60:38:e0:00:0f:01", Host: "192.168.1.9",
+	dev := &store.Device{MAC: "02:00:00:00:0f:01", Host: "192.168.1.9",
 		Name: "no-cable", Scheme: "http", AdoptedAt: &at}
 	if err := h.db.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
@@ -2673,10 +2717,10 @@ func TestBroadcastProvenanceComesFromTheSectionNotTheSSID(t *testing.T) {
 
 	h.fleet.mu.Lock()
 	h.fleet.aps = map[int64][]collector.AP{dev.ID: {
-		{Iface: "phy0-ap1", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:01"},
+		{Iface: "phy0-ap1", SSID: "fixture-roam", BSSID: "aa:bb:cc:00:00:01"},
 		{Iface: "phy0-ap0", SSID: "oonfee-c6-5g", BSSID: "aa:bb:cc:00:00:02"},
 		// Same SSID as the managed one, from a section we do not own.
-		{Iface: "phy1-ap0", SSID: "oonfee-roam", BSSID: "aa:bb:cc:00:00:03"},
+		{Iface: "phy1-ap0", SSID: "fixture-roam", BSSID: "aa:bb:cc:00:00:03"},
 	}}
 	h.fleet.sections = map[int64]map[string]string{dev.ID: {
 		"phy0-ap1": "oowrt_wlan1_radio0",
@@ -3223,7 +3267,7 @@ func TestClientsNoteNamesTheActualReasonTheRadioColumnsAreEmpty(t *testing.T) {
 		h.srv.Now = func() time.Time { return now }
 		dev := h.seedDevice("ap-c", true, nil)
 		if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
-			{MAC: "aa:bb:cc:11:22:33", Name: "phone", IPv4: "192.168.1.130"},
+			{MAC: "aa:bb:cc:11:22:33", Name: "phone", IPv4: "192.0.2.130"},
 		}, now.Unix()); err != nil {
 			t.Fatal(err)
 		}
@@ -3299,8 +3343,8 @@ func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
 	dev := h.seedDevice("ap-wrt", true, nil)
 
 	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
-		{MAC: "04:2e:c1:6d:f4:0d", Name: "phone", IPv4: "192.168.1.227"},
-		{MAC: "aa:bb:cc:00:00:01", Name: "wired-thing", IPv4: "192.168.1.50"},
+		{MAC: "02:00:00:ab:61:01", Name: "phone", IPv4: "192.0.2.227"},
+		{MAC: "aa:bb:cc:00:00:01", Name: "wired-thing", IPv4: "198.51.100.50"},
 	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -3310,7 +3354,7 @@ func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
 		// Upper case on purpose: iwinfo.assoclist returns upper and
 		// hostapd.get_clients returns lower for the same station on the same
 		// device, and the clients table stores lower.
-		dev.ID: {"04:2E:C1:6D:F4:0D": {{Iface: "phy0-ap0", Signal: &sig}}},
+		dev.ID: {"02:00:00:AB:61:01": {{Iface: "phy0-ap0", Signal: &sig}}},
 	}
 
 	w := h.do(http.MethodGet, "/api/v1/clients", nil)
@@ -3326,7 +3370,7 @@ func TestClientsShowLiveAssociationWithoutAFocusedPoll(t *testing.T) {
 	var phone, wired *clientView
 	for i := range resp.Clients {
 		switch resp.Clients[i].MAC {
-		case "04:2e:c1:6d:f4:0d":
+		case "02:00:00:ab:61:01":
 			phone = &resp.Clients[i]
 		case "aa:bb:cc:00:00:01":
 			wired = &resp.Clients[i]
@@ -3389,7 +3433,7 @@ func TestClientsDoNotChooseAnAPFromCompetingFleetAssociations(t *testing.T) {
 	h.srv.Now = func() time.Time { return now }
 	first := h.seedDevice("first-ap", true, nil)
 	second := h.seedDevice("second-ap", true, nil)
-	const mac = "04:2e:c1:6d:f4:0d"
+	const mac = "02:00:00:ab:61:01"
 	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{{
 		MAC: mac, Name: "roaming-phone", Scope: store.ScopeLocal,
 	}}, now.Unix()); err != nil {
@@ -3432,12 +3476,12 @@ func TestAssociatedWithoutAnRSSIReportsNoSignalRatherThanZero(t *testing.T) {
 	h.srv.Now = func() time.Time { return now }
 	dev := h.seedDevice("ap-wrt", true, nil)
 	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
-		{MAC: "04:2e:c1:6d:f4:0d", Name: "phone", IPv4: "192.168.1.227"},
+		{MAC: "02:00:00:ab:61:01", Name: "phone", IPv4: "192.0.2.227"},
 	}, now.Unix()); err != nil {
 		t.Fatal(err)
 	}
 	h.fleet.stations = map[int64]collector.LiveStationSet{
-		dev.ID: {"04:2e:c1:6d:f4:0d": {{Iface: "phy0-ap0"}}}, // Signal nil
+		dev.ID: {"02:00:00:ab:61:01": {{Iface: "phy0-ap0"}}}, // Signal nil
 	}
 	w := h.do(http.MethodGet, "/api/v1/clients", nil)
 	var resp struct {

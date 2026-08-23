@@ -2,16 +2,15 @@ package onair
 
 import "testing"
 
-// The BSSIDs and SSIDs are the real ones from the lab on 2026-08-16, including
-// the failure: the WRT's phy1-ap0 claimed `oonfee-roam` while the C6's radio
-// heard `wrt-cleanroom` from that exact BSSID.
+// Stable locally administered BSSIDs preserve the measured failure shape
+// without retaining lab identifiers.
 var (
 	wrt24 = BSS{DeviceID: 5, Name: "wrt", Iface: "phy1-ap0",
-		BSSID: "30:23:03:db:be:41", SSID: "oonfee-roam", Band: "2g"}
+		BSSID: "02:00:00:ab:24:41", SSID: "fixture-roam", Band: "2g"}
 	wrt5 = BSS{DeviceID: 5, Name: "wrt", Iface: "phy0-ap0",
-		BSSID: "30:23:03:db:be:42", SSID: "oonfee-roam", Band: "5g"}
+		BSSID: "02:00:00:ab:24:42", SSID: "fixture-roam", Band: "5g"}
 	c624 = BSS{DeviceID: 4, Name: "c6", Iface: "phy1-ap1",
-		BSSID: "86:d8:1b:c5:19:35", SSID: "oonfee-roam", Band: "2g"}
+		BSSID: "02:00:00:cd:52:35", SSID: "fixture-roam", Band: "2g"}
 )
 
 // The failure this package was built for, in the exact shape it occurred.
@@ -21,7 +20,7 @@ func TestTheFourteenHourLie(t *testing.T) {
 		Heard: []Heard{
 			// The BSSID is the WRT's. The SSID is one that existed in no
 			// configuration on that device.
-			{BSSID: "30:23:03:db:be:41", SSID: "wrt-cleanroom", Band: "2g"},
+			{BSSID: "02:00:00:ab:24:41", SSID: "fixture-mismatch", Band: "2g"},
 		},
 	}}
 
@@ -35,7 +34,7 @@ func TestTheFourteenHourLie(t *testing.T) {
 		t.Fatalf("verdict = %s, want mismatched — this is the one thing no "+
 			"other check in the controller can see", r.Verdict)
 	}
-	if r.HeardSSID != "wrt-cleanroom" {
+	if r.HeardSSID != "fixture-mismatch" {
 		t.Errorf("HeardSSID = %q; the report has to name what is actually on "+
 			"the air or nobody can act on it", r.HeardSSID)
 	}
@@ -50,7 +49,7 @@ func TestTheFourteenHourLie(t *testing.T) {
 func TestHeardWithTheRightSSIDIsConfirmed(t *testing.T) {
 	scans := []Scan{{
 		DeviceID: 4, BandsCovered: []string{"2g"},
-		Heard: []Heard{{BSSID: "30:23:03:DB:BE:41", SSID: "oonfee-roam", Band: "2g"}},
+		Heard: []Heard{{BSSID: "02:00:00:AB:24:41", SSID: "fixture-roam", Band: "2g"}},
 	}}
 
 	got := Check([]BSS{wrt24}, scans)
@@ -67,9 +66,9 @@ func TestHeardWithTheRightSSIDIsConfirmed(t *testing.T) {
 // case. Getting this wrong turns every confirmation into an "unheard".
 func TestBSSIDMatchingIgnoresCase(t *testing.T) {
 	upper := wrt24
-	upper.BSSID = "30:23:03:DB:BE:41"
+	upper.BSSID = "02:00:00:AB:24:41"
 	scans := []Scan{{DeviceID: 4, BandsCovered: []string{"2g"},
-		Heard: []Heard{{BSSID: "30:23:03:db:be:41", SSID: "oonfee-roam"}}}}
+		Heard: []Heard{{BSSID: "02:00:00:ab:24:41", SSID: "fixture-roam"}}}}
 
 	if got := Check([]BSS{upper}, scans); got[0].Verdict != Confirmed {
 		t.Errorf("case difference broke the match: %s", got[0].Verdict)
@@ -106,7 +105,7 @@ func TestUnheardIsNotAFault(t *testing.T) {
 func TestABandNobodyScannedIsNotChecked(t *testing.T) {
 	scans := []Scan{{
 		DeviceID: 4, BandsCovered: []string{"2g"}, // 5 GHz scan returned nothing
-		Heard: []Heard{{BSSID: "30:23:03:db:be:41", SSID: "oonfee-roam"}},
+		Heard: []Heard{{BSSID: "02:00:00:ab:24:41", SSID: "fixture-roam"}},
 	}}
 
 	got := Check([]BSS{wrt24, wrt5}, scans)
@@ -147,8 +146,8 @@ func TestASingleAPCannotConfirmItself(t *testing.T) {
 func TestEveryVerdictExplainsItself(t *testing.T) {
 	scans := []Scan{{DeviceID: 4, BandsCovered: []string{"2g", "5g"},
 		Heard: []Heard{
-			{BSSID: "30:23:03:db:be:41", SSID: "wrt-cleanroom"},
-			{BSSID: "86:d8:1b:c5:19:35", SSID: "oonfee-roam"},
+			{BSSID: "02:00:00:ab:24:41", SSID: "fixture-mismatch"},
+			{BSSID: "02:00:00:cd:52:35", SSID: "fixture-roam"},
 		}}}
 
 	for _, r := range Check([]BSS{wrt24, wrt5, c624}, scans) {

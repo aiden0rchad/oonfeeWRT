@@ -29,5 +29,8 @@ func verifyCurrentSchema(ctx context.Context, q schemaInspector) error {
 	}}); err != nil {
 		return fmt.Errorf("store: schema v17 attestation: %w", err)
 	}
-	return nil
+	if err := verifySchemaV18(ctx, q); err != nil {
+		return err
+	}
+	return verifySchemaV19(ctx, q)
 }

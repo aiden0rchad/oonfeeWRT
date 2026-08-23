@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, api, onControllerRestart } from './api'
+import { ApiError, api, onControllerRestart, onUnauthorized } from './api'
 
 function ok(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -69,6 +69,256 @@ describe('response trust boundary', () => {
     } finally {
       onControllerRestart.delete(restarted)
     }
+  })
+})
+
+describe('account management API contract', () => {
+  it('uses the controller account and session resources without putting secrets in URLs', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(ok({ account: { id: 4, username: 'owner', role: 'owner' } }))
+      .mockResolvedValueOnce(ok({ sessions: [] }))
+      .mockResolvedValueOnce(ok({ reauthenticated_until: 123 }))
+
+    await api.account()
+    await api.accountSessions()
+    await api.reauthenticate('current-password-sentinel')
+
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/account')
+    expect(vi.mocked(fetch).mock.calls[1][0]).toBe('/api/v1/account/sessions')
+    const [path, init] = vi.mocked(fetch).mock.calls[2]
+    expect(path).toBe('/api/v1/session/reauth')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ password: 'current-password-sentinel' })
+    expect(String(path)).not.toContain('sentinel')
+  })
+
+  it('sends owner mutations to the named PATCH, password, and session endpoints', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({ ok: true, account: {} }))
+
+    await api.setAccountRole(7, 'operator')
+    await api.setAccountEnabled(7, false)
+    await api.resetAccountPassword(7, 'replacement-password')
+    await api.revokeManagedAccountSession(7, 'session/with space')
+    await api.revokeManagedAccountSessions(7)
+
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [path, init?.method, init?.body && JSON.parse(String(init.body))])).toEqual([
+      ['/api/v1/accounts/7/role', 'PATCH', { role: 'operator' }],
+      ['/api/v1/accounts/7/enabled', 'PATCH', { enabled: false }],
+      ['/api/v1/accounts/7/password', 'POST', { new_password: 'replacement-password' }],
+      ['/api/v1/accounts/7/sessions/session%2Fwith%20space', 'DELETE', undefined],
+      ['/api/v1/accounts/7/sessions', 'DELETE', undefined],
+    ])
+  })
+
+  it('preserves a 428 reauthentication challenge for an explicit UI retry', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({
+      error: 'reauthentication required', code: 'reauth_required',
+    }), { status: 428, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(api.deleteAccount(9)).rejects.toMatchObject({
+      status: 428,
+      message: 'reauthentication required',
+      body: { error: 'reauthentication required', code: 'reauth_required' },
+    } satisfies Partial<ApiError>)
+  })
+
+  it('does not sign out a live session for a rejected password confirmation', async () => {
+    const unauthorized = vi.fn()
+    onUnauthorized.add(unauthorized)
+    try {
+      vi.mocked(fetch)
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          error: 'password is incorrect', code: 'incorrect_password',
+        }), { status: 401 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          error: 'session expired', code: 'not_signed_in',
+        }), { status: 401 }))
+
+      await expect(api.reauthenticate('wrong password')).rejects.toMatchObject({ status: 401 })
+      expect(unauthorized).not.toHaveBeenCalled()
+      await expect(api.reauthenticate('right but expired')).rejects.toMatchObject({ status: 401 })
+      expect(unauthorized).toHaveBeenCalledOnce()
+    } finally {
+      onUnauthorized.delete(unauthorized)
+    }
+  })
+})
+
+describe('diagnostics API contract', () => {
+  it('uses the stored-bundle resources and sends no invented request body', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({ jobs: [], job: {} }))
+
+    await api.diagnostics()
+    await api.startDiagnostics()
+    await api.diagnostic('job/with space')
+    await api.cancelDiagnostics('job/with space')
+
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [path, init?.method, init?.body])).toEqual([
+      ['/api/v1/diagnostics', undefined, undefined],
+      ['/api/v1/diagnostics', 'POST', undefined],
+      ['/api/v1/diagnostics/job%2Fwith%20space', undefined, undefined],
+      ['/api/v1/diagnostics/job%2Fwith%20space/cancel', 'POST', undefined],
+    ])
+  })
+
+  it('accepts only a completed ZIP response and preserves its server filename', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(new Blob(['zip']), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="oonfeewrt-diagnostics-123.zip"',
+        'Content-Length': '3',
+      },
+    }))
+
+    const result = await api.downloadDiagnostics('job/with space', 1024, 3)
+
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/diagnostics/job%2Fwith%20space/download')
+    expect(result.filename).toBe('oonfeewrt-diagnostics-123.zip')
+    expect(result.blob.type).toBe('application/zip')
+  })
+
+  it('rejects a successful non-ZIP response instead of downloading partial output', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response('{}', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(api.downloadDiagnostics('job', 1024, 2)).rejects.toMatchObject({
+      status: 200,
+      message: 'server returned a non-ZIP diagnostic download',
+    } satisfies Partial<ApiError>)
+  })
+
+  it.each([
+    ['missing length', undefined, '3'],
+    ['larger than descriptor limit', '2048', '3'],
+    ['different from the completed job', '4', '3'],
+  ])('rejects a ZIP with %s', async (_name, contentLength, expected) => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/zip' }
+    if (contentLength) headers['Content-Length'] = contentLength
+    vi.mocked(fetch).mockResolvedValue(new Response(new Blob(['zip']), { status: 200, headers }))
+
+    await expect(api.downloadDiagnostics('job', 1024, Number(expected))).rejects.toMatchObject({
+      status: 200,
+      message: 'server returned an invalid diagnostic download size',
+    } satisfies Partial<ApiError>)
+  })
+
+  it('rejects a ZIP whose body size differs from its trusted headers', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response(new Blob(['truncated']), {
+      status: 200,
+      headers: { 'Content-Type': 'application/zip', 'Content-Length': '3' },
+    }))
+
+    await expect(api.downloadDiagnostics('job', 1024, 3)).rejects.toMatchObject({
+      status: 200,
+      message: 'server returned an invalid diagnostic download size',
+    } satisfies Partial<ApiError>)
+  })
+})
+
+describe('backup export API contract', () => {
+  it('binds sensitive-content consent and both passphrase entries to the reviewed plan', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({ jobs: [], job: {} }))
+
+    await api.backups()
+    await api.startBackup('controller-backup-export-v1', true, 'export passphrase', 'export passphrase')
+    await api.backup('job/with space')
+    await api.cancelBackup('job/with space')
+
+    const calls = vi.mocked(fetch).mock.calls
+    expect([calls[0][0], calls[0][1]?.method, calls[0][1]?.body]).toEqual([
+      '/api/v1/backups', undefined, undefined,
+    ])
+    expect(calls[1][0]).toBe('/api/v1/backups')
+    expect(calls[1][1]?.method).toBe('POST')
+    expect(JSON.parse(String(calls[1][1]?.body))).toEqual({
+      plan_id: 'controller-backup-export-v1',
+      acknowledge_sensitive_content: true,
+      export_passphrase: 'export passphrase',
+      confirm_export_passphrase: 'export passphrase',
+    })
+    expect([calls[2][0], calls[2][1]?.method]).toEqual([
+      '/api/v1/backups/job%2Fwith%20space', undefined,
+    ])
+    expect([calls[3][0], calls[3][1]?.method, calls[3][1]?.body]).toEqual([
+      '/api/v1/backups/job%2Fwith%20space/cancel', 'POST', undefined,
+    ])
+    expect(api.backupDownloadURL('job/with space')).toBe('/api/v1/backups/job%2Fwith%20space/download')
+  })
+})
+
+describe('controller restore API contract', () => {
+  it('uploads the native artifact body and binds preview, cancellation, and confirmation to encoded IDs', async () => {
+    document.cookie = 'oonfee_csrf=restore-csrf-sentinel'
+    vi.mocked(fetch).mockImplementation(async () => ok({
+      upload: {}, preview: {}, intent: { id: 'a'.repeat(32), state: 'accepted', accepted_at: 1 },
+    }))
+    const artifact = new File(['encrypted-backup'], 'controller.oowrtbak', {
+      type: 'application/vnd.oonfeewrt.backup',
+    })
+
+    await api.restores()
+    await api.uploadRestore(artifact)
+    await api.startRestorePreview('upload/with space', 'export-passphrase-sentinel')
+    await api.restorePreview('preview/with space')
+    await api.cancelRestorePreview('preview/with space')
+    await api.confirmRestore('preview/with space', {
+      plan_id: 'controller-restore-confirm-v1.plan-sentinel',
+      export_passphrase: 'export-passphrase-sentinel',
+      destination_runtime_passphrase: 'runtime-passphrase-sentinel',
+      typed_confirmation: 'RESTORE CONTROLLER',
+      acknowledge_restart: true,
+      acknowledge_session_revocation: true,
+      acknowledge_router_writes_suppressed: true,
+      acknowledge_no_automatic_router_apply: true,
+    })
+
+    const calls = vi.mocked(fetch).mock.calls
+    expect([calls[0][0], calls[0][1]?.method]).toEqual(['/api/v1/restores', undefined])
+    expect([calls[1][0], calls[1][1]?.method, calls[1][1]?.body]).toEqual([
+      '/api/v1/restores/uploads', 'POST', artifact,
+    ])
+    expect(new Headers(calls[1][1]?.headers).get('Content-Type')).toBe('application/vnd.oonfeewrt.backup')
+    expect(new Headers(calls[1][1]?.headers).get('X-Oonfee-CSRF')).toBe('restore-csrf-sentinel')
+    expect(calls[1][1]?.credentials).toBe('same-origin')
+    expect(JSON.parse(String(calls[2][1]?.body))).toEqual({
+      upload_id: 'upload/with space', export_passphrase: 'export-passphrase-sentinel',
+    })
+    expect([calls[3][0], calls[3][1]?.method]).toEqual([
+      '/api/v1/restores/previews/preview%2Fwith%20space', undefined,
+    ])
+    expect([calls[4][0], calls[4][1]?.method, calls[4][1]?.body]).toEqual([
+      '/api/v1/restores/previews/preview%2Fwith%20space/cancel', 'POST', undefined,
+    ])
+    expect(calls[5][0]).toBe('/api/v1/restores/previews/preview%2Fwith%20space/confirm')
+    expect(JSON.parse(String(calls[5][1]?.body))).toEqual({
+      plan_id: 'controller-restore-confirm-v1.plan-sentinel',
+      export_passphrase: 'export-passphrase-sentinel',
+      destination_runtime_passphrase: 'runtime-passphrase-sentinel',
+      typed_confirmation: 'RESTORE CONTROLLER',
+      acknowledge_restart: true,
+      acknowledge_session_revocation: true,
+      acknowledge_router_writes_suppressed: true,
+      acknowledge_no_automatic_router_apply: true,
+    })
+    expect(String(calls[2][0]) + String(calls[5][0])).not.toContain('passphrase-sentinel')
+  })
+
+  it('reads suppression and requires the active restore id plus exact resume phrase', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({ suppression: { active: false } }))
+
+    await api.restoreSuppression()
+    await api.resumeRouterWrites('restore/id', 'RESUME ROUTER WRITES')
+
+    const calls = vi.mocked(fetch).mock.calls
+    expect([calls[0][0], calls[0][1]?.method]).toEqual(['/api/v1/restores/suppression', undefined])
+    expect([calls[1][0], calls[1][1]?.method, JSON.parse(String(calls[1][1]?.body))]).toEqual([
+      '/api/v1/restores/suppression/resume', 'POST', {
+        restore_id: 'restore/id', typed_confirmation: 'RESUME ROUTER WRITES',
+      },
+    ])
   })
 })
 
@@ -328,6 +578,22 @@ describe('radio scan API contract', () => {
     const [path, init] = vi.mocked(fetch).mock.calls[0]
     expect(path).toBe('/api/v1/devices/7/radios/radio%2F0/scan')
     expect(JSON.parse(String(init?.body))).toEqual({ acknowledge_disruption: false })
+  })
+})
+
+describe('speed test API contract', () => {
+  it('binds the data-use acknowledgement to the exact reviewed plan', async () => {
+    vi.mocked(fetch).mockResolvedValue(ok({ id: 'job', state: 'queued' }))
+    const planID = `sha256:${'a'.repeat(64)}`
+
+    await api.startSpeedTest(planID, true)
+
+    const [path, init] = vi.mocked(fetch).mock.calls[0]
+    expect(path).toBe('/api/v1/speedtests')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      acknowledge_data_use: true,
+      plan_id: planID,
+    })
   })
 })
 

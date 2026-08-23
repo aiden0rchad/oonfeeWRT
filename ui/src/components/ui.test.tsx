@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
-import { Banner, Button, DataGrid, FilterRail, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
+import { Banner, Button, DataGrid, FilterRail, Notice, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
 import { axisLabels, fmt, widenTo } from './Chart'
 
@@ -77,6 +77,68 @@ describe('Banner', () => {
     )
     expect(screen.queryByText(/Show details/)).toBeNull()
     expect(screen.getByRole('button', { name: 'Review capability' })).toBeTruthy()
+  })
+})
+
+describe('Notice', () => {
+  it('keeps an authored summary visible and exposes details with native semantics', () => {
+    render(
+      <Notice
+        tone="warning"
+        component="Topology"
+        summary="Some link evidence is unavailable."
+        details="The LLDP source did not report a neighbour on lan3."
+      />,
+    )
+
+    expect(screen.getByRole('group', { name: 'Warning: Topology' })).toBeTruthy()
+    expect(screen.getByText('Some link evidence is unavailable.')).toBeTruthy()
+    const toggle = screen.getByText('More information').closest('summary') as HTMLElement
+    const disclosure = toggle.closest('details') as HTMLDetailsElement
+    expect(toggle.tagName).toBe('SUMMARY')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(disclosure.open).toBe(false)
+
+    toggle.focus()
+    expect(document.activeElement).toBe(toggle)
+    fireEvent.click(toggle)
+    expect(disclosure.open).toBe(true)
+    expect(screen.getByText('Hide information').getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('The LLDP source did not report a neighbour on lan3.')).toBeTruthy()
+  })
+
+  it('opens an active capability plan while keeping consent actions outside it', () => {
+    function CapabilityNotice() {
+      const [reviewed, setReviewed] = useState(false)
+      return (
+        <Notice
+          tone="accent"
+          component="LLDP capability"
+          summary="Adds measured wired-neighbour discovery."
+          details={reviewed ? 'Install lldpd (84 KiB); rollback removes only this addition.' : 'No router change occurs until a plan is reviewed and accepted.'}
+          defaultOpen={reviewed}
+          actions={reviewed
+            ? <><Button kind="primary">Install capability</Button><Button onClick={() => setReviewed(false)}>Cancel</Button></>
+            : <Button onClick={() => setReviewed(true)}>Review</Button>}
+        />
+      )
+    }
+
+    render(<CapabilityNotice />)
+    const review = screen.getByRole('button', { name: 'Review' })
+    expect(review.closest('details')).toBeNull()
+    expect((screen.getByText('More information').closest('details') as HTMLDetailsElement).open).toBe(false)
+
+    fireEvent.click(review)
+    const install = screen.getByRole('button', { name: 'Install capability' })
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect((screen.getByText('Hide information').closest('details') as HTMLDetailsElement).open).toBe(true)
+    expect(install.closest('details')).toBeNull()
+    expect(cancel.closest('details')).toBeNull()
+    expect(screen.getByText(/Install lldpd/)).toBeTruthy()
+
+    fireEvent.click(cancel)
+    expect((screen.getByText('More information').closest('details') as HTMLDetailsElement).open).toBe(false)
   })
 })
 

@@ -159,15 +159,13 @@ func TestDegradationCauseKeepsFailureDomainsDistinct(t *testing.T) {
 // "unknown" for connection, access point and signal while two devices were
 // associated and hostapd was reporting both.
 //
-// Case matters because the sources disagree. Measured on the reference
-// WRT3200ACM in the same minute: iwinfo.assoclist returns
-// "F6:97:77:EB:8E:C9" and hostapd.get_clients returns "f6:97:77:eb:8e:c9"
-// for the same station, and the clients table stores lower case. A join that
-// does not normalise misses every row and looks like an empty result.
+// Case matters because the sources disagree. These locally administered
+// fixtures preserve the measured upper/lower-case mismatch without retaining
+// client identifiers. A join that does not normalize misses every row.
 func TestAPClientsKeepsMACsAndLowerCasesThem(t *testing.T) {
 	var s Snapshot
-	raw := []byte(`{"clients":{"F6:97:77:EB:8E:C9":{"signal":-46},
-	                            "04:2e:c1:6d:f4:0d":{}}}`)
+	raw := []byte(`{"clients":{"02:00:00:AB:61:02":{"signal":-46},
+	                            "02:00:00:ab:61:03":{}}}`)
 	if err := decodeAPClients("phy0-ap0")(raw, &s); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +173,7 @@ func TestAPClientsKeepsMACsAndLowerCasesThem(t *testing.T) {
 	if ap.Clients == nil || *ap.Clients != 2 {
 		t.Fatalf("client count = %v, want 2", ap.Clients)
 	}
-	st, ok := ap.Stations["f6:97:77:eb:8e:c9"]
+	st, ok := ap.Stations["02:00:00:ab:61:02"]
 	if !ok {
 		t.Fatalf("upper-case MAC was not normalised: %v", keysOf(ap.Stations))
 	}
@@ -186,7 +184,7 @@ func TestAPClientsKeepsMACsAndLowerCasesThem(t *testing.T) {
 		t.Errorf("iface = %q", st.Iface)
 	}
 	// A station hostapd lists without an RSSI is associated and unmeasured.
-	quiet, ok := ap.Stations["04:2e:c1:6d:f4:0d"]
+	quiet, ok := ap.Stations["02:00:00:ab:61:03"]
 	if !ok {
 		t.Fatal("a station with no signal field was dropped")
 	}

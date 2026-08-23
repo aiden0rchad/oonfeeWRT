@@ -12,13 +12,10 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/recovery"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 )
-
-type recoveryCounts struct {
-	schema, devices, credentials, owned, wlans, meshes int
-}
 
 func main() {
 	dbPath, err := recoveryDatabasePath(os.Args[1:], os.Stderr)
@@ -42,22 +39,28 @@ func run(ctx context.Context, dbPath string, output io.Writer) error {
 	}
 	_, err = fmt.Fprintf(output,
 		"schema=%d devices=%d credentials=%d owned_sections=%d wlans=%d meshes=%d\n",
-		counts.schema, counts.devices, counts.credentials, counts.owned,
-		counts.wlans, counts.meshes)
+		counts.Schema, counts.Devices, counts.Credentials, counts.OwnedSections,
+		counts.WLANs, counts.Meshes)
 	return err
 }
 
-func inspectRecovery(ctx context.Context, dbPath string) (recoveryCounts, error) {
+func inspectRecovery(ctx context.Context, dbPath string) (recovery.Counts, error) {
+	if ctx == nil {
+		return recovery.Counts{}, errors.New("recovery context is unavailable")
+	}
+	if err := ctx.Err(); err != nil {
+		return recovery.Counts{}, err
+	}
 	if err := validatePairFiles(dbPath); err != nil {
-		return recoveryCounts{}, err
+		return recovery.Counts{}, err
 	}
 	handle, err := toolstore.OpenReadOnly(ctx, dbPath)
 	if err != nil {
-		return recoveryCounts{}, fmt.Errorf("open recovery pair: %w", err)
+		return recovery.Counts{}, fmt.Errorf("open recovery pair: %w", err)
 	}
-	counts, inspectErr := inspectOpenRecovery(ctx, handle)
+	counts, inspectErr := recovery.Validate(ctx, handle.DB, handle)
 	if closeErr := handle.Close(); inspectErr == nil && closeErr != nil {
-		return recoveryCounts{}, errors.New("close recovery pair failed")
+		return recovery.Counts{}, errors.New("close recovery pair failed")
 	}
 	return counts, inspectErr
 }
@@ -89,95 +92,6 @@ func validatePairFiles(dbPath string) error {
 		}
 	}
 	return nil
-}
-
-func inspectOpenRecovery(ctx context.Context, handle *toolstore.Handle) (recoveryCounts, error) {
-	var counts recoveryCounts
-	if err := handle.DB.SQL().QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(version),0) FROM schema_version`).Scan(&counts.schema); err != nil {
-		return counts, errors.New("read schema version failed")
-	}
-	var integrity string
-	if err := handle.DB.SQL().QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
-		return counts, errors.New("database integrity check failed")
-	}
-	foreignKeys, err := handle.DB.SQL().QueryContext(ctx, `PRAGMA foreign_key_check`)
-	if err != nil {
-		return counts, errors.New("foreign-key check failed")
-	}
-	hasForeignKeyFailure := foreignKeys.Next()
-	foreignKeyReadErr := foreignKeys.Err()
-	foreignKeyCloseErr := foreignKeys.Close()
-	if hasForeignKeyFailure || foreignKeyReadErr != nil || foreignKeyCloseErr != nil {
-		return counts, errors.New("foreign-key check failed")
-	}
-
-	site, err := handle.DB.Site(ctx)
-	if err != nil {
-		return counts, errors.New("stored site could not be opened")
-	}
-	if len(site.Validate()) != 0 {
-		return counts, errors.New("stored site validation failed")
-	}
-	counts.wlans, counts.meshes = len(site.WLANs), len(site.Meshes)
-
-	devices, err := handle.DB.Devices(ctx)
-	if err != nil {
-		return counts, errors.New("device inventory could not be read")
-	}
-	counts.devices = len(devices)
-	for _, device := range devices {
-		if device.FunctionError != "" {
-			return counts, errors.New("device inventory validation failed")
-		}
-		if device.Adopted() && len(device.CredEnc) == 0 {
-			return counts, errors.New("an adopted device has no stored credential")
-		}
-		if len(device.CredEnc) == 0 {
-			continue
-		}
-		if err := handle.VerifyCredential(device.MAC, device.CredEnc); err != nil {
-			return counts, errors.New("a stored device credential failed verification")
-		}
-		counts.credentials++
-	}
-
-	var invalidOwned int
-	if err := handle.DB.SQL().QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM owned_sections
-		 WHERE rendered_hash_enc IS NULL OR length(rendered_hash_enc)=0
-		    OR COALESCE(rendered_hash,'')<>''`).Scan(&invalidOwned); err != nil || invalidOwned != 0 {
-		return counts, errors.New("an owned-section verifier is missing or not sealed")
-	}
-	rows, err := handle.DB.SQL().QueryContext(ctx,
-		`SELECT DISTINCT device_id FROM owned_sections ORDER BY device_id`)
-	if err != nil {
-		return counts, errors.New("owned-section inventory could not be read")
-	}
-	var ownerIDs []int64
-	for rows.Next() {
-		var deviceID int64
-		if err := rows.Scan(&deviceID); err != nil {
-			rows.Close()
-			return counts, errors.New("owned-section inventory could not be read")
-		}
-		ownerIDs = append(ownerIDs, deviceID)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return counts, errors.New("owned-section inventory could not be read")
-	}
-	if err := rows.Close(); err != nil {
-		return counts, errors.New("owned-section inventory could not be read")
-	}
-	for _, deviceID := range ownerIDs {
-		owned, err := handle.DB.OwnedSections(ctx, deviceID)
-		if err != nil {
-			return counts, errors.New("an owned-section verifier failed verification")
-		}
-		counts.owned += len(owned)
-	}
-	return counts, nil
 }
 
 func recoveryDatabasePath(args []string, output io.Writer) (string, error) {

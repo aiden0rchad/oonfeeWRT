@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useId, useRef, useState } from 'react'
-import type { MouseEventHandler, ReactNode } from 'react'
+import type { CSSProperties, MouseEventHandler, ReactNode } from 'react'
 import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
 import type { ColumnPrefs } from '../lib/columns'
 
@@ -126,6 +126,7 @@ export function Button({
   kind = 'default',
   disabled,
   type = 'button',
+  style,
   'aria-label': ariaLabel,
   'aria-pressed': ariaPressed,
 }: {
@@ -134,6 +135,7 @@ export function Button({
   kind?: 'default' | 'primary'
   disabled?: boolean
   type?: 'button' | 'submit'
+  style?: CSSProperties
   'aria-label'?: string
   'aria-pressed'?: boolean
 }) {
@@ -155,6 +157,7 @@ export function Button({
         color: kind === 'primary' ? '#fff' : 'var(--text-primary)',
         background: kind === 'primary' ? 'var(--control-accent)' : 'var(--surface-2)',
         border: `1px solid ${kind === 'primary' ? 'var(--control-accent)' : 'var(--border-strong)'}`,
+        ...style,
       }}
     >
       {children}
@@ -166,6 +169,7 @@ export function Button({
 // the spread below forwards it without forwardRef. The type has to say so.
 export function Field({
   label,
+  style,
   ...props
 }: { label: string } & React.ComponentPropsWithRef<'input'>) {
   return (
@@ -184,6 +188,7 @@ export function Field({
           border: '1px solid var(--border-strong)',
           color: 'var(--text-primary)',
           fontSize: 13,
+          ...style,
         }}
       />
     </label>
@@ -253,6 +258,71 @@ export function Unknown({ why }: { why: string }) {
         </span>
       )}
     </span>
+  )
+}
+
+export type NoticeTone = 'warning' | 'critical' | 'accent'
+
+/** Authored progressive disclosure. Unlike Banner's compatibility-oriented
+ *  length heuristic, Notice keeps the consequence, affected component and
+ *  actions visible while native details/summary owns the full explanation. */
+export function Notice({
+  tone = 'warning',
+  component,
+  summary,
+  details,
+  defaultOpen = false,
+  actions,
+  closedLabel = 'More information',
+  openLabel = 'Hide information',
+}: {
+  tone?: NoticeTone
+  component: string
+  summary: ReactNode
+  details: ReactNode
+  defaultOpen?: boolean
+  actions?: ReactNode
+  closedLabel?: string
+  openLabel?: string
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const detailsID = useId()
+  const toneLabel = tone === 'accent' ? 'Information' : tone === 'critical' ? 'Critical' : 'Warning'
+
+  // A capability can render compactly, fetch its exact plan from a visible
+  // Review action, then expand it. Synchronize both lifecycle transitions so
+  // Cancel closes details along with the active plan.
+  useEffect(() => {
+    setOpen(defaultOpen)
+  }, [defaultOpen])
+
+  return (
+    <div
+      className="notice"
+      data-tone={tone}
+      role="group"
+      aria-label={`${toneLabel}: ${component}`}
+    >
+      <div className="notice-context">
+        <span>{toneLabel}</span>
+        <span aria-hidden="true">·</span>
+        <span>{component}</span>
+      </div>
+      <div className="notice-summary">{summary}</div>
+      <details
+        className="notice-disclosure"
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
+        <summary aria-controls={detailsID} aria-expanded={open}>
+          {open ? openLabel : closedLabel}
+        </summary>
+        <div id={detailsID} className="notice-details">
+          {details}
+        </div>
+      </details>
+      {actions != null && <div className="notice-actions">{actions}</div>}
+    </div>
   )
 }
 

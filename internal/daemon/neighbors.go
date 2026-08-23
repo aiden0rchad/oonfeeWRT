@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -72,6 +73,10 @@ const neighbourInterval = 15 * time.Minute
 // which is the same rule Preview follows, for the same reason.
 const neighbourDeviceTimeout = 20 * time.Second
 
+var errNeighbourReconcileAdmission = errors.New(
+	"daemon: neighbour reconciliation blocked by controller operation admission",
+)
+
 // StartNeighbourReconciler runs the distribution on a slow loop until ctx ends.
 //
 // It runs one cycle immediately. A controller that has just started has no idea
@@ -84,13 +89,26 @@ const neighbourDeviceTimeout = 20 * time.Second
 // a reconciler that speeds up when a device is unreachable is a reconciler that
 // hammers whatever is already struggling.
 func (d *Daemon) StartNeighbourReconciler(ctx context.Context) {
+	if d == nil || d.RouterWritesSuppressed() {
+		return
+	}
+	d.mu.Lock()
+	if d.neighbourDone != nil {
+		d.mu.Unlock()
+		return
+	}
+	nctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	d.neighbourStop, d.neighbourDone = cancel, done
+	d.mu.Unlock()
 	go func() {
+		defer close(done)
 		t := time.NewTicker(neighbourInterval)
 		defer t.Stop()
 		for {
-			d.reconcileNeighboursOnce(ctx)
+			d.reconcileNeighboursOnce(nctx)
 			select {
-			case <-ctx.Done():
+			case <-nctx.Done():
 				return
 			case <-t.C:
 			}
@@ -99,9 +117,36 @@ func (d *Daemon) StartNeighbourReconciler(ctx context.Context) {
 	d.Log.Info("802.11k neighbour distribution started", "interval", neighbourInterval)
 }
 
+func (d *Daemon) stopNeighbourReconciler(ctx context.Context) error {
+	d.mu.Lock()
+	cancel, done := d.neighbourStop, d.neighbourDone
+	d.neighbourStop, d.neighbourDone = nil, nil
+	d.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (d *Daemon) startNeighbourAfterResume() {
+	if d == nil || d.lifetimeCtx == nil || d.RouterWritesSuppressed() {
+		return
+	}
+	d.StartNeighbourReconciler(d.lifetimeCtx)
+}
+
 func (d *Daemon) reconcileNeighboursOnce(ctx context.Context) {
 	res, err := d.DistributeNeighbours(ctx)
 	if err != nil {
+		if errors.Is(err, errNeighbourReconcileAdmission) {
+			return
+		}
 		d.Log.Warn("could not distribute 802.11k neighbour lists", "err", err)
 		d.rememberNeighbourRun(nil, err)
 		return
@@ -138,6 +183,12 @@ type bssObservation struct {
 // a fleet where one AP is unplugged is still better served by updating the
 // rest than by refusing to update anything.
 func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult, error) {
+	release, ok := d.beginNeighbourReconcileOperation()
+	if !ok {
+		return nil, errNeighbourReconcileAdmission
+	}
+	defer release()
+
 	site, err := d.Store.Site(ctx)
 	if err != nil {
 		return nil, err
@@ -251,6 +302,13 @@ func (d *Daemon) DistributeNeighbours(ctx context.Context) (*api.NeighbourResult
 		res.Unchanged += row.Unchanged
 	}
 	return res, nil
+}
+
+func (d *Daemon) beginNeighbourReconcileOperation() (func(), bool) {
+	if d.api == nil {
+		return func() {}, true
+	}
+	return d.api.BeginNeighbourReconcileOperation()
 }
 
 // readNeighbourState asks one device what its APs are and what they currently
@@ -522,6 +580,9 @@ func (d *Daemon) nudgeNeighbours() {
 		ctx, cancel := context.WithTimeout(context.Background(), previewTimeout)
 		defer cancel()
 		if res, err := d.DistributeNeighbours(ctx); err != nil {
+			if errors.Is(err, errNeighbourReconcileAdmission) {
+				return
+			}
 			d.Log.Debug("could not refresh 802.11k neighbour lists; the "+
 				"periodic cycle will retry", "err", err)
 		} else if res.Updated > 0 {

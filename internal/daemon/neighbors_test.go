@@ -3,12 +3,17 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,13 +143,91 @@ func openDaemon(t *testing.T) *Daemon {
 	return d
 }
 
+func TestNeighbourReconcileAndRestoreExclusiveNeverOverlap(t *testing.T) {
+	var calls atomic.Int64
+	entered := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	var unblockOnce sync.Once
+	releaseRouter := func() { unblockOnce.Do(func() { close(unblock) }) }
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-unblock
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[0,{"ubus_rpc_session":"0123456789abcdef0123456789abcdef"}]}`))
+	}))
+	t.Cleanup(func() {
+		releaseRouter()
+		router.Close()
+	})
+
+	d := openDaemon(t)
+	seedRoamingWLAN(t, d, "OpenWrt", true)
+	seedAP(t, d, "02:00:00:00:0d:01", "gated-ap",
+		strings.TrimPrefix(router.URL, "http://"), capability.Present)
+
+	exclusive, conflicts, err := d.api.BeginRestoreExclusiveOperation()
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("exclusive admission = conflicts %v, error %v", conflicts, err)
+	}
+	if _, err := d.DistributeNeighbours(context.Background()); !errors.Is(err, errNeighbourReconcileAdmission) {
+		exclusive()
+		t.Fatalf("restore-blocked cycle error = %v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		exclusive()
+		t.Fatalf("restore-blocked cycle made %d router calls", got)
+	}
+	exclusive()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.DistributeNeighbours(context.Background())
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		releaseRouter()
+		<-done
+		t.Fatal("neighbour cycle did not reach the router")
+	}
+	if release, conflicts, err := d.api.BeginRestoreExclusiveOperation(); err == nil {
+		release()
+		releaseRouter()
+		<-done
+		t.Fatal("restore-exclusive overlapped an active neighbour cycle")
+	} else if len(conflicts) != 1 || conflicts[0] != "neighbour_reconcile" {
+		releaseRouter()
+		<-done
+		t.Fatalf("active-cycle conflicts = %v, error %v", conflicts, err)
+	}
+	releaseRouter()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("neighbour cycle: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("neighbour cycle did not release its operation lease")
+	}
+	if release, conflicts, err := d.api.BeginRestoreExclusiveOperation(); err != nil {
+		t.Fatalf("exclusive admission after cycle = conflicts %v, error %v", conflicts, err)
+	} else {
+		release()
+	}
+}
+
 // The whole path, and then the property that makes it affordable: running it
 // again against an unchanged fleet must contact nothing.
 func TestDistributeNeighboursFillsAndThenConverges(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "OpenWrt", true)
-	seedAP(t, d, "60:38:e0:00:0b:01", "ap-one", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:01", "ap-one", addr, capability.Present)
 
 	ctx := context.Background()
 	first, err := d.DistributeNeighbours(ctx)
@@ -189,7 +272,7 @@ func TestDistributeSkipsDevicesThatCannotBeAsked(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "OpenWrt", true)
-	seedAP(t, d, "60:38:e0:00:0b:02", "old-acl", addr, capability.NotObservable)
+	seedAP(t, d, "02:00:00:00:0b:02", "old-acl", addr, capability.NotObservable)
 
 	res, err := d.DistributeNeighbours(context.Background())
 	if err != nil {
@@ -217,7 +300,7 @@ func TestDistributeIgnoresWLANsWithoutKV(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "OpenWrt", false)
-	seedAP(t, d, "60:38:e0:00:0b:03", "no-kv", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:03", "no-kv", addr, capability.Present)
 
 	res, err := d.DistributeNeighbours(context.Background())
 	if err != nil {
@@ -239,7 +322,7 @@ func TestDistributeNeverTouchesUnmanagedSSIDs(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "some-other-network", true)
-	seedAP(t, d, "60:38:e0:00:0b:04", "foreign", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:04", "foreign", addr, capability.Present)
 
 	res, err := d.DistributeNeighbours(context.Background())
 	if err != nil {
@@ -260,8 +343,8 @@ func TestDistributeReportsUnreachableDevicesWithoutFailing(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "OpenWrt", true)
-	seedAP(t, d, "60:38:e0:00:0b:05", "here", addr, capability.Present)
-	seedAP(t, d, "60:38:e0:00:0b:06", "gone", "127.0.0.1:1", capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:05", "here", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:06", "gone", "127.0.0.1:1", capability.Present)
 
 	res, err := d.DistributeNeighbours(context.Background())
 	if err != nil {
@@ -294,9 +377,9 @@ func TestDecodeOwnNRRejectsShortReplies(t *testing.T) {
 	}{
 		{"empty", ``},
 		{"no value", `{}`},
-		{"two fields", `{"value":["30:23:03:db:be:42","OpenWrt"]}`},
-		{"blank element", `{"value":["30:23:03:db:be:42","OpenWrt",""]}`},
-		{"blank ssid", `{"value":["30:23:03:db:be:42","","3023"]}`},
+		{"two fields", `{"value":["02:00:00:ab:24:42","OpenWrt"]}`},
+		{"blank element", `{"value":["02:00:00:ab:24:42","OpenWrt",""]}`},
+		{"blank ssid", `{"value":["02:00:00:ab:24:42","","0200"]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -306,12 +389,12 @@ func TestDecodeOwnNRRejectsShortReplies(t *testing.T) {
 		})
 	}
 
-	good := `{"value":["30:23:03:db:be:42","OpenWrt","302303dbbe42ef19"]}`
+	good := `{"value":["02:00:00:ab:24:42","OpenWrt","020000ab2442ef19"]}`
 	n, ok := decodeOwnNR(json.RawMessage(good), 7, "phy0-ap1")
 	if !ok {
 		t.Fatal("rejected a well-formed reply")
 	}
-	if n.DeviceID != 7 || n.Iface != "phy0-ap1" || n.NR != "302303dbbe42ef19" {
+	if n.DeviceID != 7 || n.Iface != "phy0-ap1" || n.NR != "020000ab2442ef19" {
 		t.Errorf("decoded wrong: %+v", n)
 	}
 }
@@ -328,7 +411,7 @@ func TestIncompleteCycleNeverShrinksAList(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
 	seedRoamingWLAN(t, d, "OpenWrt", true)
-	seedAP(t, d, "60:38:e0:00:0b:07", "here", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:07", "here", addr, capability.Present)
 
 	ctx := context.Background()
 	if _, err := d.DistributeNeighbours(ctx); err != nil {
@@ -337,7 +420,7 @@ func TestIncompleteCycleNeverShrinksAList(t *testing.T) {
 
 	// Now a second device appears and cannot be reached. Nothing about the
 	// first device changed, so its lists must survive untouched.
-	seedAP(t, d, "60:38:e0:00:0b:08", "gone", "127.0.0.1:1", capability.Present)
+	seedAP(t, d, "02:00:00:00:0b:08", "gone", "127.0.0.1:1", capability.Present)
 
 	res, err := d.DistributeNeighbours(ctx)
 	if err != nil {
@@ -373,7 +456,7 @@ func TestConnectExplainsAFactoryResetDevice(t *testing.T) {
 
 	// Adopted, pointed at a live device, with a credential that device will not
 	// accept. That is exactly the post-reset state.
-	dev := seedAP(t, d, "60:38:e0:00:0c:01", "was-reset", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:0c:01", "was-reset", addr, capability.Present)
 	blob, err := d.Keys.SealCredential(dev.MAC, "oonfeewrt", "not-the-password")
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +487,7 @@ func TestConnectExplainsAFactoryResetDevice(t *testing.T) {
 // that only needs to come back.
 func TestConnectDoesNotBlameAdoptionForAnUnreachableDevice(t *testing.T) {
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:0c:02", "unplugged", "127.0.0.1:1",
+	dev := seedAP(t, d, "02:00:00:00:0c:02", "unplugged", "127.0.0.1:1",
 		capability.Present)
 
 	_, err := d.Connect(context.Background(), dev)
@@ -430,7 +513,7 @@ func TestAdoptRefusesASecondDeviceAtOneAddress(t *testing.T) {
 
 	// An existing adopted row at this address, under an identity that is NOT
 	// the one the device will report.
-	seedAP(t, d, "60:38:e0:00:0d:01", "already-here", addr, capability.Present)
+	seedAP(t, d, "02:00:00:00:0d:01", "already-here", addr, capability.Present)
 
 	_, err := d.Adopt(context.Background(), api.AdoptRequest{
 		Host: addr, Username: "root", Password: "good", Name: "second",

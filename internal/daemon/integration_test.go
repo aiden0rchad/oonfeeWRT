@@ -111,7 +111,7 @@ func TestIntegrationCollectorPollsARealDevice(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:01"
+	const mac = "02:00:00:00:00:01"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatalf("SealCredential: %v", err)
@@ -205,7 +205,7 @@ func TestIntegrationTelemetryReachesTheAPI(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:02"
+	const mac = "02:00:00:00:00:02"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)

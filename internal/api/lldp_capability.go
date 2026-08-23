@@ -131,6 +131,11 @@ func (s *Server) handleLLDPCapability(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.DeviceID = id
+	release, ok := s.beginOperation(w, operationCapability)
+	if !ok {
+		return
+	}
+	defer release()
 	if !s.lockSiteMutation(w, r) {
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/coder/websocket"
 )
 
@@ -64,6 +65,28 @@ func recv(t *testing.T, ws *websocket.Conn) map[string]any {
 	return m
 }
 
+func awaitLiveClosed(t *testing.T, ws *websocket.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, _, err := ws.Read(ctx); err == nil {
+		t.Fatal("revoked session's WebSocket remained open")
+	}
+}
+
+func awaitLiveReleased(t *testing.T, h *harness, deviceID int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.fleet.focusCount(deviceID) == 0 && h.srv.Hub.Connections() == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("revoked live session retained focus=%d connections=%d",
+		h.fleet.focusCount(deviceID), h.srv.Hub.Connections())
+}
+
 // The same-origin policy does not apply to WebSockets: any page anywhere can
 // open one and the browser attaches the session cookie. Refusing a foreign
 // Origin is the only thing standing in front of cross-site WebSocket hijacking,
@@ -90,6 +113,116 @@ func TestLiveRequiresASession(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unauthenticated WebSocket was accepted")
 	}
+}
+
+func TestViewerMayUseLiveChannel(t *testing.T) {
+	h, base := liveHarness(t)
+	owner, err := h.db.AdminByName(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, sess, err := h.srv.sessions.create(owner.ID, owner.Username, store.RoleViewer,
+		"192.0.2.10", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cookies = []*http.Cookie{{Name: sessionCookie, Value: token}}
+	h.csrf = sess.csrf
+	ws := dialLive(t, h, base)
+	if ws == nil {
+		t.Fatal("viewer WebSocket was not established")
+	}
+}
+
+func TestLiveConnectionDoesNotHoldRestoreOperationLease(t *testing.T) {
+	h, base := liveHarness(t)
+	dialLive(t, h, base)
+	if h.srv.Hub.Connections() != 1 {
+		t.Fatalf("live connections = %d", h.srv.Hub.Connections())
+	}
+	release, conflicts, err := h.srv.operations.beginExclusive()
+	if err != nil || len(conflicts) != 0 {
+		t.Fatalf("live connection blocked exclusive admission: conflicts %v, error %v",
+			conflicts, err)
+	}
+	release()
+}
+
+func TestLogoutClosesLiveSessionAndReleasesFocus(t *testing.T) {
+	h, base := liveHarness(t)
+	dev := h.seedDevice("ap-logout-ws", true, nil)
+	ws := dialLive(t, h, base)
+	send(t, ws, map[string]any{"type": "subscribe", "topic": "device.stats",
+		"device_id": dev.ID})
+	recv(t, ws)
+
+	if w := h.do(http.MethodPost, "/api/v1/logout", nil); w.Code != http.StatusOK {
+		t.Fatalf("logout: %d %s", w.Code, w.Body.String())
+	}
+	awaitLiveClosed(t, ws)
+	awaitLiveReleased(t, h, dev.ID)
+}
+
+func TestPasswordChangeClosesEveryLiveSession(t *testing.T) {
+	h, base := liveHarness(t)
+	dev := h.seedDevice("ap-password-ws", true, nil)
+	other := &harness{t: t, srv: h.srv, mux: h.mux, db: h.db, fleet: h.fleet}
+	w := other.do(http.MethodPost, "/api/v1/login",
+		map[string]string{"username": "admin", "password": testPassword})
+	if w.Code != http.StatusOK {
+		t.Fatalf("second login: %d %s", w.Code, w.Body.String())
+	}
+	other.csrf, _ = other.json(w)["csrf"].(string)
+
+	firstWS, secondWS := dialLive(t, h, base), dialLive(t, other, base)
+	for _, ws := range []*websocket.Conn{firstWS, secondWS} {
+		send(t, ws, map[string]any{"type": "subscribe", "topic": "device.stats",
+			"device_id": dev.ID})
+		recv(t, ws)
+	}
+	if got := h.fleet.focusCount(dev.ID); got != 2 {
+		t.Fatalf("focus count before password change = %d, want 2", got)
+	}
+
+	w = h.do(http.MethodPost, "/api/v1/session/password", map[string]string{
+		"current_password": testPassword, "new_password": "another-long-password",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("change password: %d %s", w.Code, w.Body.String())
+	}
+	awaitLiveClosed(t, firstWS)
+	awaitLiveClosed(t, secondWS)
+	awaitLiveReleased(t, h, dev.ID)
+}
+
+func TestSessionExpiryClosesLiveSessionAndReleasesFocus(t *testing.T) {
+	h, base := liveHarness(t)
+	dev := h.seedDevice("ap-expiry-ws", true, nil)
+	ws := dialLive(t, h, base)
+	send(t, ws, map[string]any{"type": "subscribe", "topic": "device.stats",
+		"device_id": dev.ID})
+	recv(t, ws)
+
+	h.srv.Now = func() time.Time { return time.Now().Add(sessionAbsolute + time.Hour) }
+	if w := h.do(http.MethodGet, "/api/v1/devices", nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expired REST session: %d, want 401", w.Code)
+	}
+	awaitLiveClosed(t, ws)
+	awaitLiveReleased(t, h, dev.ID)
+}
+
+func TestSessionSweepClosesLiveSessionAndReleasesFocus(t *testing.T) {
+	h, base := liveHarness(t)
+	dev := h.seedDevice("ap-sweep-ws", true, nil)
+	ws := dialLive(t, h, base)
+	send(t, ws, map[string]any{"type": "subscribe", "topic": "device.stats",
+		"device_id": dev.ID})
+	recv(t, ws)
+
+	h.srv.Now = func() time.Time { return time.Now().Add(sessionAbsolute + time.Hour) }
+	h.srv.Sweep()
+	awaitLiveClosed(t, ws)
+	awaitLiveReleased(t, h, dev.ID)
 }
 
 // Focus is reference-counted by the hub (IMPLEMENTATION §7): acquired on

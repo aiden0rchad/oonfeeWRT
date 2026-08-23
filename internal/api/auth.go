@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,16 +33,30 @@ const (
 const (
 	sessionIdle     = 12 * time.Hour
 	sessionAbsolute = 7 * 24 * time.Hour
+	reauthValidity  = 5 * time.Minute
+
+	credentialFailureLimit  = 5
+	credentialFailureWindow = 5 * time.Minute
+	credentialLockout       = 5 * time.Minute
 )
 
 // session is one signed-in operator.
 type session struct {
-	adminID  int64
-	username string
-	csrf     string
-	created  time.Time
-	lastSeen time.Time
+	id                string
+	adminID           int64
+	username          string
+	role              store.AccountRole
+	csrf              string
+	peerAddress       string
+	created           time.Time
+	lastSeen          time.Time
+	reauthenticatedAt time.Time
+	credentialFails   failCount
+	done              chan struct{}
+	revoke            sync.Once
 }
+
+func (s *session) close() { s.revoke.Do(func() { close(s.done) }) }
 
 // sessions is an in-memory session table.
 //
@@ -55,23 +71,48 @@ type sessions struct {
 
 func newSessions() *sessions { return &sessions{m: map[string]*session{}} }
 
-func (s *sessions) create(adminID int64, username string, now time.Time) (token string, sess *session, err error) {
-	token, err = randomToken()
-	if err != nil {
-		return "", nil, err
+func (s *sessions) create(adminID int64, username string, role store.AccountRole,
+	peerAddress string, now time.Time) (token string, sess *session, err error) {
+	if !role.Valid() {
+		return "", nil, store.ErrInvalidRole
 	}
-	csrf, err := randomToken()
-	if err != nil {
-		return "", nil, err
+	for {
+		token, err = randomToken()
+		if err != nil {
+			return "", nil, err
+		}
+		managementID, err := randomToken()
+		if err != nil {
+			return "", nil, err
+		}
+		csrf, err := randomToken()
+		if err != nil {
+			return "", nil, err
+		}
+		sess = &session{
+			id: managementID, adminID: adminID, username: username, role: role,
+			csrf: csrf, peerAddress: peerAddress, created: now, lastSeen: now,
+			reauthenticatedAt: now, done: make(chan struct{}),
+		}
+		s.mu.Lock()
+		_, tokenExists := s.m[token]
+		idExists := s.managementIDExistsLocked(managementID)
+		if !tokenExists && !idExists {
+			s.m[token] = sess
+			s.mu.Unlock()
+			return token, sess, nil
+		}
+		s.mu.Unlock()
 	}
-	sess = &session{
-		adminID: adminID, username: username, csrf: csrf,
-		created: now, lastSeen: now,
+}
+
+func (s *sessions) managementIDExistsLocked(id string) bool {
+	for _, sess := range s.m {
+		if sess.id == id {
+			return true
+		}
 	}
-	s.mu.Lock()
-	s.m[token] = sess
-	s.mu.Unlock()
-	return token, sess, nil
+	return false
 }
 
 // get returns a live session and refreshes its idle timer.
@@ -85,40 +126,199 @@ func (s *sessions) get(token string, now time.Time) (*session, bool) {
 	if !ok {
 		return nil, false
 	}
-	if now.Sub(sess.lastSeen) > sessionIdle || now.Sub(sess.created) > sessionAbsolute {
+	if sessionExpired(sess, now) {
 		delete(s.m, token)
+		sess.close()
 		return nil, false
 	}
 	sess.lastSeen = now
 	return sess, true
 }
 
-func (s *sessions) drop(token string) {
+type sessionRecord struct {
+	ID          string
+	AdminID     int64
+	Username    string
+	Role        store.AccountRole
+	PeerAddress string
+	Created     time.Time
+	LastSeen    time.Time
+	Expires     time.Time
+	Current     bool
+}
+
+func sessionExpired(sess *session, now time.Time) bool {
+	return now.Sub(sess.lastSeen) > sessionIdle || now.Sub(sess.created) > sessionAbsolute
+}
+
+func sessionExpiry(sess *session) time.Time {
+	idle := sess.lastSeen.Add(sessionIdle)
+	absolute := sess.created.Add(sessionAbsolute)
+	if absolute.Before(idle) {
+		return absolute
+	}
+	return idle
+}
+
+func sessionRecordLocked(sess *session, currentID string) sessionRecord {
+	return sessionRecord{
+		ID: sess.id, AdminID: sess.adminID, Username: sess.username, Role: sess.role,
+		PeerAddress: sess.peerAddress, Created: sess.created, LastSeen: sess.lastSeen,
+		Expires: sessionExpiry(sess), Current: sess.id == currentID,
+	}
+}
+
+func (s *sessions) liveLocked(want *session) bool {
+	for _, sess := range s.m {
+		if sess == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sessions) pruneLocked(now time.Time) {
+	for token, sess := range s.m {
+		if sessionExpired(sess, now) {
+			delete(s.m, token)
+			sess.close()
+		}
+	}
+}
+
+func (s *sessions) drop(token string) (sessionRecord, bool) {
 	s.mu.Lock()
-	delete(s.m, token)
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if sess := s.m[token]; sess != nil {
+		delete(s.m, token)
+		sess.close()
+		return sessionRecordLocked(sess, sess.id), true
+	}
+	return sessionRecord{}, false
 }
 
 // dropAdmin ends every session belonging to one operator. A password change
 // that left old sessions alive would not be a password change.
-func (s *sessions) dropAdmin(adminID int64) {
+func (s *sessions) dropAdmin(adminID int64) []sessionRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var dropped []sessionRecord
 	for tok, sess := range s.m {
 		if sess.adminID == adminID {
 			delete(s.m, tok)
+			sess.close()
+			dropped = append(dropped, sessionRecordLocked(sess, ""))
 		}
 	}
+	return dropped
+}
+
+func (s *sessions) dropID(adminID int64, managementID string) (sessionRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for token, sess := range s.m {
+		if sess.adminID == adminID && sess.id == managementID {
+			delete(s.m, token)
+			sess.close()
+			return sessionRecordLocked(sess, ""), true
+		}
+	}
+	return sessionRecord{}, false
+}
+
+func (s *sessions) list(adminID int64, currentID string, now time.Time) []sessionRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	var records []sessionRecord
+	for _, sess := range s.m {
+		if sess.adminID == adminID {
+			records = append(records, sessionRecordLocked(sess, currentID))
+		}
+	}
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].Current != records[j].Current {
+			return records[i].Current
+		}
+		if !records[i].LastSeen.Equal(records[j].LastSeen) {
+			return records[i].LastSeen.After(records[j].LastSeen)
+		}
+		return records[i].ID < records[j].ID
+	})
+	return records
+}
+
+func (s *sessions) counts(now time.Time) map[int64]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	counts := make(map[int64]int)
+	for _, sess := range s.m {
+		counts[sess.adminID]++
+	}
+	return counts
+}
+
+func (s *sessions) allowCredentialAttempt(sess *session, now time.Time) (bool, time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.liveLocked(sess) {
+		return false, 0, false
+	}
+	failure := &sess.credentialFails
+	if now.Before(failure.until) {
+		return false, failure.until.Sub(now), true
+	}
+	if !failure.first.IsZero() && now.Sub(failure.first) >= credentialFailureWindow {
+		*failure = failCount{}
+	}
+	return true, 0, true
+}
+
+func (s *sessions) failCredentialAttempt(sess *session, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.liveLocked(sess) {
+		return
+	}
+	failure := &sess.credentialFails
+	if failure.first.IsZero() || now.Sub(failure.first) >= credentialFailureWindow {
+		*failure = failCount{first: now}
+	}
+	failure.n++
+	if failure.n >= credentialFailureLimit {
+		failure.until = now.Add(credentialLockout)
+	}
+}
+
+func (s *sessions) succeedCredentialAttempt(sess *session, now time.Time,
+	markReauthenticated bool) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.liveLocked(sess) {
+		return time.Time{}, false
+	}
+	sess.credentialFails = failCount{}
+	if markReauthenticated {
+		sess.reauthenticatedAt = now
+	}
+	return sess.reauthenticatedAt.Add(reauthValidity), true
+}
+
+func (s *sessions) reauthenticatedUntil(sess *session, now time.Time) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.liveLocked(sess) {
+		return time.Time{}, false
+	}
+	until := sess.reauthenticatedAt.Add(reauthValidity)
+	return until, now.Before(until)
 }
 
 func (s *sessions) sweep(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for tok, sess := range s.m {
-		if now.Sub(sess.lastSeen) > sessionIdle || now.Sub(sess.created) > sessionAbsolute {
-			delete(s.m, tok)
-		}
-	}
+	s.pruneLocked(now)
 }
 
 func randomToken() (string, error) {
@@ -215,11 +415,20 @@ func (t *throttle) sweep(now time.Time) {
 // needs the real address is a deployment concern to solve explicitly, with a
 // configured trusted-proxy list, rather than by trusting a header by default.
 func clientAddr(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	raw := strings.TrimSpace(r.RemoteAddr)
+	host, port, err := net.SplitHostPort(raw)
 	if err != nil {
-		return r.RemoteAddr
+		host = strings.Trim(raw, "[]")
+	} else if port == "" {
+		return "unknown"
+	} else if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return "unknown"
 	}
-	return host
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return "unknown"
+	}
+	return addr.Unmap().String()
 }
 
 // ---- password work ----
@@ -281,13 +490,63 @@ func sessionFrom(ctx context.Context) (*session, bool) {
 	return s, ok
 }
 
+func roleAllows(actual, required store.AccountRole) bool {
+	rank := func(role store.AccountRole) int {
+		switch role {
+		case store.RoleViewer:
+			return 1
+		case store.RoleOperator:
+			return 2
+		case store.RoleAdmin:
+			return 3
+		case store.RoleOwner:
+			return 4
+		default:
+			return 0
+		}
+	}
+	return rank(required) > 0 && rank(actual) >= rank(required)
+}
+
+func sessionHasRole(ctx context.Context, required store.AccountRole) bool {
+	sess, ok := sessionFrom(ctx)
+	return ok && roleAllows(sess.role, required)
+}
+
+func (s *Server) requireRole(required store.AccountRole, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !sessionHasRole(r.Context(), required) {
+			writeCodedErr(w, http.StatusForbidden, "insufficient_role",
+				"insufficient account permissions")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) requireRecentReauth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sess, ok := sessionFrom(r.Context())
+		if !ok {
+			writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "not signed in")
+			return
+		}
+		if _, ok := s.sessions.reauthenticatedUntil(sess, s.now()); !ok {
+			writeCodedErr(w, http.StatusPreconditionRequired, "reauth_required",
+				"recent password confirmation is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // requireAuth rejects anything without a live session, and anything mutating
 // without a matching CSRF token.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil {
-			writeErr(w, http.StatusUnauthorized, "not signed in")
+			writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "not signed in")
 			return
 		}
 		sess, ok := s.sessions.get(c.Value, s.now())
@@ -295,7 +554,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			// Clear the cookie so the browser stops presenting a dead token on
 			// every request from here on.
 			s.clearSessionCookies(w, r)
-			writeErr(w, http.StatusUnauthorized, "session expired")
+			writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "session expired")
 			return
 		}
 		if isMutating(r.Method) {
@@ -306,7 +565,17 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				return
 			}
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionCtxKey, sess)))
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func(requestDone <-chan struct{}) {
+			select {
+			case <-sess.done:
+				cancel()
+			case <-requestDone:
+			}
+		}(ctx.Done())
+		ctx = context.WithValue(ctx, sessionCtxKey, sess)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -402,13 +671,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "incorrect username or password")
 		return
 	}
-	s.throttle.succeed(addr)
+	if s.afterLoginPasswordVerified != nil {
+		s.afterLoginPasswordVerified()
+	}
 
-	token, sess, err := s.sessions.create(admin.ID, admin.Username, now)
+	token, sess, err := s.sessions.create(admin.ID, admin.Username, admin.Role, addr, now)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not start a session")
 		return
 	}
+	current, currentErr := s.Store.AdminByID(r.Context(), admin.ID)
+	if currentErr != nil || !current.Enabled || current.Username != admin.Username ||
+		current.Role != admin.Role || subtle.ConstantTimeCompare(
+		[]byte(current.PassHash), []byte(admin.PassHash)) != 1 {
+		s.sessions.drop(token)
+		if currentErr != nil && !errors.Is(currentErr, store.ErrNotFound) {
+			writeErr(w, http.StatusInternalServerError, "could not start a session")
+			return
+		}
+		s.throttle.fail(addr, now)
+		s.logAuth(r.Context(), "auth.login_failed", "warning", req.Username, addr)
+		writeErr(w, http.StatusUnauthorized, "incorrect username or password")
+		return
+	}
+	s.throttle.succeed(addr)
 	_ = s.Store.TouchAdminLogin(r.Context(), admin.ID)
 
 	// Raising the cost is worth nothing if existing accounts keep the old one,
@@ -416,22 +702,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if secrets.NeedsRehash(admin.PassHash, secrets.DefaultParams()) {
 		s.withHashSlot(func() {
 			if h, err := secrets.HashPassword([]byte(req.Password), secrets.DefaultParams()); err == nil {
-				_ = s.Store.SetAdminPassword(r.Context(), admin.ID, h)
+				_ = s.Store.RehashAdminPassword(r.Context(), admin.ID, h)
 			}
 		})
 	}
 
 	s.setSessionCookies(w, r, token, sess.csrf)
 	s.logAuth(r.Context(), "auth.login", "info", admin.Username, addr)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"username": admin.Username,
-		"csrf":     sess.csrf,
-	})
+	writeJSON(w, http.StatusOK, s.sessionPayload(sess))
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	sess, _ := sessionFrom(r.Context())
 	if c, err := r.Cookie(sessionCookie); err == nil {
-		s.sessions.drop(c.Value)
+		if dropped, ok := s.sessions.drop(c.Value); ok {
+			s.auditSessionRevocation(r, "auth.logout", sess, dropped.AdminID,
+				dropped.Username, "self", []sessionRecord{dropped})
+		}
 	}
 	s.clearSessionCookies(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -441,10 +728,19 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // state without a round trip through the login screen.
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	sess, _ := sessionFrom(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{
-		"username": sess.username,
-		"csrf":     sess.csrf,
-	})
+	writeJSON(w, http.StatusOK, s.sessionPayload(sess))
+}
+
+func (s *Server) sessionPayload(sess *session) map[string]any {
+	var reauthenticatedUntil any
+	if until, ok := s.sessions.reauthenticatedUntil(sess, s.now()); ok {
+		reauthenticatedUntil = until.Unix()
+	}
+	return map[string]any{
+		"admin_id": sess.adminID, "username": sess.username, "role": sess.role,
+		"role_label": roleLabel(sess.role), "csrf": sess.csrf,
+		"reauthenticated_until": reauthenticatedUntil,
+	}
 }
 
 // handleSetup enrols the first operator.
@@ -478,6 +774,11 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := store.ValidateAccountUsername(req.Username); err != nil {
+		writeErr(w, http.StatusBadRequest,
+			"username must start with a letter or digit and use only ASCII letters, digits, '.', '_' or '-'")
+		return
+	}
 	var hash string
 	var hashErr error
 	if !s.withHashSlot(func() {
@@ -506,17 +807,14 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "could not create the account")
 		return
 	}
-	token, sess, err := s.sessions.create(admin.ID, admin.Username, s.now())
+	token, sess, err := s.sessions.create(admin.ID, admin.Username, admin.Role,
+		clientAddr(r), s.now())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not start a session")
 		return
 	}
 	s.setSessionCookies(w, r, token, sess.csrf)
-	s.logAuth(r.Context(), "auth.admin_created", "info", admin.Username, clientAddr(r))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"username": admin.Username,
-		"csrf":     sess.csrf,
-	})
+	writeJSON(w, http.StatusCreated, s.sessionPayload(sess))
 }
 
 func directSetupHost(hostport string) bool {
@@ -557,8 +855,27 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	now := s.now()
+	allowed, wait, live := s.sessions.allowCredentialAttempt(sess, now)
+	if !live {
+		s.clearSessionCookies(w, r)
+		writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "session expired")
+		return
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", itoa(int(wait.Seconds())+1))
+		writeCodedErr(w, http.StatusTooManyRequests, "too_many_attempts",
+			"too many password attempts; try again shortly")
+		return
+	}
 	admin, err := s.Store.AdminByName(r.Context(), sess.username)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.sessions.dropAdmin(sess.adminID)
+			s.clearSessionCookies(w, r)
+			writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "account is unavailable")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "could not read the account")
 		return
 	}
@@ -568,17 +885,25 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	var ok bool
 	if !s.withHashSlot(func() { ok = s.verifyPassword(admin, req.Current) }) {
 		w.Header().Set("Retry-After", "2")
-		writeErr(w, http.StatusServiceUnavailable, "busy; try again shortly")
+		writeCodedErr(w, http.StatusServiceUnavailable, "password_hash_capacity",
+			"busy; try again shortly")
 		return
 	}
 	if !ok {
+		s.sessions.failCredentialAttempt(sess, now)
 		s.logAuth(r.Context(), "auth.password_change_failed", "warning",
 			admin.Username, clientAddr(r))
-		writeErr(w, http.StatusUnauthorized, "current password is incorrect")
+		writeCodedErr(w, http.StatusUnauthorized, "incorrect_password",
+			"current password is incorrect")
+		return
+	}
+	if _, live := s.sessions.succeedCredentialAttempt(sess, now, false); !live {
+		s.clearSessionCookies(w, r)
+		writeCodedErr(w, http.StatusUnauthorized, "not_signed_in", "session expired")
 		return
 	}
 	if err := validateCredential(admin.Username, req.New); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeCodedErr(w, http.StatusBadRequest, "weak_password", err.Error())
 		return
 	}
 	var hash string
@@ -587,7 +912,8 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		hash, hashErr = secrets.HashPassword([]byte(req.New), secrets.DefaultParams())
 	}) {
 		w.Header().Set("Retry-After", "2")
-		writeErr(w, http.StatusServiceUnavailable, "busy; try again shortly")
+		writeCodedErr(w, http.StatusServiceUnavailable, "password_hash_capacity",
+			"busy; try again shortly")
 		return
 	}
 	if hashErr != nil {
@@ -595,16 +921,17 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.SetAdminPassword(r.Context(), admin.ID, hash); err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not save the password")
+		s.writeAccountStoreError(w, r, err)
 		return
 	}
 	// Every session, including this one. A password change that leaves the old
 	// sessions alive has not actually changed anything for whoever had one.
-	s.sessions.dropAdmin(admin.ID)
+	dropped := s.sessions.dropAdmin(admin.ID)
 	s.clearSessionCookies(w, r)
-	s.logAuth(r.Context(), "auth.password_changed", "info", admin.Username, clientAddr(r))
+	s.auditSessionRevocation(r, "auth.sessions_revoked", sess, admin.ID,
+		admin.Username, "self", dropped)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "message": "password changed; sign in again",
+		"ok": true, "message": "password changed; sign in again", "signed_out": true,
 	})
 }
 
@@ -619,6 +946,10 @@ func validateCredential(username, password string) error {
 	if len(username) > 64 {
 		return errors.New("username is too long")
 	}
+	return validateNewPassword(password)
+}
+
+func validateNewPassword(password string) error {
 	if len([]rune(password)) < minPasswordLen {
 		return errors.New("password must be at least 12 characters")
 	}

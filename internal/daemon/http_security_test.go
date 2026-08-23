@@ -28,8 +28,11 @@ func TestHTTPServerLimits(t *testing.T) {
 }
 
 func TestSecurityHeadersCoverEveryHTTPSurface(t *testing.T) {
-	d := &Daemon{Log: quietLogger()}
-	handler := d.routes()
+	d := &Daemon{Config: Config{DataDir: t.TempDir(), Version: "test"}, Log: quietLogger()}
+	handler, err := d.routes()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, path := range []string{"/healthz", "/api/v1/not-a-route", "/"} {
 		t.Run(path, func(t *testing.T) {

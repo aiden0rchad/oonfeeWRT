@@ -105,7 +105,7 @@ read-only authenticated inspection.
 | Latency/loss indicator | adopted Gateway runs exactly three ICMP packets to fixed `1.1.1.1` at most once/minute | 🟢 **source-built and live-observed after explicit ACL refresh**. It is not HTTP/DNS validation, ISP uptime or a configurable multi-target pill set |
 | Main chart: download/upload/latency/packet loss over 1h–1M | our TSDB + probe series, dual-axis | 🟢 |
 | WAN uptime strip under the chart | fixed ICMP reachability series | 🟡 labels must say ICMP reachability to `1.1.1.1`; do not promote it to ISP uptime |
-| ISP Speed Test button | `iperf3` to a public server, or `librespeed-cli` / `speedtest-go` on the gateway via `file.exec` | 🟡 accuracy varies; be honest in the UI about method |
+| ISP Speed Test button | Phase 4.1 first runs a bounded test from the controller host/container; a gateway-run method is a separate optional official-feed capability | 🟡 always label vantage point/provider/method/data impact. Controller mode makes no router management/API/SSH call or write/install; its traffic still follows the normal gateway/WAN route. Gateway mode requires separate package-index, exact-plan, install/run and rollback acknowledgements; never smuggle a binary through `file.exec` |
 | WiFi Doctor | 🔴 branded diagnostic. Substitute: our own "WiFi Health Check" running the same checks we already have data for (weak RSSI clients, high retries, channel overlap, DFS events) |
 | Top APs / Top Clients / Top Apps strips | TSDB rankings; Top Apps needs DPI | 🟢 / 🟢 / 🟡 |
 | "Most Common Devices" (device-type icons + counts) | MAC OUI + DHCP fingerprint (vendor class, hostname patterns) → device-type classifier | 🟡 needs a fingerprint database; `fingerbank`-style data, or ship a curated OUI+DHCP ruleset |

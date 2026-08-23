@@ -33,6 +33,7 @@ test -f ui/dist/index.html || {
   echo "release build: UI build produced no index.html" >&2
   exit 1
 }
+python3 tools/generate-third-party-licenses.py --check THIRD_PARTY_LICENSES
 
 for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   os=${target%-*}
@@ -46,7 +47,8 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
     -ldflags "-s -w -buildid=" \
     -o "$stage/oonfeewrt-recoverycheck" ./tools/recoverycheck
-  cp LICENSE NOTICE docs/INSTALL.md docs/FRESH-START-VALIDATION.md "$stage/"
+  cp LICENSE NOTICE THIRD_PARTY_LICENSES RELEASE-NOTES-v0.1.0.md \
+    deploy/docker-compose.yml docs/INSTALL.md docs/FRESH-START-VALIDATION.md "$stage/"
 
   python3 - "$stage" "$out/$name.tar.gz" "$epoch" "$name" <<'PY'
 import gzip

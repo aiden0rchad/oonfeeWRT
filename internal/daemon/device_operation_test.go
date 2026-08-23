@@ -131,13 +131,13 @@ func TestDeviceOperationGateCancellationDoesNotLeakOrHoldTheDevice(t *testing.T)
 func TestQueuedApplyRevalidatesIdentityAfterUnadopt(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)
-	blob, err := d.Keys.SealCredential("60:38:e0:00:0e:01", "root", "good")
+	blob, err := d.Keys.SealCredential("02:00:00:00:0e:01", "root", "good")
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := int64(1)
 	dev := &store.Device{
-		MAC: "60:38:e0:00:0e:01", Host: "127.0.0.1:1", Name: "removed-first",
+		MAC: "02:00:00:00:0e:01", Host: "127.0.0.1:1", Name: "removed-first",
 		Role: "ap", AdoptedAt: &at, CredEnc: blob, CapsJSON: `{"Class":"A"}`,
 	}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
@@ -164,13 +164,13 @@ func TestQueuedApplyRevalidatesIdentityAfterUnadopt(t *testing.T) {
 		releaseUnadopt()
 		t.Fatal(err)
 	}
-	replacementBlob, err := d.Keys.SealCredential("60:38:e0:00:0e:99", "root", "good")
+	replacementBlob, err := d.Keys.SealCredential("02:00:00:00:0e:99", "root", "good")
 	if err != nil {
 		releaseUnadopt()
 		t.Fatal(err)
 	}
 	replacement := &store.Device{
-		MAC: "60:38:e0:00:0e:99", Host: "127.0.0.1:1", Name: "replacement",
+		MAC: "02:00:00:00:0e:99", Host: "127.0.0.1:1", Name: "replacement",
 		Role: "ap", AdoptedAt: &at, CredEnc: replacementBlob, CapsJSON: `{"Class":"A"}`,
 	}
 	if err := d.Store.UpsertDevice(ctx, replacement); err != nil {
@@ -205,7 +205,7 @@ func TestQueuedReprobeIsFencedWhenDeletedIDIsReused(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)
 	at := int64(1)
-	oldMAC := "60:38:e0:00:0e:21"
+	oldMAC := "02:00:00:00:0e:21"
 	oldCredential, err := d.Keys.SealCredential(oldMAC, "root", "old")
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestQueuedReprobeIsFencedWhenDeletedIDIsReused(t *testing.T) {
 		http.Error(w, "replacement must not be contacted", http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	replacementMAC := "60:38:e0:00:0e:22"
+	replacementMAC := "02:00:00:00:0e:22"
 	replacementCredential, err := d.Keys.SealCredential(replacementMAC, "root", "new")
 	if err != nil {
 		releaseDelete()
@@ -281,7 +281,7 @@ func TestDeleteDevicePurgesTelemetryBeforeSQLiteReusesItsID(t *testing.T) {
 	d := openDaemon(t)
 	at := int64(1)
 	old := &store.Device{
-		MAC: "60:38:e0:00:0e:11", Host: "192.0.2.11", Name: "old",
+		MAC: "02:00:00:00:0e:11", Host: "192.0.2.11", Name: "old",
 		Role: "ap", AdoptedAt: &at,
 	}
 	if err := d.Store.UpsertDevice(ctx, old); err != nil {
@@ -294,7 +294,7 @@ func TestDeleteDevicePurgesTelemetryBeforeSQLiteReusesItsID(t *testing.T) {
 	}
 	validFrom := time.Now().Add(-time.Minute).UnixMilli()
 	edge := model.TopologyEdge{
-		ChildNode: "device:60:38:e0:00:0e:11", ParentNode: "synthetic:internet",
+		ChildNode: "device:02:00:00:00:0e:11", ParentNode: "synthetic:internet",
 		Medium: "uplink", Confidence: "measured", ValidFrom: validFrom, LastSeen: validFrom,
 		Evidence: []model.TopologyEvidence{}, Ambiguities: []string{},
 	}
@@ -308,7 +308,7 @@ func TestDeleteDevicePurgesTelemetryBeforeSQLiteReusesItsID(t *testing.T) {
 		t.Fatal(err)
 	}
 	replacement := &store.Device{
-		MAC: "60:38:e0:00:0e:12", Host: "192.0.2.12", Name: "replacement",
+		MAC: "02:00:00:00:0e:12", Host: "192.0.2.12", Name: "replacement",
 		Role: "ap", AdoptedAt: &at,
 	}
 	if err := d.Store.UpsertDevice(ctx, replacement); err != nil {
@@ -359,13 +359,13 @@ func TestDeleteDevicePurgesTelemetryBeforeSQLiteReusesItsID(t *testing.T) {
 
 func TestQueuedApplyHonorsCancellationAndRemainsInTheGlobalDrain(t *testing.T) {
 	d := openDaemon(t)
-	blob, err := d.Keys.SealCredential("60:38:e0:00:0e:03", "root", "good")
+	blob, err := d.Keys.SealCredential("02:00:00:00:0e:03", "root", "good")
 	if err != nil {
 		t.Fatal(err)
 	}
 	at := int64(1)
 	dev := &store.Device{
-		MAC: "60:38:e0:00:0e:03", Host: "127.0.0.1:1", Name: "cancel-wait",
+		MAC: "02:00:00:00:0e:03", Host: "127.0.0.1:1", Name: "cancel-wait",
 		Role: "ap", AdoptedAt: &at, CredEnc: blob, CapsJSON: `{"Class":"A"}`,
 	}
 	if err := d.Store.UpsertDevice(context.Background(), dev); err != nil {
@@ -412,7 +412,7 @@ func TestUnadoptWaitingForApplyReadsTheFinalOwnershipLedger(t *testing.T) {
 	ctx := context.Background()
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:0e:02", "apply-first", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:0e:02", "apply-first", addr, capability.Present)
 
 	// Hold the slot as an apply and queue the real Unadopt call behind it. The
 	// claim is recorded while the slot is held, exactly as a converged or

@@ -40,8 +40,8 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 		`SELECT MAX(version) FROM schema_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 17 {
-		t.Fatalf("schema version=%d, want 17", version)
+	if version != schemaVersion {
+		t.Fatalf("schema version=%d, want %d", version, schemaVersion)
 	}
 	events, err := db.RecentEvents(ctx, 10)
 	if err != nil {
@@ -54,8 +54,8 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 }
 
 func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.T) {
-	if schemaVersion != 17 || secretSchemaVersion != 14 {
-		t.Fatalf("schema epochs=(%d,%d), want (17,14)", schemaVersion, secretSchemaVersion)
+	if schemaVersion != 19 || secretSchemaVersion != 14 {
+		t.Fatalf("schema epochs=(%d,%d), want (19,14)", schemaVersion, secretSchemaVersion)
 	}
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "newer.db")
@@ -64,7 +64,7 @@ func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := db.SQL().ExecContext(ctx,
-		`UPDATE schema_version SET version=18`); err != nil {
+		`UPDATE schema_version SET version=?`, schemaVersion+1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -72,7 +72,7 @@ func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.
 	}
 	if newer, err := Open(ctx, driver, path, testProtector(t, path)); err == nil {
 		newer.Close()
-		t.Fatal("v17 build accepted a v18 database")
+		t.Fatal("v19 build accepted a v20 database")
 	} else if !strings.Contains(err.Error(), "refusing to downgrade") {
 		t.Fatalf("downgrade error=%v", err)
 	}

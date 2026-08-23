@@ -62,6 +62,11 @@ func (s *Server) handleOnAir(w http.ResponseWriter, r *http.Request) {
 			"this controller has no fleet attached, so there is nothing to verify")
 		return
 	}
+	release, ok := s.beginOperation(w, operationRFScan)
+	if !ok {
+		return
+	}
+	defer release()
 	res, err := s.OnAir(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

@@ -722,6 +722,11 @@ func deviceModel(dev *store.Device) string {
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := queryInt(r, "limit", 100, 1, 1000)
 	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if !sessionHasRole(r.Context(), store.RoleAdmin) && scope != "general" {
+		writeErr(w, http.StatusForbidden,
+			"audit events require an administrator account; select scope=general")
+		return
+	}
 	if scope != "" || r.URL.Query().Has("before_ts") || r.URL.Query().Has("before_id") {
 		s.handleEventsKeyset(w, r, scope, limit)
 		return
@@ -878,6 +883,10 @@ func (s *Server) handleEventDetail(w http.ResponseWriter, r *http.Request) {
 	if handleStoreErr(w, err, "event") {
 		return
 	}
+	if event.Category == "audit" && !sessionHasRole(r.Context(), store.RoleAdmin) {
+		writeErr(w, http.StatusForbidden, "audit events require an administrator account")
+		return
+	}
 	writeJSON(w, http.StatusOK, event)
 }
 
@@ -919,6 +928,7 @@ type dashboard struct {
 	UpstreamDevices int                      `json:"upstream_devices"`
 	UnscopedDevices int                      `json:"unscoped_devices"`
 	GatewayUplinks  []dashboardGatewayUplink `json:"gateway_uplinks"`
+	WAN             dashboardWAN             `json:"wan"`
 
 	Focused  int           `json:"focused_devices"`
 	Quiesced int           `json:"quiesced_devices"`
@@ -930,6 +940,61 @@ type dashboardGatewayUplink struct {
 	DeviceID int64  `json:"device_id"`
 	Name     string `json:"name"`
 	State    string `json:"state"` // up, missing, or unknown
+}
+
+const (
+	dashboardWANTarget    = "1.1.1.1"
+	dashboardWANWindow    = 6 * time.Hour
+	dashboardWANBucketMS  = int64(telemetry.DefaultWindow / time.Millisecond)
+	dashboardWANFreshness = 2 * telemetry.DefaultWindow
+)
+
+// dashboardWAN is a bounded, durable view of the one routing gateway selected
+// by the server. Route evidence chooses the logical WAN interface; durable
+// interface-series inventory must independently confirm the telemetry key.
+// They are kept separate so an absent mapping can never become a guessed key.
+type dashboardWAN struct {
+	Target     string               `json:"target"`
+	Probe      string               `json:"probe"`
+	Freshness  string               `json:"freshness"`
+	AsOf       *int64               `json:"as_of"`
+	Gateway    *dashboardWANGateway `json:"gateway"`
+	Resolution string               `json:"resolution"`
+	BucketMS   int64                `json:"bucket_ms"`
+	From       int64                `json:"from"`
+	To         int64                `json:"to"`
+	Metrics    dashboardWANMetrics  `json:"metrics"`
+}
+
+type dashboardWANGateway struct {
+	DeviceID       int64   `json:"device_id"`
+	Name           string  `json:"name"`
+	RouteInterface string  `json:"route_interface"`
+	SeriesKey      *string `json:"series_key"`
+	lastSeen       int64
+}
+
+type dashboardWANMetrics struct {
+	Download  dashboardWANMetric `json:"download_bps"`
+	Upload    dashboardWANMetric `json:"upload_bps"`
+	Latency   dashboardWANMetric `json:"latency_ms"`
+	Loss      dashboardWANMetric `json:"loss_pct"`
+	Reachable dashboardWANMetric `json:"reachable"`
+}
+
+type dashboardWANMetric struct {
+	Kind    string              `json:"kind"`
+	Unit    string              `json:"unit"`
+	Meaning string              `json:"meaning"`
+	Status  string              `json:"status"`
+	Value   *float64            `json:"value"`
+	AsOf    *int64              `json:"as_of"`
+	Points  []dashboardWANPoint `json:"points"`
+}
+
+type dashboardWANPoint struct {
+	TS    int64    `json:"ts"`
+	Value *float64 `json:"value"`
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -961,7 +1026,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			d.Quiesced++
 		}
 	}
-	d.GatewayUplinks = s.dashboardGatewayUplinks(ctx, devices, now)
+	var selectedGateway *dashboardWANGateway
+	d.GatewayUplinks, selectedGateway = s.dashboardGatewayTopology(ctx, devices, now)
+	d.WAN = s.dashboardWANTelemetry(ctx, selectedGateway, now)
 
 	// This is exactly the Client Devices default scope and presence with its
 	// Wireless connection filter selected. In particular, a private MAC on a
@@ -1004,7 +1071,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("could not count clients", "err", err)
 	}
 
-	if events, err := s.Store.RecentEvents(ctx, 20); err == nil {
+	if events, err := s.Store.QueryEventsKeyset(ctx,
+		store.EventQuery{Scope: "general", Limit: 20}); err == nil {
 		d.Events = events
 	}
 	if err := s.Store.SQL().QueryRowContext(ctx,
@@ -1014,14 +1082,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-func (s *Server) dashboardGatewayUplinks(ctx context.Context, devices []*store.Device,
-	now time.Time) []dashboardGatewayUplink {
+func (s *Server) dashboardGatewayTopology(ctx context.Context, devices []*store.Device,
+	now time.Time) ([]dashboardGatewayUplink, *dashboardWANGateway) {
 	edges, edgeErr := s.Store.TopologyEdgesAt(ctx, 0)
 	states, stateErr := s.Store.TopologySourceStates(ctx)
-	active := map[string]bool{}
+	active := map[string]model.TopologyEdge{}
 	for _, edge := range edges {
 		if edge.ParentNode == topology.InternetNode {
-			active[edge.ChildNode] = true
+			prior, ok := active[edge.ChildNode]
+			if !ok || edge.LastSeen > prior.LastSeen ||
+				(edge.LastSeen == prior.LastSeen && edge.ID < prior.ID) {
+				active[edge.ChildNode] = edge
+			}
 		}
 	}
 	latest := map[int64]model.TopologySourceObservation{}
@@ -1032,6 +1104,7 @@ func (s *Server) dashboardGatewayUplinks(ctx context.Context, devices []*store.D
 	}
 
 	out := []dashboardGatewayUplink{}
+	var selected *dashboardWANGateway
 	for _, device := range devices {
 		if !device.Adopted() || !model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
 			continue
@@ -1043,8 +1116,25 @@ func (s *Server) dashboardGatewayUplinks(ctx context.Context, devices []*store.D
 		success := state.State == model.TopologySourceObserved || state.State == model.TopologySourceEmpty
 		if edgeErr == nil && stateErr == nil && s.viewDevice(device, now).Status == "online" && fresh && success {
 			mac, err := canonicalTopologyMAC(device.MAC)
-			if err == nil && active["device:"+mac] {
+			edge, linked := active["device:"+mac]
+			if err == nil && linked {
+				edgeFresh := edge.LastSeen <= now.UnixMilli() &&
+					edge.LastSeen >= now.Add(-maxCurrentTopologySourceAge).UnixMilli()
+				if !edgeFresh {
+					entry.State = "missing"
+					out = append(out, entry)
+					continue
+				}
 				entry.State = "up"
+				candidate := &dashboardWANGateway{DeviceID: device.ID,
+					Name: deviceDisplayName(device), RouteInterface: edge.ParentPort,
+					lastSeen: edge.LastSeen}
+				if selected == nil || candidate.lastSeen > selected.lastSeen ||
+					(candidate.lastSeen == selected.lastSeen &&
+						(candidate.Name < selected.Name ||
+							(candidate.Name == selected.Name && candidate.DeviceID < selected.DeviceID))) {
+					selected = candidate
+				}
 			} else if err == nil {
 				entry.State = "missing"
 			}
@@ -1057,6 +1147,110 @@ func (s *Server) dashboardGatewayUplinks(ctx context.Context, devices []*store.D
 		}
 		return out[i].Name < out[j].Name
 	})
+	return out, selected
+}
+
+func (s *Server) dashboardWANTelemetry(ctx context.Context, gateway *dashboardWANGateway,
+	now time.Time) dashboardWAN {
+	to := now.Truncate(telemetry.DefaultWindow)
+	from := to.Add(-dashboardWANWindow)
+	out := dashboardWAN{
+		Target: dashboardWANTarget, Probe: "icmp", Freshness: "unavailable",
+		Gateway: gateway, Resolution: "5m", BucketMS: dashboardWANBucketMS,
+		From: from.UnixMilli(), To: to.UnixMilli(),
+	}
+	points := func() []dashboardWANPoint {
+		out := make([]dashboardWANPoint, 0, int(dashboardWANWindow/telemetry.DefaultWindow))
+		for at := from; at.Before(to); at = at.Add(telemetry.DefaultWindow) {
+			out = append(out, dashboardWANPoint{TS: at.UnixMilli()})
+		}
+		return out
+	}
+	metric := func(kind telemetry.Kind, unit, meaning string) dashboardWANMetric {
+		return dashboardWANMetric{Kind: string(kind), Unit: unit, Meaning: meaning,
+			Status: "unavailable", Points: points()}
+	}
+	out.Metrics.Download = metric(telemetry.KindIfaceRx, "B/s",
+		"Bytes per second received by the gateway on the selected WAN interface from the upstream network.")
+	out.Metrics.Upload = metric(telemetry.KindIfaceTx, "B/s",
+		"Bytes per second transmitted by the gateway on the selected WAN interface to the upstream network.")
+	out.Metrics.Latency = metric(telemetry.KindSiteWANLatency, "ms",
+		"Round-trip ICMP latency from the selected gateway to 1.1.1.1.")
+	out.Metrics.Loss = metric(telemetry.KindSiteWANLoss, "%",
+		"ICMP packet loss from the selected gateway to 1.1.1.1.")
+	out.Metrics.Reachable = metric(telemetry.KindSiteWANUp, "state",
+		"ICMP reachability from the selected gateway to 1.1.1.1 (1 reachable, 0 unreachable).")
+	if gateway == nil {
+		return out
+	}
+
+	// A route interface is control-plane evidence. It becomes a counter-series
+	// key only when that exact key exists in durable RX or TX inventory.
+	for _, kind := range []telemetry.Kind{telemetry.KindIfaceRx, telemetry.KindIfaceTx} {
+		keys, err := s.Store.SeriesKeys(ctx, gateway.DeviceID, string(kind))
+		if err != nil {
+			s.Log.Debug("could not read WAN interface series inventory", "device_id", gateway.DeviceID,
+				"kind", kind, "err", err)
+			continue
+		}
+		if slices.Contains(keys, gateway.RouteInterface) {
+			key := gateway.RouteInterface
+			gateway.SeriesKey = &key
+			break
+		}
+	}
+
+	kinds := []string{
+		string(telemetry.KindIfaceRx), string(telemetry.KindIfaceTx),
+		string(telemetry.KindSiteWANLatency), string(telemetry.KindSiteWANLoss),
+		string(telemetry.KindSiteWANUp),
+	}
+	rows, _, _, err := s.Store.QueryObservabilityRollups(ctx, store.ObservabilityRollupQuery{
+		DeviceIDs: []int64{gateway.DeviceID}, Kinds: kinds,
+		From: out.From, To: out.To,
+	})
+	if err != nil {
+		s.Log.Debug("could not read dashboard WAN telemetry", "device_id", gateway.DeviceID, "err", err)
+		return out
+	}
+	metrics := map[string]*dashboardWANMetric{
+		string(telemetry.KindIfaceRx):        &out.Metrics.Download,
+		string(telemetry.KindIfaceTx):        &out.Metrics.Upload,
+		string(telemetry.KindSiteWANLatency): &out.Metrics.Latency,
+		string(telemetry.KindSiteWANLoss):    &out.Metrics.Loss,
+		string(telemetry.KindSiteWANUp):      &out.Metrics.Reachable,
+	}
+	for _, row := range rows {
+		m := metrics[row.Kind]
+		if m == nil {
+			continue
+		}
+		if row.Kind == string(telemetry.KindIfaceRx) || row.Kind == string(telemetry.KindIfaceTx) {
+			if gateway.SeriesKey == nil || row.Key != *gateway.SeriesKey {
+				continue
+			}
+		} else if row.Key != "" {
+			continue
+		}
+		index := int((row.TS - out.From) / dashboardWANBucketMS)
+		if index < 0 || index >= len(m.Points) || m.Points[index].TS != row.TS {
+			continue
+		}
+		value := row.Avg
+		m.Points[index].Value = &value
+		asOf := row.TS + dashboardWANBucketMS
+		m.Value, m.AsOf = &value, &asOf
+	}
+	for _, m := range metrics {
+		if m.AsOf == nil {
+			continue
+		}
+		m.Status = "last_observed"
+		if age := now.UnixMilli() - *m.AsOf; age >= 0 && age <= dashboardWANFreshness.Milliseconds() {
+			m.Status = "fresh"
+		}
+	}
+	out.Freshness, out.AsOf = out.Metrics.Reachable.Status, out.Metrics.Reachable.AsOf
 	return out
 }
 

@@ -293,6 +293,11 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Functions = functions.Strings()
 	req.Role = string(functions.PrimaryRole())
+	release, ok := s.beginOperation(w, operationAdopt)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Adoption changes the fleet identity that a preview token binds. Keep it
 	// out of the interval between an apply's fleet preflight and final write.
@@ -336,6 +341,11 @@ func (s *Server) handleUnadopt(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.DeviceID = id
+	release, ok := s.beginOperation(w, operationUnadopt)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Un-adoption removes credentials, ownership and the inventory row, all of
 	// which are part of the server-verified preview binding.
@@ -396,6 +406,11 @@ func (s *Server) handleRefreshACL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.DeviceID = id
+	release, ok := s.beginOperation(w, operationCapability)
+	if !ok {
+		return
+	}
+	defer release()
 	if !s.lockSiteMutation(w, r) {
 		return
 	}

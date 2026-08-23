@@ -96,6 +96,11 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 			"cross-origin WebSocket connections are not accepted")
 		return
 	}
+	sess, ok := sessionFrom(r.Context())
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "session expired")
+		return
+	}
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Belt and braces: the library performs its own Origin check against
 		// Host, and sameOrigin above has already run.
@@ -105,12 +110,19 @@ func (s *Server) handleLive(w http.ResponseWriter, r *http.Request) {
 		s.Log.Debug("websocket upgrade failed", "err", err)
 		return
 	}
-	s.Hub.serve(r.Context(), ws)
+	s.Hub.serve(r.Context(), sess.done, ws)
 }
 
-func (h *Hub) serve(ctx context.Context, ws *websocket.Conn) {
+func (h *Hub) serve(ctx context.Context, sessionDone <-chan struct{}, ws *websocket.Conn) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	go func() {
+		select {
+		case <-sessionDone:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	c := &liveConn{
 		hub:  h,

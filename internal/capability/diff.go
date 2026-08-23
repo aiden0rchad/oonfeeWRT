@@ -332,7 +332,7 @@ func radioChanges(old, new *Registry) []Change {
 			// with a band and no modes, a later one recorded phy0/phy1 with
 			// modes, and the preview then told the operator "radio radio0 is
 			// gone. WLANs targeted at its band will not render on this device"
-			// about a radio that was up and carrying oonfee-roam — offered as
+			// about a radio that was up and carrying fixture-roam — offered as
 			// the probable cause of unrelated omissions.
 			out = append(out, Change{
 				Kind: "radio", Name: p, Effect: EffectAmbiguous,

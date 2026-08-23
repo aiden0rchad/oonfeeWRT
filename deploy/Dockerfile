@@ -42,9 +42,13 @@ RUN mkdir -p /emptydirs/data /emptydirs/tmp
 
 # ---- stage 3: runtime -----------------------------------------------------
 FROM scratch
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 # CA roots support device HTTPS and webhook notifications.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /oonfeewrtd /oonfeewrtd
+COPY LICENSE NOTICE THIRD_PARTY_LICENSES /licenses/
+COPY RELEASE-NOTES-v0.1.0.md /release/
+COPY deploy/docker-compose.yml /release/docker-compose.yml
 
 # scratch has no /data, so Docker would create the mount point as root:root and
 # a fresh named volume would inherit that — leaving the non-root daemon unable

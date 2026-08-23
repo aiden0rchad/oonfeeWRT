@@ -96,6 +96,24 @@ func (db *DB) openText(blob []byte, aad []byte, what string) (string, error) {
 	return string(plain), nil
 }
 
+// authenticateText returns only plaintext length. Recovery can prove a sealed
+// value and preserve presence/length validation without leaving the secret in
+// an immutable Go string.
+func (db *DB) authenticateText(blob []byte, aad []byte, what string) (int, error) {
+	if len(blob) == 0 {
+		return 0, nil
+	}
+	if db.protector == nil {
+		return 0, errors.New("store: secret protector is unavailable")
+	}
+	plain, err := db.protector.Unseal(blob, aad)
+	if err != nil {
+		return 0, fmt.Errorf("store: cannot open %s (wrong keyring or corrupt record): %w", what, err)
+	}
+	defer clear(plain)
+	return len(plain), nil
+}
+
 // verifyLegacyKeyring proves that the supplied keyring belongs to a pre-v14
 // database before migration writes anything. A database with no sealed device
 // credential has no historical binding to prove; its plaintext site keys may be
@@ -142,6 +160,7 @@ func (db *DB) verifySecretStateOn(ctx context.Context, q schemaQuerier) (bool, e
 		return false, fmt.Errorf("store: schema v14 secret state is missing or unreadable: %w", err)
 	}
 	plain, err := db.protector.Unseal(blob, keyCheckAAD())
+	clear(blob)
 	if err != nil {
 		return false, fmt.Errorf("store: keyring does not belong to this database; refusing to open it: %w", err)
 	}

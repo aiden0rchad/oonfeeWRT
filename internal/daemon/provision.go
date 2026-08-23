@@ -618,7 +618,7 @@ func healthCheck(plan *reconcile.DevicePlan) applyengine.HealthCheck {
 	// What it does NOT catch, and the comment here said otherwise until it was
 	// checked: §0's actual failure. readSSIDs reads iwinfo and hostapd, which
 	// is the CONTROL PLANE — the very source that lied for fourteen hours while
-	// the radio beaconed wrt-cleanroom. If the firmware keeps transmitting an
+	// the radio beaconed fixture-cleanroom. If the firmware keeps transmitting an
 	// SSID hostapd has dropped, this gate is told it is gone and agrees.
 	//
 	// Only a scan answers that, which is what internal/onair is for. It is

@@ -48,6 +48,14 @@ func newRecoveryFixture(t *testing.T) recoveryFixture {
 	if _, err := db.Site(ctx); err != nil {
 		t.Fatal(err)
 	}
+	ownerHash, err := secrets.HashPassword([]byte("private-owner-password"),
+		secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateFirstAdmin(ctx, "private-owner", ownerHash); err != nil {
+		t.Fatal(err)
+	}
 
 	network := &model.Network{Name: "private-network-name", VLAN: 1,
 		CIDR: "192.0.2.1/24", Zone: "private-zone-name", Enabled: true}
@@ -61,7 +69,8 @@ func newRecoveryFixture(t *testing.T) recoveryFixture {
 		{MAC: "02:00:00:00:00:02", Host: "private-host-two.invalid", Name: "private-device-two",
 			Role: "ap", Functions: []string{"ap", "switch"}, AdoptedAt: &now},
 	}
-	privateValues := []string{passphrase, network.Name, network.Zone}
+	privateValues := []string{passphrase, "private-owner", "private-owner-password", ownerHash,
+		network.Name, network.Zone}
 	for i, device := range devices {
 		username := "private-user-" + string(rune('a'+i))
 		password := "private-password-" + string(rune('a'+i))
@@ -119,7 +128,7 @@ func TestRecoveryCheckTraversesEverySealedRecordAndPrintsCountsOnly(t *testing.T
 	if err := run(context.Background(), fixture.dbPath, &output); err != nil {
 		t.Fatal(err)
 	}
-	const want = "schema=17 devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n"
+	const want = "schema=19 devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n"
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}
@@ -140,6 +149,18 @@ func TestRecoveryCheckTraversesEverySealedRecordAndPrintsCountsOnly(t *testing.T
 	}
 	if err := run(context.Background(), fixture.dbPath, io.Discard); err != nil {
 		t.Fatalf("repeat recovery check after read-only SQLite sidecars: %v", err)
+	}
+}
+
+func TestRecoveryCheckPreservesInvalidContexts(t *testing.T) {
+	fixture := newRecoveryFixture(t)
+	if err := run(nil, fixture.dbPath, io.Discard); err == nil {
+		t.Fatal("nil context was accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := run(ctx, fixture.dbPath, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error=%v, want context.Canceled", err)
 	}
 }
 

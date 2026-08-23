@@ -17,7 +17,7 @@ func uplinkCaps(state capability.State) *capability.Registry {
 
 func uplinkWLAN() model.WLAN {
 	return model.WLAN{
-		ID: 3, SSID: "oonfee-roam", Enabled: true,
+		ID: 3, SSID: "fixture-roam", Enabled: true,
 		Bands:    []model.Band{model.Band2G, model.Band5G},
 		Security: model.Security{Mode: model.SecPSK2, Key: "hunter2hunter2", PMF: model.PMFOptional},
 		Options:  model.WLANOptions{AllowUplink: true},
@@ -187,7 +187,7 @@ func TestUplinkRefusesToJoinANetworkTheDevicePublishes(t *testing.T) {
 	site := model.Site{
 		Groups: []model.APGroup{{ID: 1, Name: "all", DeviceIDs: []int64{7}}},
 		WLANs: []model.WLAN{{
-			ID: 3, SSID: "oonfee-roam", GroupID: 1, Enabled: true,
+			ID: 3, SSID: "fixture-roam", GroupID: 1, Enabled: true,
 			Bands:   []model.Band{model.Band5G},
 			Options: model.WLANOptions{AllowUplink: true},
 		}},
@@ -218,7 +218,7 @@ func TestUplinkRefusesToJoinANetworkTheDevicePublishes(t *testing.T) {
 func TestUplinkValidationCatchesTheHalfPeopleForget(t *testing.T) {
 	site := model.Site{
 		WLANs: []model.WLAN{{
-			ID: 3, SSID: "oonfee-roam", Enabled: true,
+			ID: 3, SSID: "fixture-roam", Enabled: true,
 			Bands:   []model.Band{model.Band5G},
 			Options: model.WLANOptions{AllowUplink: false},
 		}},
@@ -291,7 +291,7 @@ func TestUplinkRendersNothingForAnUnusableWLAN(t *testing.T) {
 	site := model.Site{
 		Networks: []model.Network{{ID: 1, Name: "lan", Enabled: true}},
 		WLANs: []model.WLAN{{
-			ID: 3, SSID: "oonfee-roam", NetworkID: 1, Enabled: false,
+			ID: 3, SSID: "fixture-roam", NetworkID: 1, Enabled: false,
 			Bands:   []model.Band{model.Band5G},
 			Options: model.WLANOptions{AllowUplink: true},
 		}},

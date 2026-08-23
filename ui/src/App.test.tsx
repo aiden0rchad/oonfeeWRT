@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './lib/api'
 import { App } from './App'
+import { Auth } from './screens/Auth'
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -28,9 +29,16 @@ vi.mock('./screens/Radios', () => ({ Radios: () => {
   return <h1>Radios &amp; Channel Plan</h1>
 } }))
 
-function signedIn() {
+function signedIn(username = 'admin') {
   mocks.api.setupState.mockResolvedValue({ needs_setup: false })
-  mocks.api.session.mockResolvedValue({ username: 'admin', csrf: 'token' })
+  mocks.api.session.mockResolvedValue({
+    admin_id: 1,
+    username,
+    role: username === 'viewer' ? 'viewer' : 'owner',
+    role_label: username === 'viewer' ? 'Read only' : 'Owner',
+    csrf: 'token',
+    reauthenticated_until: null,
+  })
   mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [] })
   mocks.api.devices.mockResolvedValue({ devices: [] })
 }
@@ -38,6 +46,7 @@ function signedIn() {
 describe('App session boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    window.localStorage.clear()
     window.history.replaceState(null, '', '/')
     mocks.radioCrash = false
     mocks.api.logout.mockResolvedValue({ ok: true })
@@ -69,7 +78,14 @@ describe('App session boundaries', () => {
     window.history.replaceState(null, '', '/topology')
     mocks.api.setupState.mockResolvedValue({ needs_setup: false })
     mocks.api.session.mockRejectedValue(new ApiError(401, 'not signed in'))
-    mocks.api.login.mockResolvedValue({ username: 'admin', csrf: 'token' })
+    mocks.api.login.mockResolvedValue({
+      admin_id: 1,
+      username: 'admin',
+      role: 'owner',
+      role_label: 'Owner',
+      csrf: 'token',
+      reauthenticated_until: null,
+    })
     mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [] })
     mocks.api.devices.mockResolvedValue({ devices: [] })
     render(<App />)
@@ -128,6 +144,55 @@ describe('App session boundaries', () => {
     expect(window.location.pathname).toBe('/topology')
   })
 
+  it('renders accessible SVG navigation and persists its expanded state per controller account', async () => {
+    signedIn()
+    render(<App />)
+
+    const navigation = await screen.findByRole('navigation', { name: 'Main navigation' })
+    expect(navigation.style.width).toBe('64px')
+    const routeNames = [
+      'Dashboard', 'Topology', 'Radios', 'Devices', 'Client Devices',
+      'Policy Engine', 'Settings', 'Adopt a device', 'Logs',
+    ]
+    for (const name of routeNames) {
+      const button = screen.getByRole('button', { name })
+      expect(button.querySelector('svg')?.getAttribute('width')).toBe('24')
+      expect(button.getAttribute('title')).toBe(name)
+      expect(button.style.minHeight).toBe('44px')
+      expect(button.classList.contains('app-nav-item')).toBe(true)
+    }
+    const divider = screen.getByRole('separator', { name: 'Controller tools' })
+    expect(divider.getAttribute('data-expanded')).toBe('false')
+    expect(divider.nextElementSibling).toBe(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page')
+
+    const expand = screen.getByRole('button', { name: 'Expand navigation' })
+    expect(expand.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(expand)
+
+    expect(navigation.style.width).toBe('208px')
+    expect(screen.getByRole('button', { name: 'Collapse navigation' }).getAttribute('aria-expanded')).toBe('true')
+    expect(divider.getAttribute('data-expanded')).toBe('true')
+    expect(divider.textContent).toBe('Controller')
+    expect(screen.getByText('Dashboard')).toBeTruthy()
+    const key = `oonfeewrt:navigation:expanded:${encodeURIComponent(window.location.origin)}:admin`
+    expect(window.localStorage.getItem(key)).toBe('true')
+  })
+
+  it('restores only the signed-in account navigation preference', async () => {
+    const adminKey = `oonfeewrt:navigation:expanded:${encodeURIComponent(window.location.origin)}:admin`
+    window.localStorage.setItem(adminKey, 'true')
+    signedIn('viewer')
+    const first = render(<App />)
+
+    expect(await screen.findByRole('button', { name: 'Expand navigation' })).toBeTruthy()
+    first.unmount()
+
+    signedIn('admin')
+    render(<App />)
+    expect(await screen.findByRole('button', { name: 'Collapse navigation' })).toBeTruthy()
+  })
+
   it('keeps navigation available when one screen fails to render', async () => {
     signedIn()
     mocks.radioCrash = true
@@ -141,5 +206,33 @@ describe('App session boundaries', () => {
     mocks.radioCrash = false
     fireEvent.click(screen.getByRole('button', { name: 'Retry screen' }))
     expect(await screen.findByRole('heading', { name: 'Radios & Channel Plan' })).toBeTruthy()
+  })
+
+  it('keeps account settings available when the device inventory fails', async () => {
+    signedIn()
+    mocks.api.devices.mockRejectedValue(new Error('inventory offline'))
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    expect(await screen.findByRole('tab', { name: 'My account' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Accounts' })).toBeTruthy()
+    expect((await screen.findByRole('alert')).textContent).toMatch(/Device inventory is unavailable: inventory offline/)
+  })
+})
+
+describe('Authentication target sizing', () => {
+  it('keeps setup inputs and the primary action at least 44px tall without horizontal overflow', () => {
+    render(<Auth needsSetup onSignedIn={() => {}} />)
+
+    for (const control of [
+      screen.getByLabelText('Username'),
+      screen.getByLabelText('Password'),
+      screen.getByLabelText('Repeat password'),
+      screen.getByRole('button', { name: 'Create account' }),
+    ]) {
+      expect(getComputedStyle(control).minHeight).toBe('44px')
+    }
+    expect(getComputedStyle(screen.getByRole('button', { name: 'Create account' }).closest('form')!).maxWidth)
+      .toBe('100%')
   })
 })

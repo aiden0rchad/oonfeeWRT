@@ -64,7 +64,7 @@ func TestScanInterfaceSkipsConfiguredButAbsentRuntimeInterfaces(t *testing.T) {
 
 func TestFinishRadioScanSurvivesLostRequestContext(t *testing.T) {
 	d := openDaemon(t)
-	device := &store.Device{MAC: "60:38:e0:22:00:09", Host: "192.0.2.9", Name: "scan-ap"}
+	device := &store.Device{MAC: "02:00:00:22:00:09", Host: "192.0.2.9", Name: "scan-ap"}
 	if err := d.Store.UpsertDevice(context.Background(), device); err != nil {
 		t.Fatal(err)
 	}
@@ -102,9 +102,9 @@ func TestRadioScanBestEffortWorkIsDetachedButBounded(t *testing.T) {
 
 func seedRadioScanDevice(t *testing.T, d *Daemon, host string, state capability.State) *store.Device {
 	t.Helper()
-	mac := "60:38:e0:22:00:01"
+	mac := "02:00:00:22:00:01"
 	if rows, _ := d.Store.Devices(context.Background()); len(rows) > 0 {
-		mac = "60:38:e0:22:00:02"
+		mac = "02:00:00:22:00:02"
 	}
 	credential, err := d.Keys.SealCredential(mac, "root", "good")
 	if err != nil {
