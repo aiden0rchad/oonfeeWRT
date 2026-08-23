@@ -24,9 +24,11 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
 | D8 | **Optional router packages are two-stage, per-feature root actions.** Resolve and display the package manager's exact plan, bind it, then require a second unchecked acknowledgement. Persist the before-state and actual package diff; rollback removes that exact added set while preserving pre-existing packages, and un-adoption stays blocked until rollback succeeds. Adoption never selects a package. The first capability is official-feed `lldpd`. | previously documented future tier-2 flow |
 
-### Hardware validation checkpoint (2026-08-22)
+### Published and historical hardware validation checkpoint (2026-08-22)
 
-The build expects schema **17**. Do not collapse its four recent compatibility
+`v0.1.0-rc.1` and the historical v40 hardware checkpoint expect schema **17**.
+The lab used schema 17 for that evidence. Do not collapse its
+four recent compatibility
 epochs: v14 is the one-time secret-sealing/scrub boundary, v15 makes the
 cross-feature policy model authoritative, and v16 adds attested observability
 tables/columns for producer-provenanced events and cursors, topology validity
@@ -49,8 +51,102 @@ reproducibility gates. This v40 artifact is a merge-ready local evidence
 checkpoint, not itself a Git tag or published release asset. Publication is
 performed by the tag-triggered Release workflow; [GitHub
 Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the source of
-truth. A clean-install pass is not part of the v40 claim and must be recorded
-after testing downloaded release artifacts.
+truth. The later published `v0.1.0-rc.1` clean-install proof is recorded in
+FRESH-START-VALIDATION FS-119; FS-120 records the newer SQLite-sidecar permission
+hardening. Neither is retroactively part of the historical v40 claim.
+
+### v0.1.0 schema-19 release boundary
+
+The v0.1.0 source expects schema **19**. Migration 18 adds only the
+controller-host `speed_tests` job/history table and its one-active/history
+indexes; it does not add a device reference or router-side state. Migration 19
+adds the account-store foundation: canonical `owner`, `admin`, `operator` and
+`viewer` roles, enabled/deleted state, ASCII-NOCASE username uniqueness and
+attestation. Every existing admin row becomes an enabled owner.
+
+The controlled live upgrade/restart completed. The controller reports exact
+binary version `dev-phase41-live-schema19` and schema 19, with two devices, two
+credentials, one enabled owner, one WLAN and no mesh. A signed-in live UI smoke
+passed Dashboard, Accounts, Diagnostics, Backup & Restore, Devices and Topology
+with no browser errors. Fresh schema-17 rollback and schema-19 recovery sets
+also passed verification.
+
+`GET /api/v1/dashboard` now returns a server-selected six-hour WAN view with 72
+complete five-minute buckets. Fixed-target `1.1.1.1` ICMP metrics and
+exact-interface RX/download and TX/upload each carry independent freshness and
+null gaps; interface counters are omitted unless route and durable series keys
+match exactly. The React Dashboard renders these semantics.
+
+The authenticated `/api/v1/speedtests` start/status/cancel/history surface uses
+a bounded controller-host runner: Cloudflare direct endpoints, method
+`controller-http-single-stream-v1`, 10 MiB download, 5 MiB upload, five idle
+latency probes, 30-second timeout, one active job and at most 50 terminal rows.
+The descriptor exposes endpoint/provenance/data estimate/privacy/saturation and
+a deterministic `plan_id` before consent. Start requires the current reviewed
+ID plus `acknowledge_data_use:true`; a changed plan returns 409 before creating
+a job. Redirects fail closed; lifecycle events are audited; cancel and
+startup recovery reach durable terminal state. The package has no Fleet/router
+dependency and performs no router call or change. Loaded latency/jitter remain
+null because the method does not measure them. No public-provider speed test has
+run; current evidence uses source tests and deterministic local adapters.
+
+The schema-19 store accepts only the four canonical roles. New usernames use an
+ASCII-only grammar and the unique `admins_username_nocase` index; ASCII case
+collisions fail migration atomically. Soft deletion disables authentication,
+replaces the password verifier and preserves the username tombstone. Conditional
+updates protect the last enabled owner under concurrent disable, demote and
+delete attempts. Account creation, role/state/deletion and password mutations
+commit with their audit event or roll back together. Role-bearing sessions,
+server-side route/live authorization, My Account, owner administration and
+session listing/revocation are implemented. Owner writes require a five-minute
+password step-up. Revocation closes affected `/live` sockets and cancels
+in-flight requests. Optional MFA has not landed.
+
+The stored-only Diagnostics surface is implemented for `owner`/`admin`:
+descriptor/preview, one active cancellable generation job, bounded terminal
+history, status and private ZIP download. Its fixed, checksummed members contain
+bounded redacted/pseudonymized controller, device, topology/radio/source, event
+and rotating-controller-log evidence. The generator has no Fleet dependency and
+makes zero router management/API/SSH calls or router changes. A private bounded
+rotating `controller.jsonl` family supplies the controller-log member.
+
+Encrypted portable controller backup/restore is implemented end to end in
+schema-19 source. An owner can export a consistent live-WAL database snapshot
+and matching wrapped key material as one authenticated, separately
+passphrase-encrypted native `.oowrtbak`. Restore accepts only a bounded raw
+artifact, authenticates it, proves its manifest schema matches the source
+database, migrates and validates a disposable private copy, and returns a
+secret-free preview. Confirmation is bound to that artifact and preview plan;
+it requires recent password reauthentication, the export passphrase again, the
+current destination runtime passphrase, exact `RESTORE CONTROLLER` text, and
+four explicit acknowledgements.
+
+The controlled in-process restart quiesces the daemon, checkpoints and closes
+SQLite, verifies and swaps the prepared database/keyring pair, revokes all
+sessions, and rolls back before serving if the replacement fails validation.
+Before the swap it retains an encrypted mode-0600 safety artifact at
+`<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`. The artifact uses
+the same export passphrase supplied at confirmation. Once its applied audit
+receipt commits and is cleared, fixed-shape safety retention targets three
+artifacts, fills slots newest-first and removes the rest. Any ID referenced by
+an active restore marker, receipt or suppression record is always preserved,
+even when that temporarily exceeds three.
+Operators must copy an artifact off-host before pruning if they need longer
+retention. Router writes stay
+persistently suppressed until an owner explicitly enters `RESUME ROUTER WRITES`.
+Restored desired state is never automatically applied, although read-only
+monitoring of restored devices may resume after restart while suppression is
+active. Resume immediately re-enables the automatic 802.11k neighbour
+reconciler, which may issue hostapd `rrm_nr_set`; it does not start a restored
+desired-configuration Apply.
+
+The implementation has source/unit/race coverage, and the historical live
+schema-19 migration/restart plus signed-in route/render smoke above. That smoke did not
+execute diagnostics generation/download, backup export, restore
+upload/preview/confirmation, a public-provider speed test or router restore.
+The completed `v0.1.0` tag workflow and GitHub Release are the authority for
+final publication; the workflow must pass the isolated release matrix before it
+publishes artifacts.
 
 ---
 
@@ -74,8 +170,8 @@ addition is a decision, not a default.
 
 Build target: multi-arch container image (`linux/amd64`, `linux/arm64`) via
 `docker buildx`, `CGO_ENABLED=0`, binary stripped (`-ldflags "-s -w"`), final
-stage `FROM scratch` (+ tzdata and CA certs copied in). CI fails if the image
-exceeds 40 MB or the UI bundle exceeds 1.5 MB gzipped.
+stage `FROM scratch` with CA certificates only. CI fails if the image exceeds
+40 MB or the UI bundle exceeds 1.5 MB gzipped.
 
 ---
 
@@ -107,7 +203,7 @@ oonfeewrt/
 │   └── budget_check.sh           # binary/bundle/RSS assertions for CI
 ├── deploy/
 │   ├── Dockerfile                # multi-stage: ui build → go build → scratch
-│   ├── docker-compose.yml        # host-networking default, one volume
+│   ├── docker-compose.yml        # loopback bridge default, one volume
 │   └── acl/oonfeewrt.json        # the rpcd ACL template pushed at adoption
 └── docs/                         # these documents
 ```
@@ -124,10 +220,25 @@ One SQLite database, WAL mode, at `$OONFEE_DATA_DIR` (default `/data`, the
 container volume).
 `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=200;`
 
-Schema (authoritative; ship as `internal/store/schema.sql` with a
-`schema_version` table and forward-only migrations):
+Abridged schema overview (`internal/store/schema.sql` is authoritative and ships
+with a `schema_version` table and forward-only migrations):
 
 ```sql
+-- ===== controller accounts (schema 19 store foundation) =====
+CREATE TABLE admins (
+  id         INTEGER PRIMARY KEY,
+  username   TEXT NOT NULL UNIQUE,
+  pass_hash  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_login INTEGER,
+  role       TEXT NOT NULL DEFAULT 'owner'
+             CHECK (role IN ('owner','admin','operator','viewer')),
+  enabled    INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+  deleted_at INTEGER
+);
+CREATE UNIQUE INDEX admins_username_nocase
+  ON admins (username COLLATE NOCASE); -- ASCII-only by SQLite design
+
 -- ===== inventory =====
 CREATE TABLE devices (
   id           INTEGER PRIMARY KEY,
@@ -384,9 +495,13 @@ wrong/missing keyring, malformed key check, newer schema, or incomplete scrub on
 a read-only open fails closed; a writable v14 controller resumes an incomplete
 scrub.
 
-Treat the database and `keyring.json` as a paired backup. Use SQLite `.backup`
-while live or a clean shutdown/checkpoint, and copy the matching keyring. A
-passphrase alone cannot recreate its random data key. Pre-v14 backups retain
+At the storage layer, treat the database and `keyring.json` as a paired backup.
+`Store.BackupTo` uses SQLite's online mechanism to create a private no-clobber
+snapshot that includes committed WAL state and verifies it before publication;
+clean shutdown/checkpoint remains an alternative. A manual recovery copy must
+include the matching keyring; schema-19 portable export wraps both safely in one
+`.oowrtbak`. A passphrase alone cannot recreate the random data key. Pre-v14
+backups retain
 plaintext WLAN/mesh keys and secret-derived ownership hashes even after the live
 database is scrubbed; migration does not delete those artifacts. Protect them
 as secrets, keep recovery material until the migrated pair is verified, and
@@ -405,6 +520,21 @@ load-bearing: un-adoption cannot discard the only package/service rollback
 record. The row is written in `installing` state before SSH mutates the router,
 then completed with the observed package diff; interruption or uncertainty
 becomes `error`, never an invented clean state.
+
+Migration 18 adds `speed_tests`, a partial unique index permitting one active
+`controller-host` job and a descending history index. Consent records the exact
+reviewed deterministic `plan_id`; jobs preserve provenance, progress, nullable
+metrics, measured byte counts and terminal errors without a device foreign key.
+
+Migration 19 adds `role`, `enabled` and `deleted_at` to `admins`, so every legacy
+administrator becomes an enabled owner without a password rewrite. Its unique
+`username COLLATE NOCASE` index is intentionally ASCII-only and makes a legacy
+ASCII case collision abort and roll back the whole migration. New account names
+are limited to the matching ASCII grammar. Store mutation methods soft-delete,
+preserve one enabled owner atomically and append the corresponding audit event
+inside the same transaction. The source layers server-side authorization,
+role-bearing sessions, account/session APIs and My Account/owner administration
+on that schema. MFA remains planned.
 
 Maintenance runs every 5 minutes. The RAM-ring flush writes its completed
 `rollup_5m` rows in one transaction; hourly folding is count-weighted and never
@@ -678,9 +808,54 @@ counters are usable.
 
 ## 8. API and WebSocket
 
-REST base `/api/v1`, session-cookie auth (single admin user in v1;
-`HttpOnly; SameSite=Strict; Secure` when TLS). Login rate-limited. All mutating
+REST base `/api/v1`, session-cookie auth (`HttpOnly; SameSite=Strict; Secure`
+when TLS). The current RC has one bootstrap administrator, bounded login
+throttling, password change, audit events and memory-only sessions with idle and
+absolute expiry. Schema 19 makes every existing administrator an enabled
+`owner`; login excludes disabled/deleted rows; sessions carry the canonical
+role; and a declarative policy authorizes every protected REST route and
+`/live`. My Account and owner administration provide account/session lifecycle
+controls. The session `done` channel makes revocation immediate for REST and
+`/live`; connection cleanup releases focus. Optional TOTP/recovery codes remain
+open. All mutating
 endpoints require header `X-Oonfee-CSRF` matching a per-session token.
+
+Diagnostics is owner/admin only. `GET /api/v1/diagnostics` returns the fixed
+stored-mode disclosure and bounded job history; `POST /api/v1/diagnostics`
+starts one job; `GET /api/v1/diagnostics/{id}` reports it;
+`POST /api/v1/diagnostics/{id}/cancel` requests cancellation; and
+`GET /api/v1/diagnostics/{id}/download` serves only a completed private ZIP.
+The descriptor fixes `router_management_calls:false` and
+`router_changes:false`. No handler calls Fleet or a router. Jobs and files are
+bounded, cancelled/drained before store/log shutdown, and cleaned on startup,
+expiry, failure and cancellation.
+
+Portable backup/restore is owner-only and available only over TLS or direct
+loopback. `GET /api/v1/backups` returns the descriptor/history;
+`POST /api/v1/backups` starts an export; `GET /api/v1/backups/{id}` reports it;
+`POST /api/v1/backups/{id}/cancel` requests cancellation; and
+`GET /api/v1/backups/{id}/download` serves a completed native `.oowrtbak`.
+Export start/download and every restore mutation require recent password
+reauthentication. The export passphrase is a separate caller-owned value of
+16 or more Unicode characters and at most 4096 UTF-8 bytes; it is never stored.
+
+`GET /api/v1/restores` returns the restore descriptor. A raw
+`application/vnd.oonfeewrt.backup` upload with an exact bounded
+`Content-Length` goes to `POST /api/v1/restores/uploads`.
+`POST /api/v1/restores/previews` starts disposable authentication/migration/
+recovery validation; `GET /api/v1/restores/previews/{id}` reports its bounded
+safe result; and `POST /api/v1/restores/previews/{id}/cancel` cancels it.
+`POST /api/v1/restores/previews/{id}/confirm` accepts only the current
+`plan_id`, re-entered export passphrase, verified current runtime passphrase,
+exact destructive text and four acknowledgements, then returns 202 for the
+controlled restart. `GET /api/v1/restores/suppression` reports the persistent
+router-write gate; `POST /api/v1/restores/suppression/resume` requires recent
+reauthentication, the active restore ID and exact `RESUME ROUTER WRITES`.
+Upload/preview performs no router call. Confirmation never converts restored
+desired state into an Apply; only read-only collection may resume while the
+gate is active. Clearing it immediately starts automatic 802.11k neighbour
+maintenance, which may write hostapd RRM neighbour state without starting a
+desired-configuration Apply.
 
 WLAN and mesh keys are write-only request fields. Authenticated list, detail,
 and save responses expose `has_key` but never plaintext; event responses contain
@@ -851,8 +1026,10 @@ default with the "Combined axes" toggle rendering option A, per UI-SPEC §4's
 dual-axis discussion.
 
 Bundle budget enforcement: `tools/budget_check.sh` runs `vite build`, gzips,
-fails CI over 1.5 MB total. Fonts: system stack only. Icons: single SVG sprite,
-hand-picked subset (~60 icons), not an icon-font dependency.
+fails CI over 1.5 MB total. Fonts: system stack only. Icons: a small,
+project-owned inline SVG set with one stroke language; no Unicode/icon-font or
+raster navigation glyphs. Navigation icons render at 22–24 px in controls at
+least 44 px square and retain accessible names in collapsed mode.
 
 ---
 
@@ -986,19 +1163,21 @@ make check     # unit + integration-vs-mock + budget_check
 
 `deploy/Dockerfile` is multi-stage: node stage builds the UI, Go stage builds
 the stripped static binary with the UI embedded, final stage is `FROM scratch`
-plus CA certificates and tzdata. One process, PID 1, no shell in the image.
+plus CA certificates. One process, PID 1, no shell or package manager in the
+image. Named timezone data is not copied because the controller has no
+named-timezone runtime contract.
 
 Runtime contract (what `deploy/docker-compose.yml` encodes):
 
 | Aspect | Value |
 |---|---|
-| Data | single volume mounted at `/data` (`oonfeewrt.db` plus its paired `keyring.json`; backups remain sensitive) |
-| Network | `network_mode: host` recommended (full discovery); bridge + `8080:8080` supported with add-by-IP adoption |
-| Ports | `:8080` HTTP; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
+| Data | single volume mounted at `/data` (`oonfeewrt.db`, paired `keyring.json`, and retained `.oonfeewrt-recovery` safety artifacts; all remain sensitive) |
+| Network | bridge default with add-by-IP adoption; Linux host networking is an explicit full-discovery opt-in |
+| Ports | loopback `127.0.0.1:8080:8080` mapping by default; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
 | Config | env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value) |
 | Health | `GET /healthz` (no auth, no body beyond `ok`) wired as the compose healthcheck |
 | Upgrade | pull new image, restart; schema migrates forward on boot; downgrade = restore volume backup |
-| Backup | Today: cleanly stop/checkpoint and copy both database and keyring, or use SQLite `.backup` for the live DB and pair it with the matching keyring. The planned API must export the pair, never a database-only restore artifact. |
+| Backup | schema-19 source exports a native authenticated-encryption `.oowrtbak` containing a consistent database/key pair, and restores only through bounded preview plus plan-bound confirmation. Keep `/data` and the same `OONFEE_PASSPHRASE_FILE` across ordinary container restarts; the current runtime passphrase is verified before a prepared keyring is created. Successful restore writes `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`; after audit acknowledgement, fixed-shape retention targets three newest-first while always preserving active restore references. |
 
 Graceful shutdown on SIGTERM: finish (or abandon pre-APPLY) any in-flight
 changeset, flush completed telemetry buckets, discard the in-progress RAM
@@ -1109,7 +1288,7 @@ and Logs screen.
 evidence from one query; Radios shows interference/airtime for mt76 fixture
 radios and correctly *omits* them for the mwlwifi fixture radio.
 
-Current live status (2026-08-22): the schema-17 store, producers, bounded
+Historical Phase-4 live status (2026-08-22): the schema-17 store, producers, bounded
 REST APIs and React screens are implemented. The joined timeline is rollup-only
 and gap-aware; `wifi-v1` is fixed/all-or-null; topology preserves source
 ambiguity and validity intervals; Radios uses explicit scans and freshness;
@@ -1133,6 +1312,37 @@ the normal maintenance transaction.
 
 Flows/DPI: not scheduled. Revisit only after M6 ships and only for capable
 hardware, per PARITY-MATRIX.
+
+**M7 / Phase 4.1 — UI polish, controller operations and v0.1.0.** Incremental
+SVG navigation and disclosure primitives; freshness-aware Dashboard; bounded
+controller-host speed tests; server-side RBAC/accounts/sessions; optional MFA;
+redacted diagnostics ZIP; encrypted portable backup/restore; final release
+hardening.
+
+The v0.1.0 source includes the navigation/disclosure foundation, schema-18
+Dashboard/controller-speed-test slice and schema-19 RBAC/account/session slice
+are implemented. The stored-only diagnostics ZIP/API/UI and bounded rotating
+controller log sink are implemented. Encrypted native `.oowrtbak` export,
+bounded disposable restore preview, plan-bound confirmation, controlled restart,
+retained encrypted safety backup, session revocation, and persistent
+router-write suppression/resume are implemented. The live controller runs exact
+binary version `dev-phase41-live-schema19` at schema 19; its signed-in Dashboard,
+Accounts, Diagnostics, Backup & Restore, Devices and Topology routes passed smoke
+without browser errors. Optional MFA and gateway-run speed testing are deferred.
+The final tag workflow owns the immutable release, isolated restore, vulnerability,
+signature, archive, image, and anonymous-verification gates.
+
+*Done when:* a clean immutable release-candidate container can create
+least-privilege accounts, run and cancel a clearly sourced controller test with
+zero router management/API/SSH calls or writes/installs, generate a checksummed
+ZIP containing no seeded secret, export/restore into a second clean container
+without applying router state, and pass the RC→final upgrade/rollback gate. Its
+traffic still follows the controller host's normal route. Candidate binaries/
+images must create SQLite database, WAL and SHM files at mode 0600. Publish those
+exact bytes/digest, then anonymously verify the public hashes/digest and clean
+startup. A gateway-run speed test is a separate,
+default-off official-feed capability with a bound exact plan and rollback; it
+is not required for controller-mode completion.
 
 ---
 

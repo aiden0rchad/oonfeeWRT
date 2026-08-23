@@ -69,6 +69,11 @@ func (s *Server) handleApplyOperation(w http.ResponseWriter, r *http.Request) {
 			"could not bind the apply request", "none")
 		return
 	}
+	release, ok := s.beginOperation(w, operationApply)
+	if !ok {
+		return
+	}
+	defer release()
 	op, created, err := s.Store.BeginApplyOperation(r.Context(), req.OperationID,
 		fingerprint, sess.adminID, sess.username, s.now().Unix())
 	if err != nil {

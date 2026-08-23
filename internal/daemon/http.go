@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
@@ -11,12 +12,17 @@ import (
 
 // routes builds the HTTP surface: the health endpoint the orchestrator polls,
 // and the Phase 1 API under /api/v1.
-func (d *Daemon) routes() http.Handler {
+func (d *Daemon) routes() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", d.healthz)
 
 	d.api = api.New(d.Store, fleetAdapter{d}, d, d.Log)
 	d.api.Keys = d.Keys
+	d.api.RestoreOwnerInstanceID = d.restoreOwnerInstanceID
+	d.api.RequestRestart = d.RequestRestoreRestart
+	d.api.RouterWriteSuppression = d.RouterWriteSuppression()
+	d.api.ResumeRouterWrites = d.ResumeRouterWrites
+	d.api.RouterWritesResumed = d.startNeighbourAfterResume
 	// Set rather than passed to New: discovery is optional to the API — it
 	// serves the fleet perfectly well without one — and growing the constructor
 	// for every optional collaborator is how a constructor becomes a config
@@ -36,6 +42,26 @@ func (d *Daemon) routes() http.Handler {
 	d.api.MeshHealth = d.MeshHealthReport
 	d.api.OnAir = d.OnAirReport
 	d.api.RadioScan = d
+	d.api.DiagnosticsDir = filepath.Join(d.Config.DataDir, "diagnostics")
+	d.api.BackupsDir = filepath.Join(d.Config.DataDir, "backups")
+	d.api.RestoresDir = filepath.Join(d.Config.DataDir, "restores")
+	d.api.ControllerVersion = d.Config.Version
+	d.api.ControllerStartedAt = d.startedAt
+	if d.controllerLog != nil {
+		d.api.ControllerLogTail = d.controllerLog.Tail
+	}
+	if err := d.api.InitDiagnostics(); err != nil {
+		d.api.CloseJobs(0)
+		return nil, err
+	}
+	if err := d.api.InitBackups(); err != nil {
+		d.api.CloseJobs(0)
+		return nil, err
+	}
+	if err := d.api.InitRestores(); err != nil {
+		d.api.CloseJobs(0)
+		return nil, err
+	}
 	// Lets a poll-interval change take effect immediately: the collector holds
 	// the interval in its target, so the row alone would not move until restart.
 	d.api.Retrack = func(id int64) {
@@ -49,7 +75,7 @@ func (d *Daemon) routes() http.Handler {
 	}
 	mux.Handle("/api/v1/", d.api.Routes())
 	d.mountUI(mux)
-	return securityHeaders(mux)
+	return securityHeaders(mux), nil
 }
 
 func securityHeaders(next http.Handler) http.Handler {

@@ -5,15 +5,37 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** Phase 4's schema-17 fresh-start hardware flow is verified.
-[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
-is published with four checksum-verified binary archives and a public
-`linux/amd64` + `linux/arm64` container. A clean, zero-device installation from
-those public artifacts passed first-run health, setup, schema-integrity,
-recovery, graceful-shutdown, and hardened-container checks without contacting a
-router. Follow [`docs/INSTALL.md`](docs/INSTALL.md).
+**Release baseline:** v0.1.0 uses schema 19. Its final source includes the
+polished Dashboard/navigation system; consent-bound controller-host speed
+tests; local owner/admin/operator/viewer accounts and session revocation;
+bounded redacted diagnostics ZIPs; and encrypted, previewed portable controller
+backup/restore with a persistent post-restore router-write gate.
 
-**Current validation checkpoint (2026-08-22):** both test routers were factory
+The completed `v0.1.0` tag workflow, matching
+[GitHub Release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0),
+and GHCR manifest are the publication source of truth. That workflow gates four
+deterministic checksum archives, public `linux/amd64` + `linux/arm64` non-root
+scratch images, dependency vulnerability checks, SBOM/provenance, and a keyless
+OCI signature. Follow [`docs/INSTALL.md`](docs/INSTALL.md) only after the release
+is available. Historical
+[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
+remains the schema-17 upgrade and rollback baseline.
+
+Speed tests are never automatic: the review identifies the Cloudflare endpoint,
+single-stream method, 15 MiB estimate, 30-second limit, privacy impact, and WAN
+saturation risk. Loaded latency and jitter stay unavailable because this method
+does not measure them. Diagnostics use stored controller evidence and make no
+router call. Backup export uses a separate passphrase; restore requires bounded
+preview, recent reauthentication, explicit destructive confirmation, and a
+controlled restart. Restored desired state is never automatically applied.
+
+Optional TOTP MFA and gateway-run speed testing are deferred. A future gateway
+test remains a separate default-off official-feed capability with exact
+package, service, storage, and rollback review. No feature silently installs
+router code, packages, services, or firmware.
+
+**Historical pre-tag v40 hardware checkpoint (2026-08-22):** both test routers
+were factory
 reset, re-adopted through the default-off ACL/login disclosure, and restored to
 the reviewed WPA2-only lab WLAN. Adoption installed no package. The separate,
 default-off LLDP capability was then proved end to end on both devices: exact
@@ -291,9 +313,13 @@ make build                    # npm ci + embedded UI + versioned static binary
 ./oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080
 ```
 
-Run `make check` before deployment. A release candidate additionally requires
+Run `make check` before deployment. A release build additionally requires
 `make release-check RELEASE_VERSION=vX.Y.Z`, which refuses a dirty tree and
-byte-compares two complete UI-plus-Go builds.
+byte-compares two complete four-platform archive sets and their checksum
+manifests, then executes the host archive's controller and recovery checker.
+OCI verification uses an exact-tag, multi-platform, no-push build in the gate;
+the publish job rebuilds that immutable tag with SBOM/provenance, and the
+signed registry digest is the image's publication identity.
 
 On first start it asks for an **operator passphrase**, twice. That passphrase
 unwraps the controller keyring used to seal device credentials, WLAN and mesh
@@ -348,6 +374,32 @@ key. Database backups made before schema 14 may contain plaintext WLAN/mesh keys
 and secret-derived ownership hashes, and migration does not rewrite or delete
 old backups. Keep them protected and require explicit operator confirmation
 before deleting them.
+
+Schema-19 source also exposes **Settings → Backup & Restore** to owners over TLS
+or direct loopback. Export requires a recent account-password reauthentication
+and a separate export passphrase of at least 16 characters (maximum 4096 UTF-8
+bytes); the controller never stores that passphrase. Restore preview requires
+it once, clears it, and confirmation requires it again plus the current
+controller boot/keyring passphrase. That runtime passphrase is not the signed-in
+account password and must remain stable with the persistent data volume across
+restarts. This workflow is present in v0.1.0; historical v0.1.0-rc.1 artifacts
+remain schema 17 and do not contain it.
+
+After a successful source-built restore, the prior controller is retained as a
+mode-0600 encrypted artifact at
+`<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`, protected by the
+same export passphrase used for the confirmed restore. It is not automatically
+expired by time. After the applied-restore audit receipt is safely cleared, the
+controller targets three recognized safety artifacts, fills available slots
+newest-first, and prunes the rest. It always preserves artifacts referenced by
+an active restore marker, receipt or suppression record, even if that
+temporarily exceeds three. Copy one promptly to protected backup storage for
+longer retention. It can be fed back through the same staged restore workflow.
+Router writes remain suppressed until owner review and explicit resume, although
+read-only monitoring may resume after the controlled restart. Explicit resume
+immediately re-enables automatic 802.11k neighbour maintenance and may write
+hostapd RRM neighbour state; it does not automatically Apply restored desired
+configuration.
 
 Router configuration archives are a separate secret boundary: a normal tarball
 contains wireless keys in plaintext. Encrypt the stream before retaining it,
@@ -409,6 +461,7 @@ the proxy sends `X-Forwarded-Proto: https`.
 | [`docs/UI-SPEC.md`](docs/UI-SPEC.md) | Navigation map, layout system, validated design tokens, screen specs |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases with acceptance criteria |
 | [`docs/RISKS.md`](docs/RISKS.md) | What kills this project |
+| [`RELEASE-NOTES-v0.1.0.md`](RELEASE-NOTES-v0.1.0.md) | v0.1.0 highlights, upgrade boundary, security scope and known limitations |
 
 ---
 
@@ -474,7 +527,9 @@ You are a guest on someone else's router. Act like one.
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Apache License 2.0. See [`LICENSE`](LICENSE), [`NOTICE`](NOTICE), and the
+generated [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) bundle shipped with
+every archive and container image.
 
 That choice has a practical consequence worth stating, because it decides what
 this project may borrow from:

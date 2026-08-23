@@ -49,7 +49,9 @@ async function request<T>(
 ): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
-  if (init.body !== undefined) headers.set('Content-Type', 'application/json')
+  if (init.body !== undefined && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
   if (method !== 'GET' && method !== 'HEAD') {
     headers.set('X-Oonfee-CSRF', csrfToken())
   }
@@ -72,9 +74,9 @@ async function request<T>(
     controllerInstance = nextInstance
   }
 
-  if (resp.status === 401) {
+  const credentialCheck = path === '/login' || path === '/session/password' || path === '/session/reauth'
+  if (resp.status === 401 && !credentialCheck) {
     onUnauthorized.forEach((fn) => fn())
-    throw new ApiError(401, 'not signed in')
   }
   const text = await resp.text()
   let body: unknown
@@ -89,6 +91,17 @@ async function request<T>(
         ? `server returned an invalid response (${resp.status})`
         : `request failed (${resp.status})`,
     )
+  }
+  if (resp.status === 401 && credentialCheck) {
+    const code = body && typeof body === 'object' && 'code' in body
+      ? (body as { code?: unknown }).code
+      : undefined
+    const message = body && typeof body === 'object' && 'error' in body
+      ? (body as { error?: unknown }).error
+      : undefined
+    const credentialWasRejected = path === '/login' || code === 'incorrect_password' ||
+      message === 'current password is incorrect'
+    if (!credentialWasRejected) onUnauthorized.forEach((fn) => fn())
   }
   if (!resp.ok) {
     const message = body && typeof body === 'object' && 'error' in body &&
@@ -106,7 +119,62 @@ async function request<T>(
 const get = <T>(path: string) => request<T>(path)
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+const postRaw = <T>(path: string, body: BodyInit, contentType: string) =>
+  request<T>(path, { method: 'POST', body, headers: { 'Content-Type': contentType } })
+const patch = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
 const del = <T>(path: string) => request<T>(path, { method: 'DELETE' })
+
+async function download(
+  path: string,
+  maxBytes: number,
+  expectedBytes: number,
+): Promise<{ blob: Blob; filename: string }> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 ||
+    !Number.isSafeInteger(expectedBytes) || expectedBytes <= 0 || expectedBytes > maxBytes) {
+    throw new ApiError(0, 'invalid diagnostic download bounds')
+  }
+  const resp = await fetch(`/api/v1${path}`, { credentials: 'same-origin' })
+  const nextInstance = resp.headers.get('X-OonfeeWRT-Instance') ?? ''
+  if (nextInstance) {
+    if (controllerInstance && controllerInstance !== nextInstance) {
+      controllerInstance = nextInstance
+      onControllerRestart.forEach((fn) => fn())
+      throw new ApiError(409, 'controller restarted')
+    }
+    controllerInstance = nextInstance
+  }
+  if (resp.status === 401) onUnauthorized.forEach((fn) => fn())
+  if (!resp.ok) {
+    let body: unknown
+    try {
+      body = JSON.parse(await resp.text())
+    } catch {
+      body = undefined
+    }
+    const message = body && typeof body === 'object' && 'error' in body &&
+      typeof (body as { error?: unknown }).error === 'string'
+      ? (body as { error: string }).error
+      : `request failed (${resp.status})`
+    throw new ApiError(resp.status, message, body)
+  }
+  if ((resp.headers.get('Content-Type') ?? '').split(';')[0].trim() !== 'application/zip') {
+    throw new ApiError(resp.status, 'server returned a non-ZIP diagnostic download')
+  }
+  const contentLength = resp.headers.get('Content-Length') ?? ''
+  const announcedBytes = /^\d+$/.test(contentLength) ? Number(contentLength) : NaN
+  if (!Number.isSafeInteger(announcedBytes) || announcedBytes <= 0 ||
+    announcedBytes > maxBytes || announcedBytes !== expectedBytes) {
+    throw new ApiError(resp.status, 'server returned an invalid diagnostic download size')
+  }
+  const disposition = resp.headers.get('Content-Disposition') ?? ''
+  const filename = /filename="([^"\r\n]+)"/.exec(disposition)?.[1] ?? 'oonfeewrt-diagnostics.zip'
+  const blob = await resp.blob()
+  if (blob.size > maxBytes || blob.size !== expectedBytes) {
+    throw new ApiError(resp.status, 'server returned an invalid diagnostic download size')
+  }
+  return { blob, filename }
+}
 
 // ---- types, mirroring the Go response structs ----
 
@@ -674,6 +742,104 @@ export interface Dashboard {
   quiesced_devices: number
   recent_events: EventRow[] | null
   series_count: number
+  /** Server-selected WAN evidence. Interface throughput is only present when
+   * the observed default-route interface exactly matches a stored series key. */
+  wan: DashboardWAN
+}
+
+export type DashboardWANFreshness = 'fresh' | 'last_observed' | 'unavailable'
+export type DashboardMetricStatus = 'fresh' | 'last_observed' | 'unavailable'
+
+export interface DashboardMetricPoint {
+  ts: number
+  value: number | null
+}
+
+export interface DashboardMetric {
+  kind: string
+  unit: string
+  meaning: string
+  status: DashboardMetricStatus
+  value: number | null
+  as_of: number | null
+  points: DashboardMetricPoint[]
+}
+
+export interface DashboardWAN {
+  target: string
+  probe: 'icmp'
+  freshness: DashboardWANFreshness
+  as_of: number | null
+  gateway: {
+    device_id: number
+    name: string
+    route_interface: string
+    series_key: string | null
+  } | null
+  resolution: '5m'
+  bucket_ms: number
+  from: number
+  to: number
+  metrics: {
+    download_bps: DashboardMetric
+    upload_bps: DashboardMetric
+    latency_ms: DashboardMetric
+    loss_pct: DashboardMetric
+    reachable: DashboardMetric
+  }
+}
+
+export type SpeedTestState = 'queued' | 'running' | 'cancelling' | 'completed' | 'failed'
+
+export interface SpeedTestJob {
+  id: string
+  plan_id: string
+  state: SpeedTestState
+  phase: string
+  progress_percent: number
+  provider: string
+  method: string
+  provenance: string
+  endpoint: string
+  estimated_bytes: number
+  created_at: number
+  started_at?: number | null
+  finished_at?: number | null
+  download_mbps?: number | null
+  upload_mbps?: number | null
+  idle_latency_ms?: number | null
+  idle_jitter_ms?: number | null
+  loaded_latency_ms?: number | null
+  loaded_jitter_ms?: number | null
+  bytes_downloaded: number
+  bytes_uploaded: number
+  error?: string | null
+}
+
+export interface SpeedTestCollection {
+  jobs: SpeedTestJob[]
+  active: SpeedTestJob | null
+  test: {
+    plan_id: string
+    provider: string
+    method: string
+    provenance: string
+    endpoint: string
+    download_endpoint: string
+    upload_endpoint: string
+    estimated_bytes: number
+    max_duration_seconds: number
+  }
+  limits: {
+    max_history: number
+  }
+  disclosure: {
+    vantage_point: string
+    router_management_calls: boolean
+    router_changes: boolean
+    saturation_warning: string
+    privacy: string
+  }
 }
 
 /** What a device is for. A closed vocabulary — the API refuses anything else
@@ -1312,10 +1478,252 @@ export interface OverheadReport {
   poll_interval_note: string
 }
 
-export interface SessionInfo {
+export type AccountRole = 'owner' | 'admin' | 'operator' | 'viewer'
+
+export interface Account {
+  id: number
   username: string
-  csrf: string
+  role: AccountRole
+  role_label: string
+  enabled: boolean
+  created_at: number
+  last_login_at: number | null
+  active_session_count: number
 }
+
+export interface AccountSession {
+  id: string
+  current: boolean
+  created_at: number
+  last_seen_at: number
+  expires_at: number
+  peer_address: string
+}
+
+export interface AccountRoleOption {
+  value: AccountRole
+  label: string
+  description: string
+}
+
+export interface SessionInfo {
+  admin_id: number
+  username: string
+  role: AccountRole
+  role_label: string
+  csrf: string
+  reauthenticated_until: number | null
+}
+
+export interface AccountsResponse {
+  accounts: Account[]
+  roles: AccountRoleOption[]
+}
+
+export interface AccountMutationResponse {
+  account: Account
+  revoked_sessions?: number
+  signed_out?: boolean
+}
+
+export interface SessionMutationResponse {
+  ok: boolean
+  signed_out?: boolean
+  revoked?: number
+  revoked_sessions?: number
+}
+
+export type DiagnosticJobState =
+  | 'queued'
+  | 'collecting'
+  | 'generating'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface DiagnosticJob {
+  id: string
+  state: DiagnosticJobState
+  phase: string
+  progress_percent: number
+  created_at: number
+  started_at?: number
+  finished_at?: number
+  expires_at?: number
+  size_bytes?: number
+  error?: string
+}
+
+export interface DiagnosticDescriptor {
+  mode: 'stored'
+  router_management_calls: false
+  router_changes: false
+  sections: { id: string; label: string; description: string }[]
+  excluded_secret_classes: string[]
+  limits: {
+    devices: number
+    sources: number
+    events: number
+    controller_log_input_bytes: number
+    controller_log_output_bytes: number
+    archive_bytes: number
+    history: number
+    retention_seconds: number
+    collection_timeout_seconds: number
+  }
+  controller_log: { available: boolean; gaps: string[] }
+  jobs: DiagnosticJob[]
+}
+
+export type BackupJobState =
+  | 'queued'
+  | 'snapshotting'
+  | 'encrypting'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface BackupJob {
+  id: string
+  state: BackupJobState
+  phase: string
+  progress_percent: number
+  created_at: number
+  started_at?: number
+  finished_at?: number
+  expires_at?: number
+  size_bytes?: number
+  sha256?: string
+  schema_version?: number
+  controller_version?: string
+  error?: string
+}
+
+export interface BackupDescriptor {
+  descriptor: {
+    plan_id: string
+    format: 'oonfeewrt-portable-backup'
+    format_version: 1
+    file_extension: '.oowrtbak'
+    snapshot: string
+    encryption: string
+    includes: string[]
+    excludes: string[]
+  }
+  disclosure: {
+    router_management_calls: false
+    router_changes: false
+    automatic_router_apply: false
+    separate_export_passphrase: true
+    export_passphrase_recoverable: false
+    summary: string
+  }
+  limits: {
+    history: number
+    retention_seconds: number
+    export_timeout_seconds: number
+    min_export_passphrase_characters: number
+    max_export_passphrase_bytes: number
+  }
+  jobs: BackupJob[]
+}
+
+export type RestorePreviewState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface RestoreUpload {
+  id: string
+  created_at: number
+  expires_at: number
+  size_bytes: number
+  sha256: string
+}
+
+export interface RestoreManifest {
+  format: string
+  format_version: number
+  created_at: string
+  controller_version: string
+  schema_version: number
+  database_size_bytes: number
+}
+
+export interface RestoreCounts {
+  devices: number
+  credentials: number
+  owned_sections: number
+  wlans: number
+  meshes: number
+}
+
+export interface RestorePreview {
+  id: string
+  upload_id: string
+  state: RestorePreviewState
+  phase: string
+  progress_percent: number
+  created_at: number
+  started_at?: number
+  finished_at?: number
+  expires_at?: number
+  plan_id?: string
+  manifest?: RestoreManifest
+  source_schema?: number
+  target_schema?: number
+  counts?: RestoreCounts
+  error_code?: string
+  error?: string
+}
+
+export interface RestoreDescriptor {
+  descriptor: {
+    format: 'oonfeewrt-portable-backup'
+    format_version: 1
+    upload_content_type: 'application/vnd.oonfeewrt.backup'
+    confirmation_contract: 'controller-restore-confirm-v1'
+    typed_confirmation: 'RESTORE CONTROLLER'
+    confirmation_requires: string[]
+  }
+  disclosure: {
+    router_management_calls: false
+    router_changes: false
+    live_controller_changes: false
+    automatic_router_apply: false
+    summary: string
+  }
+  limits: {
+    max_upload_bytes: number
+    max_database_bytes: number
+    history: number
+    retention_seconds: number
+    preview_timeout_seconds: number
+    confirmation_timeout_seconds: number
+    min_export_passphrase_characters: number
+    max_export_passphrase_bytes: number
+  }
+  uploads: RestoreUpload[]
+  previews: RestorePreview[]
+}
+
+export interface RestoreConfirmation {
+  plan_id: string
+  export_passphrase: string
+  destination_runtime_passphrase: string
+  typed_confirmation: 'RESTORE CONTROLLER'
+  acknowledge_restart: true
+  acknowledge_session_revocation: true
+  acknowledge_router_writes_suppressed: true
+  acknowledge_no_automatic_router_apply: true
+}
+
+export interface RestoreIntent {
+  id: string
+  state: 'accepted'
+  accepted_at: number
+}
+
+export type RestoreSuppression =
+  | { active: false }
+  | { active: true; restore_id: string; created_at: string; reason: string }
 
 export const api = {
   setupState: () => get<{ needs_setup: boolean }>('/setup'),
@@ -1330,8 +1738,87 @@ export const api = {
       current_password,
       new_password,
     }),
+  account: () => get<{ account: Account }>('/account'),
+  reauthenticate: (password: string) =>
+    post<{ reauthenticated_until: number }>('/session/reauth', { password }),
+  accountSessions: () => get<{ sessions: AccountSession[] }>('/account/sessions'),
+  revokeAccountSession: (sessionID: string) =>
+    del<SessionMutationResponse>(`/account/sessions/${encodeURIComponent(sessionID)}`),
+  accounts: () => get<AccountsResponse>('/accounts'),
+  createAccount: (username: string, password: string, role: AccountRole) =>
+    post<AccountMutationResponse>('/accounts', { username, password, role }),
+  setAccountRole: (id: number, role: AccountRole) =>
+    patch<AccountMutationResponse>(`/accounts/${id}/role`, { role }),
+  setAccountEnabled: (id: number, enabled: boolean) =>
+    patch<AccountMutationResponse>(`/accounts/${id}/enabled`, { enabled }),
+  deleteAccount: (id: number) =>
+    del<SessionMutationResponse>(`/accounts/${id}`),
+  resetAccountPassword: (id: number, password: string) =>
+    post<SessionMutationResponse>(`/accounts/${id}/password`, { new_password: password }),
+  managedAccountSessions: (id: number) =>
+    get<{ sessions: AccountSession[] }>(`/accounts/${id}/sessions`),
+  revokeManagedAccountSession: (id: number, sessionID: string) =>
+    del<SessionMutationResponse>(`/accounts/${id}/sessions/${encodeURIComponent(sessionID)}`),
+  revokeManagedAccountSessions: (id: number) =>
+    del<SessionMutationResponse>(`/accounts/${id}/sessions`),
+  diagnostics: () => get<DiagnosticDescriptor>('/diagnostics'),
+  startDiagnostics: () => post<{ job: DiagnosticJob }>('/diagnostics'),
+  diagnostic: (id: string) =>
+    get<{ job: DiagnosticJob }>(`/diagnostics/${encodeURIComponent(id)}`),
+  cancelDiagnostics: (id: string) =>
+    post<{ job: DiagnosticJob }>(`/diagnostics/${encodeURIComponent(id)}/cancel`),
+  downloadDiagnostics: (id: string, maxBytes: number, expectedBytes: number) =>
+    download(`/diagnostics/${encodeURIComponent(id)}/download`, maxBytes, expectedBytes),
+  backups: () => get<BackupDescriptor>('/backups'),
+  backup: (id: string) =>
+    get<{ job: BackupJob }>(`/backups/${encodeURIComponent(id)}`),
+  startBackup: (
+    planID: string,
+    acknowledgeSensitiveContent: boolean,
+    exportPassphrase: string,
+    confirmExportPassphrase: string,
+  ) => post<{ job: BackupJob }>('/backups', {
+    plan_id: planID,
+    acknowledge_sensitive_content: acknowledgeSensitiveContent,
+    export_passphrase: exportPassphrase,
+    confirm_export_passphrase: confirmExportPassphrase,
+  }),
+  cancelBackup: (id: string) =>
+    post<{ job: BackupJob }>(`/backups/${encodeURIComponent(id)}/cancel`),
+  backupDownloadURL: (id: string) => `/api/v1/backups/${encodeURIComponent(id)}/download`,
+  restores: () => get<RestoreDescriptor>('/restores'),
+  uploadRestore: (file: Blob) =>
+    postRaw<{ upload: RestoreUpload }>('/restores/uploads', file, 'application/vnd.oonfeewrt.backup'),
+  startRestorePreview: (uploadID: string, exportPassphrase: string) =>
+    post<{ preview: RestorePreview }>('/restores/previews', {
+      upload_id: uploadID,
+      export_passphrase: exportPassphrase,
+    }),
+  restorePreview: (id: string) =>
+    get<{ preview: RestorePreview }>(`/restores/previews/${encodeURIComponent(id)}`),
+  cancelRestorePreview: (id: string) =>
+    post<{ preview: RestorePreview }>(`/restores/previews/${encodeURIComponent(id)}/cancel`),
+  confirmRestore: (id: string, confirmation: RestoreConfirmation) =>
+    post<{ intent: RestoreIntent }>(`/restores/previews/${encodeURIComponent(id)}/confirm`, confirmation),
+  restoreSuppression: () =>
+    get<{ suppression: RestoreSuppression }>('/restores/suppression'),
+  resumeRouterWrites: (restoreID: string, typedConfirmation: 'RESUME ROUTER WRITES') =>
+    post<{ suppression: RestoreSuppression }>('/restores/suppression/resume', {
+      restore_id: restoreID,
+      typed_confirmation: typedConfirmation,
+    }),
 
   dashboard: () => get<Dashboard>('/dashboard'),
+  speedTests: (limit = 20) =>
+    get<SpeedTestCollection>(`/speedtests?limit=${encodeURIComponent(limit)}`),
+  speedTest: (id: string) => get<SpeedTestJob>(`/speedtests/${encodeURIComponent(id)}`),
+  startSpeedTest: (planID: string, acknowledgeDataUse: boolean) =>
+    post<SpeedTestJob>('/speedtests', {
+      acknowledge_data_use: acknowledgeDataUse,
+      plan_id: planID,
+    }),
+  cancelSpeedTest: (id: string) =>
+    post<SpeedTestJob>(`/speedtests/${encodeURIComponent(id)}/cancel`, {}),
   devices: () => get<{ devices: Device[] }>('/devices'),
   /** Records a decision ABOUT a foreign section. Writes nothing to any device.
    *  An empty note clears it. */

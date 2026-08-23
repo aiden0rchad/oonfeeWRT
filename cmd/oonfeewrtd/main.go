@@ -46,6 +46,7 @@ func run() error {
 // healthcheck path must return before daemon.Open touches the data directory,
 // keyring, passphrase file, or database.
 func runWithConfig(cfg daemon.Config, args []string) error {
+	cfg.Version = version
 	flags := flag.NewFlagSet("oonfeewrtd", flag.ContinueOnError)
 	var (
 		showVersion = flags.Bool("version", false, "print the version and exit")
@@ -85,17 +86,29 @@ func runWithConfig(cfg daemon.Config, args []string) error {
 	defer stop()
 
 	log.Info("oonfeewrtd starting", "version", version, "data_dir", cfg.DataDir)
-	d, err := daemon.Open(ctx, cfg, log)
-	if err != nil {
-		return err
-	}
-	if err := d.StartCollector(ctx, collector.Options{}); err != nil {
-		return err
-	}
-	d.StartMaintenance(ctx)
-	d.StartNeighbourReconciler(ctx)
-	if err := d.Serve(ctx); err != nil {
-		return err
+	process := daemon.NewProcess(cfg, log)
+	defer process.Close()
+	for {
+		d, err := process.Open(ctx)
+		if err != nil {
+			return err
+		}
+		if err := d.StartCollector(ctx, collector.Options{}); err != nil {
+			return errors.Join(err, d.Close())
+		}
+		d.StartMaintenance(ctx)
+		if !d.RouterWritesSuppressed() {
+			d.StartNeighbourReconciler(ctx)
+		}
+		err = d.Serve(ctx)
+		if errors.Is(err, daemon.ErrRestoreRestart) {
+			log.Info("controller restore shutdown completed; reopening restored state")
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
 	}
 	log.Info("stopped cleanly")
 	return nil

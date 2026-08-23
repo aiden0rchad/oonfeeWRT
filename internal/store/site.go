@@ -30,44 +30,67 @@ import (
 // silently re-key roaming across the whole fleet and break fast transition
 // until every device had been re-applied.
 
+type siteReader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 // Site loads the whole desired state, creating the site row on first use.
 func (db *DB) Site(ctx context.Context) (model.Site, error) {
-	var s model.Site
-	row := db.sql.QueryRowContext(ctx, `SELECT uuid, name FROM site WHERE id=1`)
-	err := row.Scan(&s.UUID, &s.Name)
+	s, err := db.siteOn(ctx, db.sql, true)
 	if err == sql.ErrNoRows {
-		if s, err = db.createSite(ctx); err != nil {
+		s, err = db.createSite(ctx)
+		if err != nil {
 			return model.Site{}, err
 		}
-	} else if err != nil {
+		return db.populateSiteOn(ctx, db.sql, s, true)
+	}
+	if err != nil {
 		return model.Site{}, fmt.Errorf("store: read site: %w", err)
 	}
+	return s, nil
+}
 
-	if s.Networks, err = db.networks(ctx); err != nil {
+// siteOn reads existing desired state through one caller-owned snapshot.
+// revealSecrets=false authenticates sealed WLAN/mesh values but retains only
+// the minimum presence/length shape required by model validation.
+func (db *DB) siteOn(ctx context.Context, q siteReader, revealSecrets bool) (model.Site, error) {
+	var s model.Site
+	if err := q.QueryRowContext(ctx, `SELECT uuid, name FROM site WHERE id=1`).
+		Scan(&s.UUID, &s.Name); err != nil {
 		return model.Site{}, err
 	}
-	if s.Zones, err = db.zonePolicies(ctx); err != nil {
+	return db.populateSiteOn(ctx, q, s, revealSecrets)
+}
+
+func (db *DB) populateSiteOn(ctx context.Context, q siteReader, s model.Site,
+	revealSecrets bool) (model.Site, error) {
+	var err error
+	if s.Networks, err = db.networksOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
-	if s.Policies, err = db.policies(ctx); err != nil {
+	if s.Zones, err = db.zonePoliciesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
-	if s.PolicyClients, err = db.policyClients(ctx); err != nil {
+	if s.Policies, err = db.policiesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
-	if s.Groups, err = db.groups(ctx); err != nil {
+	if s.PolicyClients, err = db.policyClientsOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
-	if s.WLANs, err = db.wlans(ctx); err != nil {
+	if s.Groups, err = db.groupsOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
-	if s.Uplinks, err = db.uplinks(ctx); err != nil {
+	if s.WLANs, err = db.wlansOn(ctx, q, revealSecrets); err != nil {
+		return model.Site{}, err
+	}
+	if s.Uplinks, err = db.uplinksOn(ctx, q); err != nil {
 		return s, err
 	}
-	if s.Meshes, err = db.meshes(ctx); err != nil {
+	if s.Meshes, err = db.meshesOn(ctx, q, revealSecrets); err != nil {
 		return model.Site{}, err
 	}
-	if s.Overrides, err = db.Overrides(ctx); err != nil {
+	if s.Overrides, err = db.overridesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
 	return s, nil
@@ -84,7 +107,11 @@ func (db *DB) Site(ctx context.Context) (model.Site, error) {
 // applied on one device, which is recoverable and much less bad than a
 // controller that will not start because of a row from a newer version.
 func (db *DB) Overrides(ctx context.Context) (model.Overrides, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.overridesOn(ctx, db.sql)
+}
+
+func (db *DB) overridesOn(ctx context.Context, q siteReader) (model.Overrides, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT device_id, path, value_json FROM device_overrides
 		  ORDER BY device_id, path`)
 	if err != nil {
@@ -93,6 +120,9 @@ func (db *DB) Overrides(ctx context.Context) (model.Overrides, error) {
 	defer rows.Close()
 	out := model.Overrides{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var deviceID int64
 		var path, raw string
 		if err := rows.Scan(&deviceID, &path, &raw); err != nil {
@@ -174,7 +204,11 @@ func (db *DB) SetSiteName(ctx context.Context, name string) error {
 // ---- networks ----
 
 func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.networksOn(ctx, db.sql)
+}
+
+func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, name, vlan, cidr, zone, dhcp_json, enabled FROM networks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list networks: %w", err)
@@ -182,6 +216,9 @@ func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 	defer rows.Close()
 	out := []model.Network{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var n model.Network
 		var rawDHCP string
 		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone,
@@ -206,7 +243,11 @@ func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 // missing or misspelled forwarding list to an empty/default value would turn
 // unreadable access control into a different access control without consent.
 func (db *DB) zonePolicies(ctx context.Context) ([]model.ZonePolicy, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.zonePoliciesOn(ctx, db.sql)
+}
+
+func (db *DB) zonePoliciesOn(ctx context.Context, q siteReader) ([]model.ZonePolicy, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT name, policy_json FROM zones ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list zone policies: %w", err)
@@ -214,6 +255,9 @@ func (db *DB) zonePolicies(ctx context.Context) ([]model.ZonePolicy, error) {
 	defer rows.Close()
 	out := []model.ZonePolicy{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var name, raw string
 		if err := rows.Scan(&name, &raw); err != nil {
 			return nil, err
@@ -478,7 +522,11 @@ func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
 // ---- AP groups ----
 
 func (db *DB) groups(ctx context.Context) ([]model.APGroup, error) {
-	rows, err := db.sql.QueryContext(ctx, `SELECT id, name FROM ap_groups ORDER BY id`)
+	return db.groupsOn(ctx, db.sql)
+}
+
+func (db *DB) groupsOn(ctx context.Context, q siteReader) ([]model.APGroup, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, name FROM ap_groups ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list AP groups: %w", err)
 	}
@@ -486,6 +534,9 @@ func (db *DB) groups(ctx context.Context) ([]model.APGroup, error) {
 	byID := map[int]*model.APGroup{}
 	out := []model.APGroup{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var g model.APGroup
 		if err := rows.Scan(&g.ID, &g.Name); err != nil {
 			return nil, err
@@ -499,13 +550,16 @@ func (db *DB) groups(ctx context.Context) ([]model.APGroup, error) {
 		byID[out[i].ID] = &out[i]
 	}
 
-	mrows, err := db.sql.QueryContext(ctx,
+	mrows, err := q.QueryContext(ctx,
 		`SELECT group_id, device_id FROM ap_group_members ORDER BY group_id, device_id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list AP group members: %w", err)
 	}
 	defer mrows.Close()
 	for mrows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var gid int
 		var did int64
 		if err := mrows.Scan(&gid, &did); err != nil {
@@ -595,7 +649,11 @@ func (db *DB) DeleteGroup(ctx context.Context, id int) error {
 // ---- WLANs ----
 
 func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.wlansOn(ctx, db.sql, true)
+}
+
+func (db *DB) wlansOn(ctx context.Context, q siteReader, revealSecrets bool) ([]model.WLAN, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, ssid, network_id, group_id, bands, security_json,
 		        security_key_enc, roaming_json, options_json, enabled
 		   FROM wlans ORDER BY id`)
@@ -605,8 +663,12 @@ func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
 	defer rows.Close()
 	out := []model.WLAN{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var w model.WLAN
-		var bands, sec, roam, opts string
+		var bands, roam, opts string
+		var sec []byte
 		var keyEnc []byte
 		if err := rows.Scan(&w.ID, &w.SSID, &w.NetworkID, &w.GroupID, &bands,
 			&sec, &keyEnc, &roam, &opts, &w.Enabled); err != nil {
@@ -617,13 +679,33 @@ func (db *DB) wlans(ctx context.Context) ([]model.WLAN, error) {
 		// open security. Refuse the whole load instead: a site model that is
 		// partly guessed is worse than one that will not open.
 		var security storedSecurity
-		if err := json.Unmarshal([]byte(sec), &security); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(sec))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&security); err != nil {
+			clear(sec)
 			return nil, fmt.Errorf("store: WLAN %d has unreadable security: %w", w.ID, err)
 		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			clear(sec)
+			return nil, fmt.Errorf("store: WLAN %d has unreadable security: trailing JSON", w.ID)
+		}
+		clear(sec)
 		w.Security.Mode, w.Security.PMF = security.Mode, security.PMF
-		w.Security.Key, err = db.openText(keyEnc, wlanKeyAAD(w.ID), fmt.Sprintf("WLAN %d key", w.ID))
-		if err != nil {
-			return nil, err
+		if revealSecrets {
+			w.Security.Key, err = db.openText(keyEnc, wlanKeyAAD(w.ID), fmt.Sprintf("WLAN %d key", w.ID))
+			clear(keyEnc)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			length, authErr := db.authenticateText(keyEnc, wlanKeyAAD(w.ID), fmt.Sprintf("WLAN %d key", w.ID))
+			clear(keyEnc)
+			if authErr != nil {
+				return nil, authErr
+			}
+			if length > 0 {
+				w.Security.Key = "xxxxxxxx"
+			}
 		}
 		if err := json.Unmarshal([]byte(roam), &w.Roaming); err != nil {
 			return nil, fmt.Errorf("store: WLAN %d has unreadable roaming: %w", w.ID, err)
@@ -792,8 +874,13 @@ func formatBands(bs []model.Band) string {
 // ---- 802.11s mesh backhauls ----
 
 func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
-	rows, err := db.sql.QueryContext(ctx,
-		`SELECT id, mesh_id, network_id, group_id, band, key_enc, enabled
+	return db.meshesOn(ctx, db.sql, true)
+}
+
+func (db *DB) meshesOn(ctx context.Context, q siteReader, revealSecrets bool) ([]model.Mesh, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT id, mesh_id, network_id, group_id, band,
+		        length(CAST(key AS BLOB)), key_enc, enabled
 		   FROM meshes ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list meshes: %w", err)
@@ -801,16 +888,38 @@ func (db *DB) meshes(ctx context.Context) ([]model.Mesh, error) {
 	defer rows.Close()
 	out := []model.Mesh{}
 	for rows.Next() {
-		var m model.Mesh
-		var band string
-		var keyEnc []byte
-		if err := rows.Scan(&m.ID, &m.MeshID, &m.NetworkID, &m.GroupID,
-			&band, &keyEnc, &m.Enabled); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		m.Key, err = db.openText(keyEnc, meshKeyAAD(m.ID), fmt.Sprintf("mesh %d key", m.ID))
-		if err != nil {
+		var m model.Mesh
+		var band string
+		var legacyKeyBytes int64
+		var keyEnc []byte
+		if err := rows.Scan(&m.ID, &m.MeshID, &m.NetworkID, &m.GroupID,
+			&band, &legacyKeyBytes, &keyEnc, &m.Enabled); err != nil {
 			return nil, err
+		}
+		if legacyKeyBytes != 0 {
+			return nil, fmt.Errorf("store: mesh %d still has an unsealed legacy key", m.ID)
+		}
+		if revealSecrets {
+			m.Key, err = db.openText(keyEnc, meshKeyAAD(m.ID), fmt.Sprintf("mesh %d key", m.ID))
+			clear(keyEnc)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			length, authErr := db.authenticateText(keyEnc, meshKeyAAD(m.ID), fmt.Sprintf("mesh %d key", m.ID))
+			clear(keyEnc)
+			if authErr != nil {
+				return nil, authErr
+			}
+			switch {
+			case length >= 8:
+				m.Key = "xxxxxxxx"
+			case length > 0:
+				m.Key = strings.Repeat("x", length)
+			}
 		}
 		m.Band = model.Band(band)
 		out = append(out, m)
@@ -921,7 +1030,11 @@ func (db *DB) DeleteMesh(ctx context.Context, id int) error {
 
 // uplinks loads every wireless uplink in the site.
 func (db *DB) uplinks(ctx context.Context) ([]model.Uplink, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.uplinksOn(ctx, db.sql)
+}
+
+func (db *DB) uplinksOn(ctx context.Context, q siteReader) ([]model.Uplink, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, device_id, wlan_id, band, enabled FROM uplinks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list uplinks: %w", err)
@@ -929,6 +1042,9 @@ func (db *DB) uplinks(ctx context.Context) ([]model.Uplink, error) {
 	defer rows.Close()
 	var out []model.Uplink
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var u model.Uplink
 		var band string
 		if err := rows.Scan(&u.ID, &u.DeviceID, &u.WLANID, &band, &u.Enabled); err != nil {

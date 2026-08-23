@@ -492,7 +492,7 @@ func TestARenameIsNotActionable(t *testing.T) {
 // with a band and no modes, a later one recorded phy0/phy1 with modes, and the
 // apply preview told the operator "radio radio0 is gone. WLANs targeted at its
 // band will not render on this device" about a radio that was up and carrying
-// oonfee-roam — offered as the probable cause of unrelated omissions.
+// fixture-roam — offered as the probable cause of unrelated omissions.
 func TestARadioThatVanishesWithNoModeEvidenceIsNotCalledLost(t *testing.T) {
 	before := NewRegistry()
 	before.Radios = []Radio{

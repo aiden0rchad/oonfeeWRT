@@ -365,7 +365,7 @@ func TestPreviewTokenTracksSiteSecretAndRealFleetInputs(t *testing.T) {
 	t.Run("device identity credential capabilities ownership and live UCI", func(t *testing.T) {
 		addr := startMock(t)
 		d := openDaemon(t)
-		dev := seedAP(t, d, "60:38:e0:00:0d:01", "binding-ap", addr, capability.Present)
+		dev := seedAP(t, d, "02:00:00:00:0d:01", "binding-ap", addr, capability.Present)
 		if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 			bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
 			t.Fatal(err)
@@ -456,8 +456,8 @@ func TestApplyRejectsMissingAndStaleBindingsBeforeAWrite(t *testing.T) {
 func TestApplyErrorPreflightStopsFleetAndSelectionNarrows(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	good := seedAP(t, d, "60:38:e0:00:0e:01", "good-ap", addr, capability.Present)
-	bad := seedAP(t, d, "60:38:e0:00:0e:02", "gone-ap", "127.0.0.1:1", capability.Present)
+	good := seedAP(t, d, "02:00:00:00:0e:01", "good-ap", addr, capability.Present)
+	bad := seedAP(t, d, "02:00:00:00:0e:02", "gone-ap", "127.0.0.1:1", capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), good.ID,
 		bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
 		t.Fatal(err)
@@ -522,8 +522,8 @@ func TestApplyErrorPreflightStopsFleetAndSelectionNarrows(t *testing.T) {
 func TestApplyBlockedPreflightStopsEarlierDevice(t *testing.T) {
 	firstAddr, secondAddr := startMock(t), startMock(t)
 	d := openDaemon(t)
-	first := seedAP(t, d, "60:38:e0:00:0f:01", "first-ap", firstAddr, capability.Present)
-	second := seedAP(t, d, "60:38:e0:00:0f:02", "blocked-ap", secondAddr, capability.Present)
+	first := seedAP(t, d, "02:00:00:00:0f:01", "first-ap", firstAddr, capability.Present)
+	second := seedAP(t, d, "02:00:00:00:0f:02", "blocked-ap", secondAddr, capability.Present)
 	for _, dev := range []*store.Device{first, second} {
 		if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 			bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
@@ -553,7 +553,7 @@ func TestApplyBlockedPreflightStopsEarlierDevice(t *testing.T) {
 func TestApplyFatalDriverRiskNeedsServerAcknowledgement(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:10:01", "marvell-ap", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:10:01", "marvell-ap", addr, capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 		bindingCaps("Marvell 88W8964"), string(capability.ClassA)); err != nil {
 		t.Fatal(err)
@@ -584,7 +584,7 @@ func TestApplyFatalDriverRiskNeedsServerAcknowledgement(t *testing.T) {
 func TestApplyCautionNeedsServerAcknowledgementBeforeWrite(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:10:11", "mesh-ap", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:10:11", "mesh-ap", addr, capability.Present)
 	caps := bindingCaps("Generic MAC80211")
 	caps.Set(capability.FeatMesh, capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), dev.ID, caps,
@@ -624,8 +624,8 @@ func TestApplyCautionNeedsServerAcknowledgementBeforeWrite(t *testing.T) {
 func TestApplyTraversalPreflightStopsEarlierWirelessDevice(t *testing.T) {
 	apAddr, gatewayAddr := startMock(t), startMock(t)
 	d := openDaemon(t)
-	ap := seedAP(t, d, "60:38:e0:00:11:01", "first-ap", apAddr, capability.Present)
-	gateway := seedAP(t, d, "60:38:e0:00:11:02", "gateway", gatewayAddr, capability.Present)
+	ap := seedAP(t, d, "02:00:00:00:11:01", "first-ap", apAddr, capability.Present)
+	gateway := seedAP(t, d, "02:00:00:00:11:02", "gateway", gatewayAddr, capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), ap.ID,
 		bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
 		t.Fatal(err)
@@ -671,7 +671,7 @@ func TestApplyTraversalPreflightStopsEarlierWirelessDevice(t *testing.T) {
 func TestPerDeviceReplanRejectsLiveDriftBeforeWrite(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:12:01", "drift-ap", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:12:01", "drift-ap", addr, capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 		bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
 		t.Fatal(err)
@@ -695,8 +695,8 @@ func TestPerDeviceReplanRejectsLiveDriftBeforeWrite(t *testing.T) {
 func TestApplyRunOutlivesRequestCancellationBetweenDevices(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	first := seedAP(t, d, "60:38:e0:00:13:01", "first", addr, capability.Present)
-	second := seedAP(t, d, "60:38:e0:00:13:02", "second", addr, capability.Present)
+	first := seedAP(t, d, "02:00:00:00:13:01", "first", addr, capability.Present)
+	second := seedAP(t, d, "02:00:00:00:13:02", "second", addr, capability.Present)
 	preview := bindingPreview(t, d)
 	releaseSecond, err := d.deviceOps.acquire(context.Background(), second.ID)
 	if err != nil {
@@ -741,7 +741,7 @@ func TestApplyRunOutlivesRequestCancellationBetweenDevices(t *testing.T) {
 func TestApplyWillNotArmRollbackWithoutEnoughDrainBudget(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t) // testConfig intentionally has a two-second drain budget.
-	dev := seedAP(t, d, "60:38:e0:00:13:11", "budget-ap", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:13:11", "budget-ap", addr, capability.Present)
 	if err := d.Store.SetCapabilities(context.Background(), dev.ID,
 		bindingCaps("Generic MAC80211"), string(capability.ClassA)); err != nil {
 		t.Fatal(err)
@@ -769,7 +769,7 @@ func TestApplyWillNotArmRollbackWithoutEnoughDrainBudget(t *testing.T) {
 
 func TestErrorPreviewSerialisesChangesAsAnArray(t *testing.T) {
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:14:01", "gone", "127.0.0.1:1", capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:14:01", "gone", "127.0.0.1:1", capability.Present)
 	preview := bindingPreview(t, d)
 	if preview.Devices[0].Error == "" || preview.Devices[0].Changes == nil {
 		t.Fatalf("error row = %+v, want non-nil empty changes", preview.Devices[0])

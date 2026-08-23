@@ -235,7 +235,7 @@ func TestConvergedApplyRepairsOwnedLedger(t *testing.T) {
 	ctx := context.Background()
 	addr := startMock(t)
 	d := openDaemon(t)
-	dev := seedAP(t, d, "60:38:e0:00:0c:01", "ap-one", addr, capability.Present)
+	dev := seedAP(t, d, "02:00:00:00:0c:01", "ap-one", addr, capability.Present)
 
 	caps := capability.NewRegistry()
 	caps.Class = capability.ClassA
@@ -444,8 +444,8 @@ func TestFleetApplyStopsAfterAppliedDeviceOwnershipLedgerFailure(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)
 	d.Config.ApplyDrain = applyengine.MinApplyBudget() + 5*time.Second
-	first := seedAP(t, d, "60:38:e0:00:0d:01", "ap-one", startMock(t), capability.Present)
-	second := seedAP(t, d, "60:38:e0:00:0d:02", "ap-two", startMock(t), capability.Present)
+	first := seedAP(t, d, "02:00:00:00:0d:01", "ap-one", startMock(t), capability.Present)
+	second := seedAP(t, d, "02:00:00:00:0d:02", "ap-two", startMock(t), capability.Present)
 
 	caps := capability.NewRegistry()
 	caps.Class = capability.ClassA

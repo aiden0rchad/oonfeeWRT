@@ -421,7 +421,7 @@ func TestOneUplinkPerDeviceAndTheErrorSaysWhy(t *testing.T) {
 	// work — an uplink naming a device that does not exist would render for
 	// nobody and prune for nobody.
 	at := int64(1)
-	dev := &Device{MAC: "60:38:e0:00:0e:01", Host: "192.168.1.9", Name: "no-cable",
+	dev := &Device{MAC: "02:00:00:00:0e:01", Host: "192.168.1.9", Name: "no-cable",
 		Scheme: "http", AdoptedAt: &at}
 	if err := db.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)

@@ -3,11 +3,13 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets the published
-[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
-release candidate. Its public archives and multi-platform container passed a
-clean, zero-device first-run and recovery check. Back up both the controller and
-each router before using it on a network you cannot afford to interrupt.
+This guide targets final schema-19 release `v0.1.0`. The
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0)
+and its completed tag workflow are the publication source of truth; run the
+download commands only after that release is available. Back up both the
+controller and each router before using it on a network you cannot afford to
+interrupt. Upgrade and rollback from historical `v0.1.0-rc.1` are documented
+below.
 
 ## What can change a router
 
@@ -49,7 +51,7 @@ Set the release and platform. On macOS, `uname -m` reports `x86_64` rather than
 the archive's `amd64`, so normalize it:
 
 ```sh
-VERSION=v0.1.0-rc.1
+VERSION=v0.1.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -71,7 +73,7 @@ tar -xzf "$NAME.tar.gz"
 "$NAME/oonfeewrtd" -version
 ```
 
-The release-candidate macOS binaries are not Developer ID signed or notarized.
+The macOS binaries are not Developer ID signed or notarized.
 Use the checksum-verified archive above; do not bypass a checksum mismatch.
 
 Keep the extracted binary in that directory or install it on `PATH`:
@@ -84,9 +86,9 @@ sudo install -m 0755 "$NAME/oonfeewrt-recoverycheck" \
 
 Create separate private directories for persistent state and the unattended
 passphrase. The database and `keyring.json` are created in the data directory.
-Keep that directory mode `0700`: in `v0.1.0-rc.1`, live SQLite WAL/SHM
-sidecars inherit the process umask even though the directory, database, and
-keyring are private. Source after this tag also forces the sidecars to `0600`.
+Keep that directory mode `0700`. v0.1.0 also forces newly created SQLite
+database, WAL, and SHM files to mode `0600`. Historical `v0.1.0-rc.1` relied on
+the process umask for its sidecars, so keep `umask 077` during an RC upgrade.
 
 ```sh
 install -d -m 0700 "$HOME/.local/share/oonfeewrt" "$HOME/.config/oonfeewrt"
@@ -110,11 +112,17 @@ first run and once after each restart.
 
 ## Run the container
 
-After the tag workflow succeeds, its image is
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.0-rc.1`. It is multi-platform, defaults to
+After the tag workflow succeeds, its immutable release tag is
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.0`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
 backups straightforward on both Linux and Docker Desktop.
+
+Install `cosign` from the
+[official Sigstore instructions](https://docs.sigstore.dev/cosign/system_config/installation/),
+then verify the GitHub Actions keyless identity before first use. Stable aliases
+`0.1.0`, `0.1`, and `latest` resolve to the same final manifest, but deployments
+should pin `v0.1.0` or its reported digest.
 
 ```sh
 [ "$(id -u)" -ne 0 ] || { echo "run Docker as a non-root user" >&2; exit 1; }
@@ -130,6 +138,11 @@ Bridge mode works on Linux and Docker Desktop. It intentionally publishes only
 to host loopback. Layer-2 discovery does not cross the bridge; adopt by address.
 
 ```sh
+cosign verify \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.0" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
+
 docker run -d \
   --name oonfeewrt \
   --restart unless-stopped \
@@ -145,8 +158,13 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.0-rc.1
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
 ```
+
+The release archive also includes `docker-compose.yml`. It uses the same final
+image, a named data volume, a mode-0600 passphrase file owned by UID 65532, and
+the loopback-only bridge mapping above. Host networking is documented in the
+file but remains an explicit Linux-only opt-in.
 
 On Linux, full ARP/mDNS discovery requires host networking. Replace the `-p`
 line with `--network host` and set
@@ -209,6 +227,65 @@ before restarting after a real restore.
 To upgrade, retain that backup, stop the old process cleanly, replace the binary
 or container tag, and restart with the same data volume and passphrase file. The
 controller migrates its database on startup and refuses an unsupported downgrade.
+
+### Upgrade from v0.1.0-rc.1 and roll back
+
+`v0.1.0-rc.1` uses schema 17; `v0.1.0` migrates it to schema 19. Before the
+upgrade, stop the RC cleanly and copy its database and matching keyring. Verify
+that pair with the RC archive's `oonfeewrt-recoverycheck`, then retain it without
+opening it with the final daemon. Start v0.1.0 with a copy of the same data pair
+and unchanged passphrase file.
+
+Rollback is a data restore, not merely an image-tag change: stop v0.1.0, retain
+the schema-19 state separately, restore the untouched schema-17 database and
+matching keyring, then restart `v0.1.0-rc.1` with its prior passphrase. Never
+point the RC daemon at a schema-19 database. Controller migration and rollback
+make no router request and do not revert router configuration.
+
+## Portable backup and restore
+
+v0.1.0 automates the paired recovery workflow above. An owner can export one encrypted native
+`.oowrtbak` containing a consistent live-WAL database snapshot and matching
+wrapped key material from **Settings → Backup & Restore**. The artifact includes
+controller state only; it is not a backup of foreign or unmanaged router UCI.
+
+Use TLS through the trusted reverse proxy above, or access the controller
+directly on loopback. Export start/download and restore mutations require recent
+account-password reauthentication. Choose a separate export passphrase of at
+least 16 Unicode characters and at most 4096 UTF-8 bytes; it is not stored by
+the controller. Restore accepts the raw `.oowrtbak`, authenticates and migrates
+only a disposable copy, and shows manifest identity, source/target schema and
+recovery counts before any replacement.
+
+Confirmation requires that export passphrase again, the current controller
+runtime/boot passphrase, exact `RESTORE CONTROLLER`, and all four safety
+acknowledgements. The runtime passphrase is not the signed-in account password.
+For a container, keep `/data` on the same persistent volume and keep the same
+protected `OONFEE_PASSPHRASE_FILE` across ordinary restarts; otherwise the
+database/keyring pair will not reopen. The confirmed restore uses a controlled
+in-process restart, not an unattended router operation.
+
+Before replacement, the controller retains the prior pair as a mode-0600
+encrypted artifact at
+`<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`, protected by the
+same export passphrase used for confirmation. It is not automatically expired
+by time. After the applied-restore audit receipt is cleared, retention targets
+three recognized safety artifacts, fills available slots newest-first and
+prunes the rest. Artifacts referenced by an active restore marker, receipt or
+suppression record are always preserved, even if that temporarily exceeds
+three. For longer retention, copy one to protected backup storage
+before pruning and document its passphrase separately. It can be uploaded through
+the same staged restore workflow later.
+
+Successful restore revokes all controller sessions. Restored desired state is
+never automatically applied to routers, and router writes remain persistently
+suppressed until an owner reauthenticates and enters exact
+`RESUME ROUTER WRITES`. Read-only monitoring of restored devices may resume
+after restart while that gate remains active. Removing it immediately
+re-enables automatic 802.11k neighbour maintenance; the reconciler may write
+hostapd RRM neighbour state even though restored desired configuration is not
+automatically Applied. Review the restored inventory and intent before
+removing the gate.
 
 ## First adoption
 

@@ -17,7 +17,7 @@ func TestDaemonStartupClosesInterruptedRadioScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	device := &store.Device{MAC: "60:38:e0:44:00:01", Host: "192.0.2.1", Name: "scan-ap"}
+	device := &store.Device{MAC: "02:00:00:44:00:01", Host: "192.0.2.1", Name: "scan-ap"}
 	if err := first.Store.UpsertDevice(ctx, device); err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -43,6 +44,16 @@ func HashPassword(password []byte, p Params) (string, error) {
 // ErrBadPassword is returned when a password does not match.
 var ErrBadPassword = errors.New("secrets: password does not match")
 
+const maxPasswordHashBytes = 1024
+
+// ValidatePasswordHash checks the bounded PHC envelope without performing
+// Argon2 work or requiring the password. Recovery uses it to reject an account
+// row that could satisfy the owner count but could never authenticate.
+func ValidatePasswordHash(encoded string) error {
+	_, _, _, err := parsePHC(encoded)
+	return err
+}
+
 // VerifyPassword checks a password against a PHC-format argon2id hash.
 //
 // The comparison is constant-time. A byte-wise early exit leaks how much of the
@@ -72,6 +83,9 @@ func NeedsRehash(encoded string, want Params) bool {
 }
 
 func parsePHC(encoded string) (Params, []byte, []byte, error) {
+	if len(encoded) == 0 || len(encoded) > maxPasswordHashBytes {
+		return Params{}, nil, nil, errors.New("secrets: password hash is malformed")
+	}
 	parts := strings.Split(encoded, "$")
 	// "", "argon2id", "v=19", "m=...,t=...,p=...", salt, hash
 	if len(parts) != 6 || parts[0] != "" {
@@ -80,8 +94,9 @@ func parsePHC(encoded string) (Params, []byte, []byte, error) {
 	if parts[1] != "argon2id" {
 		return Params{}, nil, nil, fmt.Errorf("secrets: password hash uses %q, not argon2id", parts[1])
 	}
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
+	versionText, ok := strings.CutPrefix(parts[2], "v=")
+	version, err := strconv.Atoi(versionText)
+	if !ok || err != nil {
 		return Params{}, nil, nil, errors.New("secrets: password hash has no version")
 	}
 	if version != argon2.Version {
@@ -89,11 +104,17 @@ func parsePHC(encoded string) (Params, []byte, []byte, error) {
 			"secrets: password hash is argon2 v%d, this build implements v%d",
 			version, argon2.Version)
 	}
-	var p Params
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d",
-		&p.MemoryKiB, &p.Time, &p.Threads); err != nil {
+	parameters := strings.Split(parts[3], ",")
+	if len(parameters) != 3 {
 		return Params{}, nil, nil, errors.New("secrets: password hash has malformed parameters")
 	}
+	memory, errMemory := parsePHCParameter(parameters[0], "m", 32)
+	timeCost, errTime := parsePHCParameter(parameters[1], "t", 32)
+	threads, errThreads := parsePHCParameter(parameters[2], "p", 8)
+	if errMemory != nil || errTime != nil || errThreads != nil {
+		return Params{}, nil, nil, errors.New("secrets: password hash has malformed parameters")
+	}
+	p := Params{MemoryKiB: uint32(memory), Time: uint32(timeCost), Threads: uint8(threads)}
 	// The parameters come out of the database, and argon2 panics on time or
 	// threads of zero. A corrupted row must be an error, not a crash.
 	if err := p.validate(); err != nil {
@@ -108,4 +129,12 @@ func parsePHC(encoded string) (Params, []byte, []byte, error) {
 		return Params{}, nil, nil, errors.New("secrets: password hash is malformed")
 	}
 	return p, salt, want, nil
+}
+
+func parsePHCParameter(field, name string, bits int) (uint64, error) {
+	value, ok := strings.CutPrefix(field, name+"=")
+	if !ok || value == "" {
+		return 0, errors.New("missing parameter")
+	}
+	return strconv.ParseUint(value, 10, bits)
 }

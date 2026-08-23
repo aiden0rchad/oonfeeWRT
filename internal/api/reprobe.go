@@ -68,6 +68,11 @@ func (s *Server) handleReprobe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	release, ok := s.beginOperation(w, operationCapability)
+	if !ok {
+		return
+	}
+	defer release()
 	// A successful probe replaces the capability record used to render plans.
 	if !s.lockSiteMutation(w, r) {
 		return

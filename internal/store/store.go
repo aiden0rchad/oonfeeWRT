@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 17
+const schemaVersion = 19
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -342,6 +342,54 @@ var migrations = map[int][]string{
 		   updated_at INTEGER NOT NULL,
 		   PRIMARY KEY (device_id, capability)
 		 ) WITHOUT ROWID`,
+	},
+	18: {
+		// Explicit controller-host network tests. There is intentionally no
+		// device foreign key: controller mode never calls or changes a router.
+		`CREATE TABLE IF NOT EXISTS speed_tests (
+		   id TEXT PRIMARY KEY,
+		   state TEXT NOT NULL CHECK (state IN ('queued','running','cancelling','completed','failed')),
+		   phase TEXT NOT NULL,
+		   progress_percent INTEGER NOT NULL DEFAULT 0 CHECK (progress_percent BETWEEN 0 AND 100),
+		   provider TEXT NOT NULL,
+		   method TEXT NOT NULL,
+		   provenance TEXT NOT NULL CHECK (provenance = 'controller-host'),
+		   endpoint TEXT NOT NULL,
+		   estimated_bytes INTEGER NOT NULL CHECK (estimated_bytes > 0),
+		   actor_admin_id INTEGER NOT NULL,
+		   actor_username TEXT NOT NULL,
+		   created_at INTEGER NOT NULL,
+		   started_at INTEGER,
+		   finished_at INTEGER,
+		   plan_id TEXT NOT NULL CHECK (length(plan_id) > 0),
+		   download_mbps REAL,
+		   upload_mbps REAL,
+		   idle_latency_ms REAL,
+		   idle_jitter_ms REAL,
+		   loaded_latency_ms REAL,
+		   loaded_jitter_ms REAL,
+		   bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+		   bytes_uploaded INTEGER NOT NULL DEFAULT 0,
+		   error TEXT,
+		   CHECK (started_at IS NULL OR started_at >= created_at),
+		   CHECK (finished_at IS NULL OR finished_at >= created_at)
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS speed_tests_one_active
+		   ON speed_tests (provenance) WHERE state IN ('queued','running','cancelling')`,
+		`CREATE INDEX IF NOT EXISTS speed_tests_history
+		   ON speed_tests (created_at DESC, id DESC)`,
+	},
+	19: {
+		// Existing controller operators become enabled owners. The explicit
+		// NOCASE index intentionally fails if a legacy database contains an
+		// ASCII case collision; the migration transaction then rolls back.
+		`ALTER TABLE admins ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'
+		   CHECK (role IN ('owner','admin','operator','viewer'))`,
+		`ALTER TABLE admins ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1
+		   CHECK (enabled IN (0,1))`,
+		`ALTER TABLE admins ADD COLUMN deleted_at INTEGER`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS admins_username_nocase
+		   ON admins (username COLLATE NOCASE)`,
 	},
 }
 

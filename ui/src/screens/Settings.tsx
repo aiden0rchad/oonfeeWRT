@@ -14,6 +14,7 @@ import type {
   NeighbourDevice,
   NeighbourResult,
   PreviewResult,
+  SessionInfo,
   Site,
   SiteNetwork,
   WLAN,
@@ -22,6 +23,10 @@ import {
   Banner, Button, Card, DataGrid, Field, Prop, SlideOver, Toggle, Unknown,
 } from '../components/ui'
 import { ago } from '../components/Chart'
+import { Account } from './Account'
+import { Accounts } from './Accounts'
+import { Diagnostics } from './Diagnostics'
+import { Backups } from './Backups'
 
 const applyOperationStorageKey = 'oonfee_last_apply_operation'
 const applyOperationPollMs = 1000
@@ -103,6 +108,110 @@ function applyWriteSummary(
   return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
 }
 
+type SettingsTab = 'network' | 'account' | 'accounts' | 'diagnostics' | 'backups'
+
+export function Settings({
+  devices,
+  devicesLoaded = true,
+  devicesError = '',
+  session,
+  onSessionChange,
+  onCurrentSessionRevoked,
+}: {
+  devices: Device[]
+  devicesLoaded?: boolean
+  devicesError?: string
+  session?: SessionInfo
+  onSessionChange?: (session: SessionInfo) => void
+  onCurrentSessionRevoked?: () => void
+}) {
+  const [tab, setTab] = useState<SettingsTab>('network')
+  const accountTabs = Boolean(session)
+  const accountsTab = session?.role === 'owner'
+  const diagnosticsTab = session?.role === 'owner' || session?.role === 'admin'
+  const backupsTab = session?.role === 'owner'
+
+  useEffect(() => {
+    if ((!accountTabs && tab === 'account') || (!accountsTab && tab === 'accounts') ||
+      (!diagnosticsTab && tab === 'diagnostics') || (!backupsTab && tab === 'backups')) {
+      setTab('network')
+    }
+  }, [accountTabs, accountsTab, backupsTab, diagnosticsTab, tab])
+
+  const tabs: { id: SettingsTab; label: string }[] = [
+    { id: 'network', label: 'Network' },
+    ...(accountTabs ? [{ id: 'account' as const, label: 'My account' }] : []),
+    ...(accountsTab ? [{ id: 'accounts' as const, label: 'Accounts' }] : []),
+    ...(diagnosticsTab ? [{ id: 'diagnostics' as const, label: 'Diagnostics' }] : []),
+    ...(backupsTab ? [{ id: 'backups' as const, label: 'Backup & Restore' }] : []),
+  ]
+
+  return <div className="settings-page">
+    <div className="settings-heading">
+      <h1>Settings</h1>
+      <span>{tab === 'network'
+        ? 'Desired network state and controller operations.'
+        : tab === 'diagnostics'
+          ? 'Redacted, stored-only support bundles.'
+          : tab === 'backups'
+            ? 'Encrypted controller backup, preview, and restore.'
+          : 'Controller-local identity and access.'}</span>
+    </div>
+    <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+      {tabs.map((item) => <button
+        key={item.id}
+        id={`settings-tab-${item.id}`}
+        type="button"
+        role="tab"
+        aria-selected={tab === item.id}
+        aria-controls={`settings-panel-${item.id}`}
+        tabIndex={tab === item.id ? 0 : -1}
+        onClick={() => setTab(item.id)}
+        onKeyDown={(event) => {
+          const index = tabs.findIndex((candidate) => candidate.id === item.id)
+          let next = index
+          if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
+          else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+          else if (event.key === 'Home') next = 0
+          else if (event.key === 'End') next = tabs.length - 1
+          else return
+          event.preventDefault()
+          setTab(tabs[next].id)
+          requestAnimationFrame(() => document.getElementById(`settings-tab-${tabs[next].id}`)?.focus())
+        }}
+      >
+        {item.label}
+      </button>)}
+    </div>
+    <div
+      id={`settings-panel-${tab}`}
+      role="tabpanel"
+      aria-labelledby={`settings-tab-${tab}`}
+      className="settings-panel"
+    >
+      {tab === 'network' && (devicesLoaded
+        ? <NetworkSettings devices={devices} />
+        : devicesError
+          ? <div role="alert"><Banner tone="critical">
+              Device inventory is unavailable: {devicesError}. My account remains available above.
+            </Banner></div>
+          : <div role="status">Loading device inventory…</div>)}
+      {tab === 'account' && session && onCurrentSessionRevoked && (
+        <Account session={session} onCurrentSessionRevoked={onCurrentSessionRevoked} />
+      )}
+      {tab === 'accounts' && session?.role === 'owner' && onSessionChange && onCurrentSessionRevoked && (
+        <Accounts
+          session={session}
+          onSessionChange={onSessionChange}
+          onCurrentSessionRevoked={onCurrentSessionRevoked}
+        />
+      )}
+      {tab === 'diagnostics' && diagnosticsTab && <Diagnostics />}
+      {tab === 'backups' && backupsTab && session && <Backups session={session} />}
+    </div>
+  </div>
+}
+
 /**
  * Settings — the site model, and the flow that pushes it to hardware.
  *
@@ -116,7 +225,7 @@ function applyWriteSummary(
  * across every AP in a group and across every band, and you read the whole
  * consequence before any of it happens.
  */
-export function Settings({ devices }: { devices: Device[] }) {
+function NetworkSettings({ devices }: { devices: Device[] }) {
   const [site, setSite] = useState<Site | null>(null)
   const [editing, setEditing] = useState<Partial<WLAN> | null>(null)
   const [editingMesh, setEditingMesh] = useState<Partial<Mesh> | null>(null)
@@ -346,7 +455,6 @@ export function Settings({ devices }: { devices: Device[] }) {
   if (!site) {
     return (
       <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>Settings</h1>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
           {err
             ? <div role="alert"><Banner tone="critical">{err}</Banner></div>
@@ -393,7 +501,6 @@ export function Settings({ devices }: { devices: Device[] }) {
 
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
-      <h1 style={{ margin: 0, fontSize: 20 }}>Settings</h1>
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
       {site.problems.length > 0 && (
         <Banner tone="warning">

@@ -25,7 +25,7 @@ import (
 //	OONFEE_NEIGHBOURS=1 \
 //	OONFEE_AP1=192.168.1.1 OONFEE_AP2=192.168.1.2 \
 //	OONFEE_ADMIN_USER=root OONFEE_ADMIN_PASS= \
-//	OONFEE_WLAN_SSID=oonfee-roam OONFEE_WLAN_KEY=... \
+//	OONFEE_WLAN_SSID=fixture-roam OONFEE_WLAN_KEY=... \
 //	go test -tags=integration ./internal/daemon/ -run TestIntegrationNeighbours -v
 //
 // It ADOPTS both devices, which rewrites their rpcd login and their ACL file.

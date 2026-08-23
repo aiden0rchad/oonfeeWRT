@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -418,19 +419,21 @@ func (d *Daemon) StartMaintenance(ctx context.Context) {
 // Waiting is the point: Run performs one last drain when its context is
 // cancelled, and returning before that lands would defeat the whole reason for
 // having it.
-func (d *Daemon) stopMaintainer() {
+func (d *Daemon) stopMaintainer() error {
 	d.mu.Lock()
 	m, done, cancel := d.maint, d.maintDone, d.maintStop
 	d.maint, d.maintDone, d.maintStop = nil, nil, nil
 	d.mu.Unlock()
 	if m == nil {
-		return
+		return nil
 	}
 	cancel()
 	select {
 	case <-done:
+		return nil
 	case <-time.After(30 * time.Second):
 		d.Log.Error("the final telemetry flush did not finish; this window is lost")
+		return errors.New("daemon: final telemetry flush did not finish")
 	}
 }
 

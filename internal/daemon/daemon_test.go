@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +21,127 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
+
+func TestShutdownKeepsStoreAndControllerLogOpenUntilDiagnosticsStop(t *testing.T) {
+	d, err := Open(context.Background(), testConfig(t, "diagnostic-shutdown"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	d.api.ControllerLogTail = func(int) ([]byte, []string, error) {
+		once.Do(func() { close(entered) })
+		<-released
+		return nil, nil, nil
+	}
+
+	request := func(method, path string, body []byte, cookies []*http.Cookie, csrf string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Host = "127.0.0.1:8080"
+		req.RemoteAddr = "127.0.0.1:1234"
+		if len(body) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if csrf != "" {
+			req.Header.Set("X-Oonfee-CSRF", csrf)
+		}
+		for _, cookie := range cookies {
+			req.AddCookie(cookie)
+		}
+		w := httptest.NewRecorder()
+		d.http.Handler.ServeHTTP(w, req)
+		return w
+	}
+	setup := request(http.MethodPost, "/api/v1/setup",
+		[]byte(`{"username":"owner","password":"a-sufficiently-long-password"}`), nil, "")
+	if setup.Code != http.StatusCreated {
+		t.Fatalf("setup=%d %s", setup.Code, setup.Body.String())
+	}
+	var setupBody struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.Unmarshal(setup.Body.Bytes(), &setupBody); err != nil {
+		t.Fatal(err)
+	}
+	start := request(http.MethodPost, "/api/v1/diagnostics", nil,
+		setup.Result().Cookies(), setupBody.CSRF)
+	if start.Code != http.StatusAccepted {
+		t.Fatalf("start=%d %s", start.Code, start.Body.String())
+	}
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		close(released)
+		d.Close()
+		t.Fatal("diagnostic collection did not reach controller log")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- d.shutdown() }()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := d.controllerLog.Write([]byte("{\"msg\":\"still-open\"}\n")); err != nil {
+		close(released)
+		<-done
+		t.Fatalf("controller log closed under diagnostic job: %v", err)
+	}
+	if err := d.Store.LogEvent(context.Background(), store.Event{Category: "system", Severity: "info", Event: "still.open"}); err != nil {
+		close(released)
+		<-done
+		t.Fatalf("store closed under diagnostic job: %v", err)
+	}
+	close(released)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not finish after diagnostics stopped")
+	}
+	if _, err := d.controllerLog.Write([]byte("closed")); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("controller log remains open after shutdown: %v", err)
+	}
+}
+
+func TestShutdownKeepsStoreOpenUntilOperationLeasesDrain(t *testing.T) {
+	cfg := testConfig(t, "operation-shutdown")
+	cfg.ApplyDrain = 20 * time.Millisecond
+	d, err := Open(context.Background(), cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, ok := d.api.BeginNeighbourReconcileOperation()
+	if !ok {
+		t.Fatal("neighbour reconcile operation was not admitted")
+	}
+	released, closed := false, false
+	t.Cleanup(func() {
+		if !released {
+			release()
+		}
+		if !closed {
+			_ = d.Close()
+		}
+	})
+
+	err = d.shutdown()
+	if err == nil || !strings.Contains(err.Error(), "controller operations") ||
+		!strings.Contains(err.Error(), "neighbour_reconcile") {
+		t.Fatalf("shutdown error = %v", err)
+	}
+	if err := d.Store.LogEvent(context.Background(), store.Event{
+		Category: "system", Severity: "info", Event: "operation.still_open",
+	}); err != nil {
+		t.Fatalf("store closed under operation lease: %v", err)
+	}
+	release()
+	released = true
+	if err := d.Close(); err != nil {
+		t.Fatalf("close after operation drain: %v", err)
+	}
+	closed = true
+}
 
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))

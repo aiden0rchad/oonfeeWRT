@@ -1,8 +1,9 @@
 # oonfeeWRT — Roadmap
 
-Six phases. Each has a **proof** — the one thing that must work before the phase
-counts as done. Ship in order; the ordering is chosen so that each phase is
-independently useful and each de-risks the next.
+Six numbered phases, with a focused Phase 4.1 between observability and DPI.
+Each has a **proof** — the one thing that must work before the phase counts as
+done. Ship in order; the ordering is chosen so that each phase is independently
+useful and each de-risks the next.
 
 The interface/function reference was refreshed on 2026-08-18 against stable
 UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
@@ -388,8 +389,8 @@ the hardware did not supply.
 
 > **Status: hardware-verified with the optional ACL and LLDP capability paths
 > explicitly exercised; final release-candidate gates pass.** The v40 result is
-> a merge-ready local evidence checkpoint, not itself a Git tag or published
-> release asset. The schema-17 joined
+> the local evidence behind the subsequently published `v0.1.0-rc.1` tag and
+> public multi-platform container. The schema-17 joined
 > surface, topology/history, Radios, General
 > Logs and Audit interaction are live-rendered. ACL refresh remains default-off.
 > The separate LLDP workflow proved exact official-feed plans, installation,
@@ -402,6 +403,325 @@ the hardware did not supply.
 > unavailable by design; DFS
 > and scan results remain evidence-gated, and no disruptive scan was run merely
 > to prove access.
+
+---
+
+## Phase 4.1 — UI polish, controller operations, and v0.1.0
+
+Phase 4 proved the data and safety contracts. Phase 4.1 makes those capabilities
+feel coherent, adds the controller operations needed for support and recovery,
+and promotes the already-published `v0.1.0-rc.1` pipeline to final schema-19
+`v0.1.0`.
+This is an incremental redesign, not a UniFi clone: keep the current routes,
+truthful unavailable states, accessible tables and topology workspace; copy no
+UniFi assets or proprietary visual details.
+
+**Historical live checkpoint (2026-08-23):** the development controller used
+schema 19. The controlled upgrade/restart completed with exact
+binary version `dev-phase41-live-schema19`; recovery verification reports two
+devices, two credentials, one enabled owner, one WLAN and no mesh. A signed-in
+live UI smoke passed Dashboard, Accounts, Diagnostics, Backup & Restore,
+Devices and Topology with no browser errors. Fresh schema-17 rollback and
+schema-19 recovery sets also passed verification. This was a route/render smoke,
+not a backup export, restore execution, diagnostics generation/download,
+public-provider speed-test run or router restore. Publication state is not
+embedded in this roadmap: the completed `v0.1.0` tag workflow and GitHub Release
+are authoritative, while `v0.1.0-rc.1` remains the historical upgrade baseline.
+
+### 4.1.1 Visual system, navigation and dashboard
+
+Source status: the project-owned SVG rail and summary-first `Notice` primitive
+are in place. Dashboard now renders the server-selected six-hour WAN series:
+fixed ICMP `1.1.1.1` latency/loss/reachability, exact-interface RX/download and
+TX/upload only, independent freshness, and null gaps. Compact topology and the
+remaining desktop/text-density pass are still open.
+
+- Replace the font-dependent Unicode rail glyphs with one coherent set of
+  project-owned inline SVG icons. Render them at 22–24 px in controls at least
+  44 px square, with visible hover/focus/active states, accessible names and
+  tooltips. The rail can expand to show labels; the preference persists.
+- Establish reusable page headers, metric cards, notices, disclosures and
+  capability cards. Move repeated layout into tokens/classes incrementally;
+  do not rewrite the working grids or screen routing.
+- Expand Dashboard with real, freshness-aware WAN throughput, fixed-target ICMP
+  reachability/latency/loss, devices, clients, recent warning/critical events,
+  a compact topology summary and speed-test history. Label the current probe
+  `ICMP reachability to 1.1.1.1`—never ISP uptime—and state WAN-interface
+  direction semantics. Missing or stale evidence says `Unavailable` or `Last
+  observed`, never zero.
+- Distinguish loading, empty, partial, stale and failed states. Desktop dark and
+  light themes must remain keyboard-usable, WCAG-AA readable and free of clipped
+  labels or unintended horizontal overflow at 1280×720 and 1440×900. A broader
+  mobile redesign remains deferred.
+
+### 4.1.2 Speed tests
+
+Source status: controller mode is implemented as an explicitly consented,
+single-stream Cloudflare direct test with a 15 MiB estimate and 30-second hard
+limit. The pre-run descriptor names vantage point, endpoint, method, privacy and
+saturation; jobs are durable, one-active, bounded-history, cancellable, audited
+and restart-recovered. Consent is bound to the reviewed deterministic `plan_id`;
+a changed plan is rejected before job creation. There is no Fleet/router
+dependency. Loaded latency and jitter remain null because this method does not
+measure them. No public-provider speed test has run; the live Dashboard route
+has passed signed-in smoke.
+
+The first implementation runs from the **controller host/container**. It changes
+nothing on a router and must say so beside the Start button. Before every run,
+show the vantage point, provider/endpoint, estimated data use, timeout, privacy
+implications and the fact that the test may temporarily saturate the WAN.
+
+- Persist bounded history for download/upload throughput, idle/loaded latency,
+  jitter, method, provider, timestamp and provenance. Unknown fields stay null.
+- Use server-side `queued`, `running`, `cancelling`, `completed` and `failed`
+  jobs; allow one active controller test, hard-limit time and bytes, expose
+  progress/cancel, and audit start/cancel/complete/failure.
+- Never run a test automatically or on a schedule by default. An integration
+  test must prove controller mode makes zero router management/API/SSH calls and
+  zero router writes/installs. Its test traffic still follows the controller
+  host's normal route and may saturate the gateway/WAN.
+- Treat a future **gateway-run test** as a separate, default-off capability,
+  never as part of adoption or the Dashboard button. Only official OpenWrt-feed
+  packages are eligible. Package-index refresh, exact plan, installation, test
+  execution and rollback are separate actions. Before installation show exact
+  packages/dependencies, download and installed size, services/configuration,
+  commands/method and rollback. Bind a fresh unchecked acknowledgement to the
+  reviewed plan and reuse the durable package/service-baseline ledger. No
+  controller-authored router executable, daemon, feed or firmware is allowed.
+  This gateway mode is deferred from the required `v0.1.0` proof; if it ships in
+  that release, real OpenWrt plan/install/run/rollback evidence becomes a gate.
+  Unsupported package managers/releases fall back to controller mode. Rollback
+  drift-checks state, removes only ledger-recorded additions, preserves every
+  pre-existing package, restores prior service/configuration state and verifies
+  cleanup. Any ACL expansion is a separate reviewed capability acknowledgement;
+  run/cancel/timeout/concurrency/audit bounds match controller mode.
+
+### 4.1.3 Progressive disclosure instead of walls of text
+
+Extend the existing passive long-`Banner` collapse into one authored disclosure
+contract: `summary`, `details`, severity, affected component and always-visible
+actions. The collapsed view is one or two lines and `More information` exposes
+the complete technical text; nothing is discarded or duplicated for assistive
+technology.
+
+- Apply it to Dashboard explanations, topology/radio/log coverage, adoption and
+  ACL prompts, LLDP and other optional capabilities, RF scans, Apply previews,
+  diagnostics, backup/restore and long Settings help.
+- Informational, coverage and optional-feature details default closed.
+- Security, destructive and connectivity-loss notices remain prominent. An
+  optional capability starts as a compact summary plus `Review`; after Review,
+  its exact router mutation/rollback, fresh checkbox and action remain visible
+  and default-open. Never auto-collapse an active consent plan.
+- Mouse and keyboard expansion, `aria-expanded`, focus treatment and representative
+  collapsed desktop screenshots are release-tested.
+
+### 4.1.4 Accounts, roles, sessions and MFA
+
+Source status: schema 19 implements the account foundation and management UI. The
+migration preserves each existing bootstrap administrator and makes it an
+enabled `owner` without changing its password. Canonical roles are `owner`,
+`admin`, `operator` and `viewer`. New usernames use an ASCII-only grammar and a
+unique `COLLATE NOCASE` index; an ASCII case collision fails the migration
+transaction. Soft deletion disables authentication, removes the verifier and
+reserves the username. Conditional writes preserve one enabled owner under
+concurrency, and account mutations commit with their audit event or roll back
+together. Sessions carry their canonical role; every protected REST route and
+`/live` is server-authorized. My Account and owner administration expose account
+creation, role/state/password changes and session listing/revocation. Owner
+mutations require a fresh five-minute password step-up. Revocation closes
+`/live` and cancels in-flight requests. Optional MFA remains open.
+
+Preserve the existing Argon2id passwords, login throttling, CSRF protection,
+secure cookies, expiry, password change and audit events while completing the
+remaining surfaces:
+
+- Server-enforce four roles on every protected route and live channel; only
+  health, setup/bootstrap and login remain intentionally anonymous: `owner` (all,
+  including accounts and restore), `admin` (device/site mutation,
+  capabilities and diagnostics), `operator` (read plus acknowledged controller
+  speed tests and transient RF scans), and `viewer` (ordinary non-secret
+  reads only). Gateway package-index/install/run/rollback, credential-bearing
+  reads, diagnostics, backup and account operations require their explicit
+  higher privilege. UI hiding is not an authorization boundary.
+- Expose account list/create, role change, enable/disable, soft deletion and
+  password reset through owner-authorized API/UI paths backed by the landed
+  store invariants. A table-driven matrix must assert
+  allow/deny behavior for every protected REST route and live channel, including
+  sensitive GET/download endpoints.
+- Retain listable metadata in the existing in-memory session store; sessions
+  never survive controller restart. A user can revoke their own sessions and
+  an owner can revoke any. Capture client address only under the controller's
+  documented trusted-proxy policy. Disabling an account or changing its
+  password/role revokes the affected sessions immediately. Audit every account,
+  role, session and login-security action without recording secrets.
+- Add optional TOTP after core RBAC: require the current password for enrollment
+  and self-disable, use a short-lived server-side pre-auth challenge, and never
+  issue a full session until the second factor succeeds. Separately throttle
+  code/recovery attempts, confirm a code before activation, seal the secret and
+  show it only during enrollment. Show recovery codes once, store only hashes,
+  make them single-use, and invalidate the prior set on regeneration. Owner
+  reset and self-disable are distinct audited actions. No default credentials.
+
+### 4.1.5 Downloadable diagnostics bundle
+
+Source status: implemented for `owner`/`admin` as stored-only descriptor,
+generate, status, cancel and download API/UI. One active cancellable job,
+bounded terminal history/retention, private mode-0600 files, fixed members,
+manifest/checksums and startup/shutdown cleanup are enforced. The private
+bounded rotating controller JSONL sink is implemented. Descriptor and bundle
+gaps state that pre-existing Docker/service-manager logs outside this sink are
+unavailable. `mode: "stored"`, `router_management_calls: false` and
+`router_changes: false` are fixed: generation has no Fleet dependency and makes
+zero live router management/API/SSH calls or router changes.
+
+The bundle includes bounded controller logs/errors; controller version, schema,
+platform, uptime, health and migration/integrity results; General/Audit event
+summaries; topology/radio/source coverage; and each device's stored model,
+target, firmware, kernel, package manager, last-observed time and capability
+state.
+
+The ZIP opens with a human-readable `README.txt` summary of controller and
+router models/versions, detected gaps, collection times, redaction policy and a
+member index so diagnosis does not require custom tooling.
+
+- No live-router refresh exists in current source. If added later, it must be a
+  separate unchecked option that lists exact read-only methods and never writes,
+  installs, restarts or initiates RF scans; an offline device becomes a gap
+  rather than failing the bundle.
+- Redact configuration summaries and pseudonymize client identifiers by
+  default. Never include database/keyring files, controller/export passphrases,
+  password hashes, device credentials, private keys, session/CSRF tokens,
+  WLAN/mesh keys, TOTP secrets, recovery codes or raw secret-bearing UCI.
+- Use safe fixed ZIP paths, row/file/total bounds, mode-0600 temporary files and
+  cleanup on success, error and cancel. Audit generation/download/cancel without
+  logging contents. Database integrity collection uses a bounded read-only
+  snapshot with a timeout. Redact free-text logs/events and use one stable
+  per-bundle pseudonym map across every member. Seed every secret class in tests,
+  extract every member, then scan filenames, decompressed contents, manifest and
+  metadata; searching compressed bytes alone is not a valid leak test.
+
+### 4.1.6 Encrypted controller backup and restore
+
+Source status: implemented end to end at schema 19. Owner-only export produces
+one versioned native `.oowrtbak` containing a transactionally consistent SQLite
+snapshot and matching wrapped key material, including accounts, settings,
+desired state, sealed credentials and capability ledgers. Bounded Argon2id and
+authenticated encryption use a separate export passphrase; the passphrase is
+never retained or logged and the live data key is rewrapped rather than exported
+raw. Export/status/download, restore upload/preview/cancel/confirm, and persistent
+router-write suppression/status/resume are available through owner-authorized
+API/UI surfaces over TLS or direct loopback. Sensitive actions require recent
+password reauthentication.
+
+This is a controller backup, not an undisclosed export of every live/foreign
+router UCI value. Controller-owned desired configuration round-trips here;
+separately reviewed per-device UCI snapshots remain Phase 6.
+
+- The manifest authenticates app/format/schema versions, creation time, member sizes and hashes.
+  Wrong passphrase, corruption, truncation, mismatched DB/key material or an
+  unsupported newer schema fails before mutation.
+- Restore is bounded raw upload → decrypt/validate in disposable staging →
+  read-only preview of versions,
+  counts, migrations and overwrite impact → explicit owner confirmation. Enter
+  the export passphrase for preview and discard it; re-enter it at confirmation
+  instead of retaining plaintext stage data. Confirm the destination runtime
+  passphrase matches the live keyring/boot secret before rewrapping. It is not
+  the signed-in account password. Neither passphrase is retained. Confirmation is
+  cryptographically bound to the fixed upload, authenticated manifest, preview
+  result and exact plan. It is
+  blocked during Apply, adoption, RF scan, speed test, diagnostics or capability
+  operations. Enforce upload/member/total-size and KDF cost bounds and stream
+  encryption/decryption instead of buffering an artifact in memory.
+- Confirmation quiesces work and creates a mode-0600 encrypted pre-restore
+  safety artifact at
+  `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`, using the
+  confirmed export passphrase. After the applied audit receipt is durably
+  cleared, retention targets three recognized fixed-shape safety artifacts,
+  fills slots newest-first and prunes the rest. Artifacts referenced by an
+  active marker, receipt or suppression record are always preserved, even if
+  that temporarily exceeds three. Operators copy artifacts off-host before
+  pruning when longer retention is required. A fsynced marker drives a clean
+  controlled close/reopen. Startup verifies schema/integrity/key state before
+  serving and rolls back the raw pair on failure; open SQLite handles and an
+  in-memory data key are never hot-swapped. Success revokes all sessions.
+- Restored desired state never silently applies to routers. Persistent
+  router-write suppression survives restart and requires an owner, recent
+  reauthentication, the active restore ID and exact `RESUME ROUTER WRITES` text
+  to clear. Read-only monitoring of restored devices may resume after restart
+  using restored credentials while the gate remains active. Clearing the gate
+  immediately re-enables automatic 802.11k neighbour maintenance; that
+  reconciler may write hostapd RRM neighbour state, but does not start a
+  restored desired-configuration Apply.
+- Source tests cover live-WAL export, invalid passphrases/members, supported
+  migration, forced swap/start failures, rollback, session revocation,
+  suppression and zero automatic router writes before explicit resumption.
+  The live schema-19 migration/restart and signed-in screen smoke have passed.
+  The final release gate requires a fresh-container export/restore/recovery
+  rehearsal. The historical live checkpoint did not run a controller or router
+  restore.
+
+### 4.1.7 Final v0.1.0 release
+
+This promotes the existing release pipeline; it does not rebuild packaging from
+zero. Preserve checksum-verified archives, reproducible builds, public
+`linux/amd64` and `linux/arm64` non-root scratch images, health check, SBOM and
+provenance. Add a documented release-failing vulnerability policy, keyless OCI
+signing/identity verification, and tags `v0.1.0`, `0.1.0`, `0.1` and `latest`
+that resolve to the same manifest digest.
+
+The pre-tag gate tests immutable candidate archives and an OCI digest from the
+exact release commit: accounts, optional MFA if enabled, a controller-only
+speed test against a deterministic local adapter, diagnostics ZIP,
+fresh-container backup/restore,
+`v0.1.0-rc.1` upgrade and documented rollback. Promote those exact bytes and
+manifest digest; do not rebuild different release material. After publication,
+anonymous downloads/pulls must match the recorded hashes/digest and pass a
+minimal clean-install smoke check. Neither gate contacts a router or can install
+a capability. Installation, upgrade, rollback, backup/restore, signature, SBOM
+and provenance instructions must be complete before tagging.
+
+Archive reproducibility is byte-for-byte: two complete four-platform sets and
+their `SHA256SUMS` files are built with one fixed epoch and compared. OCI uses
+the complementary exact-source check: the gate creates a multi-platform OCI
+layout from the immutable tag without pushing, while publication rebuilds that
+same tag with SBOM/provenance and signs the resulting registry digest. OCI
+attestation and registry metadata are therefore verified by source identity and
+digest, not by pretending their serialized envelopes are byte-identical.
+
+The public binary and image must also prove newly created SQLite database,
+`-wal` and `-shm` files are mode 0600, closing the post-`rc.1` sidecar-permission
+defect before the final tag.
+
+A public-provider speed-test rehearsal is separate, explicit and opt-in so CI
+does not consume unbounded bandwidth or fail on an external service. Only fields
+the selected protocol measures are populated; loaded latency/jitter remain null
+when unsupported.
+
+### Order and proof
+
+1. SVG navigation and disclosure primitives.
+2. Landed account-store foundation, then multi-account API, server-side RBAC,
+   sessions and MFA; privileged new APIs do not land before their authorization
+   rules.
+3. Landed bounded controller logging and stored-only diagnostics ZIP.
+4. Dashboard composition and controller-only speed tests.
+5. Optional gateway speed-test capability, if a safe official-feed plan exists.
+6. Land encrypted portable backup/restore on the online database snapshot
+   foundation. **Complete in schema-19 source; the final gate owns isolated
+   restore/container proof.**
+7. Complete the desktop/accessibility/text-density pass and final release gates.
+
+**Proof:** from a clean release-candidate container, an owner can understand fleet/WAN
+health at a glance, run and cancel a clearly sourced controller speed test,
+manage a least-privilege account, download a secret-free diagnostics ZIP, and
+restore an encrypted backup into a second clean container—without any router
+write. Final `v0.1.0` is published only after that proof passes, then its public
+bytes/digest pass anonymous verification.
+
+**Out of scope for 4.1:** copying UniFi assets/layouts exactly, the broader
+mobile overhaul, DPI/application identity (Phase 5), hidden router installs,
+automatic speed tests, firmware modification and controller-authored router
+packages.
 
 ---
 
@@ -426,11 +746,9 @@ with" is answerable in three clicks.
   status/result endpoint. The browser recovered a running/failed operation
   after a reload during the live §5be pass, including its per-device write
   boundary and reverted outcome.
-- Backup/restore of controller config and per-device UCI snapshots. A controller
-  restore artifact must pair a consistent SQLite snapshot with its matching
-  `keyring.json`; a database or passphrase alone cannot recover the random data
-  key. Pre-v14 backups may contain plaintext WLAN/mesh keys and ownership hashes,
-  so protect them and never delete them without explicit operator confirmation.
+- Per-device UCI snapshots for fleet recovery. Portable controller backup and
+  restore moved to Phase 4.1; Phase 6 consumes that primitive rather than
+  defining a second format.
 - Alarm Manager: explicit trigger → scope → action rules, schedules, cooldowns
   and repeat suppression; webhook/ntfy/email plus CEF/SIEM export.
 - Safe recovery controls over collector health: monitor-only by default,

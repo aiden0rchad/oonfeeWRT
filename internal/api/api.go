@@ -23,10 +23,14 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/diagnostics"
+	"github.com/aiden0rchad/oonfeewrt/internal/restoreswap"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
+	"github.com/aiden0rchad/oonfeewrt/internal/speedtest"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -123,8 +127,33 @@ type Server struct {
 	// RadioScan runs one acknowledged, persisted RF scan. It is never called by
 	// a GET or a timer because the selected serving radio leaves its channel.
 	RadioScan RadioScanner
-	Hub       *Hub
-	Log       *slog.Logger
+	// SpeedTests runs bounded HTTP tests from this controller process. It has no
+	// Fleet reference and therefore cannot make a router management call.
+	SpeedTests *speedtest.Manager
+	// Diagnostics packages bounded stored evidence only. The directory and log
+	// reader are supplied by the daemon; neither grants router access.
+	DiagnosticsDir string
+	// BackupsDir holds short-lived encrypted controller exports and their
+	// private online-snapshot staging files. It never grants router access.
+	BackupsDir string
+	// RestoresDir holds encrypted uploads and disposable preview state only.
+	// Preview never replaces the live database or contacts a router.
+	RestoresDir string
+	// RestoreOwnerInstanceID binds a pending restore intent to this opened
+	// controller cycle. RequestRestart is signalled only after a successful
+	// confirmation response has been written and flushed.
+	RestoreOwnerInstanceID string
+	RequestRestart         func()
+	// RouterWriteSuppression is loaded by the daemon before Routes is built.
+	// ResumeRouterWrites must durably remove that fence before returning nil.
+	RouterWriteSuppression restoreswap.Suppression
+	ResumeRouterWrites     func(context.Context, string) error
+	RouterWritesResumed    func()
+	ControllerVersion      string
+	ControllerStartedAt    time.Time
+	ControllerLogTail      func(int) ([]byte, []string, error)
+	Hub                    *Hub
+	Log                    *slog.Logger
 
 	// Retrack re-registers a device with the collector after its polling
 	// settings change, so an interval override takes effect without a restart.
@@ -134,6 +163,9 @@ type Server struct {
 
 	// Now is injectable for tests.
 	Now func() time.Time
+	// afterLoginPasswordVerified coordinates security-race tests. Production
+	// servers leave it nil.
+	afterLoginPasswordVerified func()
 
 	sessions *sessions
 	throttle *throttle
@@ -149,9 +181,30 @@ type Server struct {
 	// persistence invariants, but a partial network handler reads before it
 	// writes; two such requests could otherwise each merge against stale state
 	// and silently discard the other's field.
-	siteMu     siteMutex
-	requests   *requestGate
-	instanceID string
+	siteMu                     siteMutex
+	requests                   *requestGate
+	operations                 *operationGate
+	instanceID                 string
+	diagnostics                *diagnosticManager
+	diagnosticGenerate         func(context.Context, string, diagnostics.Input) (diagnostics.Result, error)
+	afterDiagnosticGenerated   func(string)
+	backups                    *backupManager
+	backupCreate               backupCreateFunc
+	afterBackupSnapshot        func(string)
+	afterBackupCreated         func(string)
+	beforeBackupDownloadOpen   func(string)
+	restores                   *restoreManager
+	restoreInspect             restoreInspectFunc
+	restorePrepare             restorePrepareFunc
+	restoreCreateIntent        restoreCreateIntentFunc
+	restoreAuditWrite          func(context.Context, store.Event) error
+	restoreConfirmTimeout      time.Duration
+	beforeRestoreUploadPublish func(string, string)
+	afterRestoreUploadPublish  func()
+	beforeRestorePreviewCheck  func(string)
+	afterRestoreInspected      func(string)
+	afterRestorePrepared       func()
+	suppressionMu              sync.Mutex
 }
 
 // New builds a Server.
@@ -165,13 +218,28 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 	}
 	srv := &Server{
 		Store: db, Fleet: fleet, Enroll: enroll, Log: log, Now: time.Now,
+		ControllerVersion: "dev", ControllerStartedAt: time.Now(),
 		sessions:   newSessions(),
 		throttle:   newThrottle(),
 		hashing:    make(chan struct{}, hashSlots),
 		requests:   newRequestGate(),
+		operations: &operationGate{},
 		instanceID: instanceID,
 	}
 	srv.Hub = NewHub(fleet, log)
+	runner, err := speedtest.NewHTTPRunner(speedtest.DefaultHTTPConfig())
+	if err != nil {
+		panic("api: invalid built-in speed-test configuration: " + err.Error())
+	}
+	srv.SpeedTests = speedtest.New(db, runner, func(ctx context.Context, event, severity string, job speedtest.Job) error {
+		return db.LogEvent(ctx, store.Event{Category: "audit", Severity: severity,
+			Event: event, Detail: map[string]any{
+				"job_id": job.ID, "username": job.ActorUsername,
+				"provider": job.Provider, "method": job.Method,
+				"provenance": job.Provenance, "estimated_bytes": job.EstimatedBytes,
+				"plan_id": job.PlanID, "state": job.State,
+			}})
+	}, log)
 	// One derivation at startup, with the shipped parameters, so that verifying
 	// an unknown username costs exactly what verifying a known one costs.
 	h, err := secrets.HashPassword([]byte("oonfeewrt-timing-equaliser"), secrets.DefaultParams())
@@ -198,6 +266,141 @@ func (s *Server) Sweep() {
 	now := s.now()
 	s.sessions.sweep(now)
 	s.throttle.sweep(now)
+	if s.diagnostics != nil {
+		s.diagnostics.sweep(now)
+	}
+	if s.backups != nil {
+		s.backups.sweep(now)
+	}
+	if s.restores != nil {
+		s.restores.sweep(now)
+	}
+}
+
+type protectedRoute struct {
+	pattern string
+	role    store.AccountRole
+	handler http.HandlerFunc
+}
+
+// protectedRoutes is the complete authorization policy for the authenticated
+// API. Dynamic event authorization is tightened further after the event scope
+// or category is known.
+func (s *Server) protectedRoutes() []protectedRoute {
+	return []protectedRoute{
+		{"POST /api/v1/logout", store.RoleViewer, s.handleLogout},
+		{"GET /api/v1/session", store.RoleViewer, s.handleSession},
+		{"POST /api/v1/session/password", store.RoleViewer, s.handleChangePassword},
+		{"POST /api/v1/session/reauth", store.RoleViewer, s.handleReauth},
+		{"GET /api/v1/account", store.RoleViewer, s.handleAccount},
+		{"GET /api/v1/account/sessions", store.RoleViewer, s.handleAccountSessions},
+		{"DELETE /api/v1/account/sessions/{session_id}", store.RoleViewer, s.handleRevokeOwnSession},
+		{"GET /api/v1/accounts", store.RoleOwner, s.handleAccounts},
+		{"GET /api/v1/accounts/{id}/sessions", store.RoleOwner, s.handleAdminSessions},
+
+		{"GET /api/v1/devices", store.RoleViewer, s.handleDevices},
+		{"GET /api/v1/devices/{id}", store.RoleViewer, s.handleDevice},
+		{"GET /api/v1/devices/{id}/series", store.RoleViewer, s.handleDeviceSeries},
+		{"GET /api/v1/devices/{id}/overhead", store.RoleViewer, s.handleOverhead},
+		{"POST /api/v1/devices/{id}/focus", store.RoleViewer, s.handleFocus},
+		{"POST /api/v1/devices/{id}/poll-interval", store.RoleAdmin, s.handlePollInterval},
+		{"POST /api/v1/devices/{id}/name", store.RoleAdmin, s.handleRename},
+		{"POST /api/v1/devices/adopt", store.RoleAdmin, s.handleAdopt},
+		{"POST /api/v1/devices/inspect", store.RoleAdmin, s.handleInspect},
+		{"POST /api/v1/devices/{id}/unadopt", store.RoleAdmin, s.handleUnadopt},
+		{"POST /api/v1/devices/{id}/refresh-acl", store.RoleAdmin, s.handleRefreshACL},
+		{"GET /api/v1/devices/{id}/capabilities/lldp", store.RoleAdmin, s.handleLLDPStatus},
+		{"POST /api/v1/devices/{id}/capabilities/lldp", store.RoleAdmin, s.handleLLDPCapability},
+		{"POST /api/v1/devices/{id}/reprobe", store.RoleAdmin, s.handleReprobe},
+		{"POST /api/v1/devices/{id}/foreign/{section}/note", store.RoleAdmin, s.handleForeignNote},
+		{"POST /api/v1/roaming/neighbours", store.RoleAdmin, s.handleNeighbours},
+		{"GET /api/v1/roaming/neighbours", store.RoleViewer, s.handleLastNeighbours},
+		{"GET /api/v1/site/mesh-health", store.RoleViewer, s.handleMeshHealth},
+		{"POST /api/v1/site/verify-on-air", store.RoleOperator, s.handleOnAir},
+
+		{"GET /api/v1/site", store.RoleViewer, s.handleSite},
+		{"POST /api/v1/site/name", store.RoleAdmin, s.handleSiteName},
+		{"GET /api/v1/site/wlans/{id}", store.RoleViewer, s.handleGetWLAN},
+		{"POST /api/v1/site/wlans", store.RoleAdmin, s.handleSaveWLAN},
+		{"POST /api/v1/site/wlans/{id}", store.RoleAdmin, s.handleSaveWLAN},
+		{"DELETE /api/v1/site/wlans/{id}", store.RoleAdmin, s.handleDeleteWLAN},
+		{"GET /api/v1/site/meshes/{id}", store.RoleViewer, s.handleGetMesh},
+		{"POST /api/v1/site/meshes", store.RoleAdmin, s.handleSaveMesh},
+		{"POST /api/v1/site/meshes/{id}", store.RoleAdmin, s.handleSaveMesh},
+		{"DELETE /api/v1/site/meshes/{id}", store.RoleAdmin, s.handleDeleteMesh},
+		{"POST /api/v1/site/uplinks", store.RoleAdmin, s.handleSaveUplink},
+		{"POST /api/v1/site/uplinks/{id}", store.RoleAdmin, s.handleSaveUplink},
+		{"DELETE /api/v1/site/uplinks/{id}", store.RoleAdmin, s.handleDeleteUplink},
+		{"POST /api/v1/site/groups", store.RoleAdmin, s.handleSaveGroup},
+		{"POST /api/v1/site/groups/{id}", store.RoleAdmin, s.handleSaveGroup},
+		{"DELETE /api/v1/site/groups/{id}", store.RoleAdmin, s.handleDeleteGroup},
+		{"POST /api/v1/site/networks", store.RoleAdmin, s.handleSaveNetwork},
+		{"POST /api/v1/site/networks/{id}", store.RoleAdmin, s.handleSaveNetwork},
+		{"DELETE /api/v1/site/networks/{id}", store.RoleAdmin, s.handleDeleteNetwork},
+		{"POST /api/v1/site/zones/{name}", store.RoleAdmin, s.handleSaveZonePolicy},
+		{"DELETE /api/v1/site/zones/{name}", store.RoleAdmin, s.handleDeleteZonePolicy},
+		{"GET /api/v1/site/policies", store.RoleViewer, s.handlePolicies},
+		{"POST /api/v1/site/policies", store.RoleAdmin, s.handleSavePolicy},
+		{"POST /api/v1/site/policies/{id}", store.RoleAdmin, s.handleSavePolicy},
+		{"DELETE /api/v1/site/policies/{id}", store.RoleAdmin, s.handleDeletePolicy},
+		{"POST /api/v1/site/object-manager/compile", store.RoleAdmin, s.handleCompileObjects},
+		{"POST /api/v1/clients/{mac}/policy", store.RoleAdmin, s.handleSaveClientPolicy},
+		{"POST /api/v1/site/devices/{id}/override", store.RoleAdmin, s.handleSetOverride},
+		{"GET /api/v1/site/preview", store.RoleAdmin, s.handlePreview},
+		{"POST /api/v1/site/apply", store.RoleAdmin, s.handleApply},
+		{"GET /api/v1/site/apply/{operation_id}", store.RoleAdmin, s.handleApplyOperationStatus},
+
+		{"GET /api/v1/discovery", store.RoleAdmin, s.handleScanPlan},
+		{"POST /api/v1/discovery/scan", store.RoleAdmin, s.handleScan},
+		{"GET /api/v1/stats/{kind}", store.RoleViewer, s.handleStats},
+		{"GET /api/v1/clients", store.RoleViewer, s.handleClients},
+		{"GET /api/v1/clients/{mac}/observability", store.RoleViewer, s.handleClientObservability},
+		{"GET /api/v1/events", store.RoleViewer, s.handleEvents},
+		{"GET /api/v1/events/{id}", store.RoleViewer, s.handleEventDetail},
+		{"GET /api/v1/topology", store.RoleViewer, s.handleTopology},
+		{"GET /api/v1/topology/history", store.RoleViewer, s.handleTopologyHistory},
+		{"GET /api/v1/radios", store.RoleViewer, s.handleRadios},
+		{"POST /api/v1/devices/{id}/radios/{radio}/scan", store.RoleOperator, s.handleRadioScan},
+		{"GET /api/v1/dashboard", store.RoleViewer, s.handleDashboard},
+		{"GET /api/v1/speedtests", store.RoleViewer, s.handleSpeedTests},
+		{"POST /api/v1/speedtests", store.RoleOperator, s.handleStartSpeedTest},
+		{"GET /api/v1/speedtests/{id}", store.RoleViewer, s.handleSpeedTest},
+		{"POST /api/v1/speedtests/{id}/cancel", store.RoleOperator, s.handleCancelSpeedTest},
+		{"GET /api/v1/diagnostics", store.RoleAdmin, s.handleDiagnostics},
+		{"POST /api/v1/diagnostics", store.RoleAdmin, s.handleStartDiagnostics},
+		{"GET /api/v1/diagnostics/{id}", store.RoleAdmin, s.handleDiagnosticJob},
+		{"POST /api/v1/diagnostics/{id}/cancel", store.RoleAdmin, s.handleCancelDiagnostics},
+		{"GET /api/v1/diagnostics/{id}/download", store.RoleAdmin, s.handleDownloadDiagnostics},
+		{"GET /api/v1/backups", store.RoleOwner, s.handleBackups},
+		{"GET /api/v1/backups/{id}", store.RoleOwner, s.handleBackupJob},
+		{"GET /api/v1/restores", store.RoleOwner, s.handleRestores},
+		{"GET /api/v1/restores/previews/{id}", store.RoleOwner, s.handleRestorePreview},
+		{"GET /api/v1/restores/suppression", store.RoleOwner, s.handleRestoreSuppression},
+		{"GET /api/v1/live", store.RoleViewer, s.handleLive},
+	}
+}
+
+// reauthenticatedRoutes is the complete step-up policy. Keeping it separate
+// makes omission testable: every owner account mutation is registered here or
+// it is not registered at all.
+func (s *Server) reauthenticatedRoutes() []protectedRoute {
+	return []protectedRoute{
+		{"POST /api/v1/accounts", store.RoleOwner, s.handleCreateAccount},
+		{"PATCH /api/v1/accounts/{id}/role", store.RoleOwner, s.handleSetAccountRole},
+		{"PATCH /api/v1/accounts/{id}/enabled", store.RoleOwner, s.handleSetAccountEnabled},
+		{"DELETE /api/v1/accounts/{id}", store.RoleOwner, s.handleDeleteAccount},
+		{"POST /api/v1/accounts/{id}/password", store.RoleOwner, s.handleResetAccountPassword},
+		{"DELETE /api/v1/accounts/{id}/sessions/{session_id}", store.RoleOwner, s.handleRevokeAdminSession},
+		{"DELETE /api/v1/accounts/{id}/sessions", store.RoleOwner, s.handleRevokeAdminSessions},
+		{"POST /api/v1/backups", store.RoleOwner, s.handleStartBackup},
+		{"POST /api/v1/backups/{id}/cancel", store.RoleOwner, s.handleCancelBackup},
+		{"GET /api/v1/backups/{id}/download", store.RoleOwner, s.handleDownloadBackup},
+		{"POST /api/v1/restores/uploads", store.RoleOwner, s.handleRestoreUpload},
+		{"POST /api/v1/restores/previews", store.RoleOwner, s.handleStartRestorePreview},
+		{"POST /api/v1/restores/previews/{id}/cancel", store.RoleOwner, s.handleCancelRestorePreview},
+		{"POST /api/v1/restores/previews/{id}/confirm", store.RoleOwner, s.handleConfirmRestore},
+		{"POST /api/v1/restores/suppression/resume", store.RoleOwner, s.handleResumeRouterWrites},
+	}
 }
 
 // Routes returns the API handler, to be mounted under /api/v1/.
@@ -206,6 +409,9 @@ func (s *Server) Sweep() {
 // the setup-state probe (one bit, no data), first-run enrolment (which stops
 // working the moment an account exists), and login itself.
 func (s *Server) Routes() http.Handler {
+	if s.operations != nil {
+		s.operations.setSuppression(s.RouterWriteSuppression.Active)
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/v1/setup", s.handleSetupState)
@@ -217,84 +423,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/login", requireSameOrigin(s.handleLogin))
 
 	private := http.NewServeMux()
-	private.HandleFunc("POST /api/v1/logout", s.handleLogout)
-	private.HandleFunc("GET /api/v1/session", s.handleSession)
-	private.HandleFunc("POST /api/v1/session/password", s.handleChangePassword)
-
-	private.HandleFunc("GET /api/v1/devices", s.handleDevices)
-	private.HandleFunc("GET /api/v1/devices/{id}", s.handleDevice)
-	private.HandleFunc("GET /api/v1/devices/{id}/series", s.handleDeviceSeries)
-	private.HandleFunc("GET /api/v1/devices/{id}/overhead", s.handleOverhead)
-	private.HandleFunc("POST /api/v1/devices/{id}/focus", s.handleFocus)
-	private.HandleFunc("POST /api/v1/devices/{id}/poll-interval", s.handlePollInterval)
-	private.HandleFunc("POST /api/v1/devices/{id}/name", s.handleRename)
-	private.HandleFunc("POST /api/v1/devices/adopt", s.handleAdopt)
-	private.HandleFunc("POST /api/v1/devices/inspect", s.handleInspect)
-	private.HandleFunc("POST /api/v1/devices/{id}/unadopt", s.handleUnadopt)
-	private.HandleFunc("POST /api/v1/devices/{id}/refresh-acl", s.handleRefreshACL)
-	private.HandleFunc("GET /api/v1/devices/{id}/capabilities/lldp", s.handleLLDPStatus)
-	private.HandleFunc("POST /api/v1/devices/{id}/capabilities/lldp", s.handleLLDPCapability)
-	private.HandleFunc("POST /api/v1/devices/{id}/reprobe", s.handleReprobe)
-	// Records a DECISION about a foreign wireless section. Writes nothing to
-	// any device — the controller does not touch config it did not create.
-	private.HandleFunc("POST /api/v1/devices/{id}/foreign/{section}/note", s.handleForeignNote)
-	private.HandleFunc("POST /api/v1/roaming/neighbours", s.handleNeighbours)
-	private.HandleFunc("GET /api/v1/roaming/neighbours", s.handleLastNeighbours)
-	private.HandleFunc("GET /api/v1/site/mesh-health", s.handleMeshHealth)
-	private.HandleFunc("POST /api/v1/site/verify-on-air", s.handleOnAir)
-	// The site model (Phase 2). Editing any of this changes nothing on any
-	// device; /site/preview says what it WOULD change and /site/apply does it.
-	private.HandleFunc("GET /api/v1/site", s.handleSite)
-	private.HandleFunc("POST /api/v1/site/name", s.handleSiteName)
-	private.HandleFunc("GET /api/v1/site/wlans/{id}", s.handleGetWLAN)
-	private.HandleFunc("POST /api/v1/site/wlans", s.handleSaveWLAN)
-	private.HandleFunc("POST /api/v1/site/wlans/{id}", s.handleSaveWLAN)
-	private.HandleFunc("DELETE /api/v1/site/wlans/{id}", s.handleDeleteWLAN)
-	private.HandleFunc("GET /api/v1/site/meshes/{id}", s.handleGetMesh)
-	private.HandleFunc("POST /api/v1/site/meshes", s.handleSaveMesh)
-	private.HandleFunc("POST /api/v1/site/meshes/{id}", s.handleSaveMesh)
-	private.HandleFunc("DELETE /api/v1/site/meshes/{id}", s.handleDeleteMesh)
-	private.HandleFunc("POST /api/v1/site/uplinks", s.handleSaveUplink)
-	private.HandleFunc("POST /api/v1/site/uplinks/{id}", s.handleSaveUplink)
-	private.HandleFunc("DELETE /api/v1/site/uplinks/{id}", s.handleDeleteUplink)
-	private.HandleFunc("POST /api/v1/site/groups", s.handleSaveGroup)
-	private.HandleFunc("POST /api/v1/site/groups/{id}", s.handleSaveGroup)
-	private.HandleFunc("DELETE /api/v1/site/groups/{id}", s.handleDeleteGroup)
-	private.HandleFunc("POST /api/v1/site/networks", s.handleSaveNetwork)
-	private.HandleFunc("POST /api/v1/site/networks/{id}", s.handleSaveNetwork)
-	private.HandleFunc("DELETE /api/v1/site/networks/{id}", s.handleDeleteNetwork)
-	private.HandleFunc("POST /api/v1/site/zones/{name}", s.handleSaveZonePolicy)
-	private.HandleFunc("DELETE /api/v1/site/zones/{name}", s.handleDeleteZonePolicy)
-	private.HandleFunc("GET /api/v1/site/policies", s.handlePolicies)
-	private.HandleFunc("POST /api/v1/site/policies", s.handleSavePolicy)
-	private.HandleFunc("POST /api/v1/site/policies/{id}", s.handleSavePolicy)
-	private.HandleFunc("DELETE /api/v1/site/policies/{id}", s.handleDeletePolicy)
-	private.HandleFunc("POST /api/v1/site/object-manager/compile", s.handleCompileObjects)
-	private.HandleFunc("POST /api/v1/clients/{mac}/policy", s.handleSaveClientPolicy)
-	private.HandleFunc("POST /api/v1/site/devices/{id}/override", s.handleSetOverride)
-	private.HandleFunc("GET /api/v1/site/preview", s.handlePreview)
-	private.HandleFunc("POST /api/v1/site/apply", s.handleApply)
-	private.HandleFunc("GET /api/v1/site/apply/{operation_id}", s.handleApplyOperationStatus)
-
-	private.HandleFunc("GET /api/v1/discovery", s.handleScanPlan)
-	// A POST because it makes the controller emit traffic across a subnet.
-	// requireAuth enforces the CSRF token on it for that reason: a GET would be
-	// reachable from any page the operator has open.
-	private.HandleFunc("POST /api/v1/discovery/scan", s.handleScan)
-	private.HandleFunc("GET /api/v1/stats/{kind}", s.handleStats)
-	private.HandleFunc("GET /api/v1/clients", s.handleClients)
-	private.HandleFunc("GET /api/v1/clients/{mac}/observability", s.handleClientObservability)
-	private.HandleFunc("GET /api/v1/events", s.handleEvents)
-	private.HandleFunc("GET /api/v1/events/{id}", s.handleEventDetail)
-	private.HandleFunc("GET /api/v1/topology", s.handleTopology)
-	private.HandleFunc("GET /api/v1/topology/history", s.handleTopologyHistory)
-	private.HandleFunc("GET /api/v1/radios", s.handleRadios)
-	private.HandleFunc("POST /api/v1/devices/{id}/radios/{radio}/scan", s.handleRadioScan)
-	private.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
-	// Behind requireAuth like everything else. The upgrade is a GET, so the
-	// CSRF token does not apply — handleLive checks the Origin itself, which
-	// is what actually stops cross-site WebSocket hijacking.
-	private.HandleFunc("GET /api/v1/live", s.handleLive)
+	for _, route := range s.protectedRoutes() {
+		private.Handle(route.pattern, s.requireRole(route.role, route.handler))
+	}
+	for _, route := range s.reauthenticatedRoutes() {
+		private.Handle(route.pattern, s.requireRole(route.role,
+			s.requireRecentReauth(route.handler)))
+	}
 
 	mux.Handle("/api/v1/", s.requireAuth(private))
 	return noStore(s.instanceID, s.admitRequests(mux))
@@ -327,6 +462,10 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
 }
 
+func writeCodedErr(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]any{"error": msg, "code": code})
+}
+
 // maxBody bounds a request body. Every endpoint here takes a small JSON object,
 // and an unbounded reader on an unauthenticated route is a memory exhaustion
 // primitive.
@@ -338,7 +477,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	// so a cross-site form post cannot reach any handler that insists on JSON.
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		if mt, _, err := mime.ParseMediaType(ct); err != nil || mt != "application/json" {
-			writeErr(w, http.StatusUnsupportedMediaType,
+			writeCodedErr(w, http.StatusUnsupportedMediaType, "invalid_request",
 				"request body must be application/json")
 			return false
 		}
@@ -346,11 +485,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		writeErr(w, http.StatusBadRequest, "malformed request body")
+		writeCodedErr(w, http.StatusBadRequest, "invalid_request", "malformed request body")
 		return false
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		writeErr(w, http.StatusBadRequest, "malformed request body")
+		writeCodedErr(w, http.StatusBadRequest, "invalid_request", "malformed request body")
 		return false
 	}
 	return true

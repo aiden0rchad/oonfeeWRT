@@ -35,7 +35,8 @@ Official references: [UniFi Network 10.5.67 release notes](https://community.ui.
 [Traffic & Policy Management](https://help.ui.com/hc/en-us/articles/5546542486551-Traffic-Policy-Management-in-UniFi),
 and [Zone-Based Firewalls](https://help.ui.com/hc/en-us/articles/115003173168-Zone-Based-Firewalls-in-UniFi).
 
-**Current live boundary (2026-08-22):** the lab and UI contract are schema 17.
+**Published and historical hardware boundary (2026-08-22):** the lab used
+schema 17 for this proof, and `v0.1.0-rc.1` retains that UI contract.
 Both factory-reset reference routers were re-adopted only after the operator
 accepted the default-off controller-access-payload disclosure; adoption
 installed no package, binary, daemon, service or firmware. The separate,
@@ -47,6 +48,34 @@ complete-poll evidence before `v0.1.0-rc.1` was published and clean-tested from
 its public artifacts.
 All durable Phase-4 data is REST; the WebSocket supplies only `device.stats`
 focus/current updates.
+
+**v0.1.0 UI source and historical live checkpoint:** schema-19 source renders the polished WAN
+health and controller-speed-test cards. WAN charts use server-selected six-hour
+fixed-target ICMP and exact-interface throughput evidence with null gaps and
+freshness. The speed-test review shows controller-host vantage point, Cloudflare
+endpoint, single-stream method, 15 MiB estimate, 30-second limit, privacy and
+saturation before consent; Start binds a fresh acknowledgement to the reviewed
+`plan_id`, then shows progress/cancel and bounded history. Loaded latency/jitter
+display unavailable. Schema 19 also supplies role-bearing sessions, exhaustive
+server-side RBAC, My Account, owner account administration, password step-up and
+session revocation. The Diagnostics screen supplies the fixed stored-evidence
+disclosure, one cancellable job, bounded history and private ZIP download for
+owner/admin; it makes zero router management/API/SSH calls and zero router
+changes. The bounded rotating controller log sink is implemented. The
+owner-only Backup & Restore screen now exports encrypted
+native `.oowrtbak` artifacts, accepts bounded raw uploads, runs disposable
+authenticated previews, and presents plan-bound destructive confirmation plus
+the persistent router-write suppression/resume gate. The controlled live
+upgrade/restart completed with exact binary version
+`dev-phase41-live-schema19` at schema 19. Recovery verification reports two
+devices, two credentials, one enabled owner, one WLAN and no mesh. A signed-in
+live UI smoke passed Dashboard, Accounts, Diagnostics, Backup & Restore,
+Devices and Topology with no browser errors; fresh schema-17 rollback and
+schema-19 recovery sets also passed verification. This was a route/render smoke,
+not a dark/light visual audit, diagnostics generation/download, backup export,
+restore execution, public-provider speed-test run or router restore. Optional
+MFA is deferred. The completed `v0.1.0` tag workflow and GitHub Release are the
+publication authority and own the final isolated release evidence.
 
 ---
 
@@ -62,15 +91,21 @@ focus/current updates.
 │o │  «                   │                                              │
 │n │  filters / cards     │   ┌────────────────────────────┐             │
 │  │                      │   │  Detail slide-over  370px  │  ← optional │
-│52│                      │   └────────────────────────────┘             │
+│64│                      │   └────────────────────────────┘             │
 │px│                      │                                              │
 └──┴──────────────────────┴──────────────────────────────────────────────┘
 ```
 
-**Icon rail (52px).** Two groups separated by a divider. Primary: Dashboard,
-Topology, WiFi, Devices, Client Devices, Observability, Insights, Flows.
-Secondary (bottom): Settings, Logs, Tools, Alarm Manager, Admins. Icons only —
-tooltip on hover, active state is a filled/accented glyph.
+**Navigation rail (64px collapsed).** The landed first slice uses one route list;
+a remaining visual-polish pass will split it into two groups separated by a
+divider and add a dedicated hover treatment.
+Phase 4.1 first covers the routes that exist now: Dashboard, Topology, Radios,
+Devices, Client Devices, Policy, Settings, Adopt and Logs. Future routes in §2
+do not get empty placeholders. Use one project-owned inline SVG set—never font
+glyphs or raster icons. Icons are 22–24px in controls at least 44px square, with
+a consistent stroke, visible focus/active states, accessible names and
+tooltips. The rail expands to show text labels and stores its preference locally,
+namespaced by controller and account; collapsed mode remains keyboard-usable.
 
 **Context rail (264px).** Screen-specific. Two personalities:
 - *Filter rail* (Topology, Clients, Devices, Observability, Insights, Flows,
@@ -88,6 +123,19 @@ and mini-charts. Used for: device detail, client detail, log entry detail.
 **Content header.** Left: sub-tab segmented control (`Topology | Infrastructure`,
 `Main | IP Table`, `Flows | Activity`). Right: time range segmented control
 (`1h 1D 1W 1M` + calendar icon) and series toggles.
+
+**Progressive disclosure.** Use one `Notice`/`Disclosure` primitive instead of
+ad hoc prose or character-count truncation. Its authored one- or two-line
+summary always names severity, affected component and consequence. `More
+information` expands the complete technical details with native keyboard
+semantics and `aria-expanded`; action buttons and acknowledgements remain
+visible outside the collapsed region. Informational and coverage details default
+closed. An optional capability initially shows a compact summary plus `Review`;
+once reviewed, the exact router mutation/rollback, fresh acknowledgement and
+action remain visible/default-open. Security, destructive, connectivity-loss
+and active-operation essentials are never line-clamped. Apply this contract to
+coverage gaps, adoption/ACL, LLDP, RF scan, speed test, Apply preview,
+diagnostics, backup/restore and long Settings help.
 
 ---
 
@@ -114,9 +162,17 @@ Settings
  │                    Master Table facets: Firewall · Filtering · Routes · QoS · ACL · NAT/DNS
  ├ Security         (IDS/IPS, blocklists)
  ├ High Availability → Safe Apply · Recovery · Link Protection
- ├ System           (updates, backup, admins, timezone, SIEM export, notifications)
+ ├ My Account       (password, MFA, own sessions)
+ ├ Accounts         (owner-only users, roles, state, session revocation)
+ ├ Diagnostics      (redacted support-bundle preview and download)
+ ├ Backup & Restore (encrypted export and staged owner-only restore)
+ ├ System           (updates, timezone, SIEM export, notifications)
  └ Console          (control plane, identity, device credentials)
 ```
+
+This is the target map. My Account, Accounts, Diagnostics and Backup & Restore
+now exist. Other future entries remain specifications and do not get empty
+navigation destinations.
 
 The **Settings → Overview** page is a strong pattern worth copying exactly: every
 domain gets a collapsible card containing a summary table plus `Create New |
@@ -320,11 +376,28 @@ Requirements:
 
 ## 6. Screen specs (abbreviated)
 
-**Dashboard.** Card rail: console summary, ISP/WAN, WiFi defaults, traffic
-prioritization, security. Content: sub-tabs `Internet | WiFi | Flows`, WAN
-selector, main chart, uptime strip, Top APs/Clients/Apps icon strips, Most Common
-Devices strip, two donut+table cards. All cards user-reorderable
-(`Dashboard Widgets`).
+**Dashboard.** Keep the existing fleet counts, device status and recent events,
+then add WAN interface download/upload throughput, fixed-target ICMP
+reachability/freshness/latency/loss, recent warning/critical events, a compact
+topology summary and speed-test history. `site_wan_*` comes from the selected
+gateway; interface counters state download/upload direction and freshness.
+Label the availability strip `ICMP reachability to 1.1.1.1`, never ISP uptime.
+Missing or stale evidence reads `Unavailable` or `Last observed`, never zero.
+Cards link to the corresponding filtered screen; count methodology moves behind
+`How these counts are calculated`.
+
+The speed-test card defaults to **Controller test** and says `Runs from the
+controller host/container; makes no router management call or change`. It also
+states that test traffic follows the controller host's normal route and may
+saturate the gateway/WAN. Before Start, show
+vantage point, provider/endpoint, estimated data use, saturation impact, timeout
+and privacy implications. Start sends the descriptor's opaque `plan_id` with a
+fresh data-use acknowledgement; the server rejects a changed plan before
+creating a job. While running, show progress and Cancel; results show
+download/upload, idle/loaded latency, jitter, time, method and provenance with
+honest unavailable fields. A gateway-run test is a separately installed,
+default-off official-feed capability and never appears to be part of ordinary
+adoption or the controller Start button.
 
 **Topology.** Filter rail. Canvas: tidy tree, internet at top only when a
 gateway default-route observation supports it. Node = icon + label;
@@ -532,6 +605,79 @@ triggers include device/offline, WAN latency/loss, client traffic, port errors,
 security and admin changes. Scope may be site, device, client or network; action
 may be in-app, email or webhook. Schedules, cooldowns and “ignore repeats” are
 visible columns, because an alert that can spam is an operational defect.
+
+**Account-screen source boundary.** Schema 19 has the account foundation:
+canonical `owner`, `admin`, `operator` and `viewer` roles; existing admin to
+enabled owner; ASCII-NOCASE uniqueness; soft-delete tombstones; an atomic
+last-enabled-owner guard; and transactional account-mutation audit.
+Account-management endpoints, role-bearing sessions, declarative route/live
+middleware, My Account and owner account-management screens are implemented.
+Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
+Sweep close affected `/live` sockets and cancel in-flight requests. Optional
+TOTP and recovery codes remain the target contract.
+
+**Settings → My Account.** Every signed-in user can change their own password,
+and list/revoke their own in-memory sessions. Sessions state plainly that
+controller restart invalidates them. Optional TOTP enrollment/disable and
+one-time recovery codes are not implemented; when added, enrollment/self-disable
+will require the current password, the secret will appear only during
+enrollment, regenerating codes will invalidate the prior set, and login will
+withhold the full session until the short-lived MFA challenge succeeds.
+
+**Settings → Accounts.** Owner-only management lists accounts, canonical role
+(`owner`, `admin`, `operator` or `viewer`), enabled state and recent login without
+exposing password/MFA material. Owner can create, change role, enable/disable,
+soft-delete and revoke any account's sessions; the last enabled owner is
+protected. Client address is shown only under the documented trusted-proxy
+policy. The UI reflects server permissions but never serves as the authorization
+boundary.
+
+**Settings → Diagnostics.** Implemented for `owner`/`admin`. Before generation,
+the screen shows fixed stored-only sections, explicit excluded secret classes,
+bounds, redaction policy and controller-log availability/gaps. It then exposes
+one cancellable job, bounded terminal history and completed ZIP download. The
+descriptor states `mode: stored`, `router_management_calls: false` and
+`router_changes: false`; there is no live-router refresh. The ZIP has fixed
+members, a manifest and checksums. Stored evidence gaps do not fail the whole
+bundle.
+
+**Settings → Backup & Restore.** Implemented for `owner` in schema-19 source;
+the live owner screen has passed route/render smoke, but its workflow actions
+are not claimed by that smoke.
+The existing export UI remains available and explains that its native
+`.oowrtbak` contains a consistent live-WAL controller database/key pair under a
+separate export passphrase. Backup and restore are available only over TLS or
+direct loopback. Export start/download and every restore mutation require a
+recent account-password reauthentication; the UI does not auto-retry them.
+
+Restore uploads the raw native file, polls or cancels a bounded disposable
+preview, and fails closed on malformed descriptor/job responses. The concise
+result shows only authenticated manifest identity, source/target schema and
+recovery counts; technical details live under disclosure. The preview export
+passphrase is cleared and must be entered again for confirmation. Confirmation
+also requires the current controller boot/keyring passphrase—explicitly not the
+signed-in account password—exact `RESTORE CONTROLLER`, and four distinct
+acknowledgements for restart, session revocation, router-write suppression and
+no automatic router Apply. Passphrase controls disable password-manager account
+autofill; all secret fields clear on error, refresh, success and unmount.
+
+HTTP 202 changes the screen to reconnecting; it does not claim router management
+has resumed. The post-restart safety state stays prominent: restored desired
+state is not applied automatically, router writes remain persistently
+suppressed, and read-only monitoring of restored devices may resume using
+restored credentials. While suppression is active the UI blocks another confirm
+and offers only a separately reauthenticated exact-text
+`RESUME ROUTER WRITES` review. That default-open critical review states that
+resume immediately re-enables automatic 802.11k neighbour maintenance and may
+write hostapd RRM neighbour state; a separate unchecked acknowledgement and the
+exact text are both required before the UI enables resume. It does not start a
+restored desired-configuration Apply. The retained encrypted safety artifact
+lives at
+`<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`. After its applied
+audit receipt is cleared, retention targets three recognized artifacts and
+fills slots newest-first. Every artifact referenced by active marker, receipt
+or suppression state is preserved even when that exceeds three. Longer
+retention requires an off-host copy before pruning.
 
 **Un-adopt.** This operation is not rollback-armed, so its ownership preview
 has three states: loading, known (including known-empty), and unreadable. Both

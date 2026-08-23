@@ -33,6 +33,10 @@ const (
 // anything an operator can change at runtime belongs in the database, not here,
 // because a setting in the environment needs a restart to move.
 type Config struct {
+	// Version is build metadata supplied by the executable, never an environment
+	// setting. Diagnostic bundles use it verbatim.
+	Version string
+
 	// DataDir holds the database and the keyring. One volume, per §11.
 	DataDir string
 
@@ -75,6 +79,7 @@ type Config struct {
 // DefaultConfig returns the configuration before any environment is applied.
 func DefaultConfig() Config {
 	return Config{
+		Version:       "dev",
 		DataDir:       DefaultDataDir,
 		Listen:        DefaultListen,
 		ShutdownGrace: 10 * time.Second,

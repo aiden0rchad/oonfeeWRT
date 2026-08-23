@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // the pure-Go driver, per decision D3
@@ -24,6 +25,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/restoreswap"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
@@ -40,10 +42,22 @@ type clientPresenceCache struct {
 
 // Daemon is a running controller.
 type Daemon struct {
-	Config Config
-	Log    *slog.Logger
-	Store  *store.DB
-	Keys   *secrets.Keeper
+	Config                 Config
+	Log                    *slog.Logger
+	controllerLog          *rotatingLog
+	controllerLogOnce      sync.Once
+	controllerLogErr       error
+	Store                  *store.DB
+	Keys                   *secrets.Keeper
+	restoreOwnerInstanceID string
+	restoreApplied         restoreswap.Result
+	restoreRestart         chan RestartRequest
+	restoreRestartOnce     sync.Once
+	restoreRestartAccepted atomic.Bool
+	suppressionMu          sync.RWMutex
+	suppression            restoreswap.Suppression
+	lifetimeCtx            context.Context
+	shutdownOps            shutdownOperations
 
 	// resolver is consulted once at the start of inspect/adoption. Keeping the
 	// dependency here makes the workflow's address pin testable without changing
@@ -117,12 +131,15 @@ type Daemon struct {
 	// disk would answer "is this up" with something that was once true.
 	meshes meshStore
 
-	maint     *telemetry.Maintainer
-	maintDone chan struct{}
-	maintStop context.CancelFunc
+	maint         *telemetry.Maintainer
+	maintDone     chan struct{}
+	maintStop     context.CancelFunc
+	neighbourStop context.CancelFunc
+	neighbourDone chan struct{}
 
-	http *http.Server
-	ln   net.Listener
+	http      *http.Server
+	ln        net.Listener
+	startedAt time.Time
 }
 
 // Open brings up everything the daemon owns, in dependency order, and returns a
@@ -132,6 +149,15 @@ type Daemon struct {
 // in use" is reported before the keyring is opened — failing after prompting an
 // operator for a passphrase is a small rudeness that is entirely avoidable.
 func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
+	process := NewProcess(cfg, log)
+	defer process.Close()
+	return process.Open(ctx)
+}
+
+type passphraseSource func(bool) ([]byte, error)
+
+func open(ctx context.Context, cfg Config, log *slog.Logger,
+	acquirePassphrase passphraseSource) (*Daemon, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -166,10 +192,54 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon: listen on %s: %w", cfg.Listen, err)
 	}
+	controllerLog, err := openControllerLog(cfg.DataDir)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("daemon: %w", err)
+	}
+	log = withControllerLog(log, controllerLog)
+	keepControllerLog := false
+	defer func() {
+		if !keepControllerLog {
+			_ = controllerLog.Close()
+		}
+	}()
 
-	d := &Daemon{Config: cfg, Log: log, ln: ln, resolver: net.DefaultResolver,
-		Samples: telemetry.New(telemetry.Options{})}
-	if err := d.openKeyring(cfg); err != nil {
+	instanceID, err := newRestoreOwnerInstanceID()
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	d := &Daemon{Config: cfg, Log: log, controllerLog: controllerLog, ln: ln, resolver: net.DefaultResolver,
+		startedAt: time.Now(),
+		Samples:   telemetry.New(telemetry.Options{}), lifetimeCtx: ctx,
+		restoreOwnerInstanceID: instanceID, restoreRestart: make(chan RestartRequest, 1)}
+	pendingRestore, err := restoreswap.HasPending(cfg.DataDir)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("daemon: inspect pending controller restore: %w", err)
+	}
+	firstRun, err := keyringFirstRun(cfg, pendingRestore)
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	passphrase, err := acquirePassphrase(firstRun)
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	defer clear(passphrase)
+	if err := d.reconcileRestoreStartup(ctx, passphrase); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	firstRun, err = keyringFirstRun(cfg, false)
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	if err := d.openKeyring(cfg, firstRun, passphrase); err != nil {
 		ln.Close()
 		return nil, err
 	}
@@ -194,6 +264,16 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 		ln.Close()
 		return nil, fmt.Errorf("daemon: recover radio scans: %w", err)
 	}
+	recoveredTests, err := db.RecoverSpeedTests(ctx, time.Now().UnixMilli())
+	if err != nil {
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, fmt.Errorf("daemon: recover speed tests: %w", err)
+	}
+	if len(recoveredTests) > 0 {
+		log.Warn("reconciled interrupted controller speed tests", "count", len(recoveredTests))
+	}
 	// SQLite creates its database, WAL, and shared-memory files using the process
 	// umask. The 0700 directory is the hard boundary while they are created; make
 	// each file private too so copied backups and diagnostics retain safe modes.
@@ -208,14 +288,28 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 		return nil, fmt.Errorf("daemon: secure database file %s: %w", path, err)
 	}
 	d.Store = db
+	if err := d.recordAppliedRestore(ctx); err != nil {
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, err
+	}
 
+	handler, err := d.routes()
+	if err != nil {
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, err
+	}
 	d.http = &http.Server{
-		Handler:           d.routes(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
+	keepControllerLog = true
 	return d, nil
 }
 
@@ -226,28 +320,9 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 // look identical from the outside and mean opposite things: the first, on a
 // system that already had devices, means the data directory is not the one they
 // think it is.
-func (d *Daemon) openKeyring(cfg Config) error {
+func (d *Daemon) openKeyring(cfg Config, firstRun bool, passphrase []byte) error {
 	path := secrets.DefaultPath(cfg.DataDir)
-	firstRun := false
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if info, dbErr := os.Stat(cfg.DBPath()); dbErr == nil && info.Size() > 0 {
-			return fmt.Errorf("daemon: keyring %s is missing but database %s already exists; restore the matching keyring backup or move the database aside before starting a new controller",
-				path, cfg.DBPath())
-		} else if dbErr != nil && !errors.Is(dbErr, os.ErrNotExist) {
-			return fmt.Errorf("daemon: stat database before keyring creation: %w", dbErr)
-		}
-		firstRun = true
-	} else if err != nil {
-		return fmt.Errorf("daemon: stat keyring: %w", err)
-	}
-
-	pass, err := passphraseFor(cfg, firstRun, os.Stdin, os.Stderr)
-	if err != nil {
-		return err
-	}
-	defer clear(pass)
-
-	keeper, created, err := secrets.OpenOrCreate(path, pass, secrets.DefaultParams())
+	keeper, created, err := secrets.OpenOrCreate(path, passphrase, secrets.DefaultParams())
 	if err != nil {
 		return unlockHint(cfg, path, err)
 	}
@@ -297,12 +372,33 @@ func (d *Daemon) Serve(ctx context.Context) error {
 		err := d.shutdown()
 		<-errc // Serve has returned by now; drain so the goroutine does not leak.
 		return err
+	case request := <-d.restoreRestart:
+		d.Log.Info("controlled controller-restore restart requested")
+		err := d.shutdownForRestore()
+		<-errc
+		if err != nil {
+			return err
+		}
+		return &RestoreRestartError{Request: request}
 	}
 }
 
 // shutdown implements the §11 contract, in the order the contract requires.
 func (d *Daemon) shutdown() error {
+	return d.shutdownLifecycle(false)
+}
+
+func (d *Daemon) shutdownForRestore() error {
+	return d.shutdownLifecycle(true)
+}
+
+func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	var errs []error
+	lifecycleDrained := true
+	appliesDrained := true
+	jobsDrained := true
+	operationsDrained := true
+	requestsDrained := true
 
 	d.mu.Lock()
 	apiSrv := d.api
@@ -318,8 +414,15 @@ func (d *Daemon) shutdown() error {
 	hctx, cancel := context.WithTimeout(context.Background(), d.Config.ShutdownGrace)
 	defer cancel()
 	if err := d.http.Shutdown(hctx); err != nil {
+		lifecycleDrained = false
 		errs = append(errs, fmt.Errorf("daemon: HTTP did not drain: %w", err))
 		d.http.Close()
+	}
+	if apiSrv != nil && !apiSrv.CloseJobs(d.Config.ShutdownGrace) {
+		jobsDrained = false
+		lifecycleDrained = false
+		errs = append(errs, fmt.Errorf("daemon: controller background jobs did not stop after %s; database and controller log left open rather than closing underneath them",
+			d.Config.ShutdownGrace))
 	}
 
 	// 2. Drop live clients, then stop polling. This order matters: closing a
@@ -328,10 +431,15 @@ func (d *Daemon) shutdown() error {
 	if apiSrv != nil && apiSrv.Hub != nil {
 		apiSrv.Hub.Close()
 	}
+	if err := d.stopNeighbourReconciler(hctx); err != nil {
+		lifecycleDrained = false
+		errs = append(errs, fmt.Errorf("daemon: neighbour reconciler did not stop: %w", err))
+	}
 	if c := d.collectorRef(); c != nil {
 		c.Stop()
 	}
 	if err := d.stopCascadeEvents(hctx); err != nil {
+		lifecycleDrained = false
 		errs = append(errs, fmt.Errorf("daemon: flush grouped topology events: %w", err))
 	}
 
@@ -339,7 +447,10 @@ func (d *Daemon) shutdown() error {
 	//    arriving, and before the database closes, so there is somewhere to put
 	//    it. Skipping this loses up to five minutes of every series on every
 	//    restart — a visible notch in every graph of a fleet that gets updated.
-	d.stopMaintainer()
+	if err := d.stopMaintainer(); err != nil {
+		lifecycleDrained = false
+		errs = append(errs, err)
+	}
 
 	// 4. Wait for in-flight applies. An apply past APPLY has a rollback armed on
 	//    the device; that timer runs whether this process exists or not, so
@@ -349,10 +460,24 @@ func (d *Daemon) shutdown() error {
 		d.Log.Warn("waiting for in-flight applies before exit; a device has a "+
 			"rollback timer armed", "count", n, "budget", d.Config.ApplyDrain)
 		if !d.applies.wait(d.Config.ApplyDrain) {
+			appliesDrained = false
+			lifecycleDrained = false
 			errs = append(errs, fmt.Errorf("daemon: %d apply(s) still running after "+
 				"%s — a device may revert an unconfirmed change; check its config "+
 				"before assuming the change landed",
 				d.applies.inFlight(), d.Config.ApplyDrain))
+		}
+	}
+	if apiSrv != nil {
+		if names := apiSrv.ActiveOperations(); len(names) > 0 {
+			d.Log.Warn("waiting for controller operations before closing the database",
+				"operations", names, "budget", d.Config.ApplyDrain)
+			if !apiSrv.WaitForOperations(d.Config.ApplyDrain) {
+				operationsDrained = false
+				lifecycleDrained = false
+				errs = append(errs, fmt.Errorf("daemon: controller operations %v still running after %s; database and controller log left open rather than closing underneath them",
+					apiSrv.ActiveOperations(), d.Config.ApplyDrain))
+			}
 		}
 	}
 
@@ -360,32 +485,76 @@ func (d *Daemon) shutdown() error {
 	// The final receipt is written after TrackApply returns; closing SQLite in
 	// that gap loses the only durable answer to an ambiguous POST. Queued site
 	// mutations have already been woken by CloseAdmission and return no-write.
-	apiDrained := true
 	if apiSrv != nil {
 		if n := apiSrv.ActiveRequests(); n > 0 {
 			d.Log.Warn("waiting for accepted API requests before closing the database",
 				"count", n, "budget", d.Config.ApplyDrain)
 			if !apiSrv.WaitForDrain(d.Config.ApplyDrain) {
-				apiDrained = false
+				requestsDrained = false
+				lifecycleDrained = false
 				errs = append(errs, fmt.Errorf("daemon: %d accepted API request(s) still running after %s; database left open rather than closing underneath them",
 					apiSrv.ActiveRequests(), d.Config.ApplyDrain))
 			}
+		}
+	}
+	if lifecycleDrained && d.shutdownOps.afterRequestDrain != nil {
+		if err := d.shutdownOps.afterRequestDrain(); err != nil {
+			lifecycleDrained = false
+			errs = append(errs, fmt.Errorf("daemon: restore drain boundary: %w", err))
+		}
+	}
+	// The root context and buffered restart can become ready together. The
+	// accepted-response flag, not marker ownership alone, authorizes promotion:
+	// an API failure may retain the same owned marker for safe startup cleanup.
+	promoteRestore = false
+	if lifecycleDrained && appliesDrained && requestsDrained && jobsDrained && operationsDrained &&
+		d.restoreRestartAccepted.Load() {
+		owned, err := restoreswap.OwnsUncleanIntent(d.Config.DataDir, d.restoreOwnerInstanceID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("daemon: inspect owned restore intent after drain: %w", err))
+		} else if owned {
+			promoteRestore = true
 		}
 	}
 
 	// 5. Checkpoint and close the database, then zero the keys. Keys last: a
 	//    checkpoint that needed to read a credential would otherwise fail on a
 	//    closed keeper.
-	if apiDrained && d.Store != nil {
-		if err := d.Store.Checkpoint(context.Background()); err != nil {
+	closedPair := false
+	if lifecycleDrained && appliesDrained && requestsDrained && jobsDrained && operationsDrained && d.Store != nil {
+		checkpointed := true
+		if err := d.checkpointStore(context.Background()); err != nil {
+			checkpointed = false
 			errs = append(errs, err)
 		}
-		if err := d.Store.Close(); err != nil {
+		storeClosed := true
+		if err := d.closeStore(); err != nil {
+			storeClosed = false
 			errs = append(errs, err)
+		}
+		keysClosed := true
+		if d.Keys != nil {
+			if err := d.closeKeys(); err != nil {
+				keysClosed = false
+				errs = append(errs, err)
+			}
+		}
+		closedPair = checkpointed && storeClosed && keysClosed
+		if promoteRestore && closedPair {
+			timeout := restorePromotionTimeout
+			if d.shutdownOps.promotionTimeout > 0 {
+				timeout = d.shutdownOps.promotionTimeout
+			}
+			promotionCtx, cancelPromotion := context.WithTimeout(context.Background(), timeout)
+			err := d.markRestoreClean(promotionCtx)
+			cancelPromotion()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("daemon: promote controller restore after clean shutdown: %w", err))
+			}
 		}
 	}
-	if apiDrained && d.Keys != nil {
-		errs = append(errs, d.Keys.Close())
+	if lifecycleDrained && appliesDrained && requestsDrained && jobsDrained && operationsDrained {
+		errs = append(errs, d.closeControllerLog())
 	}
 	return errors.Join(errs...)
 }
@@ -394,6 +563,16 @@ func (d *Daemon) shutdown() error {
 // error paths in Open and for tests; Serve's own shutdown is the real one.
 func (d *Daemon) Close() error {
 	var errs []error
+	jobsDrained := true
+	operationsDrained := true
+	if d.api != nil {
+		d.api.CloseAdmission()
+	}
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := d.stopNeighbourReconciler(stopCtx); err != nil {
+		errs = append(errs, fmt.Errorf("daemon: neighbour reconciler did not stop: %w", err))
+	}
+	cancelStop()
 	if c := d.collectorRef(); c != nil {
 		c.Stop()
 	}
@@ -402,9 +581,20 @@ func (d *Daemon) Close() error {
 		errs = append(errs, fmt.Errorf("daemon: flush grouped topology events: %w", err))
 	}
 	cancelCascade()
-	d.stopMaintainer()
+	if err := d.stopMaintainer(); err != nil {
+		errs = append(errs, err)
+	}
 	if d.http != nil {
 		errs = append(errs, d.http.Close())
+	}
+	if d.api != nil && !d.api.CloseJobs(5*time.Second) {
+		jobsDrained = false
+		errs = append(errs, errors.New("daemon: controller background jobs did not stop; database and controller log left open"))
+	}
+	if d.api != nil && !d.api.WaitForOperations(5*time.Second) {
+		operationsDrained = false
+		errs = append(errs, fmt.Errorf("daemon: controller operations %v did not stop; database and controller log left open",
+			d.api.ActiveOperations()))
 	}
 	// http.Server only tracks listeners once Serve is running, so closing the
 	// server is not enough for a Daemon that was opened and never served — which
@@ -414,11 +604,23 @@ func (d *Daemon) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	if d.Store != nil {
+	if jobsDrained && operationsDrained && d.Store != nil {
 		errs = append(errs, d.Store.Close())
 	}
-	if d.Keys != nil {
+	if jobsDrained && operationsDrained && d.Keys != nil {
 		errs = append(errs, d.Keys.Close())
 	}
+	if jobsDrained && operationsDrained {
+		errs = append(errs, d.closeControllerLog())
+	}
 	return errors.Join(errs...)
+}
+
+func (d *Daemon) closeControllerLog() error {
+	d.controllerLogOnce.Do(func() {
+		if d.controllerLog != nil {
+			d.controllerLogErr = d.controllerLog.Close()
+		}
+	})
+	return d.controllerLogErr
 }

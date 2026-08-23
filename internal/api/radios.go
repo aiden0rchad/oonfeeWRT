@@ -257,6 +257,11 @@ func (s *Server) handleRadioScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "explicit RF scanning is not available")
 		return
 	}
+	release, ok := s.beginOperation(w, operationRFScan)
+	if !ok {
+		return
+	}
+	defer release()
 	scan, rows, err := s.RadioScan.ScanRadio(r.Context(), deviceID, radioKey)
 	if err != nil {
 		status := http.StatusBadGateway

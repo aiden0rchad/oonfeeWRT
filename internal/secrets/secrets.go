@@ -27,6 +27,7 @@
 package secrets
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -35,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,11 +97,14 @@ func DefaultParams() Params { return Params{Time: 3, MemoryKiB: 64 * 1024, Threa
 // absurd memory figure would have it try to allocate its way out of existence.
 // Validating on the way in turns both into an error message.
 const (
-	maxMemoryKiB = 4 * 1024 * 1024 // 4 GiB
-	maxTime      = 32
-	saltLen      = 16
-	keyLen       = 32
-	blobVersion  = 1
+	maxMemoryKiB        = 128 * 1024
+	maxTime             = 6
+	maxThreads          = 8
+	saltLen             = 16
+	keyLen              = 32
+	blobVersion         = 1
+	wrappedKeyRawSize   = 1 + chacha20poly1305.NonceSizeX + keyLen + chacha20poly1305.Overhead
+	maxKeyringFileBytes = 4096
 )
 
 func (p Params) validate() error {
@@ -108,6 +113,9 @@ func (p Params) validate() error {
 		return fmt.Errorf("secrets: argon2id time=%d out of range 1..%d", p.Time, maxTime)
 	case p.Threads < 1:
 		return errors.New("secrets: argon2id threads must be at least 1")
+	case p.Threads > maxThreads:
+		return fmt.Errorf("secrets: argon2id threads=%d exceeds the %d ceiling",
+			p.Threads, maxThreads)
 	case p.MemoryKiB < 8*uint32(p.Threads):
 		return fmt.Errorf("secrets: argon2id memory=%d KiB is below the floor of 8 KiB per thread",
 			p.MemoryKiB)
@@ -199,21 +207,27 @@ func Open(path string, passphrase []byte) (*Keeper, error) {
 	if err != nil {
 		return nil, err
 	}
-	// RFC 9106 puts the salt floor at 8 bytes; we write 16. Checking catches a
-	// truncated file here, with a name, rather than as a puzzling unwrap failure.
-	salt, err := base64.StdEncoding.DecodeString(kr.Salt)
-	if err != nil || len(salt) < 8 {
-		return nil, fmt.Errorf("secrets: %s: malformed or too-short salt", path)
-	}
-	wrapped, err := base64.StdEncoding.DecodeString(kr.Wrapped)
+	dek, err := unwrapKeyring(kr, passphrase, path)
 	if err != nil {
-		return nil, fmt.Errorf("secrets: %s: malformed wrapped key", path)
+		return nil, err
 	}
+	return &Keeper{path: path, dek: dek, params: kr.Params}, nil
+}
 
+func unwrapKeyring(kr keyring, passphrase []byte, source string) ([]byte, error) {
+	salt, err := decodeFixedBase64(kr.Salt, saltLen)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: %s: malformed salt: %w", source, err)
+	}
+	defer zero(salt)
+	wrapped, err := decodeFixedBase64(kr.Wrapped, wrappedKeyRawSize)
+	if err != nil {
+		return nil, fmt.Errorf("secrets: %s: malformed wrapped key: %w", source, err)
+	}
+	defer zero(wrapped)
 	kek := argon2.IDKey(passphrase, salt, kr.Params.Time, kr.Params.MemoryKiB,
 		kr.Params.Threads, keyLen)
 	defer zero(kek)
-
 	dek, err := openWith(kek, wrapped, kr.wrapAAD())
 	if err != nil {
 		return nil, ErrBadPassphrase
@@ -221,9 +235,9 @@ func Open(path string, passphrase []byte) (*Keeper, error) {
 	if len(dek) != keyLen {
 		zero(dek)
 		return nil, fmt.Errorf("secrets: %s: data key is %d bytes, expected %d",
-			path, len(dek), keyLen)
+			source, len(dek), keyLen)
 	}
-	return &Keeper{path: path, dek: dek, params: kr.Params}, nil
+	return dek, nil
 }
 
 // OpenOrCreate opens an existing keyring or creates one, reporting which it did
@@ -329,6 +343,9 @@ func (k *Keeper) ChangePassphrase(newPassphrase []byte, p Params) error {
 	defer k.mu.Unlock()
 	if k.dek == nil {
 		return ErrClosed
+	}
+	if k.path == "" {
+		return errors.New("secrets: a pathless keeper cannot change an on-disk passphrase")
 	}
 	kr, err := wrap(k.dek, newPassphrase, p)
 	if err != nil {
@@ -538,12 +555,42 @@ func wrap(dek, passphrase []byte, p Params) (keyring, error) {
 // ---- file I/O ----
 
 func readKeyring(path string) (keyring, error) {
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return keyring{}, fmt.Errorf("secrets: read keyring: %w", err)
 	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return keyring{}, fmt.Errorf("secrets: inspect keyring: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxKeyringFileBytes {
+		file.Close()
+		return keyring{}, fmt.Errorf("secrets: keyring must be a regular file no larger than %d bytes",
+			maxKeyringFileBytes)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, maxKeyringFileBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return keyring{}, fmt.Errorf("secrets: read keyring: %w", readErr)
+	}
+	if closeErr != nil {
+		return keyring{}, fmt.Errorf("secrets: close keyring after read: %w", closeErr)
+	}
+	if len(data) > maxKeyringFileBytes {
+		return keyring{}, fmt.Errorf("secrets: keyring exceeds %d-byte ceiling", maxKeyringFileBytes)
+	}
 	var kr keyring
-	if err := json.Unmarshal(data, &kr); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&kr); err != nil {
+		return keyring{}, fmt.Errorf("secrets: %s is not a valid keyring file: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("another JSON value follows the keyring")
+		}
 		return keyring{}, fmt.Errorf("secrets: %s is not a valid keyring file: %w", path, err)
 	}
 	if kr.Version != 1 {
@@ -563,7 +610,7 @@ func readKeyring(path string) (keyring, error) {
 // concurrent winner. Linking a fully synced same-directory temp file is the
 // portable no-clobber primitive: link fails with EEXIST instead of overwriting.
 func writeNewKeyring(path string, kr keyring) error {
-	return writeKeyringFile(path, kr, true)
+	return writeKeyringFile(path, kr, true, syncDirectory)
 }
 
 // writeKeyring replaces the keyring atomically.
@@ -573,10 +620,10 @@ func writeNewKeyring(path string, kr keyring) error {
 // atomic, but without the fsyncs a crash can leave the directory entry pointing
 // at a file whose contents never reached the disk.
 func writeKeyring(path string, kr keyring) error {
-	return writeKeyringFile(path, kr, false)
+	return writeKeyringFile(path, kr, false, syncDirectory)
 }
 
-func writeKeyringFile(path string, kr keyring, exclusive bool) error {
+func writeKeyringFile(path string, kr keyring, exclusive bool, syncDir func(string) error) error {
 	data, err := json.MarshalIndent(kr, "", "  ")
 	if err != nil {
 		return fmt.Errorf("secrets: encode keyring: %w", err)
@@ -616,8 +663,39 @@ func writeKeyringFile(path string, kr keyring, exclusive bool) error {
 	} else if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("secrets: replace keyring: %w", err)
 	}
-	if err := syncDirectory(dir); err != nil {
+	if err := syncDir(dir); err != nil {
+		if !exclusive {
+			return err
+		}
+		rollbackErr := removeLinkedKeyring(path, tmpName)
+		if rollbackErr == nil {
+			rollbackErr = syncDir(dir)
+		}
+		if rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("secrets: roll back new keyring: %w", rollbackErr))
+		}
 		return err
+	}
+	return nil
+}
+
+func removeLinkedKeyring(path, tempPath string) error {
+	tempInfo, err := os.Lstat(tempPath)
+	if err != nil {
+		return fmt.Errorf("inspect temporary keyring: %w", err)
+	}
+	pathInfo, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect installed keyring: %w", err)
+	}
+	if !os.SameFile(tempInfo, pathInfo) {
+		return errors.New("installed keyring changed before rollback")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove installed keyring: %w", err)
 	}
 	return nil
 }

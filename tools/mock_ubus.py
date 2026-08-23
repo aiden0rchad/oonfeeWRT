@@ -332,10 +332,10 @@ HOSTAPD_METHODS = ("get_status", "get_clients", "get_features", "list_bans",
 # what `rrm_nr_set` has most recently stored. Both SSIDs match so the two BSSes
 # are each other's neighbour, which is the case worth exercising.
 NR_OWN = {
-    "hostapd.wlan0": {"bssid": "30:23:03:db:be:42", "ssid": "OpenWrt",
-                      "nr": "302303dbbe42ef1900008024090603022a00"},
-    "hostapd.wlan1": {"bssid": "30:23:03:db:be:41", "ssid": "OpenWrt",
-                      "nr": "302303dbbe41ef0900005106070603000100"},
+    "hostapd.wlan0": {"bssid": "02:00:00:ab:24:42", "ssid": "OpenWrt",
+                      "nr": "020000ab2442ef1900008024090603022a00"},
+    "hostapd.wlan1": {"bssid": "02:00:00:ab:24:41", "ssid": "OpenWrt",
+                      "nr": "020000ab2441ef0900005106070603000100"},
 }
 NR_LISTS = {}
 
@@ -1274,7 +1274,7 @@ def handle_one(req):
         return ok(rid, {"interface": interfaces})
     if obj == "network.device" and meth == "status":
         return ok(rid, {"br-lan": {"up": True, "carrier": True, "mtu": 1500,
-                                   "macaddr": "60:38:e0:aa:bb:cc",
+                                   "macaddr": "02:00:00:aa:bb:cc",
                                    "statistics": {"rx_bytes": 123456789,
                                                   "tx_bytes": 987654321}}})
     if obj.startswith("hostapd."):
@@ -1290,7 +1290,7 @@ def handle_one(req):
             # the fixture reports it the way hardware does.
             return ok(rid, {"phy": iw.get("phy", "phy0" if g5 else "phy1"),
                             "ssid": iface.get("config", {}).get("ssid", ""),
-                            "bssid": iw.get("bssid", "30:23:03:db:be:42"),
+                            "bssid": iw.get("bssid", "02:00:00:ab:24:42"),
                             "channel": iw.get("channel", 36 if g5 else 6),
                             "freq": iw.get("frequency", 5180 if g5 else 2437),
                             "driver": "nl80211", "status": "ENABLED",
@@ -1328,8 +1328,8 @@ def handle_one(req):
             return ok(rid, {})
         # 802.11k neighbour reports.
         #
-        # The shapes are copied from real captures on 2026-08-15: a WRT3200ACM
-        # (mwlwifi) and an Archer C6 v2 (ath9k/ath10k) both answer this way.
+        # The response shape is measured; identifiers are stable synthetic
+        # fixtures. mwlwifi and ath9k/ath10k both answer this way.
         # `rrm_nr_get_own` returns a POSITIONAL triple, not an object, and the
         # element is opaque hex the controller relays untouched.
         #
@@ -1376,10 +1376,10 @@ def handle_one(req):
             }})
         if meth == "getHostHints":
             return ok(rid, {"AA:BB:CC:11:22:33":
-                            {"ipaddrs": ["192.168.1.130"],
-                             "name": "roland-laptop"},
+                            {"ipaddrs": ["192.0.2.130"],
+                             "name": "example-laptop"},
                             "AA:BB:CC:44:55:66":
-                            {"ipaddrs": ["192.168.1.131"], "name": "iot-plug"}})
+                            {"ipaddrs": ["192.0.2.131"], "name": "iot-plug"}})
         if meth == "getNetworkDevices":
             # DSA user ports carry devtype "dsa" with the conduit as parent —
             # this is how the controller detects a switch without any
@@ -1397,8 +1397,8 @@ def handle_one(req):
                 return ok(rid, copy.deepcopy(WIRELESS_DEVICES))
         if meth == "getDHCPLeases":
             return ok(rid, {"dhcp_leases": [
-                {"macaddr": "AA:BB:CC:11:22:33", "ipaddr": "192.168.1.130",
-                 "hostname": "roland-laptop", "expires": 30000}]})
+                {"macaddr": "AA:BB:CC:11:22:33", "ipaddr": "192.0.2.130",
+                 "hostname": "example-laptop", "expires": 30000}]})
         return ok(rid, {})
 
     if obj.startswith("hostapd.") and meth == "get_clients":

@@ -707,8 +707,8 @@ func decodeAPClients(iface string) func(json.RawMessage, *Snapshot) error {
 		// "which AP is this client on" that the grid then reported as unknown.
 		//
 		// Lower-cased on the way in. Measured on the reference WRT3200ACM:
-		// hostapd.get_clients returns "f6:97:77:eb:8e:c9" and iwinfo.assoclist
-		// returns "F6:97:77:EB:8E:C9" for the same station in the same minute,
+		// hostapd.get_clients can return lower case while iwinfo.assoclist returns
+		// upper case for the same station in the same minute,
 		// and the clients table stores lower case. A join that did not
 		// normalise would miss every row and look like an empty result.
 		ap.Stations = make(map[string]LiveStation, len(v.Clients))

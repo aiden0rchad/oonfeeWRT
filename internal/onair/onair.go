@@ -4,10 +4,10 @@
 // # Why this exists
 //
 // Measured on 2026-08-16, and it is the most expensive lesson this project has
-// paid for. A WRT3200ACM beaconed `wrt-cleanroom` — an SSID present in NO
+// paid for. A reference AP beaconed `fixture-mismatch` — an SSID present in NO
 // configuration anywhere on the device — for roughly fourteen hours, while
 // `/etc/config/wireless`, hostapd's running configuration, `iwinfo`, ubus AND
-// the kernel's own `iw dev info` all reported `oonfee-roam`. A `wifi reload`
+// the kernel's own `iw dev info` all reported `fixture-roam`. A `wifi reload`
 // did not clear it; only a hard reset did.
 //
 // Every verification this controller had was on the wrong side of the driver.

@@ -1,36 +1,33 @@
-# oonfeeWRT controller — self-hosted, Omada-style.
+# oonfeeWRT controller — self-hosted network management.
 #
 #   docker compose up -d
-#   open http://<this-host>:8080
+#   open http://127.0.0.1:8080 on the controller host
 #
-# NETWORKING — pick one, understand the tradeoff (ARCHITECTURE, deployment):
+# NETWORKING — the safe, portable bridge mode is the default:
 #
-#   network_mode: host   (default below, Linux only)
-#     Full discovery: subnet TCP probe + ARP + mDNS. The controller sees the
-#     LAN the way a program on the host does. Port 8080 is bound directly on
-#     the host — no `ports:` mapping is used or needed.
+#   Bridge mode works everywhere, including Docker Desktop. HTTP is exposed
+#   only on host loopback. Subnet TCP probing still works; ARP/mDNS discovery
+#   does not cross the bridge, so adopt devices by IP.
 #
-#   bridge + ports mapping   (comment host mode out, uncomment `ports:`)
-#     Works everywhere including Docker Desktop. Subnet TCP probing still
-#     works (it's plain L3); ARP/mDNS discovery does not cross the bridge —
-#     adopt devices by IP, which the UI treats as a first-class path.
+# Linux-only host networking is an explicit discovery opt-in. Remove `ports:`,
+# add `network_mode: host`, and put TLS/firewall policy in front of port 8080.
+# Host mode exposes the daemon's `:8080` listener directly on host interfaces.
 
 services:
   oonfeewrt:
-    image: oonfeewrt:dev            # built via deploy/Dockerfile
+    image: ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
     container_name: oonfeewrt
     restart: unless-stopped
 
-    network_mode: host              # Linux: full discovery (recommended)
-    # ports:                        # bridge-mode alternative:
-    #   - "8080:8080"
+    ports:
+      - "127.0.0.1:8080:8080"
 
     volumes:
       - oonfee-data:/data           # SQLite DB, keyring and backups
       # Bind mounts keep the host's uid/gid, so a correctly-secured 0600 secret
       # owned by your account is unreadable by the container's uid 65532 and
       # argon2id key derivation fails at startup. Before first run:
-      #     chown 65532 deploy/passphrase && chmod 600 deploy/passphrase
+      #     sudo chown 65532:65532 passphrase && sudo chmod 600 passphrase
       - type: bind
         source: ./passphrase
         target: /run/secrets/oonfee-passphrase

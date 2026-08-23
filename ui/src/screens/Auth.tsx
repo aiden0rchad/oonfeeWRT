@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, ApiError } from '../lib/api'
+import type { SessionInfo } from '../lib/api'
 import { Button, Field, Banner } from '../components/ui'
 
 /**
@@ -16,7 +17,7 @@ export function Auth({
   onSignedIn,
 }: {
   needsSetup: boolean
-  onSignedIn: (username: string) => void
+  onSignedIn: (session: SessionInfo) => void
 }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -36,7 +37,7 @@ export function Auth({
       const info = needsSetup
         ? await api.setup(username, password)
         : await api.login(username, password)
-      onSignedIn(info.username)
+      onSignedIn(info)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'Could not reach the controller.')
     } finally {
@@ -46,18 +47,21 @@ export function Auth({
 
   return (
     <div
+      className="auth-screen"
       style={{
-        height: '100%',
+        minHeight: '100%',
         display: 'grid',
         placeItems: 'center',
         background: 'var(--surface-0)',
       }}
     >
       <form
+        className="auth-card"
         onSubmit={submit}
         aria-busy={busy}
         style={{
           width: 340,
+          maxWidth: '100%',
           display: 'grid',
           gap: 14,
           padding: 24,
@@ -79,6 +83,7 @@ export function Auth({
 
         <Field
           label="Username"
+          style={{ minHeight: 44 }}
           value={username}
           autoComplete="username"
           autoFocus
@@ -86,6 +91,7 @@ export function Auth({
         />
         <Field
           label="Password"
+          style={{ minHeight: 44 }}
           type="password"
           value={password}
           autoComplete={needsSetup ? 'new-password' : 'current-password'}
@@ -95,6 +101,7 @@ export function Auth({
           <>
             <Field
               label="Repeat password"
+              style={{ minHeight: 44 }}
               type="password"
               value={confirm}
               autoComplete="new-password"
@@ -107,7 +114,8 @@ export function Auth({
           </>
         )}
 
-        <Button type="submit" kind="primary" disabled={busy || !username || !password}>
+        <Button type="submit" kind="primary" style={{ minHeight: 44 }}
+          disabled={busy || !username || !password}>
           {busy ? 'Working…' : needsSetup ? 'Create account' : 'Sign in'}
         </Button>
       </form>

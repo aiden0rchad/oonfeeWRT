@@ -22,7 +22,11 @@ type storedPolicy struct {
 }
 
 func (db *DB) policies(ctx context.Context) ([]model.Policy, error) {
-	rows, err := db.sql.QueryContext(ctx,
+	return db.policiesOn(ctx, db.sql)
+}
+
+func (db *DB) policiesOn(ctx context.Context, q siteReader) ([]model.Policy, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT id, sort, rule_json, enabled FROM fw_rules ORDER BY sort, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list policies: %w", err)
@@ -30,6 +34,9 @@ func (db *DB) policies(ctx context.Context) ([]model.Policy, error) {
 	defer rows.Close()
 	out := []model.Policy{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var p model.Policy
 		var raw string
 		if err := rows.Scan(&p.ID, &p.Order, &raw, &p.Enabled); err != nil {
@@ -52,7 +59,11 @@ func (db *DB) policies(ctx context.Context) ([]model.Policy, error) {
 }
 
 func (db *DB) policyClients(ctx context.Context) ([]model.PolicyClient, error) {
-	rows, err := db.sql.QueryContext(ctx, `
+	return db.policyClientsOn(ctx, db.sql)
+}
+
+func (db *DB) policyClientsOn(ctx context.Context, q siteReader) ([]model.PolicyClient, error) {
+	rows, err := q.QueryContext(ctx, `
 SELECT mac, COALESCE(grp,''), blocked, COALESCE(fixed_ip,'')
   FROM clients
  WHERE blocked != 0 OR COALESCE(fixed_ip,'') != '' OR COALESCE(grp,'') != ''
@@ -63,6 +74,9 @@ SELECT mac, COALESCE(grp,''), blocked, COALESCE(fixed_ip,'')
 	defer rows.Close()
 	out := []model.PolicyClient{}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var client model.PolicyClient
 		if err := rows.Scan(&client.MAC, &client.Group, &client.Blocked, &client.FixedIP); err != nil {
 			return nil, err

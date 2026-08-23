@@ -44,7 +44,7 @@ func TestIntegrationReprobeIsStableAcrossRuns(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:03"
+	const mac = "02:00:00:00:00:03"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestIntegrationPreviewExplainsItselfAfterACapabilityLoss(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:04"
+	const mac = "02:00:00:00:00:04"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestIntegrationRoleFitAgainstRealHardware(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:05"
+	const mac = "02:00:00:00:00:05"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +320,7 @@ func TestIntegrationMeshPreviewsAgainstRealHardware(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:06"
+	const mac = "02:00:00:00:00:06"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +437,7 @@ func TestIntegrationMeshAppliesToRealHardware(t *testing.T) {
 	}
 	defer d.Close()
 
-	const mac = "60:38:e0:00:00:07"
+	const mac = "02:00:00:00:00:07"
 	blob, err := d.Keys.SealCredential(mac, user, pass)
 	if err != nil {
 		t.Fatal(err)

@@ -4,24 +4,20 @@ import (
 	"testing"
 )
 
-// The fixtures are the real thing: these are the elements the two reference
-// devices reported for the `oonfee-roam` WLAN, read with `rrm_nr_get_own` on
-// 2026-08-15. Using measured bytes rather than invented ones keeps the tests
-// honest about the shape the code actually handles — a hand-written "aabbcc"
-// would not have caught a length or case assumption.
+// These sanitized fixtures retain the measured neighbour-element shape while
+// using stable locally administered BSSIDs and generic SSIDs.
 var (
-	wrt5 = Neighbour{DeviceID: 1, Iface: "phy0-ap1", SSID: "oonfee-roam",
-		BSSID: "32:23:03:db:be:43", NR: "322303dbbe43ef1900008024090603022a00"}
-	wrt2 = Neighbour{DeviceID: 1, Iface: "phy1-ap1", SSID: "oonfee-roam",
-		BSSID: "32:23:03:db:be:40", NR: "322303dbbe40ef0900005101070603000100"}
-	c6_5 = Neighbour{DeviceID: 2, Iface: "phy0-ap1", SSID: "oonfee-roam",
-		BSSID: "86:d8:1b:c5:19:34", NR: "86d81bc51934ef1900008024090603022a00"}
-	c6_2 = Neighbour{DeviceID: 2, Iface: "phy1-ap1", SSID: "oonfee-roam",
-		BSSID: "86:d8:1b:c5:19:35", NR: "86d81bc51935ef0900005101070603000100"}
-	// A different SSID on the same hardware — the reference devices really do
-	// carry these alongside the managed WLAN.
-	probe5 = Neighbour{DeviceID: 1, Iface: "phy0-ap0", SSID: "oonfeewrt-probe-5g",
-		BSSID: "30:23:03:db:be:42", NR: "302303dbbe42ef1900008024090603022a00"}
+	wrt5 = Neighbour{DeviceID: 1, Iface: "phy0-ap1", SSID: "fixture-roam",
+		BSSID: "02:00:00:ab:51:43", NR: "020000ab5143ef1900008024090603022a00"}
+	wrt2 = Neighbour{DeviceID: 1, Iface: "phy1-ap1", SSID: "fixture-roam",
+		BSSID: "02:00:00:ab:51:40", NR: "020000ab5140ef0900005101070603000100"}
+	c6_5 = Neighbour{DeviceID: 2, Iface: "phy0-ap1", SSID: "fixture-roam",
+		BSSID: "02:00:00:cd:52:34", NR: "020000cd5234ef1900008024090603022a00"}
+	c6_2 = Neighbour{DeviceID: 2, Iface: "phy1-ap1", SSID: "fixture-roam",
+		BSSID: "02:00:00:cd:52:35", NR: "020000cd5235ef0900005101070603000100"}
+	// A different SSID on the same synthetic hardware preserves filtering.
+	probe5 = Neighbour{DeviceID: 1, Iface: "phy0-ap0", SSID: "fixture-probe-5g",
+		BSSID: "02:00:00:ab:24:42", NR: "020000ab2442ef1900008024090603022a00"}
 )
 
 func bssids(ns []Neighbour) map[string]bool {
@@ -96,7 +92,7 @@ func TestDistributeEmitsAnEntryForALoneBSS(t *testing.T) {
 }
 
 func TestDistributeDropsIncompleteObservations(t *testing.T) {
-	noNR := Neighbour{DeviceID: 3, Iface: "phy0-ap0", SSID: "oonfee-roam",
+	noNR := Neighbour{DeviceID: 3, Iface: "phy0-ap0", SSID: "fixture-roam",
 		BSSID: "aa:bb:cc:dd:ee:ff"}
 
 	got := Distribute([]Neighbour{wrt5, wrt2, noNR})
@@ -144,7 +140,7 @@ func TestSameSetIgnoresOrder(t *testing.T) {
 func TestSameSetNoticesAChangedElement(t *testing.T) {
 	moved := c6_5
 	// Same AP, same BSSID, different channel — byte 14 of the element.
-	moved.NR = "86d81bc51934ef1900008024250603022a00"
+	moved.NR = "020000cd5234ef1900008024250603022a00"
 
 	if SameSet([]Neighbour{wrt5, c6_5}, []Neighbour{wrt5, moved}) {
 		t.Error("a neighbour that changed channel compared equal; the client " +
@@ -171,7 +167,7 @@ func TestCaseFoldingOnBSSIDs(t *testing.T) {
 	// The same BSS, reported once in upper case — as if one source of the
 	// address disagreed with another about presentation.
 	upper := wrt5
-	upper.BSSID = "32:23:03:DB:BE:43"
+	upper.BSSID = "02:00:00:AB:51:43"
 
 	got := Distribute([]Neighbour{upper, wrt2})
 
@@ -250,7 +246,7 @@ func TestUnionKeepsNeighboursAnIncompleteCycleCannotSee(t *testing.T) {
 // otherwise an AP that changed channel is remembered on the old one forever.
 func TestUnionPrefersTheFreshElement(t *testing.T) {
 	moved := c6_5
-	moved.NR = "86d81bc51934ef1900008024250603022a00"
+	moved.NR = "020000cd5234ef1900008024250603022a00"
 
 	got := Union([]Neighbour{c6_5, wrt5}, []Neighbour{moved})
 

@@ -1476,7 +1476,7 @@ func TestUnknownInterfaceModeNeverBecomesAClientTelemetrySource(t *testing.T) {
 func TestIfaceModeDecodeDoesNotCarryThePassphrase(t *testing.T) {
 	// The shape the reference device returns, key included.
 	raw := []byte(`{"radio0":{"interfaces":[{"ifname":"phy0-ap0","section":"default_radio0",
-	  "config":{"mode":"ap","ssid":"net","encryption":"psk2","key":"Ys5bKIiUDYmRK66ZXSGq"}}]},
+	  "config":{"mode":"ap","ssid":"net","encryption":"psk2","key":"not-a-real"}}]},
 	  "radio1":{"interfaces":[{"ifname":"phy1-mesh0","config":{"mode":"mesh","key":"another"}}]}}`)
 	var snap Snapshot
 	if err := decodeIfaceModes(raw, &snap); err != nil {

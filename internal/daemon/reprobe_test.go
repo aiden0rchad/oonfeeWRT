@@ -82,7 +82,7 @@ func TestReprobeFailureIsRecordedWithItsConsequence(t *testing.T) {
 	// Adopted, with a credential that cannot open a session: the host does not
 	// exist. That is the shape of "upgraded and has not come back yet".
 	at := int64(1)
-	blob, err := d.Keys.SealCredential("60:38:e0:00:00:09", "u", "p")
+	blob, err := d.Keys.SealCredential("02:00:00:00:00:09", "u", "p")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestReprobeFailureIsRecordedWithItsConsequence(t *testing.T) {
 	caps, _ := json.Marshal(old)
 
 	dev := &store.Device{
-		MAC: "60:38:e0:00:00:09", Host: "127.0.0.1:1", Name: "gone",
+		MAC: "02:00:00:00:00:09", Host: "127.0.0.1:1", Name: "gone",
 		Scheme: "http", AdoptedAt: &at, CredEnc: blob,
 		CapsJSON: string(caps), FWRelease: "OpenWrt 23.05.0",
 	}
@@ -126,12 +126,12 @@ func TestReprobeBusyIsNotAFailure(t *testing.T) {
 	defer d.Close()
 
 	at := int64(1)
-	blob, err := d.Keys.SealCredential("60:38:e0:00:00:0a", "u", "p")
+	blob, err := d.Keys.SealCredential("02:00:00:00:00:0a", "u", "p")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dev := &store.Device{
-		MAC: "60:38:e0:00:00:0a", Host: "127.0.0.1:1", Name: "busy",
+		MAC: "02:00:00:00:00:0a", Host: "127.0.0.1:1", Name: "busy",
 		Scheme: "http", AdoptedAt: &at, CredEnc: blob,
 	}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
@@ -161,7 +161,7 @@ func TestReprobeRefusesAnUnadoptedDevice(t *testing.T) {
 	}
 	defer d.Close()
 
-	dev := &store.Device{MAC: "60:38:e0:00:00:0b", Host: "192.0.2.1", Name: "pending"}
+	dev := &store.Device{MAC: "02:00:00:00:00:0b", Host: "192.0.2.1", Name: "pending"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestRecentCapabilityLossOffersOnlyActionableChanges(t *testing.T) {
 	}
 	defer d.Close()
 
-	dev := &store.Device{MAC: "60:38:e0:00:00:0c", Host: "192.0.2.1", Name: "ap"}
+	dev := &store.Device{MAC: "02:00:00:00:00:0c", Host: "192.0.2.1", Name: "ap"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestRecentCapabilityLossIsNilWithNoHistory(t *testing.T) {
 	}
 	defer d.Close()
 
-	dev := &store.Device{MAC: "60:38:e0:00:00:0d", Host: "192.0.2.1", Name: "fresh"}
+	dev := &store.Device{MAC: "02:00:00:00:00:0d", Host: "192.0.2.1", Name: "fresh"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -271,8 +271,8 @@ func TestRecentCapabilityLossDoesNotLeakBetweenDevices(t *testing.T) {
 	}
 	defer d.Close()
 
-	a := &store.Device{MAC: "60:38:e0:00:00:0e", Host: "192.0.2.1", Name: "a"}
-	b := &store.Device{MAC: "60:38:e0:00:00:0f", Host: "192.0.2.2", Name: "b"}
+	a := &store.Device{MAC: "02:00:00:00:00:0e", Host: "192.0.2.1", Name: "a"}
+	b := &store.Device{MAC: "02:00:00:00:00:0f", Host: "192.0.2.2", Name: "b"}
 	for _, dev := range []*store.Device{a, b} {
 		if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 			t.Fatal(err)
@@ -350,7 +350,7 @@ func TestACleanReprobeClearsAnEarlierLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	dev := &store.Device{MAC: "60:38:e0:00:00:0d", Host: "192.0.2.2", Name: "ap2"}
+	dev := &store.Device{MAC: "02:00:00:00:00:0d", Host: "192.0.2.2", Name: "ap2"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestAnUnchangedProbeStillRecordsThatItRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	dev := &store.Device{MAC: "60:38:e0:00:00:0e", Host: "192.0.2.3", Name: "ap3"}
+	dev := &store.Device{MAC: "02:00:00:00:00:0e", Host: "192.0.2.3", Name: "ap3"}
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
@@ -436,8 +436,8 @@ func TestAnUnchangedProbeStillRecordsThatItRan(t *testing.T) {
 func TestAutomaticReprobeSharesThePerDeviceMutationGate(t *testing.T) {
 	addr := startMock(t)
 	d := openDaemon(t)
-	blocked := seedAP(t, d, "60:38:e0:00:15:01", "blocked", addr, capability.Present)
-	other := seedAP(t, d, "60:38:e0:00:15:02", "other", addr, capability.Present)
+	blocked := seedAP(t, d, "02:00:00:00:15:01", "blocked", addr, capability.Present)
+	other := seedAP(t, d, "02:00:00:00:15:02", "other", addr, capability.Present)
 
 	release, err := d.deviceOps.acquire(context.Background(), blocked.ID)
 	if err != nil {
@@ -469,5 +469,24 @@ func TestAutomaticReprobeSharesThePerDeviceMutationGate(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("blocked reprobe did not resume")
+	}
+}
+
+func TestAutomaticReprobeUsesControllerOperationAdmission(t *testing.T) {
+	d := &Daemon{api: api.New(nil, nil, nil, quietLogger())}
+	release, ok := d.beginAutomaticReprobeOperation()
+	if !ok {
+		t.Fatal("automatic reprobe was not admitted")
+	}
+	if got := d.api.ActiveOperations(); len(got) != 1 || got[0] != "capability" {
+		t.Fatalf("active operations = %v", got)
+	}
+	release()
+	if !d.api.WaitForOperations(time.Second) {
+		t.Fatal("automatic reprobe lease did not release")
+	}
+	d.api.CloseAdmission()
+	if _, ok := d.beginAutomaticReprobeOperation(); ok {
+		t.Fatal("automatic reprobe crossed closed operation admission")
 	}
 }

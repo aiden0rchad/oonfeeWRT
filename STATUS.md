@@ -1,7 +1,7 @@
 # Where this project is
 
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
-through **2026-08-22**, with the earlier Phase-3 hardware endpoint in §5bg, the
+through **2026-08-23**, with the earlier Phase-3 hardware endpoint in §5bg, the
 schema-15/16 source-only checkpoint in §5bh, the read-only live schema-16
 Phase-4 pass under the retained router ACLs in §5bi, the superseded no-change
 checkpoint in §5bj, the corrected Phase-4 runtime/recovery checkpoint in §5bk,
@@ -13,8 +13,14 @@ operation-safety pass, §5bc the function-selection cycle, and §5bd is the
 directional-policy/class-C gate; §5be is the gateway proof, §5bf the live
 schema-14 migration, §5bg its cleanup endpoint, §5bh the source checkpoint at
 that time, §5bi the signed-in schema-16 screen pass, §5bj the superseded
-no-change checkpoint, §5bk the Phase-4 completion boundary, and §5bl the current
-validation boundary.
+no-change checkpoint, §5bk the Phase-4 completion boundary, §5bl the historical
+schema-17 live/release validation boundary, §5bm the source-only Phase-4.1
+Dashboard/speed-test checkpoint, §5bn the historical schema-19 store foundation,
+§5bo the account/RBAC/log foundation, §5bp the stored-diagnostics and
+online-backup foundation, §5bq the encrypted portable backup/restore source
+closure, and §5br the historical live schema-19 upgrade closure. The active
+release boundary at the start of §5 is final schema-19 `v0.1.0`; optional MFA
+and gateway-run speed testing are deferred.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -22,7 +28,9 @@ This handoff records source, hardware, and release evidence.
 [`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
 was published by the tag-triggered workflow and independently re-downloaded for
 the clean, zero-device verification recorded in FS-119. The post-release
-SQLite-sidecar hardening in FS-120 is newer than that immutable tag.
+SQLite-sidecar hardening in FS-120 is newer than that immutable tag and is
+included in the final schema-19 source. The completed `v0.1.0` tag workflow and
+GitHub Release are authoritative for final publication.
 
 ---
 
@@ -182,7 +190,7 @@ it did not invent an empty client set.
 **Credentials.** Both controller logins are sealed in `.run/oonfeewrt.db` under
 the random data key wrapped by `.run/keyring.json`; adoption never returns the
 password it generates. The database and keyring are therefore one restore pair,
-not interchangeable files. The live schema-17 database retains schema 14's
+not interchangeable files. The live schema-19 database retains schema 14's
 sealed WLAN/mesh keys and secret-derived ownership verifiers and adds the
 optional-capability rollback ledger. Nothing tracked in this repository holds
 live device passwords, WLAN keys, SSH private keys or raw lab identifiers; §7
@@ -205,8 +213,8 @@ before the experiment"). It saved this work three times.
 ## 1. Historical short version — superseded
 
 > This was the Phase-1/2 handoff summary. It is retained for provenance and is
-> not the current completion boundary. Use §0 and §5bl for the schema-17,
-> two-device Phase-4 state.
+> not the current completion boundary. Use §0 and §5br for the current live
+> state; §5bl retains the schema-17, two-device Phase-4 boundary.
 
 The design is no longer a design. It was validated against a real
 **Linksys WRT3200ACM running OpenWrt 25.12.5**, which corrected several
@@ -434,89 +442,71 @@ for someone picking the work up.
 
 ## 5. What to do next
 
-**Phases 0 and 1 are complete. Phase 2 is complete except for two items that
-need something I do not have.** Everything below is the honest remaining list,
-most-worth-doing first.
+**Phase 4.1 source is the schema-19 `v0.1.0` release baseline.** It preserves
+the hardware-verified topology/radio/log/client work and adds polished
+presentation, controller operations, accounts, diagnostics and portable
+backup/restore. Historical `v0.1.0-rc.1` remains the schema-17 upgrade baseline.
 
-### Do these next
+### v0.1.0 release inventory
 
-0. ~~**Neighbour-report distribution (`rrm_nr_set`).**~~ **Done 2026-08-16** —
-   §5t. The ACL decision §5s left open was made: `rrm_nr_get_own` and
-   `rrm_nr_list` to read, `rrm_nr_set` to write, and deliberately **not**
-   `bss_transition_request`. Verified across both APs.
+1. **Visual foundation and text density.** **Landed:**
+   the 64 px rail now uses coherent 24 px project-owned SVGs, expands to labels,
+   and persists per controller/account. The authored `Notice` disclosure keeps
+   actions visible; Dashboard count definitions and optional capabilities use
+   it. Critical, destructive and install consent stays prominent.
+2. **Accounts before new privileged APIs.** **Core slice landed
+   2026-08-22:** schema 19 makes the existing admin an enabled `owner`; defines
+   canonical `owner`/`admin`/`operator`/`viewer`; enforces ASCII-NOCASE username
+   uniqueness, soft deletion, an atomic last-enabled-owner guard and
+   transactional mutation audit. Role-bearing sessions, exhaustive server-side
+   route/live authorization, My Account, owner account administration,
+   five-minute password step-up and session listing/revocation are implemented.
+   Revocation closes `/live` and cancels in-flight requests. Optional TOTP and
+   recovery codes are deferred.
+3. **Diagnostics.** **Source slice landed 2026-08-22; live screen smoke passed
+   2026-08-23:** a private bounded rotating controller JSONL sink mirrors
+   accepted structured records. Owner/admin can preview, generate, cancel and
+   download a bounded, checksummed, redacted ZIP containing controller and
+   stored device/topology/radio/source/event evidence. Stored mode makes zero
+   router management/API/SSH calls and zero router changes. No live-router
+   refresh mode exists.
+4. **Dashboard and controller speed test.** **Source slice landed 2026-08-22;
+   live Dashboard smoke passed 2026-08-23:** the server-selected six-hour WAN
+   view and polished Dashboard preserve null gaps/freshness and never guess an
+   interface-series key. The consent-bound controller-host Cloudflare job is
+   single-stream, 15 MiB/30 seconds, one-active, cancellable, audited and
+   restart-recovered; it makes no router management/API/SSH call or router
+   change. Consent is bound to the exact reviewed descriptor plan ID; a changed
+   plan is rejected before a job is created. Loaded latency/jitter remain
+   unavailable. Public-provider execution remains explicit and separate from
+   deterministic release tests. A gateway-run test stays deferred to a separately
+   installed official-feed capability with an exact plan and rollback.
+5. **Encrypted backup/restore.** **Schema-19 source slice landed and its live
+   owner screen passed smoke on 2026-08-23:** owner-only native `.oowrtbak`
+   export packages a consistent live-WAL database/key pair under a separate
+   export passphrase. Bounded raw upload and disposable preview authenticate,
+   migrate and recovery-validate the fixed artifact. Confirmation is plan-bound,
+   recently reauthenticated, verifies the destination runtime passphrase, and
+   requires exact destructive text plus four acknowledgements. A controlled
+   restart retains an encrypted safety artifact, revokes sessions, and persists
+   router-write suppression until exact-text owner resume. Restored desired
+   state is never auto-Applied; read-only monitoring may resume while
+   suppressed. Explicit resume immediately enables automatic 802.11k neighbour
+   maintenance and may write hostapd RRM neighbour state without starting a
+   desired-configuration Apply. The final release matrix owns isolated
+   end-to-end restore and clean-container recovery proof.
+6. **Stable release.** The tag pipeline builds byte-reproducible
+   multi-architecture archives and pinned multi-platform images, runs
+   vulnerability gates, signs the immutable image digest, and publishes stable
+   aliases. Its isolated candidate checks cover accounts,
+   deterministic-local speed test, diagnostics, backup/restore, RC upgrade and
+   rollback without contacting a router; anonymous verification follows
+   publication.
 
-   The obvious follow-on is **`rrm_beacon_req`**, which asks a *client* what it
-   can hear. That is the missing half of roaming: the controller now knows where
-   its APs are and still has no idea what any client's radio actually sees, so
-   it cannot tell "this phone is stuck on a far AP" from "this phone is exactly
-   where it should be". It is a bigger step than it looks — a beacon request is
-   a frame sent to a client, so it needs a policy for which clients and how
-   often, and the answer arrives asynchronously as an event rather than as a
-   call's return value. Nothing in the collector consumes device-pushed events
-   yet.
-
-1. ~~**Look at the screens in a browser.**~~ **Done 2026-08-16** — §5v. Four
-   defects in one sitting, none reachable by any test in the repo, including a
-   grid whose headers could not be dragged and a suite that tested dragging
-   anyway. The sticky header was checked by eye and holds.
-
-   **Still unlooked-at:** the Clients grid with a real client on it (both APs
-   currently have none associated), the Logs facets under load, and the adopt
-   and discovery screens. Keep doing this — it remains the highest-yield check
-   this project has, and the count is now nineteen.
-2. ~~**A mesh backhaul whose health cannot be seen is half a feature.**~~
-   **Done 2026-08-16** — §5w. Thirteen states, no new device requests for four
-   of the five facts, and the peer read on the slow slot. Four bugs found by
-   running it, one of which would have reported a critical fault after every
-   successful mesh apply.
-
-   **The half that could not be done here:** no `peered` state has ever been
-   observed, because mesh is Present only on the C6 and there is no second node
-   to peer with. Three rungs of the ladder are unit-tested and have never met
-   hardware.
-
-   **One more device is now by far the highest-value thing this project could
-   acquire**, and after §5x the case is stronger than it was. A third router
-   would close four separate gaps at once: mesh `peered`, the wireless uplink
-   (which needs a radio that will run a station — neither of these two will),
-   ROADMAP Phase 2's "three APs", and the first class B or C measurement, since
-   every number in DEVICE-BUDGET comes from the comfortable class. Any cheap
-   MT7621 or ath79 box that takes OpenWrt does all four.
-
-   The remaining device-side gap is `mpath dump`, the forwarding table, which
-   is the one thing here that would need an ACL grant. Worth it only once a
-   mesh actually carries traffic, since a path table with no peers is empty.
-3. ~~**A WDS/relay bridge is still entirely unmodelled.**~~ **Built
-   2026-08-16** — §5x. Capability, model, renderer, store, API and screen, with
-   two review-found guards and three hardware-found bugs fixed. Unproven on this
-   hardware because **station mode does not work on the C6 at all** — isolated
-   three ways, so not the controller, not 4-address, not concurrency.
-
-   **`classify()` still covers three SoC families**, and the half of that item
-   which needs no lab is done (§5m item 3): the panel names the board target
-   instead of a bare `?`. Adding targets to the map still needs measuring.
-
-4. ~~**Look at the three new screens, and the Clients grid with a real client on
-   it.**~~ **Done 2026-08-16** — §5ad. All three cards seen, plus the Clients
-   grid with a real client, the Logs screen and the adopt/discovery screen. Four
-   more defects, **count now twenty-three**, still none reachable by any test.
-
-   **The unadopt flow is now looked at too** (2026-08-17, §5ai and §5aj): eight
-   more defects, **count thirty-one**, and one of them made a device that cannot
-   be reached permanently un-removable. Two came from reading the panel, two
-   from driving it, and four from three review rounds over those — 2, then 3,
-   then 1, which is the first thinning tail in a review sequence here. **Still unlooked-at:** any screen under a
-   fleet larger than two devices.
-
-5. ~~**The adoption bug has no regression test.**~~ **Done 2026-08-16** — §5z.
-   Both halves pinned and mutation-verified, and the fixture gained the two
-   things whose absence had made the bug untestable.
-
-6. ~~**Persist the SSH host-key pin.**~~ **Done 2026-08-17** — §5ah. The last
-   open review finding. **No numbered item is left**; what follows is a
-   practice, not a list.
-
-7. **Nothing else pressing.** The rest is hardware- or package-blocked (below).
+The broader mobile overhaul, DPI/application identity, exact UniFi cloning,
+automatic speed tests and hidden router installs are outside Phase 4.1. Older
+numbered “next” items are completed or superseded history in §§5t–5bl; they are
+not the current queue.
 
 ### If you are picking this up cold
 
@@ -536,11 +526,12 @@ devices were cleanly un-adopted, inspected and re-adopted in §5bc; if the fleet
 looks empty again, read §5ax's host-routing failure before assuming a device
 defect.
 
-**Schema 17 is the current live store.** §5bf remains the historical schema-14
+**Schema 19 is the current live store.** §5bf remains the historical schema-14
 migration/backup proof and §5bg its cleanup endpoint. §5bh records the later
 source-only checkpoint, §5bi the initial signed-in read-only screen pass, §5bj
 the superseded no-change checkpoint, §5bk the Phase-4 boundary, and §5bl the
-fresh-start/schema-17 boundary. Default adoption installed only the separately
+fresh-start/schema-17 boundary; §5br records the controlled schema-19 upgrade
+and current recovery/UI-smoke evidence. Default adoption installed only the separately
 acknowledged ACL/login payload and no package. The optional/default-off LLDP
 workflow was later authorized, rolled back with hardened verification, and
 reinstalled/configured on both routers.
@@ -579,9 +570,10 @@ Read **§0** first (the reference hardware lies, and why), then **§6** (the
 mistakes already made and the rules that came out of them). Those two explain
 most of the decisions in the code.
 
-**The current completion boundary is §5bl plus the final fresh-start log rows.**
+**The current completion boundary is §5br; §5bl plus the final fresh-start log
+rows retain the Phase-4 hardware/release-candidate boundary.**
 Everything below this block is standing guidance. §5be closes the durable-operation,
-authenticated-browser, VLAN/DHCP/firewall LIST, directional-WAN and runtime
+signed-in browser, VLAN/DHCP/firewall LIST, directional-WAN and runtime
 custom-DHCP proofs; §5bf closes live schema-14 promotion and the rebuilt-browser
 reconciliation; §5bg closes that lab cleanup; §5bi records schema-16 promotion
 and the initial signed-in, read-only Phase-4 pass; §5bj is its superseded
@@ -601,8 +593,9 @@ permission hardening.
    literal bidirectional peer data-plane isolation claim remains open. §5bk
    records the runtime evidence and cleanup.
 
-2. **Phase 4's current boundary is §5bl.** Schema 17 is live. ACL refresh and
-   official-feed LLDP remain distinct, optional/default-off workflows. Leaving
+2. **Phase 4's hardware boundary is §5bl; the current Phase-4.1 live runtime is
+   §5br at schema 19.** ACL refresh and official-feed LLDP remain distinct,
+   optional/default-off workflows. Leaving
    either box unchecked or cancelling sends no mutation request. The ACL path
    installs no package; LLDP installation/configuration names and records its
    exact package/service/UCI changes and blocks un-adoption until verified
@@ -682,8 +675,8 @@ Then, in order of value:
 
 **What the operator has already done:** the Archer C6's WPA passphrase was
 rotated on 2026-08-17, closing the leak from `02e99d0`. That historical rotation
-does not close the later disclosure recorded in §5bf; the current rotation is
-still pending explicit confirmation. The WRT3200ACM was power-cycled to recover
+did not close the later disclosure recorded in §5bf; §5bg records the subsequent
+managed-WLAN rotation and encrypted post-rotation recovery proof. The WRT3200ACM was power-cycled to recover
 from the deliberate PMF wedge. Both
 devices were re-adopted on 2026-08-18 after the routing incident in §5ax, are
 named after their models, sit in the `all-aps` group, and carry `example-managed-wlan`.
@@ -1802,13 +1795,13 @@ FT keys from the shared passphrase, no key-holder exchange needed.
 apply because the key comes from the handshake:
 
     ft_psk_generate_local=0
-    r0kh=ff:ff:ff:ff:ff:ff * <redacted-ft-key>
-    r1kh=00:00:00:00:00:00 00:00:00:00:00:00 <redacted-ft-key>
+    r0kh=ff:ff:ff:ff:ff:ff * <redacted>
+    r1kh=00:00:00:00:00:00 00:00:00:00:00:00 <redacted>
     wpa_key_mgmt=SAE FT-SAE WPA-PSK WPA-PSK-SHA256 FT-PSK
 
 OpenWrt generates wildcard key holders with a key derived from the mobility
 domain and the passphrase. **The identical config on the Archer C6 produced the
-identical key** — `<redacted-ft-key>` on Marvell/mvebu and on
+identical key** — `<redacted>` on Marvell/mvebu and on
 Qualcomm/ath79, different drivers, different radio vendors.
 
 That is the whole design working. The controller derives the mobility domain
@@ -5964,6 +5957,221 @@ transient zero-byte WAL and 32,768-byte SHM were removed. Building, restarting,
 checking, and creating the recovery pair changed no router state. This v40
 evidence was a merge-ready local checkpoint; it is not itself a Git tag or
 published release asset.
+
+---
+
+### 5bm. Phase-4.1 Dashboard and controller-speed-test source checkpoint
+
+**Source-only checkpoint at that step, 2026-08-22.** The working source then
+expected schema 18; §5bn records the current schema-19 source boundary. The
+published `v0.1.0-rc.1`, v40 artifact and live lab database remain schema 17. No
+live database migration, controller restart, signed-in browser pass or router
+mutation is part of this checkpoint.
+
+`GET /api/v1/dashboard` now selects the newest gateway with durable Internet
+route evidence and returns 72 complete five-minute buckets over six hours.
+`site_wan_latency_ms`, `site_wan_loss_pct` and `site_wan_up` remain explicitly
+the fixed ICMP probe to `1.1.1.1`, not ISP uptime. WAN RX/download and TX/upload
+appear only when the route-interface name exactly matches durable interface
+series inventory; no alias or likely interface is guessed. Missing buckets are
+null, and every metric reports `fresh`, `last_observed` or `unavailable` with an
+independent observation time. The Dashboard renders that evidence and preserves
+last-good data across refresh errors.
+
+Schema 18 adds durable controller-host speed-test jobs and no device foreign
+key. The authenticated API exposes descriptor/history, start, status and cancel.
+Before consent the Dashboard shows `Cloudflare`,
+`https://speed.cloudflare.com`, method `controller-http-single-stream-v1`,
+provenance `controller-host`, an estimated 10 MiB download plus 5 MiB upload,
+the 30-second ceiling, provider/public-IP privacy and WAN-saturation warning.
+The runner rejects redirects, supports one active job, retains at most 50
+terminal rows, records progress and byte counts, distinguishes operator cancel,
+audits lifecycle events, and marks interrupted in-flight rows failed on restart.
+It has no Fleet/router dependency and makes no router management, API or SSH
+call, write or install. It measures download/upload plus idle latency/jitter;
+loaded latency/jitter remain null because no simultaneous loaded probe exists.
+
+This checkpoint documents source behavior only. A live schema-18 migration,
+external-provider run, signed-in dark/light browser pass and release packaging
+remain future evidence; none may be inferred from the schema-17 hardware record.
+
+---
+
+### 5bn. Phase-4.1 schema-19 account-store foundation (historical)
+
+**Source-only checkpoint, 2026-08-22.** The current working source expects schema
+19. It retains §5bm's schema-18 Dashboard/WAN/controller-speed-test slice and
+adds account storage and mutation invariants. The published `v0.1.0-rc.1`, v40
+artifact and live controller database remain schema 17. The live controller must
+stay there until an authorized restart; no live migration, restart, signed-in
+browser pass, public-provider speed-test run or router mutation is part of this
+checkpoint.
+
+Migration 19 adds `role`, `enabled` and `deleted_at` to `admins`. Its canonical
+roles are `owner`, `admin`, `operator` and `viewer`; each existing administrator
+becomes an enabled owner and keeps its password hash. New usernames use a
+1–64-byte ASCII grammar and a unique `username COLLATE NOCASE` index. An ASCII
+case collision aborts and rolls back migration rather than selecting an account.
+Soft deletion disables authentication, records `deleted_at`, replaces the
+password verifier and retains the row so the username remains reserved and
+first-run setup cannot reopen.
+
+Disable, demote and delete use conditional writes that count enabled owners
+inside the write statement; concurrent attempts cannot remove the last enabled
+owner. Bootstrap/create, role/state/delete and password mutations append their
+`auth.account_*` audit event in the same transaction, so an audit failure rolls
+back the account change. Schema attestation checks the complete column, CHECK
+constraint, unique-index and ASCII-NOCASE shape.
+
+This slice intentionally stopped at the store boundary. At that checkpoint there was no multi-account
+management REST API or UI, no role-bearing session, and no role-enforcing
+middleware for protected REST routes or the live channel. Existing session
+invalidation is immediate: logout, password change, REST expiry and `Sweep`
+close the affected session's `/live` WebSockets, whose disconnect cleanup
+releases every focused poll. Account-session listing/administration and MFA have
+not landed. Existing setup/login/self-password behavior continues to use the
+compatible account row; schema 19 was not yet evidence that least-privilege
+authorization was complete. §5bo supersedes that source boundary.
+
+The Dashboard and controller-speed-test source claim remains §5bm's bounded
+contract: server-selected WAN evidence, consent bound to the reviewed
+deterministic `plan_id`, one active controller-host job, cancellation/history and
+no Fleet/router dependency. No request has been made to the public speed-test
+provider.
+
+---
+
+### 5bo. Phase-4.1 account/RBAC and diagnostics-log foundation
+
+**Source-only checkpoint, 2026-08-22.** Schema 19 now extends §5bn through the
+API and UI. Sessions carry `owner`, `admin`, `operator` or `viewer`; an exhaustive
+declarative policy server-authorizes every protected REST route and `/live`.
+My Account supports password changes and named in-memory session revocation.
+Owner administration supports create, role/state/password changes, soft delete
+and target-session revocation. Owner writes require password reauthentication
+valid for five minutes and never auto-retry after a prompt.
+
+The store rechecks the enabled owner actor in each `BEGIN IMMEDIATE` mutation,
+protects the last enabled owner under concurrency and commits the audit event in
+the same transaction. Session revocation closes live sockets and cancels
+in-flight requests. Session management identifiers are independent random
+values; peer display uses the socket address and ignores forwarded headers.
+Login rechecks enabled state, role and password verifier after the expensive
+password comparison, so a concurrent disable, role change or reset cannot create
+a late session.
+
+A mode-0600 bounded rotating `controller.jsonl` sink now mirrors accepted
+structured controller records for diagnostics. At this checkpoint it did not
+expose a download or make a router call. §5bp supersedes that diagnostics
+boundary. Optional MFA, encrypted portable backup/restore, live schema migration
+and signed-in browser proof remain open. The public speed-test provider has not
+been contacted.
+
+---
+
+### 5bp. Phase-4.1 stored diagnostics and online-backup foundation
+
+**Source-only checkpoint, 2026-08-22.** The schema-19 source now completes the
+stored-evidence Diagnostics surface. Owner/admin can inspect the fixed section,
+exclusion, bound and log-gap disclosure; start one cancellable job; view bounded
+terminal history; and download a private, checksummed ZIP. The bundle contains
+redacted/pseudonymized bounded controller, stored-device, topology/radio/source,
+event and rotating-controller-log evidence. Stored mode makes zero router
+management/API/SSH calls and zero router changes. There is no live-router
+refresh mode.
+
+The controller log input is a private bounded rotating JSONL family. Startup
+and shutdown clean only controller-owned diagnostics artifacts; jobs are
+cancelled/drained before the store and logger close.
+
+`Store.BackupTo` is the landed online SQLite-snapshot foundation. It captures
+committed WAL state, stages mode-0600 output in the destination directory,
+refuses overwrite, verifies schema/key state/integrity/foreign keys and removes
+partial output on failure or cancellation. It does **not** package the matching
+`keyring.json`, encrypt a portable artifact, restore data, or expose backup API
+or UI at this historical checkpoint. §5bq supersedes this boundary with the
+completed schema-19 source workflow.
+
+The live controller remains schema 17. No live migration, daemon restart,
+signed-in browser pass, router call/write/install or public-provider speed test
+was performed for this source checkpoint.
+
+---
+
+### 5bq. Phase-4.1 encrypted portable controller backup/restore source closure
+
+**Source-only checkpoint, 2026-08-23.** Schema-19 source now implements the
+owner-only portable controller recovery workflow end to end. Export captures a
+consistent live-WAL SQLite snapshot and its matching wrapped key material in one
+authenticated native `.oowrtbak`, encrypted under a caller-owned export
+passphrase separate from the controller runtime passphrase. Backup and restore
+routes require TLS or direct loopback. Export start/download and every restore
+mutation require recent account-password reauthentication.
+
+Restore accepts only a bounded raw `application/vnd.oonfeewrt.backup` upload
+with an exact `Content-Length`. Disposable private staging authenticates the
+fixed artifact, proves its manifest schema matches its actual database, rejects
+unsupported future schema, migrates a scratch copy to exactly schema 19, and
+validates integrity, every sealed secret and a usable owner. The safe preview
+contains only manifest identity, source/target schema and recovery counts; its
+export passphrase is cleared. Cancellation/error/expiry remove controller-owned
+plaintext stages and SQLite sidecars.
+
+Confirmation is bound to the preview's artifact and `plan_id`. It requires the
+export passphrase again, the current destination runtime passphrase, exact
+`RESTORE CONTROLLER`, and four separate acknowledgements for restart, session
+revocation, router-write suppression and no automatic router Apply. The runtime
+passphrase is the controller boot/keyring secret, not the signed-in account
+password; it is checked against the live keyring/data key before a prepared
+pair is created. No passphrase is retained.
+
+Before replacement, the controller writes a mode-0600 encrypted safety artifact
+to `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak` using the same
+export passphrase. It is not age-expired. After the applied audit receipt is
+durably cleared, fixed-shape retention targets three artifacts, fills available
+slots newest-first and prunes the rest. Artifacts referenced by active marker,
+receipt or suppression state are always preserved, even if that temporarily
+exceeds three. Copy an artifact off-host before pruning when longer retention
+is required. The controlled in-process restart quiesces work,
+checkpoints/closes SQLite, verifies and swaps the prepared pair,
+and rolls back before serving if validation fails. Success revokes all sessions
+and persists router-write suppression until an owner recently reauthenticates
+and enters exact `RESUME ROUTER WRITES`. Restored desired state is never
+automatically applied. Read-only monitoring of restored devices may resume
+after restart using restored credentials while the gate remains active.
+Explicit resume immediately starts automatic 802.11k neighbour reconciliation,
+which may call hostapd `rrm_nr_set`; it does not start a restored
+desired-configuration Apply.
+
+The source packages have normal/race/adversarial coverage for artifact
+authentication, schema mismatch/future rejection, migration, secret/owner
+validation, cancellation, no source/live-pair mutation, residue cleanup,
+filesystem/symlink/race defenses, prepared-pair ownership, restart intent and
+suppression. This is not live evidence: `v0.1.0-rc.1`, v40 and the lab database
+remain schema 17. No live schema-19 migration, signed-in backup/restore browser
+pass, controlled live restart, or router restore test has run. Optional MFA,
+remaining UI polish and final `v0.1.0` release evidence remain open.
+
+---
+
+### 5br. Phase-4.1 live schema-19 upgrade closure
+
+**Live checkpoint, 2026-08-23.** The controlled controller upgrade and restart
+completed. The live runtime reports exact binary version
+`dev-phase41-live-schema19` and schema 19. Its verified recovery state contains
+two devices, two credentials, one enabled owner, one WLAN and no mesh.
+
+A signed-in live UI smoke passed Dashboard, Accounts, Diagnostics, Backup &
+Restore, Devices and Topology with no browser errors. This was a route/render
+smoke: it does not claim diagnostics generation/download, backup export,
+restore upload/preview/confirmation, a public-provider speed test or router
+restore. Fresh schema-17 rollback and schema-19 recovery sets passed
+verification.
+
+This remains historical live evidence, not publication state. The completed
+`v0.1.0` tag workflow and GitHub Release are authoritative. The release matrix
+owns isolated restore/clean-container proof; optional MFA and gateway-run speed
+testing are deferred.
 
 ---
 

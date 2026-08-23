@@ -1161,7 +1161,7 @@ func TestClientsPageConnectionComesFromTelemetry(t *testing.T) {
 	db := open(t)
 	ctx := context.Background()
 
-	dev := &Device{MAC: "60:38:e0:00:00:01", Host: "192.168.1.1", Name: "ap"}
+	dev := &Device{MAC: "02:00:00:00:00:01", Host: "192.168.1.1", Name: "ap"}
 	if err := db.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}

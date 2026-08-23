@@ -37,6 +37,10 @@ jobs:
         run: go test -count=1 ./...
       - name: Vet
         run: go vet ./...
+      - name: Scan dependencies
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          "$RUNNER_TEMP/bin/govulncheck" ./...
 
   go-race:
     name: Go / race
@@ -75,6 +79,8 @@ jobs:
         run: npm --prefix ui ci
       - name: Test
         run: npm --prefix ui test
+      - name: Audit dependencies
+        run: npm --prefix ui audit --audit-level=high
       - name: Build
         run: npm --prefix ui run build
       - name: Check bundle budget
@@ -83,7 +89,7 @@ jobs:
   release-build:
     name: Release / build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,6 +109,7 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - name: Build and verify archives
         run: |
+          ./tools/reproducible-build-check.sh v0.0.0-ci
           ./tools/release-build.sh v0.0.0-ci "$RUNNER_TEMP/release"
           (cd "$RUNNER_TEMP/release" && sha256sum --check SHA256SUMS)
           mkdir "$RUNNER_TEMP/release-extract"
@@ -112,6 +119,8 @@ jobs:
           test -x "$RUNNER_TEMP/release-extract/oonfeewrt_0.0.0-ci_linux_amd64/oonfeewrt-recoverycheck"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Test backup and restore in a clean container
+        run: ./tools/release-container-smoke.sh v0.0.0-ci
       - name: Build multi-platform image without publishing
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
@@ -134,5 +143,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Scan tree and history
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run repository-specific secret checks
         run: ./tools/secret-scan.sh
+      - name: Scan complete tree and history with Gitleaks
+        run: ./tools/full-secret-scan.sh
