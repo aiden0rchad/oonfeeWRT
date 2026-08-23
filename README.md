@@ -5,13 +5,13 @@ A UniFi-grade management interface for the OpenWrt you already run.
 Not a fork. Not a firmware. Not a distribution. **A front end that connects to
 stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
 
-**Status:** Phase 4's schema-17 fresh-start hardware flow is verified. Tagged
-artifacts are produced by the [Release workflow](.github/workflows/release.yml)
-only after its binary and multi-platform container jobs pass. [GitHub
-Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) is the source of
-truth for whether `v0.1.0-rc.1` is published. Once it appears there, follow
-[`docs/INSTALL.md`](docs/INSTALL.md); clean-install verification is reported
-separately after the published artifacts are tested.
+**Status:** Phase 4's schema-17 fresh-start hardware flow is verified.
+[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
+is published with four checksum-verified binary archives and a public
+`linux/amd64` + `linux/arm64` container. A clean, zero-device installation from
+those public artifacts passed first-run health, setup, schema-integrity,
+recovery, graceful-shutdown, and hardened-container checks without contacting a
+router. Follow [`docs/INSTALL.md`](docs/INSTALL.md).
 
 **Current validation checkpoint (2026-08-22):** both test routers were factory
 reset, re-adopted through the default-off ACL/login disclosure, and restored to

@@ -42,9 +42,9 @@ installed no package, binary, daemon, service or firmware. The separate,
 default-off official-feed `lldpd` workflow was exercised through exact planning,
 installation, physical-interface configuration, read-only diagnosis,
 drift-checked rollback and clean reinstallation on both routers. V39 remains the
-historical startup-fix checkpoint; the v40 signed-in deep-link and complete-poll
-result is the merge-ready final release candidate, not a tagged or published
-release.
+historical startup-fix checkpoint; v40 supplied the signed-in deep-link and
+complete-poll evidence before `v0.1.0-rc.1` was published and clean-tested from
+its public artifacts.
 All durable Phase-4 data is REST; the WebSocket supplies only `device.stats`
 focus/current updates.
 

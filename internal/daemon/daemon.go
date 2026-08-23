@@ -194,20 +194,20 @@ func Open(ctx context.Context, cfg Config, log *slog.Logger) (*Daemon, error) {
 		ln.Close()
 		return nil, fmt.Errorf("daemon: recover radio scans: %w", err)
 	}
-	d.Store = db
-
-	// SQLite creates the database 0644. Tighten it: controller metadata remains
-	// sensitive even though credentials, WLAN/mesh keys, and secret-derived
-	// ownership verifiers are sealed at rest.
-	//
-	// The 0700 data directory is the real boundary (nobody else can traverse into
-	// it), and this does not reliably cover the -wal and -shm files, which SQLite
-	// creates later. It is worth doing anyway for the case that actually happens:
-	// someone copies the database file out for a backup.
-	if err := os.Chmod(cfg.DBPath(), 0o600); err != nil {
-		log.Warn("could not tighten permissions on the database file",
-			"path", cfg.DBPath(), "err", err)
+	// SQLite creates its database, WAL, and shared-memory files using the process
+	// umask. The 0700 directory is the hard boundary while they are created; make
+	// each file private too so copied backups and diagnostics retain safe modes.
+	for i, path := range []string{cfg.DBPath(), cfg.DBPath() + "-wal", cfg.DBPath() + "-shm"} {
+		err := os.Chmod(path, 0o600)
+		if err == nil || i > 0 && errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, fmt.Errorf("daemon: secure database file %s: %w", path, err)
 	}
+	d.Store = db
 
 	d.http = &http.Server{
 		Handler:           d.routes(),

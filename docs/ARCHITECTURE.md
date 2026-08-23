@@ -14,7 +14,9 @@ workflow on both routers, including exact planning, installation,
 physical-interface configuration, read-only diagnosis, drift-checked rollback
 and clean reinstallation. V39 remains the historical startup-fix checkpoint.
 V40 passed the settled runtime, recovery, regression, secret and reproducibility
-gates as the merge-ready final release candidate; it is not tagged or published.
+gates before `v0.1.0-rc.1` was published and clean-tested from its public binary
+and container artifacts. FS-119 records that proof; FS-120 records permission
+hardening newer than the immutable tag.
 
 ---
 

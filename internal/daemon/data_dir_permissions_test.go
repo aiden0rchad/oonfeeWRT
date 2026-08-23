@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 )
 
 func TestOpenTightensAnExistingDataDirectory(t *testing.T) {
@@ -22,11 +24,19 @@ func TestOpenTightensAnExistingDataDirectory(t *testing.T) {
 	}
 	defer d.Close()
 
-	info, err := os.Stat(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := info.Mode().Perm(); got != 0o700 {
-		t.Fatalf("data directory mode = %04o, want 0700", got)
+	for path, want := range map[string]os.FileMode{
+		dataDir:                      0o700,
+		secrets.DefaultPath(dataDir): 0o600,
+		cfg.DBPath():                 0o600,
+		cfg.DBPath() + "-wal":        0o600,
+		cfg.DBPath() + "-shm":        0o600,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", filepath.Base(path), got, want)
+		}
 	}
 }

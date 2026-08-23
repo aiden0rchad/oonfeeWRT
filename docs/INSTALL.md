@@ -3,11 +3,11 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets the `v0.1.0-rc.1` release candidate. Use its artifacts only
-after [GitHub Releases](https://github.com/aiden0rchad/oonfeeWRT/releases) lists
-that tag; source documentation alone does not prove publication succeeded. Back
-up both the controller and each router before using it on a network you cannot
-afford to interrupt.
+This guide targets the published
+[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
+release candidate. Its public archives and multi-platform container passed a
+clean, zero-device first-run and recovery check. Back up both the controller and
+each router before using it on a network you cannot afford to interrupt.
 
 ## What can change a router
 
@@ -84,6 +84,9 @@ sudo install -m 0755 "$NAME/oonfeewrt-recoverycheck" \
 
 Create separate private directories for persistent state and the unattended
 passphrase. The database and `keyring.json` are created in the data directory.
+Keep that directory mode `0700`: in `v0.1.0-rc.1`, live SQLite WAL/SHM
+sidecars inherit the process umask even though the directory, database, and
+keyring are private. Source after this tag also forces the sidecars to `0600`.
 
 ```sh
 install -d -m 0700 "$HOME/.local/share/oonfeewrt" "$HOME/.config/oonfeewrt"
