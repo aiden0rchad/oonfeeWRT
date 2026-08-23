@@ -173,6 +173,9 @@ func TestSpeedTestAPIRequiresConsentAndNeverTouchesFleet(t *testing.T) {
 	if got.Error == nil || *got.Error != "cancelled by operator" {
 		t.Fatalf("cancelled job=%+v", got)
 	}
+	if !h.srv.WaitForOperations(2 * time.Second) {
+		t.Fatalf("terminal job did not release lease: %v", h.srv.ActiveOperations())
+	}
 	if spy.calls.Load() != 0 {
 		t.Fatalf("controller speed test made %d Fleet call(s)", spy.calls.Load())
 	}
