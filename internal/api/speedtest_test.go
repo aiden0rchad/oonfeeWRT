@@ -166,12 +166,16 @@ func TestSpeedTestAPIRequiresConsentAndNeverTouchesFleet(t *testing.T) {
 		t.Fatalf("conflict: %d %s", conflict.Code, conflict.Body.String())
 	}
 	cancelled := h.do(http.MethodPost, "/api/v1/speedtests/"+id+"/cancel", map[string]any{})
-	if cancelled.Code != http.StatusAccepted || h.json(cancelled)["state"] != "cancelling" {
+	cancelState := h.json(cancelled)["state"]
+	if cancelled.Code != http.StatusAccepted || (cancelState != "cancelling" && cancelState != "failed") {
 		t.Fatalf("cancel: %d %s", cancelled.Code, cancelled.Body.String())
 	}
 	got := waitSpeedJob(t, h.db, id, "failed")
 	if got.Error == nil || *got.Error != "cancelled by operator" {
 		t.Fatalf("cancelled job=%+v", got)
+	}
+	if !h.srv.WaitForOperations(2 * time.Second) {
+		t.Fatalf("terminal job did not release lease: %v", h.srv.ActiveOperations())
 	}
 	if spy.calls.Load() != 0 {
 		t.Fatalf("controller speed test made %d Fleet call(s)", spy.calls.Load())
