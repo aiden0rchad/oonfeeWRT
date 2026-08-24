@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build && node -e \"require('node:fs').writeFileSync('dist/.gitkeep','')\"",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:browser": "tsc -p tsconfig.e2e.json && playwright test",
+    "test:browser:install": "playwright install --with-deps --only-shell chromium",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -16,6 +18,7 @@
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@testing-library/react": "16.3.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

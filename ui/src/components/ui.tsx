@@ -37,6 +37,26 @@ export function Status({ value }: { value: string }) {
   )
 }
 
+export function PageHeader({
+  title,
+  purpose,
+  actions,
+}: {
+  title: string
+  purpose: string
+  actions?: ReactNode
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header-copy">
+        <h1>{title}</h1>
+        <div className="page-header-purpose">{purpose}</div>
+      </div>
+      {actions != null && <div className="page-header-actions">{actions}</div>}
+    </header>
+  )
+}
+
 export function Card({
   title,
   actions,

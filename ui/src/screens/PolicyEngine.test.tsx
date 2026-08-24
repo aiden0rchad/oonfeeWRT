@@ -81,7 +81,8 @@ describe('Policy Engine', () => {
       zone('Office', ['Guest']),
       zone('Guest', []),
     ]))
-    render(<PolicyEngine />)
+    const reviewChanges = vi.fn()
+    render(<PolicyEngine onReviewChanges={reviewChanges} />)
 
     expect(await screen.findByRole('button', {
       name: 'Office to Guest: Allow All. Edit Office policy',
@@ -94,7 +95,18 @@ describe('Policy Engine', () => {
     expect(diagonal.getAttribute('title')).toMatch(/Not firewall-controlled/i)
     expect(screen.getByText(/Same-zone traffic is not controlled here/i)).toBeTruthy()
     expect(screen.getAllByText('Allow Return Traffic').length).toBeGreaterThan(0)
-    expect(screen.getByText(/Forwarded firewall and NAT changes govern new flows; existing tracked sessions and NAT mappings may persist until conntrack expiry/i)).toBeTruthy()
+    const lifecycle = screen.getByRole('group', { name: 'Information: Policy change lifecycle' })
+    expect(within(lifecycle).getByText(/No router changes until you Preview and Apply/i)).toBeTruthy()
+    const lifecycleToggle = within(lifecycle).getByText('More information about policy changes')
+    const lifecycleDetails = lifecycleToggle.closest('details')
+    expect(lifecycleDetails?.open).toBe(false)
+    const review = within(lifecycle).getByRole('button', { name: 'Review changes' })
+    expect(review.closest('.notice-disclosure')).toBeNull()
+    fireEvent.click(review)
+    expect(reviewChanges).toHaveBeenCalledTimes(1)
+    fireEvent.click(lifecycleToggle)
+    expect(lifecycleDetails?.open).toBe(true)
+    expect(within(lifecycle).getByText(/Forwarded firewall and NAT changes govern new flows; existing tracked sessions and NAT mappings may persist until conntrack expiry/i)).toBeTruthy()
   })
 
   it('keeps an explicit empty forwarding list distinct from the legacy default', async () => {
@@ -143,16 +155,23 @@ describe('Policy Engine', () => {
     expect(inbound.closest('button')).toBeNull()
     expect(inbound.getAttribute('title')).toMatch(/created as an explicit firewall rule or port forward/i)
     expect(screen.queryByRole('button', { name: /Edit Internet \/ WAN policy/i })).toBeNull()
-    expect(document.body.textContent).toMatch(
+    const scope = screen.getByRole('group', { name: 'Information: Zone Matrix scope' })
+    expect(within(scope).getByText(/manages whole-zone forwarding only/i)).toBeTruthy()
+    const scopeToggle = within(scope).getByText('More information about Zone Matrix scope')
+    const scopeDetails = scopeToggle.closest('details')
+    expect(scopeDetails?.open).toBe(false)
+    fireEvent.click(scopeToggle)
+    expect(scopeDetails?.open).toBe(true)
+    expect(scope.textContent).toMatch(
       /WAN-initiated allow rules, port forwards, per-client or per-port rules, application filtering, QoS, and DPI are not implemented by this Zone Matrix editor/i,
     )
-    expect(document.body.textContent).toMatch(
+    expect(scope.textContent).toMatch(
       /explicit gateway policies it also reads active nftables transit hooks and reachable rules/i,
     )
-    expect(document.body.textContent).toMatch(
+    expect(scope.textContent).toMatch(
       /terse runtime view cannot prove include-file provenance or inspect set contents/i,
     )
-    expect(document.body.textContent).toMatch(
+    expect(scope.textContent).toMatch(
       /!fw4: attribution comments can be imitated by direct custom rules/i,
     )
   })

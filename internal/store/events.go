@@ -67,6 +67,25 @@ func (db *DB) QueryEventsKeyset(ctx context.Context, query EventQuery) ([]Event,
 	return scanEvents(rows)
 }
 
+// QueryRecentGeneralAlerts returns retained warning and error events only.
+// The severity predicate runs before LIMIT so routine info events cannot crowd
+// an older alert out of a compact dashboard feed.
+func (db *DB) QueryRecentGeneralAlerts(ctx context.Context, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 8
+	}
+	if limit > 1001 {
+		return nil, errors.New("store: alert page limit exceeds 1001")
+	}
+	rows, err := db.sql.QueryContext(ctx, `SELECT `+eventColumns+` FROM events
+ WHERE category != 'audit' AND severity IN ('warning', 'error')
+ ORDER BY ts DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanEvents(rows)
+}
+
 func (db *DB) EventByID(ctx context.Context, id int64) (Event, error) {
 	if id <= 0 {
 		return Event{}, errors.New("store: event id must be positive")

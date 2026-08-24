@@ -379,15 +379,24 @@ func TestEventAuthorizationSeparatesGeneralAndAudit(t *testing.T) {
 	}
 }
 
-func TestDashboardRecentEventsNeverIncludesAudit(t *testing.T) {
+func TestDashboardEventFeedsRemainScoped(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
 	ctx := context.Background()
+	base := time.Now().Unix()
 	for _, event := range []store.Event{
-		{TS: time.Now().Unix(), Category: "system", Severity: "info", Event: "dashboard.general"},
-		{TS: time.Now().Unix() + 1, Category: "audit", Severity: "warning", Event: "dashboard.audit"},
+		{TS: base, Category: "device", Severity: "warning", Event: "dashboard.warning"},
+		{TS: base + 1, Category: "system", Severity: "error", Event: "dashboard.error"},
+		{TS: base + 2, Category: "audit", Severity: "error", Event: "dashboard.audit"},
 	} {
 		if err := h.db.LogEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := int64(0); i < 30; i++ {
+		if err := h.db.LogEvent(ctx, store.Event{
+			TS: base + 3 + i, Category: "system", Severity: "info", Event: "dashboard.info",
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -397,19 +406,54 @@ func TestDashboardRecentEventsNeverIncludesAudit(t *testing.T) {
 	}
 	var body struct {
 		Events []store.Event `json:"recent_events"`
+		Alerts []store.Event `json:"recent_alert_events"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	foundGeneral := false
 	for _, event := range body.Events {
 		if event.Category == "audit" {
 			t.Fatalf("dashboard leaked audit event: %+v", event)
 		}
-		foundGeneral = foundGeneral || event.Event == "dashboard.general"
 	}
-	if !foundGeneral {
-		t.Fatalf("dashboard omitted general event: %+v", body.Events)
+	if len(body.Events) != 20 || body.Events[0].Event != "dashboard.info" {
+		t.Fatalf("legacy recent events changed: %+v", body.Events)
+	}
+	if len(body.Alerts) != 2 || body.Alerts[0].Event != "dashboard.error" ||
+		body.Alerts[1].Event != "dashboard.warning" {
+		t.Fatalf("alert events=%+v", body.Alerts)
+	}
+	for _, event := range body.Alerts {
+		if event.Category == "audit" || (event.Severity != "warning" && event.Severity != "error") {
+			t.Fatalf("dashboard alert feed leaked out-of-scope row: %+v", event)
+		}
+	}
+}
+
+func TestDashboardAlertFeedDistinguishesEmptyFromUnavailable(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	read := func() []store.Event {
+		w := h.do(http.MethodGet, "/api/v1/dashboard", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+		}
+		var body struct {
+			Alerts []store.Event `json:"recent_alert_events"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Alerts
+	}
+	if alerts := read(); alerts == nil || len(alerts) != 0 {
+		t.Fatalf("successful empty alert feed=%+v", alerts)
+	}
+	if _, err := h.db.SQL().ExecContext(context.Background(), `DROP TABLE events`); err != nil {
+		t.Fatal(err)
+	}
+	if alerts := read(); alerts != nil {
+		t.Fatalf("failed alert query did not serialize null: %+v", alerts)
 	}
 }
 

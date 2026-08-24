@@ -9,6 +9,7 @@ import {
   Status,
   Unknown,
   Banner,
+  PageHeader,
   useColumnPrefs,
 } from '../components/ui'
 import type { Column } from '../components/ui'
@@ -123,6 +124,7 @@ export function Clients() {
   const loading = page === null && err === ''
   const rows = page?.clients ?? []
   const withRF = rows.filter((c) => c.signal != null).length
+  const count = page ? page.total.toLocaleString() : err ? 'Unavailable' : '…'
 
   const columns: Column<Client>[] = [
     {
@@ -249,7 +251,10 @@ export function Clients() {
 
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <h1 style={{ margin: 0, fontSize: 20 }}>Client Devices</h1>
+      <PageHeader
+        title="Client Devices"
+        purpose="Current wired and wireless clients with scoped network and access-point evidence."
+      />
       {/* The server decides what this says: the remedy differs by cause, and
           "Open a device to populate them" used to be appended to all of them.
           On a fleet whose radios have no associated stations at all, opening a
@@ -287,7 +292,7 @@ export function Clients() {
           />
         </div>
         <div className="client-observability-list" role="region" aria-label="Client list">
-          <Card title={`Client devices (${(page?.total ?? 0).toLocaleString()})`} pad={false}>
+          <Card title={`Client devices (${count})`} pad={false}>
             {err && (
               <div role="alert" style={{ padding: 12 }}>
                 <Banner tone="critical">{err}</Banner>

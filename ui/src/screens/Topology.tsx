@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../lib/api'
 import type { TopologyEdge, TopologyNode, TopologySnapshot } from '../lib/api'
-import { Banner, Button, Card, Stat, Status } from '../components/ui'
+import { Banner, Button, Card, Notice, Stat, Status } from '../components/ui'
 import { DeviceDetailPanel } from './Devices'
 
 type Mode = 'current' | 'history'
@@ -523,54 +523,68 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
         </Banner>
       )}
       {capabilityDeviceCount > 0 && (
-        <Banner tone="accent">
-          <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div>
-              <strong>
-                Some topology sources are unavailable on{' '}
-                {capabilityDeviceCount} {capabilityDeviceCount === 1 ? 'router' : 'routers'}.
-              </strong>{' '}
-              Would you like to add this functionality? Optional controller access may restore
-              bridge and neighbor evidence when access is the cause, and it never runs automatically.
+        <Notice
+          tone="accent"
+          component="Bridge and neighbor sources"
+          summary={(
+            <div role="status">
+              Topology evidence is unavailable on {capabilityDeviceCount}{' '}
+              {capabilityDeviceCount === 1 ? 'router' : 'routers'}.
             </div>
-            {onReviewCapabilities && (
-              <Button onClick={onReviewCapabilities}>Review optional capability</Button>
-            )}
-          </div>
-        </Banner>
+          )}
+          closedLabel="More information about topology sources"
+          openLabel="Hide topology source information"
+          details="Optional controller access may restore bridge and neighbor evidence when permissions are the cause. It never runs automatically; review the capability before authorizing a change."
+          actions={onReviewCapabilities ? (
+            <Button onClick={onReviewCapabilities}>Review optional capability</Button>
+          ) : undefined}
+        />
       )}
       {lldpDeviceCount > 0 && (
-        <Banner tone="accent">
-          <div role="status" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <div>
-              LLDP evidence is unavailable on {lldpDeviceCount} {lldpDeviceCount === 1 ? 'router' : 'routers'}.
-              The optional official OpenWrt <code>lldpd</code> capability can add wired peer and port evidence.
-              It is never installed automatically: review the exact package-manager plan and rollback first.
+        <Notice
+          tone="accent"
+          component="LLDP source"
+          summary={(
+            <div role="status">
+              Wired peer and port evidence is unavailable on {lldpDeviceCount}{' '}
+              {lldpDeviceCount === 1 ? 'router' : 'routers'}.
             </div>
-            {onReviewCapabilities && <Button onClick={onReviewCapabilities}>Review LLDP capability</Button>}
-          </div>
-        </Banner>
+          )}
+          closedLabel="More information about LLDP"
+          openLabel="Hide LLDP information"
+          details={(
+            <>
+              The optional official OpenWrt <code>lldpd</code> capability can add this evidence.
+              It is never installed automatically; review the exact package-manager plan and rollback first.
+            </>
+          )}
+          actions={onReviewCapabilities
+            ? <Button onClick={onReviewCapabilities}>Review LLDP capability</Button>
+            : undefined}
+        />
       )}
       {data && !data.complete && (
-        <Banner>
-          <div role="status">
-            <strong>Topology is partial.</strong>{' '}
-            {data.gaps.length > 0
-              ? `${data.gaps.length} coverage ${data.gaps.length === 1 ? 'issue is' : 'issues are'} recorded. `
-              : 'Source coverage is incomplete. '}
-            Missing evidence is not treated as an empty network.
-          </div>
-          {data.gaps.length > 0 && (
-            <details style={{ marginTop: 6 }}>
-              <summary style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                Show technical details ({data.gaps.length})
-              </summary>
+        <Notice
+          component="Topology coverage"
+          summary={(
+            <div role="status">
+              <strong>Topology is partial.</strong>{' '}
+              {data.gaps.length > 0
+                ? `${data.gaps.length} coverage ${data.gaps.length === 1 ? 'issue is' : 'issues are'} recorded; `
+                : 'Source coverage is incomplete; '}
+              missing evidence is not treated as an empty network.
+            </div>
+          )}
+          closedLabel="More information about coverage"
+          openLabel="Hide coverage information"
+          details={data.gaps.length > 0
+            ? (
               <ul style={{ margin: '6px 0 0', paddingLeft: 20, overflowWrap: 'anywhere' }}>
                 {data.gaps.map((gap) => <li key={gap}>{gap}</li>)}
               </ul>
-            </details>
-          )}
-        </Banner>
+            )
+            : 'The source did not return a per-source explanation for this snapshot.'}
+        />
       )}
       {data?.truncated && (
         <Banner>

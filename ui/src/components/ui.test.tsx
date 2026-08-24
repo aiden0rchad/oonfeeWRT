@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
-import { Banner, Button, DataGrid, FilterRail, Notice, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
+import { Banner, Button, DataGrid, FilterRail, Notice, PageHeader, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
 import { axisLabels, fmt, widenTo } from './Chart'
 
@@ -43,6 +43,28 @@ const columns: Column<Row>[] = [
 ]
 
 const noPrefs: ColumnPrefs = { hidden: [], order: [] }
+
+describe('PageHeader', () => {
+  it('keeps one page heading, its purpose, and a visible action in separate regions', () => {
+    const onAction = vi.fn()
+    render(
+      <PageHeader
+        title="Devices"
+        purpose="Managed inventory and live details."
+        actions={<Button onClick={onAction}>Adopt a device</Button>}
+      />,
+    )
+
+    const heading = screen.getByRole('heading', { level: 1, name: 'Devices' })
+    const header = heading.closest('header') as HTMLElement
+    expect(within(header).getByText('Managed inventory and live details.')).toBeTruthy()
+    const action = within(header).getByRole('button', { name: 'Adopt a device' })
+    expect(action.closest('.page-header-actions')).toBeTruthy()
+    expect(heading.contains(action)).toBe(false)
+    fireEvent.click(action)
+    expect(onAction).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('Banner', () => {
   it('leaves short notices unchanged', () => {

@@ -54,6 +54,7 @@ const api = {
   speedTests: vi.fn(),
   startSpeedTest: vi.fn(),
   cancelSpeedTest: vi.fn(),
+  topology: vi.fn(),
 }
 
 vi.mock('../lib/api', () => ({
@@ -107,6 +108,7 @@ api.devices.mockResolvedValue({ devices: [] })
 // The 802.11k card asks what the last automatic cycle did, on mount.
 api.lastNeighbours.mockResolvedValue({ ran: false })
 api.speedTests.mockReturnValue(new Promise(() => {}))
+api.topology.mockReturnValue(new Promise(() => {}))
 
 // Dynamic, like the screens below: the mock factory defines ApiError, and the
 // panel checks `e instanceof ApiError` before trusting a body, so a test that
@@ -702,6 +704,20 @@ describe('Adopt', () => {
 })
 
 describe('Clients', () => {
+  it('does not claim zero while the first query is unresolved or unavailable', async () => {
+    let reject!: (error: Error) => void
+    api.clients.mockReturnValue(new Promise((_, rejectPromise) => {
+      reject = rejectPromise
+    }))
+    render(<Clients />)
+
+    expect(screen.getByText('Client devices (…)')).toBeTruthy()
+    expect(screen.queryByText('Client devices (0)')).toBeNull()
+    await act(async () => reject(new Error('client inventory offline')))
+    expect(await screen.findByText('Client devices (Unavailable)')).toBeTruthy()
+    expect(screen.queryByText('Client devices (0)')).toBeNull()
+  })
+
   // Page 4 of the unfiltered list is not page 4 of the filtered one. Keeping
   // the offset lands on an empty page, which reads as "no matches" — a wrong
   // answer produced by a stale number rather than by the data.
@@ -720,6 +736,7 @@ describe('Clients', () => {
     )
     render(<Clients />)
     expectSinglePageHeading('Client Devices')
+    expect(screen.getByText(/Current wired and wireless clients/)).toBeTruthy()
     await waitFor(() => expect(api.clients).toHaveBeenCalled())
 
     // Turn a page, then change a filter.
@@ -1551,6 +1568,24 @@ describe('Settings — desired-state controls', () => {
     api.site.mockResolvedValue(site)
   })
 
+  it('summarizes configuration blockers and keeps their exact reasons in an alert disclosure', async () => {
+    api.site.mockResolvedValue({
+      ...site,
+      problems: ['A managed network needs a firewall zone.', 'An AP group has no devices.'],
+    })
+    render(<Settings devices={[]} />)
+
+    const alert = await screen.findByRole('alert')
+    const notice = within(alert).getByRole('group', { name: 'Warning: Configuration readiness' })
+    expect(within(notice).getByText('2 configuration problems block Apply.')).toBeTruthy()
+    const toggle = within(notice).getByText('More information about configuration problems')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(within(notice).getByText('A managed network needs a firewall zone.')).toBeTruthy()
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+  })
+
   it('requires a named confirmation and surfaces a WLAN deletion failure', async () => {
     let rejectDelete!: (error: Error) => void
     api.deleteWLAN.mockReturnValue(
@@ -1731,6 +1766,9 @@ describe('Devices — re-probe panel', () => {
   it('shows assigned functions in both the fleet row and device detail', async () => {
     await openPanel()
     expectSinglePageHeading('Devices')
+    expect(screen.getByText(/Managed OpenWrt inventory/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Adopt a device' })
+      .closest('.page-header-actions')).toBeTruthy()
     expect(screen.getAllByText('AP · Switch').length).toBeGreaterThanOrEqual(2)
     const panel = screen.getByRole('dialog', { name: 'ap-1' })
     expect(within(panel).getByText('AP · Switch')).toBeTruthy()
@@ -2554,6 +2592,23 @@ describe('Settings — neighbour reports', () => {
     expect((screen.getByText('Distribute now') as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('keeps the automatic purpose visible while neighbour mechanics stay collapsed', async () => {
+    api.site.mockResolvedValue(siteWith([wlan()]))
+    render(<Settings devices={[]} />)
+
+    const notice = await screen.findByRole('group', {
+      name: 'Information: 802.11k neighbour reports',
+    })
+    expect(within(notice).getByText(/every 15 minutes and after every Apply/)).toBeTruthy()
+    const toggle = within(notice).getByText('More information about neighbour reports')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(screen.getByRole('button', { name: 'Distribute now' }).closest('details')).toBeNull()
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    expect(within(notice).getByText(/An AP that restarts comes back with an empty list/)).toBeTruthy()
+  })
+
   // The distinction the whole capability model exists to protect, at the UI
   // layer. "Could not reach this device" is something to go and fix now; "this
   // device was adopted before the controller could ask" is a standing fact that
@@ -2677,6 +2732,20 @@ describe('Devices — column preferences', () => {
     role: 'ap',
     last_seen: 1,
   }
+
+  it('distinguishes loading, first-load failure, and retained last-good inventory', () => {
+    const { rerender } = render(<Devices devices={[]} devicesLoaded={false} />)
+    expect(screen.getByText('Managed devices (…)')).toBeTruthy()
+    expect(screen.getByText('Loading devices…')).toBeTruthy()
+
+    rerender(<Devices devices={[]} devicesLoaded={false} devicesError="inventory offline" />)
+    expect(screen.getByText('Managed devices (Unavailable)')).toBeTruthy()
+    expect(screen.getByText(/Device inventory is unavailable\. Retry/)).toBeTruthy()
+
+    rerender(<Devices devices={[device] as never} devicesLoaded devicesError="refresh failed" />)
+    expect(screen.getByText('Managed devices (1)')).toBeTruthy()
+    expect(screen.getByText('ap-one')).toBeTruthy()
+  })
 
   it('makes the device grid reorderable like every other grid', () => {
     // A row is required: an empty grid renders its empty state instead of a
@@ -2901,7 +2970,7 @@ describe('Settings — wireless uplinks', () => {
     api.site.mockResolvedValue({ ...base, wlans: [wlan()] })
     render(<Settings devices={[]} />)
 
-    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(await screen.findByRole('group', { name: 'Information: Wireless uplinks' })).toBeTruthy()
     expect(screen.getByText(/No network accepts wireless bridges yet/)).toBeTruthy()
     expect(screen.queryByText('Add uplink')).toBeNull()
   })
@@ -2913,9 +2982,27 @@ describe('Settings — wireless uplinks', () => {
     })
     render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
 
-    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(await screen.findByRole('group', { name: 'Information: Wireless uplinks' })).toBeTruthy()
     expect(screen.getByText('Add uplink')).toBeTruthy()
     expect(screen.getByText(/No device is using a wireless uplink/)).toBeTruthy()
+  })
+
+  it('keeps the uplink purpose visible while 4-address mechanics stay collapsed', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [wlan({ allow_uplink: true })],
+    })
+    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+
+    const notice = await screen.findByRole('group', { name: 'Information: Wireless uplinks' })
+    expect(within(notice).getByText(/network must accept wireless bridges first/)).toBeTruthy()
+    const toggle = within(notice).getByText('More information about wireless uplinks')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect(screen.getByRole('button', { name: 'Add uplink' }).closest('details')).toBeNull()
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    expect(within(notice).getByText(/joins as a 4-address bridge/)).toBeTruthy()
   })
 
   // One per device, and the reason is said rather than merely enforced: a
@@ -2928,7 +3015,7 @@ describe('Settings — wireless uplinks', () => {
     })
     render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
 
-    await waitFor(() => expect(screen.getByText('Wireless uplinks')).toBeTruthy())
+    expect(await screen.findByRole('group', { name: 'Information: Wireless uplinks' })).toBeTruthy()
     expect(screen.getByText(/joins fixture-roam on 5g/)).toBeTruthy()
     expect(screen.getByText(/loop rather than redundancy/)).toBeTruthy()
     expect(screen.queryByText('Add uplink')).toBeNull()
@@ -4158,8 +4245,16 @@ describe('Logs', () => {
     })
     const { unmount } = render(<Logs />)
     expectSinglePageHeading('Logs')
-    expect(await screen.findByText(/Router log coverage is incomplete/)).toBeTruthy()
-    expect(screen.getByText(/an empty result is not proven/)).toBeTruthy()
+    expect(screen.getByText(/Controller, router, and audit events/)).toBeTruthy()
+    const coverageNotice = await screen.findByRole('group', { name: 'Warning: Router log coverage' })
+    expect(within(coverageNotice).getByText(/Router log coverage is incomplete/)).toBeTruthy()
+    expect(within(coverageNotice).getByText(/an empty result is not proven/)).toBeTruthy()
+    const coverageToggle = within(coverageNotice).getByText('More information about log coverage')
+    const coverageDetails = coverageToggle.closest('details') as HTMLDetailsElement
+    expect(coverageDetails.open).toBe(false)
+    fireEvent.click(coverageToggle)
+    expect(coverageDetails.open).toBe(true)
+    expect(within(coverageNotice).getByText(/has not been observed on AP one/)).toBeTruthy()
     expect(screen.queryByText('No general events were observed.')).toBeNull()
     unmount()
 
@@ -4228,11 +4323,16 @@ describe('Logs', () => {
 
     render(<Logs />)
 
-    await waitFor(() => {
-      expect(screen.getByRole('status').textContent ?? '').toMatch(
-        /Router event time differs.*24 hours.*ordered by their router source time/i,
-      )
-    })
+    const clockNotice = await screen.findByRole('group', { name: 'Warning: Router clock' })
+    expect(within(clockNotice).getByRole('status').textContent ?? '').toMatch(
+      /Router event time differs.*24 hours.*ordered by their router source time/i,
+    )
+    const toggle = within(clockNotice).getByText('More information about event time')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    expect(within(clockNotice).getByText(/Check the router clock and NTP/)).toBeTruthy()
   })
 
   // Every device event carries a device_id, the API has always returned it, and
@@ -4550,7 +4650,180 @@ describe('Dashboard', () => {
     quiesced_devices: 0,
     series_count: 70,
     recent_events: [],
+    recent_alert_events: [],
   }
+
+  const topology = {
+    at: Date.now() - 60_000,
+    complete: true,
+    truncated: false,
+    gaps: [],
+    nodes: [
+      { id: 'synthetic:internet', kind: 'synthetic', name: 'Internet', synthetic: true },
+      { id: 'device:02:00:00:00:00:01', kind: 'device', name: 'Gateway', device_id: 1, online: true, synthetic: false },
+      { id: 'device:02:00:00:00:00:02', kind: 'device', name: 'Hall AP', device_id: 2, online: true, synthetic: false },
+      { id: 'client:02:00:00:00:01:01', kind: 'client', name: 'Phone', online: true, synthetic: false },
+    ],
+    edges: [
+      {
+        id: 1, child_id: 'device:02:00:00:00:00:01', parent_id: 'synthetic:internet',
+        parent_port: 'wan', medium: 'uplink', confidence: 'measured', valid_from: 1, last_seen: 1,
+        evidence: [], ambiguities: [],
+      },
+      {
+        id: 2, child_id: 'device:02:00:00:00:00:02', parent_id: 'device:02:00:00:00:00:01',
+        parent_port: 'lan2', medium: 'wired', confidence: 'measured', valid_from: 1, last_seen: 1,
+        evidence: [], ambiguities: [],
+      },
+      {
+        id: 3, child_id: 'client:02:00:00:00:01:01', parent_id: 'device:02:00:00:00:00:02',
+        parent_port: 'phy0-ap0', medium: 'wireless', confidence: 'inferred', valid_from: 1, last_seen: 1,
+        evidence: [], ambiguities: [],
+      },
+    ],
+    last_known_edges: [],
+  }
+
+  it('summarizes current topology evidence without turning placed clients into a fleet total', async () => {
+    api.topology.mockResolvedValueOnce(topology)
+    const onOpenTopology = vi.fn()
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} onOpenTopology={onOpenTopology} />)
+
+    const summary = await screen.findByRole('region', { name: 'Network topology' })
+    expect(within(summary).getByText('Complete coverage')).toBeTruthy()
+    expect(within(summary).getByText('Managed devices').parentElement?.textContent).toContain('2')
+    expect(within(summary).getByText('Active links').parentElement?.textContent).toContain('3')
+    expect(within(summary).queryByText('Observed links')).toBeNull()
+    expect(within(summary).getByText('Placed clients').parentElement?.textContent).toContain('1')
+    expect(within(summary).getByLabelText('Internet to Gateway, uplink, wan, measured')).toBeTruthy()
+    expect(within(summary).getByLabelText('Gateway to Hall AP, wired, lan2, measured')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open topology' }))
+    expect(onOpenTopology).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds the compact infrastructure preview and names the omitted remainder', async () => {
+    const extraNodes = [
+      { id: 'device:02:00:00:00:00:03', kind: 'device', name: 'Office AP', device_id: 3, online: true, synthetic: false },
+      { id: 'device:02:00:00:00:00:04', kind: 'device', name: 'Patio AP', device_id: 4, online: true, synthetic: false },
+    ]
+    api.topology.mockResolvedValueOnce({
+      ...topology,
+      nodes: [...topology.nodes, ...extraNodes],
+      edges: [
+        ...topology.edges,
+        {
+          ...topology.edges[1], id: 4, child_id: extraNodes[0].id,
+          parent_port: 'lan3',
+        },
+        {
+          ...topology.edges[1], id: 5, child_id: extraNodes[1].id,
+          parent_port: 'lan4',
+        },
+      ],
+    })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    const summary = await screen.findByRole('region', { name: 'Network topology' })
+    const links = within(summary).getByRole('list', { name: 'Active infrastructure links' })
+    expect(within(links).getAllByRole('listitem')).toHaveLength(3)
+    expect(within(summary).getByText(/Showing 3 of 4 infrastructure links/)).toBeTruthy()
+  })
+
+  it('does not count an unresolved device reference as managed inventory', async () => {
+    api.topology.mockResolvedValueOnce({
+      ...topology,
+      nodes: [
+        ...topology.nodes,
+        { id: 'device:02:00:00:00:00:99', kind: 'device', name: 'Unresolved device', synthetic: false },
+      ],
+      edges: [
+        ...topology.edges,
+        {
+          ...topology.edges[1], id: 9, child_id: 'device:02:00:00:00:00:99',
+          parent_port: 'lan4', confidence: 'inferred',
+        },
+      ],
+    })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    const summary = await screen.findByRole('region', { name: 'Network topology' })
+    expect(within(summary).getByText('Managed devices').parentElement?.textContent).toContain('2')
+    expect(within(summary).getByText('Active links').parentElement?.textContent).toContain('4')
+  })
+
+  it('keeps partial, ambiguous and last-known topology evidence explicit', async () => {
+    api.topology.mockResolvedValueOnce({
+      ...topology,
+      complete: false,
+      gaps: ['device:2/private-source: unavailable', 'edge:2: parent is ambiguous'],
+      edges: [{ ...topology.edges[1], confidence: 'ambiguous' }],
+      last_known_edges: [{ ...topology.edges[1], id: 4, valid_to: topology.at - 1 }],
+    })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    const summary = await screen.findByRole('region', { name: 'Network topology' })
+    expect(within(summary).getByText('Partial · 2 coverage issues')).toBeTruthy()
+    expect(within(summary).getByText('Active links').parentElement?.textContent).toContain('1')
+    expect(within(summary).getByText(/1 active link has ambiguous evidence/)).toBeTruthy()
+    expect(within(summary).getByText(/1 last-known placement is excluded from active links/)).toBeTruthy()
+    expect(within(summary).queryByText(/private-source/)).toBeNull()
+  })
+
+  it('isolates a topology failure and retries without hiding the rest of the Dashboard', async () => {
+    api.topology
+      .mockRejectedValueOnce(new Error('topology store unavailable'))
+      .mockResolvedValueOnce(topology)
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={data as never} />)
+
+    const topologyError = await screen.findByRole('group', { name: 'Warning: Topology summary' })
+    expect(within(topologyError).getByRole('alert')).toBeTruthy()
+    expect(screen.getByText('Fleet overview')).toBeTruthy()
+    expect(screen.queryByText('Active links')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Complete coverage')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Warning: Topology summary' })).toBeNull()
+    expect(api.topology).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders only the bounded warning/error feed and keeps legacy activity out', async () => {
+    const rows = Array.from({ length: 9 }, (_, index) => ({
+      ID: index + 1,
+      TS: Date.now() / 1000 - index,
+      Severity: index === 0 ? 'error' : 'warning',
+      Event: `alert.${index}`,
+    }))
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      recent_events: [{ ID: 90, TS: 1, Severity: 'info', Event: 'routine.activity' }],
+      recent_alert_events: [...rows, { ID: 91, TS: 1, Severity: 'info', Event: 'invalid.alert' }],
+    } as never} />)
+
+    expect(screen.getByText('Recent warnings and errors')).toBeTruthy()
+    expect(screen.getByText('alert.0').parentElement?.textContent).toContain('error')
+    expect(screen.getByText('alert.7')).toBeTruthy()
+    expect(screen.queryByText('alert.8')).toBeNull()
+    expect(screen.queryByText('routine.activity')).toBeNull()
+    expect(screen.queryByText('invalid.alert')).toBeNull()
+    expect(screen.getByText(/1 alert row had an unrecognized severity/)).toBeTruthy()
+  })
+
+  it('distinguishes a confirmed-empty alert feed from unavailable evidence', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    const { rerender } = render(<Dashboard data={data as never} />)
+    expect(screen.getByText('No retained warning or error events.')).toBeTruthy()
+
+    rerender(<Dashboard data={{ ...data, recent_alert_events: null } as never} />)
+    expect(screen.getByRole('alert').textContent ?? '').toMatch(/feed is unavailable/i)
+    expect(screen.queryByText('No retained warning or error events.')).toBeNull()
+  })
 
   // A number under another number's label. This screen's own sibling code
   // states the rule — showing one thing labelled as another is how a dashboard
@@ -4997,6 +5270,20 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     api.site.mockResolvedValue(site)
   })
 
+  it('keeps durable Apply truth visible while rollout mechanics stay collapsed', async () => {
+    render(<Settings devices={[]} />)
+
+    const notice = await screen.findByRole('group', { name: 'Information: Apply behavior' })
+    expect(within(notice).getByText(/Nothing above has touched a device/)).toBeTruthy()
+    const toggle = within(notice).getByText('More information about Apply')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    expect(within(notice).getByText(/stops at the first device that fails/)).toBeTruthy()
+    expect(within(notice).getByText(/rollback armed/)).toBeTruthy()
+  })
+
   async function previewThen(defects: unknown[]) {
     api.preview.mockResolvedValue(previewWith(defects))
     render(<Settings devices={[]} />)
@@ -5123,9 +5410,18 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     fireEvent.click(screen.getByText('Preview changes'))
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
 
+    const plan = screen.getByRole('group', { name: 'Warning: Apply preview · ap-1' })
+    expect(within(plan).getByText(/0 planned changes · 1 caution · 1 omission · 1 undetermined item/)).toBeTruthy()
+    const technicalToggle = within(plan).getByText('Show technical details for ap-1')
+    const technicalDetails = technicalToggle.closest('details') as HTMLDetailsElement
+    expect(technicalDetails.open).toBe(false)
+
     // The hazard is present, and is NOT under the heading that calls it fine.
     await waitFor(() => expect(screen.getAllByText(/layer-2 loop/).length).toBeGreaterThan(0))
     expect(screen.getByText(/worth a look first/)).toBeTruthy()
+    const visibleCautions = screen.getAllByText(/ALSO connected by ethernet/)
+    expect(visibleCautions.length).toBeGreaterThanOrEqual(2)
+    expect(visibleCautions.every((item) => item.closest('.notice-disclosure') == null)).toBe(true)
     expect(screen.queryByText(/hardware or firmware cannot take it/)).toBeNull()
 
     // A section kept in place is not described as left out.
@@ -5134,6 +5430,37 @@ describe('Settings — the hazard a rollback cannot undo', () => {
 
     // And a genuine omission still shows.
     expect(screen.getByText(/no 6g radio/)).toBeTruthy()
+    fireEvent.click(technicalToggle)
+    expect(technicalDetails.open).toBe(true)
+  })
+
+  it('keeps blocking, management-path and drift-overwrite consequences outside device details', async () => {
+    api.preview.mockResolvedValue({
+      ...previewWith([]),
+      devices: [{
+        ...previewWith([]).devices[0],
+        blocked: true,
+        error: 'device planning failed',
+        conflicts: ['wireless.foreign is owned by the operator'],
+        touches_traversal: true,
+        drift: ['wireless.s.mode differs from desired state'],
+      }],
+    })
+    render(<Settings devices={[]} />)
+    fireEvent.click(await screen.findByText('Preview changes'))
+
+    const plan = await screen.findByRole('group', { name: 'Critical: Apply preview · ap-wrt' })
+    const details = within(plan).getByText('Show technical details for ap-wrt').closest('details')
+    expect(details?.open).toBe(false)
+    for (const text of [
+      'device planning failed',
+      /Nothing will be applied to this device/,
+      /Edits this device's network or firewall configuration/,
+      /Applying will put it back to the site model/,
+    ]) {
+      expect(screen.getByText(text).closest('.notice-disclosure')).toBeNull()
+    }
+    expect(within(plan).getByText(/1 planned change · 1 drift item · management path affected/)).toBeTruthy()
   })
 
   // Two changes can name the SAME section: an option-to-list repair clears the
@@ -5233,6 +5560,11 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await previewThen([defect()])
 
     await waitFor(() => expect(screen.getByText(/take the radio down until someone power-cycles it/)).toBeTruthy())
+    const risk = screen.getByRole('group', { name: 'Critical: Driver risk' })
+    expect((within(risk).getByText('Hide driver risk information').closest('details') as HTMLDetailsElement).open).toBe(true)
+    expect(risk.textContent ?? '').toMatch(/rollback does not cover this/i)
+    expect(risk.textContent ?? '').toMatch(/physically power-cycles the device/i)
+    expect(screen.getByText(/take the radio down until someone power-cycles it/).closest('.notice-disclosure')).toBeNull()
     if (!applyBtn().disabled) {
       throw new Error('Apply was enabled for a change measured to kill the radio')
     }
@@ -5244,6 +5576,24 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await waitFor(() => {
       if (applyBtn().disabled) throw new Error('still disabled after acknowledging')
     })
+  })
+
+  it('keeps a silently ignored setting visible without gating Apply', async () => {
+    const summary = 'the driver accepts PMF configuration but silently discards it'
+    const detail = 'the requested PMF value is absent from the active radio state'
+    await previewThen([defect({
+      defect_id: 'mwlwifi-pmf-silently-ignored',
+      summary,
+      detail,
+      severity: 'silently-ignored',
+    })])
+
+    const consequence = screen.getByText(/Silently ignored: Apply will write this setting/)
+    expect(consequence.textContent ?? '').toContain(`fixture-roam: ${summary}`)
+    expect(consequence.closest('.notice-disclosure')).toBeNull()
+    expect(screen.getByText(detail).closest('.notice-disclosure')).not.toBeNull()
+    expect(screen.queryByRole('group', { name: 'Critical: Driver risk' })).toBeNull()
+    if (applyBtn().disabled) throw new Error('Apply was gated by a nonfatal driver defect')
   })
 
   it('sends the bound preview and both acknowledgements, then requires a new preview after rejection', async () => {
@@ -5587,6 +5937,17 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
 
     await waitFor(() => expect(screen.getByText(/apply the network changes/)).toBeTruthy())
+    const managementPath = screen.getByRole('group', { name: 'Warning: Management path' })
+    const managementDetails = within(managementPath)
+      .getByText('More information about management-path rollback')
+      .closest('details') as HTMLDetailsElement
+    expect(managementDetails.open).toBe(false)
+    const unreachable = within(managementPath).getByText(/may become temporarily unreachable/)
+    expect(unreachable.closest('.notice-disclosure')).toBeNull()
+    expect(within(managementPath).getByText(/armed rollback restores it to its prior configuration/)
+      .closest('.notice-disclosure')).toBeNull()
+    expect(screen.getByText(/apply the network changes/).closest('.notice-disclosure')).toBeNull()
+    expect(within(managementPath).getByText(/restores itself within 90 seconds/)).toBeTruthy()
     fireEvent.click(screen.getByText(/apply the network changes/))
     await waitFor(() => {
       if (applyBtn().disabled) throw new Error('still disabled after acknowledging')

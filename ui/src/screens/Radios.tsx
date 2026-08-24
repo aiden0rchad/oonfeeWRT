@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { api } from '../lib/api'
 import { live } from '../lib/live'
 import type { RadioChannel, RadiosResponse, RadioView } from '../lib/api'
-import { Banner, Button, Card, Stat } from '../components/ui'
+import { Banner, Button, Card, Notice, Stat } from '../components/ui'
 
 const metricKinds = [
   'radio_utilization_pct',
@@ -211,13 +211,36 @@ export function Radios() {
       {metricError && <Banner tone="critical">{metricError}</Banner>}
       {notice && <div role="status"><Banner>{notice}</Banner></div>}
       {data && data.gaps.length > 0 && (
-        <Banner>Radio coverage is partial: {data.gaps.join(', ')}. Missing data is not rendered as zero.</Banner>
+        <Notice
+          component="Radio coverage"
+          summary={(
+            <div role="status">
+              Radio coverage is partial. {data.gaps.length}{' '}
+              {data.gaps.length === 1 ? 'source gap is' : 'source gaps are'} recorded;{' '}
+              missing data is not rendered as zero.
+            </div>
+          )}
+          closedLabel="More information about radio coverage"
+          openLabel="Hide radio coverage information"
+          details={(
+            <ul style={{ margin: 0, paddingLeft: 20, overflowWrap: 'anywhere' }}>
+              {data.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+            </ul>
+          )}
+        />
       )}
-      <Banner>
-        DFS is unknown here. OpenWrt&apos;s <code>freqlist.restricted</code> flag is not proof of radar/DFS state,
-        so restricted channels stay labelled Restricted. Channel exclusions are also unknown until a persisted
-        exclusion model proves them.
-      </Banner>
+      <Notice
+        component="Channel classification"
+        summary="DFS and channel exclusions are unknown here; restricted channels remain labelled Restricted."
+        closedLabel="More information about channel classification"
+        openLabel="Hide channel classification information"
+        details={(
+          <>
+            OpenWrt&apos;s <code>freqlist.restricted</code> flag is not proof of radar/DFS state.
+            The controller does not have a persisted channel-exclusion evidence model in this release.
+          </>
+        )}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 10 }}>
         <Card><Stat label="Radios" value={data == null ? '—' : rows.length} /></Card>

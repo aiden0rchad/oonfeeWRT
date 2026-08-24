@@ -73,8 +73,8 @@ live UI smoke passed Dashboard, Accounts, Diagnostics, Backup & Restore,
 Devices and Topology with no browser errors; fresh schema-17 rollback and
 schema-19 recovery sets also passed verification. This was a route/render smoke,
 not a dark/light visual audit, diagnostics generation/download, backup export,
-restore execution, public-provider speed-test run or router restore. Optional
-MFA is deferred. The completed `v0.1.0` tag workflow and GitHub Release are the
+restore execution, public-provider speed-test run or router restore. The
+completed `v0.1.0` tag workflow and GitHub Release are the
 publication authority and own the final isolated release evidence.
 
 ---
@@ -162,7 +162,7 @@ Settings
  │                    Master Table facets: Firewall · Filtering · Routes · QoS · ACL · NAT/DNS
  ├ Security         (IDS/IPS, blocklists)
  ├ High Availability → Safe Apply · Recovery · Link Protection
- ├ My Account       (password, MFA, own sessions)
+ ├ My Account       (password, own sessions)
  ├ Accounts         (owner-only users, roles, state, session revocation)
  ├ Diagnostics      (redacted support-bundle preview and download)
  ├ Backup & Restore (encrypted export and staged owner-only restore)
@@ -613,20 +613,15 @@ last-enabled-owner guard; and transactional account-mutation audit.
 Account-management endpoints, role-bearing sessions, declarative route/live
 middleware, My Account and owner account-management screens are implemented.
 Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
-Sweep close affected `/live` sockets and cancel in-flight requests. Optional
-TOTP and recovery codes remain the target contract.
+Sweep close affected `/live` sockets and cancel in-flight requests.
 
 **Settings → My Account.** Every signed-in user can change their own password,
 and list/revoke their own in-memory sessions. Sessions state plainly that
-controller restart invalidates them. Optional TOTP enrollment/disable and
-one-time recovery codes are not implemented; when added, enrollment/self-disable
-will require the current password, the secret will appear only during
-enrollment, regenerating codes will invalidate the prior set, and login will
-withhold the full session until the short-lived MFA challenge succeeds.
+controller restart invalidates them.
 
 **Settings → Accounts.** Owner-only management lists accounts, canonical role
 (`owner`, `admin`, `operator` or `viewer`), enabled state and recent login without
-exposing password/MFA material. Owner can create, change role, enable/disable,
+exposing password material. Owner can create, change role, enable/disable,
 soft-delete and revoke any account's sessions; the last enabled owner is
 protected. Client address is shown only under the documented trusted-proxy
 policy. The UI reflects server permissions but never serves as the authorization

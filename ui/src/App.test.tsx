@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './lib/api'
 import { App } from './App'
@@ -22,7 +22,14 @@ vi.mock('./lib/api', async (importOriginal) => ({
   api: mocks.api,
 }))
 vi.mock('./lib/live', () => ({ live: mocks.live }))
-vi.mock('./screens/Dashboard', () => ({ Dashboard: () => <div>dashboard data</div> }))
+vi.mock('./screens/Dashboard', () => ({
+  Dashboard: ({ onOpenTopology }: { onOpenTopology?: () => void }) => (
+    <div>
+      dashboard data
+      {onOpenTopology && <button onClick={onOpenTopology}>Open topology</button>}
+    </div>
+  ),
+}))
 vi.mock('./screens/Topology', () => ({ Topology: () => <h1>Topology</h1> }))
 vi.mock('./screens/Radios', () => ({ Radios: () => {
   if (mocks.radioCrash) throw new Error('radio fixture failed')
@@ -39,7 +46,7 @@ function signedIn(username = 'admin') {
     csrf: 'token',
     reauthenticated_until: null,
   })
-  mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [] })
+  mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [], recent_alert_events: [] })
   mocks.api.devices.mockResolvedValue({ devices: [] })
 }
 
@@ -86,7 +93,7 @@ describe('App session boundaries', () => {
       csrf: 'token',
       reauthenticated_until: null,
     })
-    mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [] })
+    mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [], recent_alert_events: [] })
     mocks.api.devices.mockResolvedValue({ devices: [] })
     render(<App />)
 
@@ -97,6 +104,15 @@ describe('App session boundaries', () => {
     expect(await screen.findByRole('heading', { name: 'Topology' })).toBeTruthy()
     expect(window.location.pathname).toBe('/topology')
     expect(screen.queryByText('dashboard data')).toBeNull()
+  })
+
+  it('opens the full Topology workspace from the Dashboard summary', async () => {
+    signedIn()
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open topology' }))
+    expect(await screen.findByRole('heading', { name: 'Topology' })).toBeTruthy()
+    expect(window.location.pathname).toBe('/topology')
   })
 
   it('keeps the authenticated UI when logout fails', async () => {
@@ -142,6 +158,42 @@ describe('App session boundaries', () => {
     await waitFor(() => expect(document.activeElement).toBe(heading))
     expect(document.title).toBe('Topology — oonfeeWRT')
     expect(window.location.pathname).toBe('/topology')
+  })
+
+  it('mounts and focuses a deep-linked Devices heading before inventory resolves without stealing focus later', async () => {
+    window.history.replaceState(null, '', '/devices')
+    signedIn()
+    let resolveDevices!: (value: { devices: [] }) => void
+    mocks.api.devices.mockReturnValue(new Promise((resolve) => {
+      resolveDevices = resolve
+    }))
+    render(<App />)
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Devices' })
+    expect(screen.getByText('Managed devices (…)')).toBeTruthy()
+    expect(screen.getByText('Loading devices…')).toBeTruthy()
+    expect(screen.queryByText('Managed devices (0)')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+
+    const adopt = heading.closest('.page-header')?.querySelector('button') as HTMLButtonElement
+    expect(adopt.textContent).toBe('Adopt a device')
+    adopt.focus()
+    await act(async () => resolveDevices({ devices: [] }))
+    expect(await screen.findByText('Managed devices (0)')).toBeTruthy()
+    expect(document.activeElement).toBe(adopt)
+  })
+
+  it('keeps a deep-linked Devices heading and truthful unavailable state after a first-load failure', async () => {
+    window.history.replaceState(null, '', '/devices')
+    signedIn()
+    mocks.api.devices.mockRejectedValue(new Error('inventory offline'))
+    render(<App />)
+
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Devices' })
+    expect(await screen.findByText('Managed devices (Unavailable)')).toBeTruthy()
+    expect(screen.getByText(/Device inventory is unavailable\. Retry/)).toBeTruthy()
+    expect(screen.queryByText('Managed devices (0)')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(heading))
   })
 
   it('renders accessible SVG navigation and persists its expanded state per controller account', async () => {

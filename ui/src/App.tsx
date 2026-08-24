@@ -430,20 +430,21 @@ export function App() {
           )}
           <ScreenBoundary key={screen} name={NAV.find((item) => item.id === screen)?.label ?? 'Screen'}>
             {screen === 'dashboard' && (dash
-              ? <Dashboard data={dash} />
+              ? <Dashboard data={dash} onOpenTopology={() => navigate('topology')} />
               : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
             {screen === 'topology' && (
               <Topology onReviewCapabilities={() => navigate('devices')} />
             )}
             {screen === 'radios' && <Radios />}
-            {screen === 'devices' && devicesLoaded && (
+            {screen === 'devices' && (
               <Devices
                 devices={devices}
+                devicesLoaded={devicesLoaded}
+                devicesError={refreshErrors.devices}
                 onAdopt={() => navigate('adopt')}
                 onChanged={refresh}
               />
             )}
-            {screen === 'devices' && !devicesLoaded && !refreshErrors.devices && <div role="status">Loading devices…</div>}
             {screen === 'clients' && <Clients />}
             {screen === 'policy' && (
               <PolicyEngine onReviewChanges={() => navigate('settings')} />

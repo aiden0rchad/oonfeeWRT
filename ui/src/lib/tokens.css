@@ -192,6 +192,54 @@ a {
   outline-offset: 2px;
 }
 
+.page-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-header-copy {
+  flex: 1 1 280px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.page-header-purpose {
+  min-width: 0;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.page-header-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.page-header-actions button,
+.page-header-actions a,
+.page-header-actions [role='button'] {
+  max-width: 100%;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* Unknown evidence has to be recoverable without hover. The reason is fixed
  * above clipped table/card ancestors, while the trigger keeps the compact dash
  * that dense data tables need. */
@@ -800,6 +848,101 @@ a {
   align-items: start;
 }
 
+.dashboard-topology-card {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.dashboard-topology-summary {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dashboard-topology-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-topology-coverage {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.dashboard-topology-coverage[data-complete='true'] {
+  color: var(--good);
+}
+
+.dashboard-topology-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dashboard-topology-stats > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.dashboard-topology-stats strong {
+  color: var(--text-primary);
+  font-size: 17px;
+}
+
+.dashboard-topology-links {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-topology-links li {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr) minmax(150px, auto);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dashboard-topology-links li > span:first-child,
+.dashboard-topology-links strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-topology-links li > span:nth-child(2) {
+  color: var(--accent);
+}
+
+.dashboard-topology-links small {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.dashboard-topology-empty,
+.dashboard-topology-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .dashboard-section {
   display: grid;
   gap: 8px;
@@ -1028,6 +1171,19 @@ a {
 @media (max-width: 720px) {
   .dashboard-wan-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-topology-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-topology-links li {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  .dashboard-topology-links small {
+    grid-column: 1 / -1;
+    text-align: left;
   }
 }
 

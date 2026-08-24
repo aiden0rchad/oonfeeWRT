@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type { Device, EventCursor, EventPage, EventRow } from '../lib/api'
-import { Banner, Button, Card, DataGrid, FilterRail, useColumnPrefs } from '../components/ui'
+import { Banner, Button, Card, DataGrid, FilterRail, Notice, PageHeader, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 
 type EventScope = 'general' | 'audit'
@@ -242,7 +242,12 @@ export function Logs() {
         alignItems: 'start',
       }}
     >
-      <h1 style={{ margin: 0, fontSize: 20, gridColumn: '1 / -1' }}>Logs</h1>
+      <div style={{ gridColumn: '1 / -1' }}>
+        <PageHeader
+          title="Logs"
+          purpose="Controller, router, and audit events with explicit source and time coverage."
+        />
+      </div>
       <FilterRail
         counted="all"
         groups={[
@@ -295,27 +300,50 @@ export function Logs() {
           )}
           {scope === 'general' && (
             <div style={{ padding: '12px 12px 0' }}>
-              <Banner>
-                General includes controller events plus router syslog and hostapd association events.
-                Packet-flow/NFLOG, GeoIP, and application identity are not collected in this phase;
-                blank enrichment fields mean unavailable, not no traffic.
-              </Banner>
+              <Notice
+                tone="accent"
+                component="General event sources"
+                summary="General combines controller events, router syslog and hostapd association events."
+                details="Packet-flow/NFLOG, GeoIP and application identity are not collected in this phase; blank enrichment fields mean unavailable, not no traffic."
+                closedLabel="More information about event sources"
+                openLabel="Hide event source information"
+              />
             </div>
           )}
           {scope === 'general' && page && !coverage.complete && (
-            <div style={{ padding: '12px 12px 0' }} role="status">
-              <Banner tone="warning">
-                Router log coverage is incomplete. {coverage.gaps.join(' · ')}
-              </Banner>
+            <div style={{ padding: '12px 12px 0' }}>
+              <Notice
+                component="Router log coverage"
+                summary={(
+                  <div role="status">
+                    <strong>Router log coverage is incomplete.</strong>{' '}
+                    {coverage.observed_devices} of {coverage.expected_devices} expected routers reported coverage;
+                    an empty result is not proven.
+                  </div>
+                )}
+                details={coverage.gaps.length > 0
+                  ? <ul style={{ margin: 0, paddingLeft: 20 }}>{coverage.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
+                  : 'The controller response did not include a per-router explanation.'}
+                closedLabel="More information about log coverage"
+                openLabel="Hide log coverage information"
+              />
             </div>
           )}
           {clockSkew && (
-            <div style={{ padding: '12px 12px 0' }} role="status">
-              <Banner tone="warning">
-                Router event time differs from controller receive time by about{' '}
-                {clockSkewLabel(Math.abs(clockSkew.TS * 1000 - clockSkew.IngestedAt))}.
-                Check the router clock or NTP. General events are ordered by their router source time.
-              </Banner>
+            <div style={{ padding: '12px 12px 0' }}>
+              <Notice
+                component="Router clock"
+                summary={(
+                  <div role="status">
+                    Router event time differs from controller receive time by about{' '}
+                    {clockSkewLabel(Math.abs(clockSkew.TS * 1000 - clockSkew.IngestedAt))}.
+                    General events remain ordered by their router source time.
+                  </div>
+                )}
+                details="Check the router clock and NTP configuration before relying on event chronology."
+                closedLabel="More information about event time"
+                openLabel="Hide event time information"
+              />
             </div>
           )}
           <DataGrid

@@ -17,7 +17,7 @@ import type {
   SiteZonePolicy,
   StaticRoute,
 } from '../lib/api'
-import { Banner, Button, Card, DataGrid, Field, SlideOver } from '../components/ui'
+import { Banner, Button, Card, DataGrid, Field, Notice, SlideOver } from '../components/ui'
 import type { Column } from '../components/ui'
 
 const WAN = 'wan'
@@ -235,18 +235,23 @@ export function PolicyEngine({ onReviewChanges }: { onReviewChanges?: () => void
         </div>
       )}
       {saved && <Banner tone="accent">{saved} Preview and Apply are still required.</Banner>}
-      <Banner tone="accent">
-        Every write here changes controller desired state only. No router changes until you
-        Preview and Apply. Object Manager compiles visible drafts; it never installs a hidden
-        policy or silently substitutes for an unavailable backend. Forwarded firewall and NAT
-        changes govern new flows; existing tracked sessions and NAT mappings may persist until
-        conntrack expiry.
-        {onReviewChanges && (
-          <span style={{ marginLeft: 8 }}>
-            <Button onClick={onReviewChanges}>Review changes</Button>
-          </span>
+      <Notice
+        tone="accent"
+        component="Policy change lifecycle"
+        summary="Every write here changes controller desired state only. No router changes until you Preview and Apply."
+        closedLabel="More information about policy changes"
+        openLabel="Hide policy change information"
+        details={(
+          <>
+            Object Manager compiles visible drafts; it never installs a hidden policy or silently
+            substitutes for an unavailable backend. Forwarded firewall and NAT changes govern new
+            flows; existing tracked sessions and NAT mappings may persist until conntrack expiry.
+          </>
         )}
-      </Banner>
+        actions={onReviewChanges
+          ? <Button onClick={onReviewChanges}>Review changes</Button>
+          : undefined}
+      />
 
       <PolicyTabs value={tab} onChange={(next) => {
         setTab(next)
@@ -405,17 +410,24 @@ function ZoneMatrix({ zones, openEditor }: {
 }) {
   return (
     <div style={{ display: 'grid', gap: 14 }}>
-      <Banner tone="accent">
-        The Zone Matrix manages whole-zone forwarding only. WAN-initiated allow rules,
-        port forwards, per-client or per-port rules, application filtering, QoS, and DPI are
-        not implemented by this Zone Matrix editor. Use Master Table for explicit firewall, port
-        forward and route records. QoS and application identity remain capability-gated.
-        Preview also checks foreign OpenWrt rule, redirect and include sections. For explicit
-        gateway policies it also reads active nftables transit hooks and reachable rules, blocking
-        custom or unreadable evidence. The terse runtime view cannot prove include-file
-        provenance or inspect set contents, and <code>!fw4:</code> attribution comments can be
-        imitated by direct custom rules.
-      </Banner>
+      <Notice
+        tone="accent"
+        component="Zone Matrix scope"
+        summary="The Zone Matrix manages whole-zone forwarding only. Use Master Table for explicit firewall, port-forward, and route records."
+        closedLabel="More information about Zone Matrix scope"
+        openLabel="Hide Zone Matrix scope"
+        details={(
+          <>
+            WAN-initiated allow rules, port forwards, per-client or per-port rules, application
+            filtering, QoS, and DPI are not implemented by this Zone Matrix editor. QoS and
+            application identity remain capability-gated. Preview also checks foreign OpenWrt rule,
+            redirect and include sections. For explicit gateway policies it also reads active
+            nftables transit hooks and reachable rules, blocking custom or unreadable evidence. The
+            terse runtime view cannot prove include-file provenance or inspect set contents, and{' '}
+            <code>!fw4:</code> attribution comments can be imitated by direct custom rules.
+          </>
+        )}
+      />
       {zones.length === 0 ? (
         <Card title="Zone Matrix">
           <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>

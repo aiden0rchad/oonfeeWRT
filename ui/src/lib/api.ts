@@ -740,7 +740,11 @@ export interface Dashboard {
   }>
   focused_devices: number
   quiesced_devices: number
+  /** Legacy general activity retained for older Dashboard consumers. */
   recent_events: EventRow[] | null
+  /** Newest retained general warning/error rows. Empty means confirmed none;
+   * null or absent means unavailable or an older controller. */
+  recent_alert_events?: EventRow[] | null
   series_count: number
   /** Server-selected WAN evidence. Interface throughput is only present when
    * the observed default-route interface exactly matches a stored series key. */
