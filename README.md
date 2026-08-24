@@ -10,6 +10,16 @@ oonfeeWRT is a controller, not firmware. It runs on your server, NAS, mini-PC,
 or Mac and manages OpenWrt devices through their existing interfaces. Your
 routers stay on stock OpenWrt and continue to work with LuCI.
 
+## Preview
+
+[![oonfeeWRT live dashboard showing Internet health, speed tests, and fleet status](docs/images/dashboard-overview.jpg)](docs/images/dashboard-overview.jpg)
+
+*Live Internet health, controller-host speed tests, and fleet status.*
+
+[![oonfeeWRT radio and channel planning dashboard](docs/images/radios-channel-plan.jpg)](docs/images/radios-channel-plan.jpg)
+
+*Live radio inventory and evidence-aware channel planning.*
+
 ## What it provides
 
 - A fleet dashboard with WAN reachability, throughput, topology, clients,
