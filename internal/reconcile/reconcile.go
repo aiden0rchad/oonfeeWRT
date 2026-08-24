@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -76,6 +77,15 @@ type Reconciler struct {
 	Engine *applyengine.Engine
 	Now    func() time.Time
 }
+
+const (
+	applyAuditPersistTimeout         = 5 * time.Second
+	applyAuditMaxTextBytes           = 1024
+	applyAuditMaxOmissions           = 8
+	applyAuditMaxOmissionWLANBytes   = 128
+	applyAuditMaxOmissionReasonBytes = 512
+	applyAuditMaxOmissionKindBytes   = 32
+)
 
 // New returns a Reconciler with sensible defaults.
 func New(db *store.DB) *Reconciler {
@@ -345,8 +355,7 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 					Reason:    "no configuration was written; desired managed state is not loaded in runtime",
 					HealthErr: healthErr,
 				}
-				r.logOutcome(ctx, deviceID, p, res, applyErr)
-				return res, applyErr
+				return r.finishApplyOutcome(ctx, deviceID, p, res, applyErr)
 			}
 		}
 		// Nothing to write, and possibly a great deal to remember.
@@ -367,8 +376,7 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 		if err != nil {
 			res.Reason = fmt.Sprintf("device outcome was applied, but controller ownership recording failed: %v", err)
 		}
-		r.logOutcome(ctx, deviceID, p, res, err)
-		return res, err
+		return r.finishApplyOutcome(ctx, deviceID, p, res, err)
 	}
 
 	health = composeManagedRuntimeHealth(p, health)
@@ -379,8 +387,7 @@ func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 			res.Reason = fmt.Sprintf("device outcome was applied, but controller ownership recording failed: %v", ownedErr)
 		}
 	}
-	r.logOutcome(ctx, deviceID, p, res, err)
-	return res, err
+	return r.finishApplyOutcome(ctx, deviceID, p, res, err)
 }
 
 // recordOwned makes the ownership record match what is on the device.
@@ -445,11 +452,36 @@ func (r *Reconciler) recordOwned(ctx context.Context, deviceID int64, p *DeviceP
 	return nil
 }
 
+// finishApplyOutcome makes the audit write part of the Apply result. The
+// router outcome remains intact when controller bookkeeping fails, but the
+// caller cannot mistake that run for ordinary success.
+func (r *Reconciler) finishApplyOutcome(ctx context.Context, deviceID int64,
+	p *DevicePlan, res applyengine.Result, applyErr error) (applyengine.Result, error) {
+	auditErr := r.logOutcome(ctx, deviceID, p, res, applyErr)
+	if auditErr == nil {
+		return res, applyErr
+	}
+	recordErr := fmt.Errorf("reconcile: record apply outcome audit: %w", auditErr)
+	failure := fmt.Sprintf("controller apply-outcome audit recording failed: %v", auditErr)
+	if res.Outcome != "" {
+		outcome := fmt.Sprintf("device outcome was %s", res.Outcome)
+		if res.Reason != "" {
+			outcome += ": " + res.Reason
+		}
+		res.Reason = outcome + "; " + failure
+	} else if res.Reason == "" {
+		res.Reason = failure
+	} else {
+		res.Reason += "; " + failure
+	}
+	return res, errors.Join(applyErr, recordErr)
+}
+
 // logOutcome writes an audit event for every apply, including the ones that
-// failed. An apply nobody can account for afterwards is worse than one that
-// failed loudly.
+// failed. Variable detail is bounded before it reaches the store's per-event
+// limit; clipping is explicit so the audit never presents a sample as complete.
 func (r *Reconciler) logOutcome(ctx context.Context, deviceID int64,
-	p *DevicePlan, res applyengine.Result, applyErr error) {
+	p *DevicePlan, res applyengine.Result, applyErr error) error {
 
 	sev := "info"
 	switch {
@@ -458,25 +490,71 @@ func (r *Reconciler) logOutcome(ctx context.Context, deviceID int64,
 	case res.Outcome == applyengine.Reverted:
 		sev = "warning"
 	}
+	omissions, omissionsTruncated := boundedApplyAuditOmissions(p.Report.Omissions)
+	reason, reasonTruncated := boundedApplyAuditText(res.Reason, applyAuditMaxTextBytes)
 	detail := map[string]any{
 		"outcome":   string(res.Outcome),
-		"reason":    res.Reason,
+		"reason":    reason,
 		"ops":       len(p.Plan.Ops),
 		"sections":  len(p.Doc.Sections),
-		"omissions": p.Report.Omissions,
+		"omissions": omissions,
 		"stranded":  res.Stranded,
 	}
+	if reasonTruncated {
+		detail["reason_truncated"] = true
+	}
+	if omissionsTruncated {
+		detail["omissions_total"] = len(p.Report.Omissions)
+		detail["omissions_truncated"] = true
+	}
 	if applyErr != nil {
-		detail["error"] = applyErr.Error()
+		message, truncated := boundedApplyAuditText(applyErr.Error(), applyAuditMaxTextBytes)
+		detail["error"] = message
+		if truncated {
+			detail["error_truncated"] = true
+		}
 	}
 	if res.HealthErr != nil {
-		detail["health_error"] = res.HealthErr.Error()
+		message, truncated := boundedApplyAuditText(res.HealthErr.Error(), applyAuditMaxTextBytes)
+		detail["health_error"] = message
+		if truncated {
+			detail["health_error_truncated"] = true
+		}
 	}
 	id := deviceID
-	_ = r.Store.LogEvent(ctx, store.Event{
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applyAuditPersistTimeout)
+	defer cancel()
+	return r.Store.LogEvent(auditCtx, store.Event{
 		DeviceID: &id, Category: "audit", Severity: sev,
 		Event: "config.apply", Detail: detail,
 	})
+}
+
+func boundedApplyAuditOmissions(in []render.Omission) ([]render.Omission, bool) {
+	n := min(len(in), applyAuditMaxOmissions)
+	out := make([]render.Omission, n)
+	truncated := len(in) > n
+	for i := range n {
+		wlan, wlanTruncated := boundedApplyAuditText(in[i].WLAN, applyAuditMaxOmissionWLANBytes)
+		reason, reasonTruncated := boundedApplyAuditText(in[i].Reason, applyAuditMaxOmissionReasonBytes)
+		kind, kindTruncated := boundedApplyAuditText(string(in[i].Kind), applyAuditMaxOmissionKindBytes)
+		out[i] = render.Omission{WLAN: wlan, Reason: reason, Kind: render.OmissionKind(kind)}
+		truncated = truncated || wlanTruncated || reasonTruncated || kindTruncated
+	}
+	return out, truncated
+}
+
+func boundedApplyAuditText(value string, limit int) (string, bool) {
+	valid := strings.ToValidUTF8(value, "\uFFFD")
+	changed := valid != value
+	if len(valid) <= limit {
+		return valid, changed
+	}
+	cut := limit - len("…")
+	for cut > 0 && !utf8.RuneStart(valid[cut]) {
+		cut--
+	}
+	return valid[:cut] + "…", true
 }
 
 func (r *Reconciler) now() time.Time {

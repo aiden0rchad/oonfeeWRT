@@ -176,6 +176,51 @@ END`); err != nil {
 	}
 }
 
+func TestApplyOperationPreservesRouterOutcomeWhenAuditRecordingFails(t *testing.T) {
+	d, dev, preview := operationApplyFixture(t)
+	beginDaemonApplyOperation(t, d, daemonApplyOperationID)
+	before := bindingConfigFingerprint(t, d, dev.ID)
+	if _, err := d.Store.SQL().Exec(`
+CREATE TRIGGER fail_apply_audit
+BEFORE INSERT ON events WHEN NEW.event = 'config.apply'
+BEGIN
+  SELECT RAISE(ABORT, 'test apply audit failure');
+END`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := d.ApplySite(context.Background(), api.ApplyRequest{
+		OperationID: daemonApplyOperationID, PreviewToken: preview.PreviewToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Aborted || len(result.Devices) != 1 ||
+		result.Devices[0].Outcome != "error" ||
+		result.Devices[0].RouterOutcome != "applied" ||
+		!strings.Contains(result.Devices[0].Reason, "audit recording failed") {
+		t.Fatalf("audit failure result = %+v", result)
+	}
+	if after := bindingConfigFingerprint(t, d, dev.ID); after == before {
+		t.Fatal("fixture never reached a confirmed router write")
+	}
+	op, err := d.Store.ApplyOperation(context.Background(), daemonApplyOperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := op.Devices[0]
+	if op.WriteState != store.ApplyWriteStatePossible ||
+		device.State != store.ApplyOperationDeviceFailed ||
+		device.WriteState != store.ApplyWriteStatePossible ||
+		device.RouterOutcome != "applied" || device.Outcome != "error" {
+		t.Fatalf("audit failure durability = %+v", op)
+	}
+	if events, err := d.Store.DeviceEvents(context.Background(), dev.ID,
+		"config.apply", 1); err != nil || len(events) != 0 {
+		t.Fatalf("rejected audit unexpectedly persisted: events=%+v err=%v", events, err)
+	}
+}
+
 func TestDaemonStartupRecoversUnfinishedApplyOperations(t *testing.T) {
 	ctx := context.Background()
 	cfg := testConfig(t, "apply recovery passphrase")

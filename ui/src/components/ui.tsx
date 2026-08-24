@@ -82,6 +82,7 @@ export function Card({
           style={{
             display: 'flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             justifyContent: 'space-between',
             gap: 12,
             padding: '10px 14px',
@@ -90,7 +91,7 @@ export function Card({
             fontWeight: 600,
           }}
         >
-          <span>{title}</span>
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{title}</span>
           {actions}
         </header>
       )}
@@ -1323,21 +1324,11 @@ export function Pager({
   const from = total === 0 ? 0 : offset + 1
   const to = Math.min(offset + limit, total)
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '6px 12px',
-        borderTop: '1px solid var(--border)',
-        fontSize: 11,
-        color: 'var(--text-secondary)',
-      }}
-    >
+    <div className="pager">
       <span className="num">
         {from.toLocaleString()}–{to.toLocaleString()} of {total.toLocaleString()}
       </span>
-      <div style={{ flex: 1 }} />
+      <div className="pager-spacer" />
       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
         Rows
         <select

@@ -351,6 +351,43 @@ func TestPruneCapsEventsByRowCount(t *testing.T) {
 	}
 }
 
+func TestPruneEventsCommitsIndependentlyAndRollsBackOnFailure(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	for i := range 3 {
+		if err := db.LogEvent(ctx, Event{TS: int64(100 + i), Category: "system",
+			Severity: "info", Event: fmt.Sprintf("event-%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER reject_event_prune
+BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.PruneEvents(ctx, time.Now(), Retention{MaxEvents: 1}); err == nil ||
+		!strings.Contains(err.Error(), "store: prune events:") ||
+		!strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("failed event prune err=%v", err)
+	}
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("failed event prune left %d rows, want 3", count)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `DROP TRIGGER reject_event_prune`); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := db.PruneEvents(ctx, time.Now(), Retention{MaxEvents: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 2 {
+		t.Fatalf("pruned=%d, want 2", pruned)
+	}
+}
+
 func TestPruneKeepsOpenWRTLogWindowIndependentOfEventCap(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
@@ -498,6 +535,115 @@ func TestPruneBoundsFreshOpenWRTLogsWithoutEvictingControllerHistory(t *testing.
 	}
 	if logs != 3 || !controller {
 		t.Fatalf("remaining logs=%d controller=%v events=%+v", logs, controller, events)
+	}
+}
+
+func TestPrunePerDeviceOpenWRTCapKeepsRefreshedSummary(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1, 2)
+	for _, deviceID := range []int64{1, 2} {
+		if err := db.SaveIngestCursor(ctx, IngestCursor{DeviceID: deviceID,
+			Source: "openwrt-logd", BootID: fmt.Sprintf("boot-%d", deviceID),
+			Cursor: "3", UpdatedAt: 3_000}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(deviceID int64, event, sourceID string, ingestedAt int64) {
+		t.Helper()
+		if err := db.LogEvent(ctx, Event{TS: ingestedAt / 1000, DeviceID: &deviceID,
+			Category: "system", Severity: "warning", Event: event,
+			Source: "openwrt-logd", SourceBoot: fmt.Sprintf("boot-%d", deviceID),
+			SourceID: sourceID, IngestedAt: ingestedAt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(1, EventOpenWRTIPv6RANoDefaultRoute, EventOpenWRTIPv6RANoDefaultRouteSourceID, 1_000)
+	add(1, "per-device-victim", "2", 2_000)
+	add(1, "per-device-newest", "3", 3_000)
+	add(2, "per-device-untouched", "1", 1_000)
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE events SET ts=4, ingested_at=4000 WHERE event=?`,
+		EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.UnixMilli(10_000)
+	pruned, err := db.PruneEvents(ctx, now, Retention{MaxOpenWRTEventsPerDevice: 2})
+	if err != nil || pruned != 1 {
+		t.Fatalf("pruned=%d err=%v, want one stale device row", pruned, err)
+	}
+	events, err := db.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]bool{}
+	for _, event := range events {
+		kept[event.Event] = true
+	}
+	if !kept[EventOpenWRTIPv6RANoDefaultRoute] || !kept["per-device-newest"] ||
+		!kept["per-device-untouched"] || kept["per-device-victim"] {
+		t.Fatalf("per-device cap kept=%v", kept)
+	}
+	for deviceID, wantGap := range map[int64]int64{1: now.UnixMilli(), 2: 0} {
+		cursor, err := db.LoadIngestCursor(ctx, deviceID, "openwrt-logd")
+		if err != nil || cursor.ContinuityGapAt != wantGap {
+			t.Fatalf("device %d gap=%d err=%v, want %d", deviceID,
+				cursor.ContinuityGapAt, err, wantGap)
+		}
+	}
+}
+
+func TestPruneGlobalOpenWRTCapMarksTheDeletedVictimDevice(t *testing.T) {
+	ctx := context.Background()
+	db := open(t)
+	seedDevices(t, db, 1, 2, 3)
+	for _, deviceID := range []int64{1, 2, 3} {
+		if err := db.SaveIngestCursor(ctx, IngestCursor{DeviceID: deviceID,
+			Source: "openwrt-logd", BootID: fmt.Sprintf("boot-%d", deviceID),
+			Cursor: "1", UpdatedAt: 3_000}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(deviceID int64, event, sourceID string, ingestedAt int64) {
+		t.Helper()
+		if err := db.LogEvent(ctx, Event{TS: ingestedAt / 1000, DeviceID: &deviceID,
+			Category: "system", Severity: "warning", Event: event,
+			Source: "openwrt-logd", SourceBoot: fmt.Sprintf("boot-%d", deviceID),
+			SourceID: sourceID, IngestedAt: ingestedAt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(1, EventOpenWRTIPv6RANoDefaultRoute, EventOpenWRTIPv6RANoDefaultRouteSourceID, 1_000)
+	add(2, "global-victim", "1", 2_000)
+	add(3, "global-newest", "1", 3_000)
+	if _, err := db.SQL().ExecContext(ctx, `UPDATE events SET ts=4, ingested_at=4000 WHERE event=?`,
+		EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.UnixMilli(10_000)
+	pruned, err := db.PruneEvents(ctx, now, Retention{MaxOpenWRTEvents: 2})
+	if err != nil || pruned != 1 {
+		t.Fatalf("pruned=%d err=%v, want one global victim", pruned, err)
+	}
+	events, err := db.RecentEvents(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]bool{}
+	for _, event := range events {
+		kept[event.Event] = true
+	}
+	if !kept[EventOpenWRTIPv6RANoDefaultRoute] || !kept["global-newest"] ||
+		kept["global-victim"] {
+		t.Fatalf("global cap kept=%v", kept)
+	}
+	for deviceID, wantGap := range map[int64]int64{1: 0, 2: now.UnixMilli(), 3: 0} {
+		cursor, err := db.LoadIngestCursor(ctx, deviceID, "openwrt-logd")
+		if err != nil || cursor.ContinuityGapAt != wantGap {
+			t.Fatalf("device %d gap=%d err=%v, want %d", deviceID,
+				cursor.ContinuityGapAt, err, wantGap)
+		}
 	}
 }
 

@@ -594,7 +594,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
         </Banner>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
+      <div className="topology-stat-grid">
         <Card><Stat label="Nodes" value={data?.nodes.length ?? '—'} /></Card>
         <Card><Stat label={mode === 'current' ? 'Active links' : 'Link intervals'} value={data?.edges.length ?? '—'} /></Card>
         <Card>
@@ -612,7 +612,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
           ? 'Current infrastructure'
           : `Infrastructure at ${historyAt ? when(historyAt) : 'selected time'}`}
         actions={(
-          <div aria-label="Topology confidence legend" style={{ display: 'flex', gap: 10, fontSize: 11, color: 'var(--text-secondary)' }}>
+          <div aria-label="Topology confidence legend" className="card-inline-legend">
             <ConfidenceLegendItem confidence="measured" />
             <ConfidenceLegendItem confidence="inferred" />
             <ConfidenceLegendItem confidence="ambiguous" />

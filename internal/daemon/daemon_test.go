@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -163,6 +164,159 @@ func testConfig(t *testing.T, passphrase string) Config {
 	cfg.ShutdownGrace = 2 * time.Second
 	cfg.ApplyDrain = 2 * time.Second
 	return cfg
+}
+
+func TestOpenPrunesExpiredEventsBeforeServing(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t, "startup event prune")
+	d, err := Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := d.Store.LogEvent(ctx, store.Event{TS: old.Unix(), IngestedAt: old.UnixMilli(),
+		Category: "system", Severity: "warning", Event: "expired",
+		Source: "openwrt-logd"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err = Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var count int
+	if err := d.Store.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("startup retained %d expired events", count)
+	}
+}
+
+func TestOpenCompactsRetainedIPv6RAWarningsBeforeServing(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t, "startup IPv6 RA compaction")
+	d, err := Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := &store.Device{MAC: "02:00:00:00:00:72", Host: "192.0.2.72", Name: "legacy"}
+	if err := d.Store.UpsertDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	boot := "boot:81:0"
+	now := time.Now()
+	events := make([]store.Event, 0, 9)
+	for id := 1; id <= 9; id++ {
+		sourceTime := now.Add(time.Duration(id) * time.Millisecond).UnixMilli()
+		events = append(events, store.Event{
+			TS: sourceTime / 1000, IngestedAt: sourceTime, DeviceID: &device.ID,
+			Category: "system", Severity: "warning", Event: "openwrt.log",
+			Source: openWRTLogSource, SourceBoot: boot, SourceID: fmt.Sprint(id),
+			Detail: map[string]any{
+				"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+				"facility": uint32(3), "priority": uint32(28), "source_time_ms": sourceTime,
+			},
+		})
+	}
+	cursor := store.IngestCursor{DeviceID: device.ID, Source: openWRTLogSource,
+		BootID: boot, Cursor: "9:" + fmt.Sprint(now.Add(9*time.Millisecond).UnixMilli()),
+		UpdatedAt: now.Add(10 * time.Millisecond).UnixMilli()}
+	if inserted, err := d.Store.AppendEventsAndCursor(ctx, events, cursor); err != nil || inserted != 9 {
+		t.Fatalf("seed inserted=%d err=%v", inserted, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err = Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var raw, conditions, occurrences int64
+	if err := d.Store.SQL().QueryRowContext(ctx, `SELECT
+  SUM(CASE WHEN event='openwrt.log' THEN 1 ELSE 0 END),
+  SUM(CASE WHEN event=? THEN 1 ELSE 0 END),
+  COALESCE(MAX(CASE WHEN event=? THEN json_extract(detail_json,'$.occurrences') END),0)
+FROM events`, store.EventOpenWRTIPv6RANoDefaultRoute,
+		store.EventOpenWRTIPv6RANoDefaultRoute).Scan(&raw, &conditions, &occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if raw != 0 || conditions != 1 || occurrences != 9 {
+		t.Fatalf("startup compaction raw=%d conditions=%d occurrences=%d", raw, conditions, occurrences)
+	}
+}
+
+func TestOpenFailsWhenIPv6RACompactionCannotCommit(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t, "startup IPv6 RA compaction failure")
+	d, err := Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := &store.Device{MAC: "02:00:00:00:00:73", Host: "192.0.2.73", Name: "legacy"}
+	if err := d.Store.UpsertDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UnixMilli()
+	cursor := store.IngestCursor{DeviceID: device.ID, Source: openWRTLogSource,
+		BootID: "boot:81:0", Cursor: "1:" + fmt.Sprint(now), UpdatedAt: now}
+	event := store.Event{TS: now / 1000, IngestedAt: now, DeviceID: &device.ID,
+		Category: "system", Severity: "warning", Event: "openwrt.log",
+		Source: openWRTLogSource, SourceBoot: cursor.BootID, SourceID: "1",
+		Detail: map[string]any{
+			"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+			"facility": uint32(3), "priority": uint32(28), "source_time_ms": now,
+		}}
+	if inserted, err := d.Store.AppendEventsAndCursor(ctx, []store.Event{event}, cursor); err != nil || inserted != 1 {
+		t.Fatalf("seed inserted=%d err=%v", inserted, err)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx, `CREATE TRIGGER reject_ipv6_ra_compaction
+BEFORE DELETE ON events WHEN OLD.event='openwrt.log'
+BEGIN SELECT RAISE(ABORT,'blocked compaction'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(ctx, cfg, quietLogger()); err == nil ||
+		!strings.Contains(err.Error(), "daemon: compact repeated IPv6 RA events at startup:") ||
+		!strings.Contains(err.Error(), "blocked compaction") {
+		t.Fatalf("startup compaction error=%v", err)
+	}
+}
+
+func TestOpenFailsWhenStartupEventPruneFails(t *testing.T) {
+	ctx := context.Background()
+	cfg := testConfig(t, "startup event prune failure")
+	d, err := Open(ctx, cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := d.Store.LogEvent(ctx, store.Event{TS: old.Unix(), IngestedAt: old.UnixMilli(),
+		Category: "system", Severity: "warning", Event: "expired",
+		Source: "openwrt-logd"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx, `CREATE TRIGGER reject_startup_event_prune
+BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(ctx, cfg, quietLogger()); err == nil ||
+		!strings.Contains(err.Error(), "daemon: prune retained events at startup: store: prune OpenWrt logd events:") ||
+		!strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("startup prune error=%v", err)
+	}
 }
 
 func TestConfigFromEnv(t *testing.T) {

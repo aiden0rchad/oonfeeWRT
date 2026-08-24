@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type { Device, EventCursor, EventPage, EventRow } from '../lib/api'
+import { eventLabel, ipv6RACondition } from '../lib/eventCondition'
 import { Banner, Button, Card, DataGrid, FilterRail, Notice, PageHeader, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 
@@ -142,6 +143,14 @@ export function Logs() {
     gaps: ['router log coverage was not reported by this controller response'],
   }
   const rows = page?.events ?? []
+  const ipv6RAConditions = rows.flatMap((event) => {
+    const condition = ipv6RACondition(event)
+    return condition ? [condition] : []
+  })
+  const ipv6RAOccurrences = ipv6RAConditions.reduce(
+    (total, condition) => total + condition.occurrences,
+    0,
+  )
   const clockSkew = scope === 'general'
     ? rows.find((event) => event.Source === 'openwrt-logd' && event.IngestedAt > 0 &&
         Math.abs(event.TS * 1000 - event.IngestedAt) >= 5 * 60_000)
@@ -191,7 +200,19 @@ export function Logs() {
       render: (e) => e.Category,
       sortBy: (e) => e.Category,
     },
-    { key: 'event', header: 'Event', render: (e) => e.Event, sortBy: (e) => e.Event },
+    {
+      key: 'event', header: 'Event',
+      render: (e) => {
+        const condition = ipv6RACondition(e)
+        return condition ? (
+          <span>
+            {eventLabel(e)} · {condition.occurrences.toLocaleString()} occurrence
+            {condition.occurrences === 1 ? '' : 's'}
+          </span>
+        ) : e.Event
+      },
+      sortBy: (e) => eventLabel(e),
+    },
     {
       key: 'device',
       header: 'Device',
@@ -225,7 +246,7 @@ export function Logs() {
       width: 76,
       required: true,
       render: (e) => (
-        <Button aria-label={`View event ${e.ID}: ${e.Event}`} onClick={(event) => {
+        <Button aria-label={`View event ${e.ID}: ${eventLabel(e)}`} onClick={(event) => {
           detailTrigger.current = event.currentTarget
           void openDetail(e)
         }}>View</Button>
@@ -234,15 +255,8 @@ export function Logs() {
   ]
 
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '190px 1fr',
-        gap: 14,
-        alignItems: 'start',
-      }}
-    >
-      <div style={{ gridColumn: '1 / -1' }}>
+    <div className="logs-page">
+      <div className="logs-page-header">
         <PageHeader
           title="Logs"
           purpose="Controller, router, and audit events with explicit source and time coverage."
@@ -265,7 +279,7 @@ export function Logs() {
           },
         ]}
       />
-      <div style={{ display: 'grid', gap: 12 }}>
+      <div className="logs-page-content">
         <Card
           title={`Events (${page == null ? '…' : page.total.toLocaleString()})`}
           actions={(
@@ -282,7 +296,7 @@ export function Logs() {
                     borderRadius: 6,
                     border: '1px solid var(--border-strong)',
                     color: scope === value ? '#fff' : 'var(--text-primary)',
-                    background: scope === value ? 'var(--accent)' : 'var(--surface-2)',
+                    background: scope === value ? 'var(--control-accent)' : 'var(--surface-2)',
                     cursor: 'pointer',
                   }}
                 >
@@ -346,6 +360,23 @@ export function Logs() {
               />
             </div>
           )}
+          {scope === 'general' && ipv6RAConditions.length > 0 && (
+            <div style={{ padding: '12px 12px 0' }}>
+              <Notice
+                tone="warning"
+                component="IPv6 router advertisements"
+                summary={(
+                  <div role="status">
+                    OpenWrt reported no usable IPv6 default route while sending router
+                    advertisements. This concerns IPv6 and does not indicate an IPv4 outage.
+                  </div>
+                )}
+                details={`${ipv6RAOccurrences.toLocaleString()} reported occurrence${ipv6RAOccurrences === 1 ? '' : 's'} ${ipv6RAOccurrences === 1 ? 'is' : 'are'} condensed into ${ipv6RAConditions.length} condition record${ipv6RAConditions.length === 1 ? '' : 's'} on this page. The original warning priority, message, first and latest source timestamps remain in event detail.`}
+                closedLabel="More information about this IPv6 warning"
+                openLabel="Hide IPv6 warning information"
+              />
+            </div>
+          )}
           <DataGrid
             tableLabel={`${scope === 'audit' ? 'Audit' : 'General'} events`}
             totalRows={page?.total}
@@ -370,17 +401,11 @@ export function Logs() {
             }
           />
           {page && (
-            <div
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px',
-                borderTop: '1px solid var(--border)', fontSize: 11,
-                color: 'var(--text-secondary)',
-              }}
-            >
+            <div className="pager">
               <span className="num">
                 Page {history.length + 1} · {rows.length.toLocaleString()} rows · {page.total.toLocaleString()} matching
               </span>
-              <div style={{ flex: 1 }} />
+              <div className="pager-spacer" />
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 Rows
                 <select
@@ -529,7 +554,7 @@ function EventDetail({
       >
         <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
           <h2 id="event-detail-title" style={{ margin: 0, fontSize: 15, flex: 1 }}>
-            {event ? `${event.Event} · event ${event.ID}` : 'Event detail'}
+            {event ? `${eventLabel(event)} · event ${event.ID}` : 'Event detail'}
           </h2>
           <Button onClick={onClose}>Close</Button>
         </header>

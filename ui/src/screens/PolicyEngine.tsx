@@ -373,7 +373,7 @@ function PolicyTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
   }
 
   return (
-    <div role="tablist" aria-label="Policy Engine views" style={{
+    <div className="policy-tabs" role="tablist" aria-label="Policy Engine views" style={{
       display: 'flex', gap: 2, padding: 3, width: 'fit-content',
       background: 'var(--surface-1)', border: '1px solid var(--border)', borderRadius: 8,
     }}>
@@ -393,7 +393,7 @@ function PolicyTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
           style={{
             minHeight: 30, padding: '0 13px', border: 0, borderRadius: 6,
             cursor: 'pointer', fontSize: 12, fontWeight: 600,
-            color: value === tab.id ? 'var(--accent)' : 'var(--text-secondary)',
+            color: value === tab.id ? 'var(--accent-text)' : 'var(--text-secondary)',
             background: value === tab.id ? 'var(--accent-soft)' : 'transparent',
           }}
         >
@@ -1080,7 +1080,7 @@ function ObjectsPanel({
         <div style={{ display: 'grid', gap: 14 }}>
           <div>
             <div style={stepTitleStyle}>1 · Choose objects</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(130px, .55fr) minmax(220px, 1.45fr) auto', gap: 8, alignItems: 'end' }}>
+            <div className="policy-object-picker">
               <SelectField label="Object type" value={objectKind} disabled={compiling} onChange={(value) => setObjectKind(value as PolicyObjectTarget['kind'])}>
                 <option value="device">Client device</option>
                 <option value="group">Client group</option>
@@ -1170,7 +1170,7 @@ function ObjectsPanel({
               </div>
             )}
             {outcomes.includes('route') && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 120px', gap: 8, marginTop: 10 }}>
+              <div className="policy-route-fields">
                 <Field label="Route target" placeholder="10.40.0.0/16" disabled={compiling} value={routeTarget} onChange={(event) => setRouteTarget(event.target.value)} />
                 <Field label="Next-hop IPv4" placeholder="192.168.20.2" disabled={compiling} value={routeGateway} onChange={(event) => setRouteGateway(event.target.value)} />
                 <Field label="Metric" type="number" min={0} max={65535} disabled={compiling} value={routeMetric} onChange={(event) => setRouteMetric(numberValue(event.target.value))} />
@@ -1218,7 +1218,7 @@ function ObjectsPanel({
                     <strong style={{ fontSize: 13 }}>{policy.name}</strong>
                     <div style={hintStyle}>{kindLabel(policy.kind)} · {originLabel(policy.origin)} · {policy.enabled ? 'enabled' : 'disabled'}</div>
                   </div>
-                  <Pill colour="var(--accent)">Draft</Pill>
+                  <Pill colour="var(--accent-text)">Draft</Pill>
                 </div>
                 {policy.kind === 'firewall_rule' && policy.firewall && (
                   <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
@@ -1258,7 +1258,7 @@ function ObjectsPanel({
           It affects new routed flows; existing conntrack sessions may continue until expiry.
         </div>
         {clients && clients.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px, 1fr) auto', gap: 8, alignItems: 'end' }}>
+          <div className="policy-client-picker">
             <SelectField
               label={clientsCoverage ? 'Client (partial client inventory)' : 'Client'}
               value={clientChoice}
@@ -1781,7 +1781,7 @@ const tableActionStyle = {
   border: '1px solid var(--border-strong)',
   borderRadius: 5,
   background: 'var(--surface-2)',
-  color: 'var(--accent)',
+  color: 'var(--accent-text)',
   cursor: 'pointer',
   fontSize: 11,
   fontWeight: 600,

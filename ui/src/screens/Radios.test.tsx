@@ -40,6 +40,7 @@ const response: RadiosResponse = {
         { band: '5g', channel: 36, mhz: 5180, state: 'in-use', availability: 'enabled', in_use: true, restricted: false, dfs: null, excluded: null, flags: [] },
         { band: '5g', channel: 44, mhz: 5220, state: 'enabled', availability: 'enabled', in_use: false, restricted: false, dfs: null, excluded: null, flags: [] },
         { band: '5g', channel: 52, mhz: 5260, state: 'restricted', availability: 'restricted', in_use: false, restricted: true, dfs: null, excluded: null, flags: ['NO-IR'] },
+        { band: '5g', channel: 60, mhz: 5300, state: 'unknown', availability: 'unknown', in_use: false, restricted: false, dfs: null, excluded: null, flags: [] },
       ],
       scan_capability: 'present',
       latest_observations: [],
@@ -69,7 +70,7 @@ describe('Radios', () => {
     expect((await screen.findAllByText('Gateway AP')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('radio0').length).toBeGreaterThan(0)
     const classification = screen.getByRole('group', { name: 'Warning: Channel classification' })
-    expect(within(classification).getByText(/DFS and channel exclusions are unknown here/i)).toBeTruthy()
+    expect(within(classification).getByText(/cannot prove which restricted channels require DFS/i)).toBeTruthy()
     const classificationToggle = within(classification).getByText('More information about channel classification')
     const classificationDetails = classificationToggle.closest('details')
     expect(classificationDetails?.open).toBe(false)
@@ -77,7 +78,13 @@ describe('Radios', () => {
     expect(classificationDetails?.open).toBe(true)
     expect(within(classification).getByText(/freqlist\.restricted/)).toBeTruthy()
     const plan = screen.getByRole('list', { name: /Channel plan for 1 radios/ })
-    expect(within(plan).getByLabelText('Channel 52, restricted, DFS unknown, exclusion unknown')).toBeTruthy()
+    for (const [channel, state] of [['36', 'in-use'], ['52', 'restricted'], ['60', 'unknown']] as const) {
+      const tile = plan.querySelector(`.radio-channel[data-state="${state}"]`)!
+      expect(tile.getAttribute('aria-label')).toContain(`Channel ${channel},`)
+      expect(tile.querySelector(`.radio-state-mark[data-state="${state}"]`)).toBeTruthy()
+    }
+    const legend = screen.getByLabelText('Channel Plan legend')
+    expect(legend.querySelectorAll('.radio-state-mark')).toHaveLength(4)
 
     const table = screen.getByRole('table', { name: 'Per-radio observability' })
     await waitFor(() => expect(within(table).getByText('23.4%')).toBeTruthy())

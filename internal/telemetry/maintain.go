@@ -87,15 +87,25 @@ func (m *Maintainer) tick(ctx context.Context, final bool) {
 		return
 	}
 
+	eventRows, err := m.Store.PruneEvents(ctx, now, m.Retention)
+	if err != nil {
+		m.Log.Error("could not prune events", "err", err)
+	}
 	if err := m.Store.FoldHourly(ctx, now); err != nil {
 		m.Log.Error("could not fold hourly rollups", "err", err)
 		return // pruning now would delete 5-minute rows that never got folded
 	}
-	res, err := m.Store.Prune(ctx, now, m.Retention)
+	retention := m.Retention
+	retention.OpenWRTLogs = 0
+	retention.MaxOpenWRTEvents = 0
+	retention.MaxOpenWRTEventsPerDevice = 0
+	retention.MaxEvents = 0
+	res, err := m.Store.Prune(ctx, now, retention)
 	if err != nil {
 		m.Log.Error("could not prune telemetry", "err", err)
 		return
 	}
+	res.Events = eventRows
 	// Clients age out on their own schedule. Randomised MACs mean one phone can
 	// produce a new "client" per SSID per reconnect, so the table grows without
 	// this even on a small network.

@@ -97,7 +97,7 @@ export function Devices({
       key: 'tier',
       header: 'Poll',
       render: (d) => (
-        <span style={{ color: d.tier === 'focused' ? 'var(--accent)' : undefined }}>
+        <span style={{ color: d.tier === 'focused' ? 'var(--accent-text)' : undefined }}>
           {d.quiesced ? 'paused (applying)' : (d.tier ?? d.poll_state)}
         </span>
       ),
@@ -1770,7 +1770,7 @@ function TakeoverBriefBlock({ deviceID, b, onNoted }: { deviceID: number; b: Bro
           border: 'none',
           padding: 0,
           marginTop: 2,
-          color: 'var(--accent)',
+          color: 'var(--accent-text)',
           cursor: 'pointer',
           font: 'inherit',
         }}

@@ -889,7 +889,7 @@ function WLANRow({
         borderTop: '1px solid var(--border)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>
             {w.ssid}
@@ -929,7 +929,7 @@ function WLANRow({
                 Delete <strong>{w.ssid}</strong> from desired state? No router changes until
                 you Preview and Apply.
               </span>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <Button
                   disabled={deleting}
                   onClick={async () => {
@@ -1227,7 +1227,7 @@ function WLANEditor({
           />
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button kind="primary" disabled={saving || !draft.ssid} onClick={save}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
@@ -1304,13 +1304,14 @@ function Groups({
     <Card
       title="AP groups"
       actions={
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: '100%' }}>
           <input
             aria-label="New AP group name"
             value={name}
             placeholder="new group"
             onChange={(e) => setName(e.target.value)}
             style={{
+              maxWidth: '100%',
               height: 26,
               padding: '0 8px',
               borderRadius: 4,
@@ -1996,7 +1997,7 @@ function NetworkEditor({
           </Card>
         )}
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button disabled={
             !dirty || busy || !draft.name.trim() || !!addressWarning || !!dhcpWarning
           } onClick={save}>
@@ -2555,8 +2556,8 @@ function MeshRow({
         borderTop: '1px solid var(--border)',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ flex: 1 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>
             {m.mesh_id}
             {!m.enabled && (
@@ -2598,7 +2599,7 @@ function MeshRow({
                 Delete <strong>{m.mesh_id}</strong> from desired state? No router changes
                 until you Preview and Apply.
               </span>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <Button
                   disabled={deleting}
                   onClick={async () => {
@@ -2749,7 +2750,7 @@ function MeshEditor({
           A mesh point is an extra interface, not a different kind of device.
         </div>
 
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button kind="primary" onClick={save} disabled={saving || !(draft.mesh_id ?? '').trim()}>
             {saving ? 'Saving…' : 'Save'}
           </Button>
@@ -2941,6 +2942,7 @@ function NeighbourDeviceRow({ d }: { d: NeighbourDevice }) {
           key={b.iface}
           style={{
             display: 'flex',
+            flexWrap: 'wrap',
             gap: 8,
             marginTop: 3,
             color: b.failed ? 'var(--critical)' : 'var(--text-secondary)',
@@ -3045,7 +3047,7 @@ function MeshLinkRow({ l }: { l: MeshLink }) {
         fontSize: 12,
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 600 }}>
           {l.name}{' '}
           <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
@@ -3181,6 +3183,7 @@ function Uplinks({
                 padding: '6px 8px',
                 fontSize: 12,
                 display: 'flex',
+                flexWrap: 'wrap',
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 gap: 8,

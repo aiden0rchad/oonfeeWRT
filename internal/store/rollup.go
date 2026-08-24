@@ -213,6 +213,25 @@ type PruneResult struct {
 	RadioScans int64
 }
 
+// PruneEvents enforces event retention in its own transaction. Daemon startup
+// and periodic maintenance use it independently of rollup folding so a broken
+// telemetry ladder cannot leave the event table growing without a bound.
+func (db *DB) PruneEvents(ctx context.Context, now time.Time, r Retention) (int64, error) {
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin event prune: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	pruned, err := pruneEventsOn(ctx, tx, now, r)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: commit event prune: %w", err)
+	}
+	return pruned, nil
+}
+
 // Prune enforces retention. It runs after FoldHourly, never before: dropping a
 // 5-minute row that has not been folded yet loses the data outright rather than
 // downsampling it.
@@ -244,77 +263,10 @@ func (db *DB) Prune(ctx context.Context, now time.Time, r Retention) (PruneResul
 		}
 		out.Hourly, _ = res.RowsAffected()
 	}
-	if r.OpenWRTLogs > 0 {
-		res, err := tx.ExecContext(ctx,
-			`DELETE FROM events WHERE source='openwrt-logd' AND COALESCE(ingested_at, ts * 1000) < ?`,
-			now.Add(-r.OpenWRTLogs).UnixMilli())
-		if err != nil {
-			return out, fmt.Errorf("store: prune OpenWrt logd events: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		out.Events += n
-	}
-	if r.MaxOpenWRTEventsPerDevice > 0 {
-		if _, err := tx.ExecContext(ctx, `
-UPDATE ingest_cursors
-   SET continuity_gap_at=MAX(continuity_gap_at, ?)
- WHERE source='openwrt-logd' AND device_id IN (
-   SELECT device_id FROM (
-     SELECT device_id,
-            ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY id DESC) AS n
-       FROM events
-      WHERE source='openwrt-logd' AND device_id IS NOT NULL
-   ) WHERE n > ?
-)`, now.UnixMilli(), r.MaxOpenWRTEventsPerDevice); err != nil {
-			return out, fmt.Errorf("store: mark per-device OpenWrt logd truncation: %w", err)
-		}
-		res, err := tx.ExecContext(ctx, `
-DELETE FROM events WHERE id IN (
-  SELECT id FROM (
-    SELECT id, ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY id DESC) AS n
-      FROM events WHERE source='openwrt-logd'
-  ) WHERE n > ?
-)`, r.MaxOpenWRTEventsPerDevice)
-		if err != nil {
-			return out, fmt.Errorf("store: prune per-device OpenWrt logd events: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		out.Events += n
-	}
-	if r.MaxOpenWRTEvents > 0 {
-		if _, err := tx.ExecContext(ctx, `
-UPDATE ingest_cursors
-   SET continuity_gap_at=MAX(continuity_gap_at, ?)
- WHERE source='openwrt-logd' AND device_id IN (
-   SELECT DISTINCT device_id FROM events
-    WHERE source='openwrt-logd' AND device_id IS NOT NULL AND id NOT IN (
-      SELECT id FROM events WHERE source='openwrt-logd' ORDER BY id DESC LIMIT ?
-    )
-)`, now.UnixMilli(), r.MaxOpenWRTEvents); err != nil {
-			return out, fmt.Errorf("store: mark global OpenWrt logd truncation: %w", err)
-		}
-		res, err := tx.ExecContext(ctx, `
-DELETE FROM events WHERE source='openwrt-logd' AND id NOT IN (
-  SELECT id FROM events WHERE source='openwrt-logd' ORDER BY id DESC LIMIT ?
-)`, r.MaxOpenWRTEvents)
-		if err != nil {
-			return out, fmt.Errorf("store: prune global OpenWrt logd events: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		out.Events += n
-	}
-	if r.MaxEvents > 0 {
-		// Controller/audit history remains row-count based. OpenWrt logd rows use
-		// their independent time window above, so a noisy router cannot evict
-		// controller outcomes or lose recent logs to this cap.
-		res, err := tx.ExecContext(ctx, `
-DELETE FROM events WHERE source <> 'openwrt-logd' AND id NOT IN (
-  SELECT id FROM events WHERE source <> 'openwrt-logd' ORDER BY id DESC LIMIT ?)`, r.MaxEvents)
-		if err != nil {
-			return out, fmt.Errorf("store: prune events: %w", err)
-		}
-		n, _ := res.RowsAffected()
-		out.Events += n
+	var eventErr error
+	out.Events, eventErr = pruneEventsOn(ctx, tx, now, r)
+	if eventErr != nil {
+		return out, eventErr
 	}
 	if r.TopologyHistory > 0 {
 		// Active edges are the current graph and have no expiry. Only intervals
@@ -373,6 +325,91 @@ DELETE FROM series WHERE id NOT IN (SELECT series_id FROM rollup_5m)
 		return out, fmt.Errorf("store: commit prune: %w", err)
 	}
 	return out, nil
+}
+
+func pruneEventsOn(ctx context.Context, exec *sql.Tx, now time.Time, r Retention) (int64, error) {
+	var pruned int64
+	if r.OpenWRTLogs > 0 {
+		res, err := exec.ExecContext(ctx,
+			`DELETE FROM events WHERE source='openwrt-logd' AND COALESCE(ingested_at, ts * 1000) < ?`,
+			now.Add(-r.OpenWRTLogs).UnixMilli())
+		if err != nil {
+			return 0, fmt.Errorf("store: prune OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		pruned += n
+	}
+	if r.MaxOpenWRTEventsPerDevice > 0 {
+		if _, err := exec.ExecContext(ctx, `
+UPDATE ingest_cursors
+   SET continuity_gap_at=MAX(continuity_gap_at, ?)
+ WHERE source='openwrt-logd' AND device_id IN (
+   SELECT device_id FROM (
+     SELECT device_id,
+            ROW_NUMBER() OVER (
+              PARTITION BY device_id
+              ORDER BY COALESCE(ingested_at, ts * 1000) DESC, id DESC
+            ) AS n
+       FROM events
+      WHERE source='openwrt-logd' AND device_id IS NOT NULL
+   ) WHERE n > ?
+)`, now.UnixMilli(), r.MaxOpenWRTEventsPerDevice); err != nil {
+			return 0, fmt.Errorf("store: mark per-device OpenWrt logd truncation: %w", err)
+		}
+		res, err := exec.ExecContext(ctx, `
+DELETE FROM events WHERE id IN (
+  SELECT id FROM (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY device_id
+      ORDER BY COALESCE(ingested_at, ts * 1000) DESC, id DESC
+    ) AS n
+      FROM events WHERE source='openwrt-logd'
+  ) WHERE n > ?
+)`, r.MaxOpenWRTEventsPerDevice)
+		if err != nil {
+			return 0, fmt.Errorf("store: prune per-device OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		pruned += n
+	}
+	if r.MaxOpenWRTEvents > 0 {
+		if _, err := exec.ExecContext(ctx, `
+UPDATE ingest_cursors
+   SET continuity_gap_at=MAX(continuity_gap_at, ?)
+ WHERE source='openwrt-logd' AND device_id IN (
+   SELECT DISTINCT device_id FROM events
+    WHERE source='openwrt-logd' AND device_id IS NOT NULL AND id NOT IN (
+      SELECT id FROM events WHERE source='openwrt-logd'
+       ORDER BY COALESCE(ingested_at, ts * 1000) DESC, id DESC LIMIT ?
+    )
+)`, now.UnixMilli(), r.MaxOpenWRTEvents); err != nil {
+			return 0, fmt.Errorf("store: mark global OpenWrt logd truncation: %w", err)
+		}
+		res, err := exec.ExecContext(ctx, `
+DELETE FROM events WHERE source='openwrt-logd' AND id NOT IN (
+  SELECT id FROM events WHERE source='openwrt-logd'
+   ORDER BY COALESCE(ingested_at, ts * 1000) DESC, id DESC LIMIT ?
+)`, r.MaxOpenWRTEvents)
+		if err != nil {
+			return 0, fmt.Errorf("store: prune global OpenWrt logd events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		pruned += n
+	}
+	if r.MaxEvents > 0 {
+		// Controller/audit history remains row-count based. OpenWrt logd rows use
+		// their independent time window above, so a noisy router cannot evict
+		// controller outcomes or lose recent logs to this cap.
+		res, err := exec.ExecContext(ctx, `
+DELETE FROM events WHERE source <> 'openwrt-logd' AND id NOT IN (
+  SELECT id FROM events WHERE source <> 'openwrt-logd' ORDER BY id DESC LIMIT ?)`, r.MaxEvents)
+		if err != nil {
+			return 0, fmt.Errorf("store: prune events: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		pruned += n
+	}
+	return pruned, nil
 }
 
 // SweepOrphans deletes rollups whose series row is gone, and any series row

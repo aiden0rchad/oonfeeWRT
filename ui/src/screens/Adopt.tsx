@@ -439,12 +439,12 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                       <span style={{ fontSize: 12, fontWeight: 600 }}>
                         {item.label}
                         {isRecommended && (
-                          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>
+                          <span style={{ color: 'var(--accent-text)', fontWeight: 500 }}>
                             {' '}· recommended
                           </span>
                         )}
                         {!isRecommended && !isUnknown && isAvailable && (
-                          <span style={{ color: 'var(--accent)', fontWeight: 500 }}>
+                          <span style={{ color: 'var(--accent-text)', fontWeight: 500 }}>
                             {' '}· available
                           </span>
                         )}

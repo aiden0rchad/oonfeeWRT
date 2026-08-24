@@ -95,3 +95,58 @@ func TestFinalFlushPersistsCompletedBucketsWithoutWritingCurrentPartial(t *testi
 		t.Fatalf("completed buckets=%+v, want process A then process B", got.Points)
 	}
 }
+
+func TestEventPruneRunsWhenHourlyFoldFails(t *testing.T) {
+	ctx := context.Background()
+	db, _ := openMaintainerDB(t)
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	if err := db.LogEvent(ctx, store.Event{TS: now.Add(-2 * time.Hour).Unix(),
+		IngestedAt: now.Add(-2 * time.Hour).UnixMilli(), Category: "system",
+		Severity: "warning", Event: "expired", Source: "openwrt-logd"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `DROP TABLE rollup_5m`); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMaintainer(db, New(Options{}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m.Retention = store.Retention{OpenWRTLogs: time.Hour}
+	m.Now = func() time.Time { return now }
+	m.Tick(ctx)
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("fold failure left %d expired events", count)
+	}
+}
+
+func TestEventPruneFailureDoesNotBlockOtherMaintenance(t *testing.T) {
+	ctx := context.Background()
+	db, _ := openMaintainerDB(t)
+	for range 2 {
+		if err := db.LogEvent(ctx, store.Event{Category: "system", Severity: "info",
+			Event: "bounded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER reject_event_prune
+BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	m := NewMaintainer(db, New(Options{}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m.Retention = store.Retention{MaxEvents: 1}
+	runAfterTick := false
+	m.AfterTick = func() { runAfterTick = true }
+	m.Tick(ctx)
+	if !runAfterTick {
+		t.Fatal("event prune failure stopped independent maintenance")
+	}
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("failed event prune changed rows=%d, want 2", count)
+	}
+}

@@ -8,6 +8,7 @@ import type {
   SpeedTestJob,
   TopologySnapshot,
 } from '../lib/api'
+import { eventLabel, ipv6RACondition } from '../lib/eventCondition'
 import { Banner, Button, Card, Notice, Stat, Status, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
 
@@ -48,43 +49,68 @@ function speedTestProvenance(value: string | null | undefined) {
     : value || 'Controller host/container'
 }
 
-function Trend({ label, points }: { label: string; points: DashboardMetricPoint[] }) {
+export function Trend({ label, points }: { label: string; points: DashboardMetricPoint[] }) {
   const observed = points.flatMap((point) => point.value == null ? [] : [point.value])
-  if (observed.length < 2) return null
+  if (observed.length === 0) return null
 
   const width = 180
   const height = 38
   const low = Math.min(...observed)
   const high = Math.max(...observed)
-  const span = high - low || 1
-  const segments: string[] = []
-  let current = ''
+  const span = high - low
+  const x = (index: number) => points.length === 1 ? width / 2 : (index / (points.length - 1)) * width
+  const y = (value: number) => span === 0
+    ? height / 2
+    : height - 2 - ((value - low) / span) * (height - 4)
+  const segments: Array<{ path: string; count: number; x: number; y: number }> = []
+  const gaps: Array<{ from: number; to: number }> = []
+  let current = { path: '', count: 0, x: 0, y: 0 }
+  let gapStart = -1
   points.forEach((point, index) => {
     if (point.value == null) {
-      if (current) segments.push(current)
-      current = ''
+      if (current.count) segments.push(current)
+      current = { path: '', count: 0, x: 0, y: 0 }
+      if (gapStart < 0) gapStart = index
       return
     }
-    const x = points.length === 1 ? 0 : (index / (points.length - 1)) * width
-    const y = height - 2 - ((point.value - low) / span) * (height - 4)
-    current += `${current ? ' L' : 'M'} ${x.toFixed(1)} ${y.toFixed(1)}`
+    if (gapStart >= 0) {
+      gaps.push({ from: gapStart, to: index - 1 })
+      gapStart = -1
+    }
+    const px = x(index)
+    const py = y(point.value)
+    current.path += `${current.path ? ' L' : 'M'} ${px.toFixed(1)} ${py.toFixed(1)}`
+    current.count++
+    current.x = px
+    current.y = py
   })
-  if (current) segments.push(current)
+  if (current.count) segments.push(current)
+  if (gapStart >= 0) gaps.push({ from: gapStart, to: points.length - 1 })
+
+  const gapX = (index: number) => Math.max(0, Math.min(width, x(index)))
+  const missing = points.length - observed.length
 
   return (
     <svg
       className="dashboard-trend"
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label={`${label} six-hour trend: ${observed.length} of ${points.length} five-minute buckets observed`}
+      aria-label={`${label} six-hour trend: ${observed.length} available and ${missing} unavailable five-minute samples${missing ? '; shaded bands mark unavailable samples' : ''}`}
       preserveAspectRatio="none"
     >
-      {segments.map((path, index) => <path key={index} d={path} />)}
+      {gaps.map(({ from, to }) => {
+        const left = gapX(from - 0.5)
+        const right = gapX(to + 0.5)
+        return <rect key={`${from}-${to}`} className="dashboard-trend-gap" x={left} width={right - left} height={height} />
+      })}
+      {segments.map((segment, index) => segment.count === 1
+        ? <circle key={index} className="dashboard-trend-point" cx={segment.x} cy={segment.y} r="2" />
+        : <path key={index} className="dashboard-trend-series" d={segment.path} />)}
     </svg>
   )
 }
 
-function WANMetric({
+export function WANMetric({
   label,
   metric,
   format,
@@ -94,6 +120,13 @@ function WANMetric({
   format: (value: number, unit?: string) => string
 }) {
   const available = metric?.value != null && metric.status !== 'unavailable'
+  const missing = metric?.points.filter((point) => point.value == null).length ?? 0
+  const note = [
+    metric?.status === 'fresh' && metric.as_of ? `Updated ${agoMilliseconds(metric.as_of)}` : '',
+    metric?.status === 'last_observed' && metric.as_of ? `Last observed ${agoMilliseconds(metric.as_of)}` : '',
+    !metric || metric.status === 'unavailable' ? 'Current value unavailable' : '',
+    missing ? `${missing} missing` : '',
+  ].filter(Boolean).join(' · ')
   return (
     <div className="dashboard-metric">
       <div className="dashboard-metric-label">{label}</div>
@@ -103,11 +136,7 @@ function WANMetric({
           : <Unknown why={metric?.meaning || 'the controller has no matching WAN telemetry'} />}
       </div>
       {metric && <Trend label={label} points={metric.points} />}
-      <div className="dashboard-metric-note">
-        {metric?.status === 'fresh' && metric.as_of ? `Updated ${agoMilliseconds(metric.as_of)}` : null}
-        {metric?.status === 'last_observed' && metric.as_of ? `Last observed ${agoMilliseconds(metric.as_of)}` : null}
-        {!metric || metric.status === 'unavailable' ? 'Current value unavailable' : null}
-      </div>
+      <div className="dashboard-metric-note">{note}</div>
     </div>
   )
 }
@@ -409,7 +438,8 @@ function InternetHealth({ data }: { data: DashboardData }) {
 
       <div className="dashboard-wan-footnote">
         Fixed-target ICMP to {wan?.target ?? 'an unavailable target'} measures reachability, not gateway uptime.
-        {' '}Traffic requires an exact default-route interface series key; gaps remain gaps.
+        {' '}Traffic charts appear only when telemetry matches the active default-route interface. Shaded spans are unavailable samples;
+        {' '}trend lines never bridge them.
         {wan?.as_of ? ` Evidence ${wan.freshness === 'fresh' ? 'updated' : 'last observed'} ${agoMilliseconds(wan.as_of)}.` : ''}
       </div>
     </Card>
@@ -758,25 +788,34 @@ export function Dashboard({
                   The feed is partial; open Logs for the complete record.
                 </Banner>
               )}
-              {alerts.slice(0, 8).map((e) => (
-                <div key={e.ID} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
-                  <span
-                    style={{
-                      color:
-                        e.Severity === 'error'
-                          ? 'var(--critical)'
-                          : e.Severity === 'warning'
-                            ? 'var(--warning)'
-                            : 'var(--text-secondary)',
-                      minWidth: 58,
-                    }}
-                  >
-                    {e.Severity}
-                  </span>
-                  <span style={{ flex: 1 }}>{e.Event}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{ago(e.TS)}</span>
-                </div>
-              ))}
+              {alerts.slice(0, 8).map((e) => {
+                const condition = ipv6RACondition(e)
+                return (
+                  <div key={e.ID} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+                    <span
+                      style={{
+                        color:
+                          e.Severity === 'error'
+                            ? 'var(--critical)'
+                            : e.Severity === 'warning'
+                              ? 'var(--warning)'
+                              : 'var(--text-secondary)',
+                        minWidth: 58,
+                      }}
+                    >
+                      {e.Severity}
+                    </span>
+                    <span style={{ flex: 1 }}>
+                      {eventLabel(e)}
+                      {condition && (
+                        <> · {condition.occurrences.toLocaleString()} occurrence
+                          {condition.occurrences === 1 ? '' : 's'}</>
+                      )}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)' }}>{ago(e.TS)}</span>
+                  </div>
+                )
+              })}
             </div>
           )}
         </Card>

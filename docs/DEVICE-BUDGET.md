@@ -213,8 +213,8 @@ These are memory/query/retention limits, not managed-router work to spend:
 |---|---|
 | raw telemetry | RAM ring only; SQLite receives one transaction of completed 5m rollups |
 | durable metric history | 5m for 14d; 1h for 396d; client query uses 5m through 7d and 1h beyond |
-| OpenWrt log events | 24h, 50,000/device, 100,000 global; decoder 4,096 rows × 4,096-byte messages |
-| controller/audit events | newest 100,000 rows, independently of router-log caps |
+| OpenWrt log events | 24h, 50,000/device, 100,000 global; decoder 4,096 rows × 4,096-byte messages; exact repeated odhcpd IPv6-RA/no-default-route warnings condense per producer epoch |
+| controller/audit events | newest 100,000 rows, independently of router-log caps; all event text plus encoded detail is capped at 64 KiB/row |
 | General event coverage | producer poll once/minute; stale after 3m; missing, observed-empty and retained gaps are distinct |
 | topology | source cadence 15m; current source stale after 31m; closed history/range 31d; 10,000 intervals/response |
 | client incident response | 31d range; 2,000 exact events; 64 paths and 2,048 path visits |

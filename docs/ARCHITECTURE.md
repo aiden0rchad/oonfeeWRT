@@ -683,8 +683,8 @@ never raw samples:
 |---|---|---|
 | 5m avg/min/max/count | 14d | ranges up to 7d |
 | 1h avg/min/max/count | 13mo (396d) | longer ranges |
-| OpenWrt `logd` events | 24h, at most 50,000/device and 100,000 total | General Logs and client incidents |
-| Controller/audit events | newest 100,000 rows | Audit and controller history |
+| OpenWrt `logd` events | 24h, at most 50,000/device and 100,000 total; exact repeated odhcpd IPv6-RA/no-default-route warnings condense per producer epoch without changing warning severity | General Logs and client incidents |
+| Controller/audit events | newest 100,000 rows; every event has a 64 KiB aggregate stored-text/detail limit | Audit and controller history |
 | Closed topology intervals | 31d; active intervals do not expire | current graph and replay |
 | RF scan runs/BSS rows | newest terminal run per `(device_id,radio_key)`; pending/running preserved; BSS cascade | newest explicit scan per radio |
 

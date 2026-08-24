@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,112 @@ func TestLogIngestMarksGapsAndRedactsMessages(t *testing.T) {
 		if strings.Contains(string(blob), "persist-sentinel") || strings.Contains(string(blob), "PRIVATE KEY") {
 			t.Fatalf("durable detail retained secret material: %s", blob)
 		}
+	}
+}
+
+func TestLogIngestClassifiesOnlyTheKnownIPv6RAWarning(t *testing.T) {
+	deviceID := int64(7)
+	correlator := observability.NewAssociationCorrelator()
+	for _, tc := range []struct {
+		name     string
+		priority uint32
+		message  string
+		want     string
+	}{
+		{
+			name: "current OpenWrt wording", priority: 28,
+			message: "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+			want:    store.EventOpenWRTIPv6RANoDefaultRoute,
+		},
+		{
+			name: "alternate OpenWrt wording", priority: 28,
+			message: "odhcpd: No default route present, overriding ra_lifetime!",
+			want:    store.EventOpenWRTIPv6RANoDefaultRoute,
+		},
+		{
+			name: "same words at error priority remain raw", priority: 27,
+			message: "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+			want:    "openwrt.log",
+		},
+		{
+			name: "other odhcpd warning remains raw", priority: 28,
+			message: "odhcpd[81]: unable to send router advertisement",
+			want:    "openwrt.log",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := logStoreEvent(deviceID, 101_000, "boot:81:0", observability.LogEntry{
+				ID: 9, TimeMS: 100_000, Priority: tc.priority, Message: tc.message,
+			}, correlator)
+			if event.Event != tc.want {
+				t.Fatalf("event=%q, want %q", event.Event, tc.want)
+			}
+			if tc.want == store.EventOpenWRTIPv6RANoDefaultRoute {
+				detail := event.Detail.(map[string]any)
+				if event.Severity != "warning" ||
+					event.SourceID != store.EventOpenWRTIPv6RANoDefaultRouteSourceID ||
+					detail["priority"] != uint32(28) ||
+					detail["occurrences"] != 1 || detail["condition"] != "ipv6_ra_no_default_route" ||
+					detail["message"] != tc.message {
+					t.Fatalf("classified event lost source truth: %+v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestLogIngestCoalescingAdvancesAcrossUint32Wrap(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "log wrap condition"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	device := &store.Device{MAC: "02:00:00:00:00:71", Host: "192.0.2.71", Name: "wrap"}
+	if err := d.Store.UpsertDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	epoch := observability.LogEpoch{
+		BootID: "11111111-2222-4333-8444-555555555555", PID: 81,
+	}
+	message := "odhcpd[81]: No default route present, setting ra_lifetime to 0!"
+	row := func(id uint32, at uint64) observability.LogEntry {
+		return observability.LogEntry{ID: id, TimeMS: at, Priority: 28, Message: message}
+	}
+	ingestor := newLogIngestor(d.Store)
+	initial := row(math.MaxUint32-1, 100_000)
+	if err := ingestor.record(ctx, device.ID, time.UnixMilli(101_000), epoch,
+		[]observability.LogEntry{initial}); err != nil {
+		t.Fatal(err)
+	}
+	page := []observability.LogEntry{
+		initial,
+		row(math.MaxUint32, 101_000),
+		row(0, 102_000),
+		row(1, 103_000),
+	}
+	if err := ingestor.record(ctx, device.ID, time.UnixMilli(104_000), epoch, page); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingestor.record(ctx, device.ID, time.UnixMilli(105_000), epoch, page); err != nil {
+		t.Fatal(err)
+	}
+
+	wrappedBoot := (observability.LogCursor{Epoch: epoch, Generation: 1}).SourceBoot()
+	var count int64
+	var lastID string
+	if err := d.Store.SQL().QueryRowContext(ctx, `
+SELECT json_extract(detail_json,'$.occurrences'), json_extract(detail_json,'$.last_source_id')
+  FROM events WHERE event=? AND source_boot=?`,
+		store.EventOpenWRTIPv6RANoDefaultRoute, wrappedBoot).Scan(&count, &lastID); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || lastID != "1" {
+		t.Fatalf("wrapped condition occurrences=%d last_source_id=%q", count, lastID)
+	}
+	cursor, err := d.Store.LoadIngestCursor(ctx, device.ID, openWRTLogSource)
+	if err != nil || cursor.BootID != wrappedBoot || cursor.Cursor != "1:103000" {
+		t.Fatalf("wrapped cursor=%+v err=%v", cursor, err)
 	}
 }
 
