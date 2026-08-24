@@ -136,7 +136,11 @@ func TestViewerMayUseLiveChannel(t *testing.T) {
 
 func TestLiveConnectionDoesNotHoldRestoreOperationLease(t *testing.T) {
 	h, base := liveHarness(t)
-	dialLive(t, h, base)
+	ws := dialLive(t, h, base)
+	send(t, ws, map[string]any{"type": "ping"})
+	if m := recv(t, ws); m["type"] != "pong" {
+		t.Fatalf("ping response = %v", m)
+	}
 	if h.srv.Hub.Connections() != 1 {
 		t.Fatalf("live connections = %d", h.srv.Hub.Connections())
 	}
