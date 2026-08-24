@@ -25,13 +25,6 @@ const metricFreshnessSeconds = 15 * 60
 const metricQueryBoundaryAllowanceSeconds = 5 * 60
 const metricRefreshMilliseconds = 5 * 60 * 1000
 
-const stateColours: Record<RadioChannel['state'], string> = {
-  'in-use': 'var(--accent)',
-  enabled: 'var(--good)',
-  restricted: 'var(--warning)',
-  unknown: 'var(--text-muted)',
-}
-
 const radioID = (deviceID: number, key: string) => `${deviceID}/${key}`
 
 export function Radios() {
@@ -231,7 +224,7 @@ export function Radios() {
       )}
       <Notice
         component="Channel classification"
-        summary="DFS and channel exclusions are unknown here; restricted channels remain labelled Restricted."
+        summary="The controller cannot prove which restricted channels require DFS, so it labels them Restricted rather than guessing."
         closedLabel="More information about channel classification"
         openLabel="Hide channel classification information"
         details={(
@@ -242,31 +235,31 @@ export function Radios() {
         )}
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 10 }}>
+      <div className="radio-stat-grid">
         <Card><Stat label="Radios" value={data == null ? '—' : rows.length} /></Card>
         <Card><Stat label="Known channel plans" value={data == null ? '—' : `${knownPlans}/${rows.length}`} tone={data != null && knownPlans === rows.length ? 'good' : 'warning'} /></Card>
-        <Card><Stat label="Reported channels" value={data == null ? '—' : channels} sub="Restricted is not relabelled as DFS" /></Card>
+        <Card><Stat label="Reported channels" value={data == null ? '—' : channels} sub="DFS status is not inferred." /></Card>
       </div>
 
       <Card title="Channel Plan" actions={(
-        <div aria-label="Channel Plan legend" style={{ display: 'flex', gap: 10, fontSize: 11, color: 'var(--text-secondary)' }}>
+        <div aria-label="Channel Plan legend" className="card-inline-legend">
           {(['in-use', 'enabled', 'restricted', 'unknown'] as const).map((state) => (
             <span key={state} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <i aria-hidden style={{ width: 9, height: 9, borderRadius: 2, background: stateColours[state] }} />
+              <i aria-hidden className="radio-state-mark" data-state={state} />
               {state === 'in-use' ? 'In use' : state[0].toUpperCase() + state.slice(1)}
             </span>
           ))}
         </div>
       )}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+        <div className="radio-plan-filters">
+          <label>
             Access point{' '}
             <select aria-label="Filter by access point" value={deviceFilter} onChange={(e) => setDeviceFilter(e.target.value)}>
               <option value="all">All</option>
               {data?.devices.map((device) => <option key={device.device_id} value={device.device_id}>{device.name}</option>)}
             </select>
           </label>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <label>
             Band{' '}
             <select aria-label="Filter by band" value={bandFilter} onChange={(e) => setBandFilter(e.target.value)}>
               <option value="all">All</option><option value="2g">2.4 GHz</option><option value="5g">5 GHz</option><option value="6g">6 GHz</option>
@@ -276,7 +269,7 @@ export function Radios() {
         {rows.length > 0 ? (
           <div role="list" aria-label={`Channel plan for ${rows.length} radios`} style={{ display: 'grid', gap: 10 }}>
             {rows.map((row) => (
-              <div role="listitem" key={radioID(row.deviceID, row.radio.radio_key)} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
+              <div role="listitem" className="radio-plan-row" key={radioID(row.deviceID, row.radio.radio_key)}>
                 <div style={{ fontSize: 12 }}>
                   <strong>{row.deviceName}</strong><br />
                   <span style={{ color: 'var(--text-secondary)' }}>{row.radio.radio_key} · {bandName(row.radio.band)}</span>
@@ -289,12 +282,15 @@ export function Radios() {
                     {row.radio.channels.map((channel) => (
                       <span
                         role="listitem"
+                        className="radio-channel"
+                        data-state={channel.state}
                         key={`${channel.channel}/${channel.mhz}`}
                         title={channelLabel(channel, true)}
                         aria-label={channelLabel(channel, false)}
-                        style={{ width: 34, height: 28, display: 'inline-grid', placeItems: 'center', borderRadius: 4,
-                          background: stateColours[channel.state], color: channel.state === 'enabled' ? '#07140d' : '#fff', fontSize: 11, fontWeight: 600 }}
-                      >{channel.channel}</span>
+                      >
+                        {channel.channel}
+                        <i aria-hidden className="radio-state-mark" data-state={channel.state} />
+                      </span>
                     ))}
                   </div>
                 ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Channel list unavailable</span>}

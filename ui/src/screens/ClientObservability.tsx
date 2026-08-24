@@ -565,7 +565,7 @@ function viewButtonStyle(active: boolean) {
   return {
     minHeight: 26, padding: '2px 9px', borderRadius: 5, cursor: 'pointer', fontSize: 11,
     border: `1px solid ${active ? 'var(--accent)' : 'var(--border-strong)'}`,
-    color: active ? 'var(--accent)' : 'var(--text-secondary)',
+    color: active ? 'var(--accent-text)' : 'var(--text-secondary)',
     background: active ? 'var(--accent-soft)' : 'var(--surface-2)',
   } as const
 }

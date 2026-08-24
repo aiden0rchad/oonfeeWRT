@@ -287,6 +287,26 @@ func open(ctx context.Context, cfg Config, log *slog.Logger,
 		ln.Close()
 		return nil, fmt.Errorf("daemon: secure database file %s: %w", path, err)
 	}
+	prunedEvents, err := db.PruneEvents(ctx, time.Now(), store.DefaultRetention())
+	if err != nil {
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, fmt.Errorf("daemon: prune retained events at startup: %w", err)
+	}
+	if prunedEvents > 0 {
+		log.Info("pruned retained events at startup", "events", prunedEvents)
+	}
+	compactedEvents, err := db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx)
+	if err != nil {
+		db.Close()
+		d.Keys.Close()
+		ln.Close()
+		return nil, fmt.Errorf("daemon: compact repeated IPv6 RA events at startup: %w", err)
+	}
+	if compactedEvents > 0 {
+		log.Info("condensed repeated IPv6 RA warnings at startup", "events", compactedEvents)
+	}
 	d.Store = db
 	if err := d.recordAppliedRestore(ctx); err != nil {
 		db.Close()

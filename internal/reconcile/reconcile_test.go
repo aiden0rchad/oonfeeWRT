@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -509,6 +510,103 @@ func TestEveryOutcomeIsAudited(t *testing.T) {
 	}
 	if !strings.Contains(string(fmt.Appendf(nil, "%s", e.Detail)), "reverted") {
 		t.Errorf("the detail should record the outcome: %v", e.Detail)
+	}
+}
+
+func TestApplyOutcomeAuditIsBoundedAndSurvivesCallerCancellation(t *testing.T) {
+	r, db := newReconciler(t)
+	dev := device(t, db)
+	huge := strings.Repeat("&", 70<<10)
+	omissions := make([]render.Omission, 64)
+	for i := range omissions {
+		omissions[i] = render.Omission{
+			WLAN: strings.Repeat("<", 1024), Reason: huge,
+			Kind: render.OmissionKind(strings.Repeat(">", 512)),
+		}
+	}
+	if blob, err := json.Marshal(omissions); err != nil {
+		t.Fatal(err)
+	} else if len(blob) <= 64<<10 {
+		t.Fatalf("fixture is only %d bytes; it does not exercise the event cap", len(blob))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res := applyengine.Result{
+		Outcome: applyengine.Applied, Reason: huge, HealthErr: errors.New(huge),
+	}
+	if err := r.logOutcome(ctx, dev.ID,
+		&DevicePlan{Report: render.Report{Omissions: omissions}}, res, errors.New(huge)); err != nil {
+		t.Fatalf("bounded detached audit: %v", err)
+	}
+	events, err := db.DeviceEvents(context.Background(), dev.ID, "config.apply", 1)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("audit events=%+v err=%v", events, err)
+	}
+	raw, ok := events[0].Detail.(json.RawMessage)
+	if !ok {
+		t.Fatalf("audit detail type = %T", events[0].Detail)
+	}
+	if len(raw) >= 64<<10 {
+		t.Fatalf("bounded audit detail is %d bytes", len(raw))
+	}
+	var detail struct {
+		Omissions            []render.Omission `json:"omissions"`
+		OmissionsTotal       int               `json:"omissions_total"`
+		OmissionsTruncated   bool              `json:"omissions_truncated"`
+		ReasonTruncated      bool              `json:"reason_truncated"`
+		ErrorTruncated       bool              `json:"error_truncated"`
+		HealthErrorTruncated bool              `json:"health_error_truncated"`
+	}
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Omissions) != applyAuditMaxOmissions ||
+		detail.OmissionsTotal != len(omissions) || !detail.OmissionsTruncated ||
+		!detail.ReasonTruncated || !detail.ErrorTruncated || !detail.HealthErrorTruncated {
+		t.Fatalf("bounded audit detail = %+v", detail)
+	}
+}
+
+func TestApplyFailsLoudlyWhenOutcomeAuditCannotBeRecorded(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	r, db := newReconciler(t)
+	dev := device(t, db)
+	p, err := r.PlanDevice(ctx, c, siteWLAN(dev.ID, 112), model.Device{ID: dev.ID}, caps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Empty() || p.Blocked() {
+		t.Fatalf("fixture plan empty=%v blocked=%v", p.Empty(), p.Blocked())
+	}
+	for range 16 {
+		p.Report.Omissions = append(p.Report.Omissions, render.Omission{
+			WLAN: "large-audit-fixture", Reason: strings.Repeat("&", 1024),
+		})
+	}
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TRIGGER reject_apply_audit
+BEFORE INSERT ON events WHEN NEW.event = 'config.apply' BEGIN
+  SELECT RAISE(ABORT, 'synthetic apply audit failure');
+END`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := r.Apply(ctx, c, dev.ID, p,
+		func(context.Context, *ubus.Client) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "synthetic apply audit failure") {
+		t.Fatalf("apply error = %v", err)
+	}
+	if res.Outcome != applyengine.Applied ||
+		!strings.Contains(res.Reason, "device outcome was applied") ||
+		!strings.Contains(res.Reason, "apply-outcome audit recording failed") {
+		t.Fatalf("apply result = %+v", res)
+	}
+	if owned, err := db.OwnedSections(ctx, dev.ID); err != nil || len(owned) == 0 {
+		t.Fatalf("confirmed router outcome was lost: owned=%+v err=%v", owned, err)
+	}
+	if events, err := db.DeviceEvents(ctx, dev.ID, "config.apply", 1); err != nil || len(events) != 0 {
+		t.Fatalf("rejected audit unexpectedly persisted: events=%+v err=%v", events, err)
 	}
 }
 

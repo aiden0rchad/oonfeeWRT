@@ -229,8 +229,9 @@ func (l *logIngestor) cursor(ctx context.Context, deviceID int64) (observability
 
 func logStoreEvent(deviceID, ingestedAt int64, sourceBoot string,
 	row observability.LogEntry, correlator *observability.AssociationCorrelator) store.Event {
+	message := observability.SanitizeLogMessage(row.Message)
 	detail := map[string]any{
-		"message":        observability.SanitizeLogMessage(row.Message),
+		"message":        message,
 		"facility":       row.Facility(),
 		"priority":       row.Priority,
 		"source_time_ms": row.TimeMS,
@@ -246,6 +247,19 @@ func logStoreEvent(deviceID, ingestedAt int64, sourceBoot string,
 		SourceID:   row.SourceID(),
 		SourceBoot: sourceBoot,
 		IngestedAt: ingestedAt,
+	}
+	if store.IsOpenWRTIPv6RANoDefaultRouteLog(row.Priority, message) {
+		event.Event = store.EventOpenWRTIPv6RANoDefaultRoute
+		event.SourceID = store.EventOpenWRTIPv6RANoDefaultRouteSourceID
+		detail["condition"] = "ipv6_ra_no_default_route"
+		detail["occurrences"] = 1
+		detail["first_source_time_ms"] = row.TimeMS
+		detail["last_source_time_ms"] = row.TimeMS
+		detail["first_source_id"] = row.SourceID()
+		detail["last_source_id"] = row.SourceID()
+		detail["address_family"] = "ipv6"
+		detail["router_advertisement_lifetime"] = 0
+		return event
 	}
 	wireless, ok := observability.ParseWirelessLog(row.Message)
 	if !ok {

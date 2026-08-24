@@ -310,7 +310,7 @@ export function App() {
                 setSigningOut(false)
               }
             }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 12 }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-text)', fontSize: 12 }}
           >
             {signingOut ? 'Signing out…' : 'Sign out'}
           </button>

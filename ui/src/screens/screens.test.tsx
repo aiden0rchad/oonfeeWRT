@@ -4402,6 +4402,41 @@ describe('Logs', () => {
     expect(screen.queryByText(/will not rewrite/)).toBeNull()
   })
 
+  it('explains and condenses the known IPv6 router-advertisement condition', async () => {
+	api.devices.mockResolvedValue({ devices: [] })
+	api.events.mockResolvedValue({
+	  events: [ev({
+		Event: 'openwrt.ipv6_ra_no_default_route',
+		Severity: 'warning',
+		Source: 'openwrt-logd',
+		Detail: {
+		  message: 'odhcpd[81]: No default route present, setting ra_lifetime to 0!',
+		  priority: 28,
+		  occurrences: 37,
+		},
+	  })],
+	  total: 1,
+	  limit: 100,
+	  scope: 'general',
+	  next_before: null,
+	  facets: { category: [], severity: [] },
+	  coverage: { complete: true, expected_devices: 1, observed_devices: 1, gaps: [] },
+	})
+
+	render(<Logs />)
+
+	expect(await screen.findByText(/IPv6 router advertisements have no usable default route · 37 occurrences/)).toBeTruthy()
+	const notice = screen.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
+	expect(within(notice).getByRole('status').textContent ?? '').toMatch(
+	  /does not indicate an IPv4 outage/i,
+	)
+	const toggle = within(notice).getByText('More information about this IPv6 warning')
+	const details = toggle.closest('details') as HTMLDetailsElement
+	expect(details.open).toBe(false)
+	fireEvent.click(toggle)
+	expect(within(notice).getByText(/37 reported occurrences.*1 condition record/i)).toBeTruthy()
+  })
+
   it('never renders an out-of-order response under newer filters', async () => {
     vi.useFakeTimers()
     api.devices.mockResolvedValue({ devices: [] })
@@ -4813,6 +4848,23 @@ describe('Dashboard', () => {
     expect(screen.queryByText('routine.activity')).toBeNull()
     expect(screen.queryByText('invalid.alert')).toBeNull()
     expect(screen.getByText(/1 alert row had an unrecognized severity/)).toBeTruthy()
+  })
+
+  it('renders the coalesced IPv6 condition without hiding its warning severity', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      recent_alert_events: [{
+        ID: 44,
+        TS: Date.now() / 1000,
+        Severity: 'warning',
+        Event: 'openwrt.ipv6_ra_no_default_route',
+        Detail: { occurrences: 220 },
+      }],
+    } as never} />)
+
+    const row = screen.getByText(/IPv6 router advertisements have no usable default route/).parentElement
+    expect(row?.textContent).toMatch(/warning.*220 occurrences/i)
   })
 
   it('distinguishes a confirmed-empty alert feed from unavailable evidence', async () => {

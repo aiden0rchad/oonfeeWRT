@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -249,6 +250,82 @@ func downgradeFixtureToV15(t *testing.T, db *DB) {
 		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("prepare v15 fixture (%s): %v", stmt, err)
 		}
+	}
+}
+
+func TestAppendEventBoundsAggregateEncodedStorage(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	event := Event{Category: "system", Severity: "info", Source: "controller"}
+	_, detail, err := normalizeEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := maxEncodedEventBytes - len(detail)
+	for _, value := range []string{event.Category, event.Severity, event.Source} {
+		remaining -= len(value)
+	}
+	event.Event = strings.Repeat("x", remaining)
+	if inserted, err := db.AppendEvent(ctx, event); err != nil || !inserted {
+		t.Fatalf("boundary event inserted=%v err=%v", inserted, err)
+	}
+
+	over := event
+	over.Event += "x"
+	if inserted, err := db.AppendEvent(ctx, over); inserted || err == nil ||
+		err.Error() != "store: event exceeds 65536-byte encoded storage limit" {
+		t.Fatalf("oversized event inserted=%v err=%v", inserted, err)
+	}
+	encodedDetail := Event{Category: "system", Severity: "info", Event: "encoded",
+		Detail: strings.Repeat("&", maxEncodedEventBytes/6)}
+	if _, err := db.AppendEvent(ctx, encodedDetail); err == nil ||
+		err.Error() != "store: event exceeds 65536-byte encoded storage limit" {
+		t.Fatalf("escaped oversized detail err=%v", err)
+	}
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("stored events=%d, want only the exact-boundary row", count)
+	}
+}
+
+func TestAppendEventsAndCursorRejectsOversizedBatchAtomically(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	cursor := IngestCursor{DeviceID: device.ID, Source: "logd",
+		BootID: "boot:pid:0", Cursor: "0:1000", UpdatedAt: 1000}
+	if inserted, err := db.AppendEventsAndCursor(ctx, nil, cursor); err != nil || inserted != 0 {
+		t.Fatalf("seed cursor inserted=%d err=%v", inserted, err)
+	}
+	next := cursor
+	next.Cursor, next.UpdatedAt = "2:2000", 2000
+	events := []Event{
+		{TS: 1, DeviceID: &device.ID, Category: "system", Severity: "info",
+			Event: "valid", Source: "logd", SourceBoot: cursor.BootID, SourceID: "1"},
+		{TS: 2, DeviceID: &device.ID, Category: "system", Severity: "info",
+			Event: strings.Repeat("x", maxEncodedEventBytes), Source: "logd",
+			SourceBoot: cursor.BootID, SourceID: "2"},
+	}
+	if inserted, err := db.AppendEventsAndCursor(ctx, events, next); inserted != 0 || err == nil ||
+		!strings.Contains(err.Error(), "store: ingest event 1: store: event exceeds 65536-byte encoded storage limit") {
+		t.Fatalf("oversized batch inserted=%d err=%v", inserted, err)
+	}
+	got, err := db.LoadIngestCursor(ctx, device.ID, cursor.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cursor != cursor.Cursor {
+		t.Fatalf("cursor advanced to %q, want %q", got.Cursor, cursor.Cursor)
+	}
+	var count int
+	if err := db.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("oversized batch stored %d rows", count)
 	}
 }
 
@@ -552,6 +629,486 @@ func TestAppendEventsAndCursorIsAtomicBoundedAndReplaySafe(t *testing.T) {
 	}
 	if _, err := db.AppendEventsAndCursor(ctx, make([]Event, 513), next); err == nil {
 		t.Fatal("batch larger than 512 was accepted")
+	}
+}
+
+func TestAppendEventsAndCursorCoalescesKnownIPv6RAWarningPerProducerEpoch(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	boot := "boot:81:0"
+	cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd",
+		BootID: boot, Cursor: "11:110000", UpdatedAt: 111_000}
+	condition := func(id, sourceTime uint64) Event {
+		return Event{
+			TS: int64(sourceTime / 1000), DeviceID: &device.ID,
+			Category: "system", Severity: "warning",
+			Event:  EventOpenWRTIPv6RANoDefaultRoute,
+			Source: "openwrt-logd", SourceBoot: boot, SourceID: EventOpenWRTIPv6RANoDefaultRouteSourceID,
+			IngestedAt: int64(sourceTime + 1_000),
+			Detail: map[string]any{
+				"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+				"priority": uint32(28), "occurrences": 1,
+				"source_time_ms": sourceTime,
+				"condition":      "ipv6_ra_no_default_route", "address_family": "ipv6",
+				"router_advertisement_lifetime": 0,
+				"first_source_time_ms":          sourceTime, "last_source_time_ms": sourceTime,
+				"first_source_id": fmt.Sprint(id), "last_source_id": fmt.Sprint(id),
+			},
+		}
+	}
+	inserted, err := db.AppendEventsAndCursor(ctx,
+		[]Event{condition(10, 100_000), condition(11, 110_000)}, cursor)
+	if err != nil || inserted != 1 {
+		t.Fatalf("condition batch inserted=%d err=%v", inserted, err)
+	}
+	events, err := db.QueryEventsKeyset(ctx, EventQuery{Scope: "general", Limit: 10})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("events=%+v err=%v", events, err)
+	}
+	got := events[0]
+	if got.Event != EventOpenWRTIPv6RANoDefaultRoute ||
+		got.SourceID != EventOpenWRTIPv6RANoDefaultRouteSourceID || got.TS != 110 {
+		t.Fatalf("condition row=%+v", got)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(got.Detail.(json.RawMessage), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["occurrences"] != float64(2) || detail["first_source_id"] != "10" ||
+		detail["last_source_id"] != "11" || detail["first_source_time_ms"] != float64(100_000) ||
+		detail["last_source_time_ms"] != float64(110_000) {
+		t.Fatalf("condition detail=%+v", detail)
+	}
+	if inserted, err = db.AppendEventsAndCursor(ctx,
+		[]Event{condition(10, 100_000), condition(11, 110_000)}, cursor); err != nil || inserted != 0 {
+		t.Fatalf("condition replay inserted=%d err=%v", inserted, err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT json_extract(detail_json,'$.occurrences') FROM events WHERE event=?`,
+		EventOpenWRTIPv6RANoDefaultRoute).Scan(&inserted); err != nil || inserted != 2 {
+		t.Fatalf("condition replay occurrences=%d err=%v", inserted, err)
+	}
+
+	nextBoot := cursor
+	nextBoot.BootID, nextBoot.Cursor, nextBoot.UpdatedAt = "boot:82:0", "1:120000", 121_000
+	third := condition(1, 120_000)
+	third.SourceBoot = nextBoot.BootID
+	if inserted, err = db.AppendEventsAndCursor(ctx, []Event{third}, nextBoot); err != nil || inserted != 1 {
+		t.Fatalf("new epoch inserted=%d err=%v", inserted, err)
+	}
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE event=?`, EventOpenWRTIPv6RANoDefaultRoute).Scan(&inserted); err != nil || inserted != 2 {
+		t.Fatalf("condition rows=%d err=%v", inserted, err)
+	}
+}
+
+func TestAppendEventsAndCursorIPv6RAWrapReplayIsIdempotent(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	boot := "boot:81:1"
+	cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd",
+		BootID: boot, Cursor: "1:103000", UpdatedAt: 104_000}
+	condition := func(id uint64, sourceTime int64) Event {
+		return Event{
+			TS: sourceTime / 1000, IngestedAt: sourceTime + 1_000, DeviceID: &device.ID,
+			Category: "system", Severity: "warning",
+			Event: EventOpenWRTIPv6RANoDefaultRoute, Source: "openwrt-logd",
+			SourceBoot: boot, SourceID: EventOpenWRTIPv6RANoDefaultRouteSourceID,
+			Detail: map[string]any{
+				"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+				"priority": uint32(28), "occurrences": 1,
+				"source_time_ms": sourceTime,
+				"condition":      "ipv6_ra_no_default_route", "address_family": "ipv6",
+				"router_advertisement_lifetime": 0,
+				"first_source_time_ms":          sourceTime, "last_source_time_ms": sourceTime,
+				"first_source_id": fmt.Sprint(id), "last_source_id": fmt.Sprint(id),
+			},
+		}
+	}
+	page := []Event{
+		condition(uint64(^uint32(0)), 101_000),
+		condition(0, 102_000),
+		condition(1, 103_000),
+	}
+	if inserted, err := db.AppendEventsAndCursor(ctx, page, cursor); err != nil || inserted != 1 {
+		t.Fatalf("first wrap page inserted=%d err=%v", inserted, err)
+	}
+	if inserted, err := db.AppendEventsAndCursor(ctx, page, cursor); err != nil || inserted != 0 {
+		t.Fatalf("replayed wrap page inserted=%d err=%v", inserted, err)
+	}
+	var occurrences int64
+	var lastID string
+	if err := db.SQL().QueryRowContext(ctx, `
+SELECT json_extract(detail_json,'$.occurrences'), json_extract(detail_json,'$.last_source_id')
+  FROM events WHERE event=? AND source_boot=?`,
+		EventOpenWRTIPv6RANoDefaultRoute, boot).Scan(&occurrences, &lastID); err != nil {
+		t.Fatal(err)
+	}
+	if occurrences != 3 || lastID != "1" {
+		t.Fatalf("wrap replay occurrences=%d last_source_id=%q", occurrences, lastID)
+	}
+	got, err := db.LoadIngestCursor(ctx, device.ID, "openwrt-logd")
+	if err != nil || got.Cursor != cursor.Cursor || got.BootID != cursor.BootID {
+		t.Fatalf("wrap replay cursor=%+v err=%v", got, err)
+	}
+}
+
+func TestCompactLegacyIPv6RAWarningsPreservesEvidenceAndDistinctAlerts(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	boot := "boot:81:0"
+	message := "odhcpd[81]: No default route present, setting ra_lifetime to 0!"
+	raw := func(id uint64, text string) Event {
+		return Event{
+			TS: int64(100 + id), IngestedAt: int64(100_000 + id), DeviceID: &device.ID,
+			Category: "system", Severity: "warning", Event: "openwrt.log",
+			Source: "openwrt-logd", SourceBoot: boot, SourceID: fmt.Sprint(id),
+			Detail: map[string]any{
+				"message": text, "facility": uint32(3), "priority": uint32(28),
+				"source_time_ms": int64(100_000 + id),
+			},
+		}
+	}
+	events := make([]Event, 0, 10)
+	for id := uint64(1); id <= 9; id++ {
+		events = append(events, raw(id, message))
+	}
+	events = append(events, raw(10, "odhcpd[81]: unable to send router advertisement"))
+	cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd", BootID: boot,
+		Cursor: "10:100010", UpdatedAt: 101_000}
+	if inserted, err := db.AppendEventsAndCursor(ctx, events, cursor); err != nil || inserted != 10 {
+		t.Fatalf("seed legacy events inserted=%d err=%v", inserted, err)
+	}
+	if err := db.LogEvent(ctx, Event{TS: 50, Category: "system", Severity: "error",
+		Event: "distinct.controller.alert"}); err != nil {
+		t.Fatal(err)
+	}
+
+	compacted, err := db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx)
+	if err != nil || compacted != 9 {
+		t.Fatalf("compacted=%d err=%v", compacted, err)
+	}
+	alerts, err := db.QueryRecentGeneralAlerts(ctx, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 3 {
+		t.Fatalf("alerts=%+v, want condition, near-match and distinct alert", alerts)
+	}
+	var condition Event
+	for _, event := range alerts {
+		if event.Event == EventOpenWRTIPv6RANoDefaultRoute {
+			condition = event
+		}
+	}
+	if condition.ID == 0 || condition.SourceID != EventOpenWRTIPv6RANoDefaultRouteSourceID {
+		t.Fatalf("condition=%+v", condition)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(condition.Detail.(json.RawMessage), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail["occurrences"] != float64(9) || detail["first_source_id"] != "1" ||
+		detail["last_source_id"] != "9" || detail["message"] != message {
+		t.Fatalf("condition detail=%+v", detail)
+	}
+	var rawRows int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE source='openwrt-logd' AND event='openwrt.log'`).Scan(&rawRows); err != nil || rawRows != 1 {
+		t.Fatalf("raw rows=%d err=%v, want untouched near-match", rawRows, err)
+	}
+	if compacted, err = db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx); err != nil || compacted != 0 {
+		t.Fatalf("idempotent compacted=%d err=%v", compacted, err)
+	}
+
+	next := cursor
+	next.Cursor, next.UpdatedAt = "11:100011", 102_000
+	if inserted, err := db.AppendEventsAndCursor(ctx, []Event{raw(11, message)}, next); err != nil || inserted != 1 {
+		t.Fatalf("later legacy event inserted=%d err=%v", inserted, err)
+	}
+	if compacted, err = db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx); err != nil || compacted != 1 {
+		t.Fatalf("merged compacted=%d err=%v", compacted, err)
+	}
+	if err := db.SQL().QueryRowContext(ctx, `SELECT json_extract(detail_json,'$.occurrences')
+FROM events WHERE event=?`, EventOpenWRTIPv6RANoDefaultRoute).Scan(&compacted); err != nil || compacted != 10 {
+		t.Fatalf("merged occurrences=%d err=%v", compacted, err)
+	}
+}
+
+func TestIPv6RAConditionCorruptionOrGrowthCannotAdvanceCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *DB)
+	}{
+		{
+			name: "missing evidence",
+			mutate: func(t *testing.T, db *DB) {
+				if _, err := db.SQL().Exec(`UPDATE events SET detail_json='{}' WHERE event=?`,
+					EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "noncanonical source id",
+			mutate: func(t *testing.T, db *DB) {
+				if _, err := db.SQL().Exec(`UPDATE events SET detail_json=json_set(
+detail_json,'$.last_source_id','01') WHERE event=?`, EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "occurrence overflow",
+			mutate: func(t *testing.T, db *DB) {
+				if _, err := db.SQL().Exec(`UPDATE events SET detail_json=json_set(
+detail_json,'$.occurrences',?) WHERE event=?`, int64(math.MaxInt64),
+					EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := open(t)
+			ctx := context.Background()
+			device := addObservationDevice(t, db)
+			boot := "boot:81:0"
+			firstCursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd",
+				BootID: boot, Cursor: "1:100000", UpdatedAt: 101_000}
+			first := testIPv6RAConditionEvent(device.ID, boot, 1, 100_000)
+			if inserted, err := db.AppendEventsAndCursor(ctx, []Event{first}, firstCursor); err != nil || inserted != 1 {
+				t.Fatalf("first inserted=%d err=%v", inserted, err)
+			}
+			tc.mutate(t, db)
+			var before string
+			if err := db.SQL().QueryRow(`SELECT detail_json FROM events WHERE event=?`,
+				EventOpenWRTIPv6RANoDefaultRoute).Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+
+			nextCursor := firstCursor
+			nextCursor.Cursor, nextCursor.UpdatedAt = "2:110000", 111_000
+			if _, err := db.AppendEventsAndCursor(ctx,
+				[]Event{testIPv6RAConditionEvent(device.ID, boot, 2, 110_000)}, nextCursor); err == nil {
+				t.Fatal("corrupt condition advanced without an error")
+			}
+			got, err := db.LoadIngestCursor(ctx, device.ID, "openwrt-logd")
+			if err != nil || got.Cursor != firstCursor.Cursor {
+				t.Fatalf("cursor=%+v err=%v", got, err)
+			}
+			var after string
+			if err := db.SQL().QueryRow(`SELECT detail_json FROM events WHERE event=?`,
+				EventOpenWRTIPv6RANoDefaultRoute).Scan(&after); err != nil || after != before {
+				t.Fatalf("condition changed=%v err=%v", after != before, err)
+			}
+		})
+	}
+}
+
+func TestIPv6RAConditionCannotGrowPastEncodedLimit(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	boot := "boot:81:0"
+	event := testIPv6RAConditionEvent(device.ID, boot, 1, 100_000)
+	detail := event.Detail.(map[string]any)
+	detail["padding"] = ""
+	normalized, encoded, err := normalizeEvent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := 0
+	for _, value := range []string{
+		normalized.Category, normalized.Severity, normalized.Event, normalized.Source,
+		normalized.SourceID, normalized.SourceBoot, normalized.ClientMAC, normalized.Action,
+		normalized.Direction, normalized.InIface, normalized.OutIface, normalized.SrcIP,
+		normalized.DstIP, normalized.ZoneIn, normalized.ZoneOut,
+	} {
+		fixed += len(value)
+	}
+	padding := maxEncodedEventBytes - fixed - len(encoded)
+	if padding <= 0 {
+		t.Fatalf("invalid padding target=%d", padding)
+	}
+	detail["padding"] = strings.Repeat("x", padding)
+	if _, encoded, err = normalizeEvent(event); err != nil || fixed+len(encoded) != maxEncodedEventBytes {
+		t.Fatalf("boundary detail bytes=%d fixed=%d err=%v", len(encoded), fixed, err)
+	}
+	cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd",
+		BootID: boot, Cursor: "1:100000", UpdatedAt: 101_000}
+	if inserted, err := db.AppendEventsAndCursor(ctx, []Event{event}, cursor); err != nil || inserted != 1 {
+		t.Fatalf("boundary inserted=%d err=%v", inserted, err)
+	}
+	if _, err := db.SQL().Exec(`UPDATE events SET detail_json=json_set(
+detail_json,'$.occurrences',9) WHERE event=?`, EventOpenWRTIPv6RANoDefaultRoute); err != nil {
+		t.Fatal(err)
+	}
+	next := cursor
+	next.Cursor, next.UpdatedAt = "2:110000", 111_000
+	if _, err := db.AppendEventsAndCursor(ctx,
+		[]Event{testIPv6RAConditionEvent(device.ID, boot, 2, 110_000)}, next); err == nil ||
+		!strings.Contains(err.Error(), "encoded storage limit") {
+		t.Fatalf("growth error=%v", err)
+	}
+	got, err := db.LoadIngestCursor(ctx, device.ID, "openwrt-logd")
+	if err != nil || got.Cursor != cursor.Cursor {
+		t.Fatalf("cursor=%+v err=%v", got, err)
+	}
+}
+
+func TestIPv6RALegacyCompactionLimitsArePreflightOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		limits legacyIPv6RACompactionLimits
+		want   string
+	}{
+		{name: "events", limits: legacyIPv6RACompactionLimits{events: 2, groups: 10, bytes: 1 << 20}, want: "exceeds 2 events"},
+		{name: "groups", limits: legacyIPv6RACompactionLimits{events: 10, groups: 2, bytes: 1 << 20}, want: "exceeds 2 producer groups"},
+		{name: "bytes", limits: legacyIPv6RACompactionLimits{events: 10, groups: 10, bytes: 10}, want: "exceeds 10 input bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := open(t)
+			ctx := context.Background()
+			device := addObservationDevice(t, db)
+			for i := 1; i <= 3; i++ {
+				event := testLegacyIPv6RAEvent(device.ID, fmt.Sprintf("boot:%d:0", i), 1,
+					int64(100_000+i))
+				if _, err := db.AppendEvent(ctx, event); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.compactOpenWRTIPv6RANoDefaultRouteEvents(ctx, tc.limits); err == nil ||
+				!strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("limit error=%v", err)
+			}
+			var raw, conditions int
+			if err := db.SQL().QueryRow(`SELECT
+SUM(CASE WHEN event='openwrt.log' THEN 1 ELSE 0 END),
+SUM(CASE WHEN event=? THEN 1 ELSE 0 END) FROM events`,
+				EventOpenWRTIPv6RANoDefaultRoute).Scan(&raw, &conditions); err != nil || raw != 3 || conditions != 0 {
+				t.Fatalf("preflight mutated raw=%d conditions=%d err=%v", raw, conditions, err)
+			}
+		})
+	}
+}
+
+func TestIPv6RALegacyCompactionLeavesInvalidSourceTimesRaw(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	device := addObservationDevice(t, db)
+	boot := "boot:81:invalid-time"
+	for i, sourceTime := range []int64{0, -1} {
+		if _, err := db.AppendEvent(ctx,
+			testLegacyIPv6RAEvent(device.ID, boot, uint64(i+1), sourceTime)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if compacted, err := db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx); err != nil || compacted != 0 {
+		t.Fatalf("compacted=%d err=%v", compacted, err)
+	}
+	var raw, conditions int
+	if err := db.SQL().QueryRow(`SELECT
+SUM(CASE WHEN event='openwrt.log' THEN 1 ELSE 0 END),
+SUM(CASE WHEN event=? THEN 1 ELSE 0 END) FROM events`,
+		EventOpenWRTIPv6RANoDefaultRoute).Scan(&raw, &conditions); err != nil || raw != 2 || conditions != 0 {
+		t.Fatalf("raw=%d conditions=%d err=%v", raw, conditions, err)
+	}
+
+	cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd", BootID: boot,
+		Cursor: "3:100000", UpdatedAt: 101_000}
+	if inserted, err := db.AppendEventsAndCursor(ctx,
+		[]Event{testIPv6RAConditionEvent(device.ID, boot, 3, 100_000)}, cursor); err != nil || inserted != 1 {
+		t.Fatalf("valid condition inserted=%d err=%v", inserted, err)
+	}
+	next := cursor
+	next.Cursor, next.UpdatedAt = "4:110000", 111_000
+	if inserted, err := db.AppendEventsAndCursor(ctx,
+		[]Event{testIPv6RAConditionEvent(device.ID, boot, 4, 110_000)}, next); err != nil || inserted != 0 {
+		t.Fatalf("valid condition update inserted=%d err=%v", inserted, err)
+	}
+	var occurrences int64
+	if err := db.SQL().QueryRow(`SELECT json_extract(detail_json,'$.occurrences')
+FROM events WHERE event=?`, EventOpenWRTIPv6RANoDefaultRoute).Scan(&occurrences); err != nil || occurrences != 2 {
+		t.Fatalf("occurrences=%d err=%v", occurrences, err)
+	}
+}
+
+func TestIPv6RALegacyCompactionSkipsReplayAndAcceptsWrapSuffix(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		existingID uint64
+		rawIDs     []uint64
+		wantCount  int64
+		wantLast   string
+	}{
+		{name: "replay then forward", existingID: 1,
+			rawIDs: []uint64{math.MaxUint32, 0, 1, 2}, wantCount: 2, wantLast: "2"},
+		{name: "forward wrap", existingID: math.MaxUint32,
+			rawIDs: []uint64{0, 1}, wantCount: 3, wantLast: "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := open(t)
+			ctx := context.Background()
+			device := addObservationDevice(t, db)
+			boot := "boot:81:1"
+			cursor := IngestCursor{DeviceID: device.ID, Source: "openwrt-logd", BootID: boot,
+				Cursor: fmt.Sprintf("%d:100000", tc.existingID), UpdatedAt: 101_000}
+			if inserted, err := db.AppendEventsAndCursor(ctx,
+				[]Event{testIPv6RAConditionEvent(device.ID, boot, tc.existingID, 100_000)}, cursor); err != nil || inserted != 1 {
+				t.Fatalf("summary inserted=%d err=%v", inserted, err)
+			}
+			for i, id := range tc.rawIDs {
+				if _, err := db.AppendEvent(ctx, testLegacyIPv6RAEvent(device.ID, boot, id,
+					int64(110_000+i))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if compacted, err := db.CompactOpenWRTIPv6RANoDefaultRouteEvents(ctx); err != nil ||
+				compacted != int64(len(tc.rawIDs)) {
+				t.Fatalf("compacted=%d err=%v", compacted, err)
+			}
+			var count int64
+			var last string
+			if err := db.SQL().QueryRow(`SELECT json_extract(detail_json,'$.occurrences'),
+json_extract(detail_json,'$.last_source_id') FROM events WHERE event=?`,
+				EventOpenWRTIPv6RANoDefaultRoute).Scan(&count, &last); err != nil ||
+				count != tc.wantCount || last != tc.wantLast {
+				t.Fatalf("condition count=%d last=%q err=%v", count, last, err)
+			}
+		})
+	}
+}
+
+func testIPv6RAConditionEvent(deviceID int64, boot string, id uint64, sourceTime int64) Event {
+	return Event{
+		TS: sourceTime / 1000, IngestedAt: sourceTime + 1_000, DeviceID: &deviceID,
+		Category: "system", Severity: "warning",
+		Event: EventOpenWRTIPv6RANoDefaultRoute, Source: "openwrt-logd",
+		SourceBoot: boot, SourceID: EventOpenWRTIPv6RANoDefaultRouteSourceID,
+		Detail: map[string]any{
+			"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+			"facility": uint32(3), "priority": uint32(28), "source_time_ms": sourceTime,
+			"condition": "ipv6_ra_no_default_route", "occurrences": 1,
+			"first_source_time_ms": sourceTime, "last_source_time_ms": sourceTime,
+			"first_source_id": fmt.Sprint(id), "last_source_id": fmt.Sprint(id),
+			"address_family": "ipv6", "router_advertisement_lifetime": 0,
+		},
+	}
+}
+
+func testLegacyIPv6RAEvent(deviceID int64, boot string, id uint64, sourceTime int64) Event {
+	return Event{
+		TS: sourceTime / 1000, IngestedAt: sourceTime + 1_000, DeviceID: &deviceID,
+		Category: "system", Severity: "warning", Event: "openwrt.log",
+		Source: "openwrt-logd", SourceBoot: boot, SourceID: fmt.Sprint(id),
+		Detail: map[string]any{
+			"message":  "odhcpd[81]: No default route present, setting ra_lifetime to 0!",
+			"facility": uint32(3), "priority": uint32(28), "source_time_ms": sourceTime,
+		},
 	}
 }
 

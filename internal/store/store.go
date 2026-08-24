@@ -1295,6 +1295,9 @@ func (db *DB) ForgetOwned(ctx context.Context, deviceID int64) error {
 	return err
 }
 
+// maxEncodedEventBytes covers every text column, including encoded detail JSON.
+const maxEncodedEventBytes = 64 << 10
+
 // Event is an audit or telemetry event.
 type Event struct {
 	ID         int64
@@ -1321,6 +1324,15 @@ type Event struct {
 	ZoneOut    string
 	PolicyID   *int64
 }
+
+// EventOpenWRTIPv6RANoDefaultRoute is the durable condition emitted when
+// odhcpd advertises a zero router lifetime because it cannot find a usable
+// IPv6 default route. The source warning remains a warning; only identical
+// repeats from one router-log epoch are condensed.
+const (
+	EventOpenWRTIPv6RANoDefaultRoute         = "openwrt.ipv6_ra_no_default_route"
+	EventOpenWRTIPv6RANoDefaultRouteSourceID = "condition:ipv6-ra-no-default-route"
+)
 
 // LogEvent appends to the event log. Every apply outcome lands here, including
 // the Unknown one — especially that one.
@@ -1394,7 +1406,29 @@ func normalizeEvent(e Event) (Event, string, error) {
 		}
 		detail = string(blob)
 	}
+	if !eventFitsEncodedLimit(e, detail) {
+		return e, "", fmt.Errorf("store: event exceeds %d-byte encoded storage limit",
+			maxEncodedEventBytes)
+	}
 	return e, detail, nil
+}
+
+func eventFitsEncodedLimit(e Event, detail string) bool {
+	if len(detail) > maxEncodedEventBytes {
+		return false
+	}
+	remaining := maxEncodedEventBytes - len(detail)
+	for _, value := range []string{
+		e.Category, e.Severity, e.Event, e.Source, e.SourceID, e.SourceBoot,
+		e.ClientMAC, e.Action, e.Direction, e.InIface, e.OutIface,
+		e.SrcIP, e.DstIP, e.ZoneIn, e.ZoneOut,
+	} {
+		if len(value) > remaining {
+			return false
+		}
+		remaining -= len(value)
+	}
+	return true
 }
 
 func eventInsertArgs(e Event, detail string) []any {
@@ -1455,6 +1489,25 @@ func (db *DB) AppendEventsAndCursor(ctx context.Context, events []Event,
 	}
 	defer stmt.Close()
 	for i, event := range prepared {
+		condition := event.event.Source == "openwrt-logd" && event.event.Severity == "warning" &&
+			event.event.Event == EventOpenWRTIPv6RANoDefaultRoute &&
+			event.event.SourceID == EventOpenWRTIPv6RANoDefaultRouteSourceID
+		if condition {
+			detail, err := decodeIPv6RAConditionDetail([]byte(event.detail))
+			if err != nil || detail.occurrences != 1 {
+				if err == nil {
+					err = errors.New("store: new IPv6 RA condition must represent one occurrence")
+				}
+				return 0, fmt.Errorf("store: ingest event %d: %w", i, err)
+			}
+			updated, err := coalesceOpenWRTIPv6RAEvent(ctx, tx, event.event, event.detail)
+			if err != nil {
+				return 0, fmt.Errorf("store: ingest event %d: %w", i, err)
+			}
+			if updated {
+				continue
+			}
+		}
 		res, err := stmt.ExecContext(ctx, eventInsertArgs(event.event, event.detail)...)
 		if err != nil {
 			return 0, fmt.Errorf("store: ingest event %d: %w", i, err)
@@ -1462,6 +1515,9 @@ func (db *DB) AppendEventsAndCursor(ctx context.Context, events []Event,
 		added, err := eventInsertResult(res)
 		if err != nil {
 			return 0, err
+		}
+		if condition && !added {
+			return 0, fmt.Errorf("store: ingest event %d: IPv6 RA condition identity conflicted", i)
 		}
 		if added {
 			inserted++

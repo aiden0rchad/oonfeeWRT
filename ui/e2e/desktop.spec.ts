@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 const dashboard = {
   devices: { total: 2, online: 2, offline: 0, pending: 0, unknown: 0 },
@@ -71,6 +71,104 @@ const speedTests = {
   },
 }
 
+const clientPage = {
+  clients: [{
+    mac: '02:00:00:00:00:01',
+    name: 'Fixture phone',
+    ipv4: '192.168.1.20',
+    first_seen: 1_787_999_000,
+    last_seen: 1_788_000_000,
+    blocked: false,
+    connection: 'wireless',
+    online: true,
+    signal: -55,
+    device_id: 1,
+    scope: 'local',
+  }],
+  total: 1,
+  limit: 500,
+  offset: 0,
+  facets: {
+    presence: [{ value: 'online', count: 1 }],
+    connection: [{ value: 'wireless', count: 1 }],
+    scope: [{ value: 'local', count: 1 }],
+  },
+  note: 'Current fixture evidence is available',
+  scope_note: '',
+}
+
+const site = {
+  name: 'Fixture site',
+  uuid: 'f8a258d7-3bf1-4099-a534-ce1f0a6cdd7c',
+  wlans: [],
+  meshes: [],
+  uplinks: [],
+  groups: [],
+  networks: [{ id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true }],
+  zones: [{ name: 'lan', forward_to: ['wan'], explicit: true }],
+  policies: [],
+  policy_capabilities: [
+    { kind: 'firewall', available: true },
+    { kind: 'route', available: true },
+    { kind: 'fixed_ip', available: true },
+  ],
+  problems: [],
+  overrides: [],
+  overridable: [],
+  override_note: '',
+}
+
+const radios = {
+  generated_at: 1_788_000_000_000,
+  gaps: [],
+  devices: [{
+    device_id: 7,
+    name: 'Fixture AP',
+    status: { last_poll_ok: true, consecutive_failures: 0, stale: false },
+    radios: [{
+      radio_key: 'radio0',
+      up: true,
+      band: '5g',
+      configured_channel: 'auto',
+      htmode: 'VHT80',
+      current_mhz: 5180,
+      current_channel: 36,
+      inventory_observed_at: 1_788_000_000_000,
+      channels_observed_at: 1_788_000_000_000,
+      stale: false,
+      interfaces: [{ name: 'phy0-ap0', mode: 'ap' }],
+      channels_known: true,
+      channels: [
+        { band: '5g', channel: 36, mhz: 5180, state: 'in-use', availability: 'enabled', in_use: true, restricted: false, dfs: null, excluded: null, flags: [] },
+        { band: '5g', channel: 44, mhz: 5220, state: 'enabled', availability: 'enabled', in_use: false, restricted: false, dfs: null, excluded: null, flags: [] },
+        { band: '5g', channel: 52, mhz: 5260, state: 'restricted', availability: 'restricted', in_use: false, restricted: true, dfs: null, excluded: null, flags: ['NO-IR'] },
+        { band: '5g', channel: 60, mhz: 5300, state: 'unknown', availability: 'unknown', in_use: false, restricted: false, dfs: null, excluded: null, flags: [] },
+      ],
+      scan_capability: 'absent',
+      latest_observations: [],
+    }],
+  }],
+}
+
+const accounts = {
+  accounts: [{
+    id: 1,
+    username: 'operator',
+    role: 'owner',
+    role_label: 'Owner',
+    enabled: true,
+    created_at: 1_787_000_000,
+    last_login_at: 1_788_000_000,
+    active_session_count: 1,
+  }],
+  roles: [
+    { value: 'owner', label: 'Owner', description: 'Full controller and account administration.' },
+    { value: 'admin', label: 'Administrator', description: 'Full network administration.' },
+    { value: 'operator', label: 'Operator', description: 'Operate the network.' },
+    { value: 'viewer', label: 'Read only', description: 'View controller state.' },
+  ],
+}
+
 async function installControllerFixture(page: Page, topologyResponse: unknown = topology) {
   const unexpectedRequests: string[] = []
   await page.addInitScript(() => {
@@ -123,15 +221,7 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       },
       '/api/v1/dashboard': dashboard,
       '/api/v1/devices': { devices: [] },
-      '/api/v1/clients': {
-        clients: [],
-        total: 0,
-        limit: 500,
-        offset: 0,
-        facets: { presence: [], connection: [], scope: [] },
-        note: 'No current RF evidence is available',
-        scope_note: '',
-      },
+      '/api/v1/clients': clientPage,
       '/api/v1/events': {
         events: [],
         total: 0,
@@ -143,8 +233,15 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       },
       '/api/v1/speedtests': speedTests,
       '/api/v1/topology': topologyResponse,
+      '/api/v1/site': site,
+      '/api/v1/accounts': accounts,
+      '/api/v1/radios': radios,
+      '/api/v1/roaming/neighbours': { ran: false },
+      '/api/v1/site/mesh-health': { links: [], note: 'No configured mesh links.' },
     }
-    const body = responses[path]
+    const body = path.startsWith('/api/v1/stats/')
+      ? { device_id: 7, kind: path.split('/').at(-1), key: 'radio0', resolution: '5m', points: [] }
+      : responses[path]
     if (route.request().method() !== 'GET' || body === undefined) {
       unexpectedRequests.push(`${route.request().method()} ${path}`)
       await route.fulfill({ status: 500, json: { error: `unmocked fixture route: ${path}` } })
@@ -166,6 +263,35 @@ async function readOverflow(page: Page) {
       document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       main: main ? main.scrollWidth - main.clientWidth : Number.POSITIVE_INFINITY,
     }
+  })
+}
+
+async function expectWithinMain(page: Page, locator: Locator) {
+  await locator.scrollIntoViewIfNeeded()
+  const [main, element] = await Promise.all([
+    page.locator('#main-content').boundingBox(),
+    locator.boundingBox(),
+  ])
+  expect(main).not.toBeNull()
+  expect(element).not.toBeNull()
+  expect(element!.x).toBeGreaterThanOrEqual(main!.x - 1)
+  expect(element!.x + element!.width).toBeLessThanOrEqual(main!.x + main!.width + 1)
+}
+
+async function contrastRatio(locator: Locator) {
+  return locator.evaluate((element) => {
+    const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+    const luminance = (value: string) => {
+      const [red, green, blue] = rgb(value).map((channel) => {
+        const normalized = channel / 255
+        return normalized <= .04045 ? normalized / 12.92 : ((normalized + .055) / 1.055) ** 2.4
+      })
+      return .2126 * red + .7152 * green + .0722 * blue
+    }
+    const style = getComputedStyle(element)
+    const foreground = luminance(style.color)
+    const background = luminance(style.backgroundColor)
+    return (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05)
   })
 }
 
@@ -275,6 +401,115 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
     overflow = await readOverflow(page)
     expect(overflow.document).toBeLessThanOrEqual(1)
     expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
+}
+
+test('390x844 responsive routes keep controls and state in view', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const unexpectedRequests = await installControllerFixture(page)
+
+  await page.goto('/logs')
+  await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toBeVisible()
+  expect(await page.locator('.logs-page').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await expectWithinMain(page, page.getByRole('group', { name: 'Event view' }))
+  await expectWithinMain(page, page.locator('.logs-page .pager').getByRole('button', { name: 'Next' }))
+
+  await page.goto('/settings')
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Accounts' }).click()
+  for (const field of ['Username', 'Password', 'Repeat password']) {
+    await expectWithinMain(page, page.getByLabel(field, { exact: true }).first())
+  }
+  await expectWithinMain(page, page.getByRole('combobox', { name: /^Role/ }))
+
+  await page.goto('/radios')
+  await expect(page.getByRole('heading', { level: 1, name: 'Radios & Channel Plan' })).toBeVisible()
+  expect(await page.locator('.radio-stat-grid').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  expect(await page.locator('.radio-plan-row').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await expectWithinMain(page, page.getByLabel('Filter by access point'))
+  await expectWithinMain(page, page.getByLabel('Filter by band'))
+  await expectWithinMain(page, page.getByLabel('Channel Plan legend'))
+
+  await page.goto('/topology')
+  await expect(page.getByRole('heading', { level: 1, name: 'Topology' })).toBeVisible()
+  expect(await page.locator('.topology-stat-grid').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await expectWithinMain(page, page.getByText('Evidence coverage').locator('..'))
+  await expectWithinMain(page, page.getByLabel('Topology confidence legend'))
+
+  await page.goto('/policy')
+  const policyTabs = page.getByRole('tablist', { name: 'Policy Engine views' })
+  await expect(policyTabs).toBeVisible()
+  await expectWithinMain(page, policyTabs)
+  await page.getByRole('tab', { name: 'Objects' }).click()
+  expect(await page.locator('.policy-object-picker').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await page.getByRole('checkbox', { name: /^Route\b/ }).check()
+  expect(await page.locator('.policy-route-fields').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+
+  await page.goto('/clients')
+  await expect(page.getByRole('heading', { level: 1, name: 'Client Devices' })).toBeVisible()
+  await expectWithinMain(page, page.locator('.pager').getByRole('button', { name: 'Next' }))
+
+  const overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  expect(unexpectedRequests).toEqual([])
+})
+
+test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  const unexpectedRequests = await installControllerFixture(page)
+
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+  let overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+
+  await page.goto('/logs')
+  const logsPager = page.locator('.logs-page .pager')
+  await expect(logsPager).toBeVisible()
+  await expectWithinMain(page, logsPager.getByRole('button', { name: 'Previous' }))
+  await expectWithinMain(page, logsPager.getByRole('button', { name: 'Next' }))
+
+  await page.goto('/radios')
+  const channel = page.locator('.radio-channel[data-state="in-use"]')
+  await expect(channel).toBeVisible()
+  await expectWithinMain(page, channel)
+  expect(await page.locator('.radio-plan-row').evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  expect(unexpectedRequests).toEqual([])
+})
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`${theme} selected controls and channel numerals meet text contrast`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    const unexpectedRequests = await installControllerFixture(page)
+
+    await page.goto('/logs')
+    if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+    expect(await contrastRatio(page.getByRole('button', { name: 'General' }))).toBeGreaterThanOrEqual(4.5)
+
+    await page.goto('/policy')
+    const objects = page.getByRole('tab', { name: 'Objects' })
+    await objects.click()
+    expect(await contrastRatio(objects)).toBeGreaterThanOrEqual(4.5)
+
+    await page.goto('/radios')
+    await expect(page.locator('.radio-channel')).toHaveCount(4)
+    for (const state of ['in-use', 'enabled', 'restricted', 'unknown']) {
+      expect(await contrastRatio(page.locator(`.radio-channel[data-state="${state}"]`))).toBeGreaterThanOrEqual(4.5)
+    }
     expect(unexpectedRequests).toEqual([])
   })
 }

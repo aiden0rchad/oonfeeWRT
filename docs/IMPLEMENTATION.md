@@ -538,13 +538,18 @@ on that schema.
 
 Maintenance runs every 5 minutes. The RAM-ring flush writes its completed
 `rollup_5m` rows in one transaction; hourly folding is count-weighted and never
-overwrites a fuller hour with a pruned partial; then retention pruning runs.
+overwrites a fuller hour with a pruned partial. Event retention runs first in
+an independent transaction and also runs before the daemon begins serving, so
+a rollup failure or short restart cycle cannot leave event history unbounded.
 Defaults are 5m→14d, 1h→396d, OpenWrt events→24h plus 50k/device and 100k
 global, non-OpenWrt events→100k, and closed topology intervals→31d. Active
 topology intervals do not expire. Terminal RF scans are capped to the newest
 run per `(device_id,radio_key)`; pending/running rows are excluded and pruned
 parents cascade to `radio_scan_bss`. Do not regress to per-sample inserts or
-unbounded scan history.
+unbounded scan history. Every event is limited to 64 KiB across its stored text
+and encoded detail. Exact repeated odhcpd IPv6-RA/no-default-route warnings are
+kept as one warning condition per router-log epoch with an occurrence count and
+first/latest source evidence; unrelated router warnings remain individual rows.
 
 ---
 
