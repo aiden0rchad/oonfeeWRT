@@ -33,6 +33,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"echo \"$image:$stable\"",
 		"echo \"$image:$minor\"",
 		"echo \"$image:latest\"",
+		"notes=\"RELEASE-NOTES-${GITHUB_REF_NAME}.md\"",
 		"./tools/release-build.sh \"$GITHUB_REF_NAME\" \"$release_dir\"",
 		"path: ${{ runner.temp }}/release/*",
 		"--notes-file dist/RELEASE-NOTES.md",
@@ -50,6 +51,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	}
 	if strings.Contains(release, "\n  archives:\n") {
 		t.Error("release archives must be built once in the gate, not rebuilt for publication")
+	}
+	if strings.Contains(release, `notes="RELEASE-NOTES-${GITHUB_REF_NAME#v}.md"`) {
+		t.Error("release notes filename must retain the tag's leading v")
 	}
 
 	ci := readWorkflow(t, "../.github/workflows/ci.yml")

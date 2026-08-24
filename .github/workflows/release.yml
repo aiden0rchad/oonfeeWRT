@@ -97,7 +97,7 @@ jobs:
       - name: Build exact release archives
         run: |
           release_dir="$RUNNER_TEMP/release"
-          notes="RELEASE-NOTES-${GITHUB_REF_NAME#v}.md"
+          notes="RELEASE-NOTES-${GITHUB_REF_NAME}.md"
           test -f "$notes"
           ./tools/release-build.sh "$GITHUB_REF_NAME" "$release_dir"
           (cd "$release_dir" && sha256sum --check SHA256SUMS)
