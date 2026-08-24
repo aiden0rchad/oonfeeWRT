@@ -536,7 +536,7 @@ technology.
 - Mouse and keyboard expansion, `aria-expanded`, focus treatment and representative
   collapsed desktop screenshots are release-tested.
 
-### 4.1.4 Accounts, roles, sessions and MFA
+### 4.1.4 Accounts, roles and sessions
 
 Source status: schema 19 implements the account foundation and management UI. The
 migration preserves each existing bootstrap administrator and makes it an
@@ -550,7 +550,7 @@ together. Sessions carry their canonical role; every protected REST route and
 `/live` is server-authorized. My Account and owner administration expose account
 creation, role/state/password changes and session listing/revocation. Owner
 mutations require a fresh five-minute password step-up. Revocation closes
-`/live` and cancels in-flight requests. Optional MFA remains open.
+`/live` and cancels in-flight requests. This account-security scope is complete.
 
 Preserve the existing Argon2id passwords, login throttling, CSRF protection,
 secure cookies, expiry, password change and audit events while completing the
@@ -574,14 +574,8 @@ remaining surfaces:
   an owner can revoke any. Capture client address only under the controller's
   documented trusted-proxy policy. Disabling an account or changing its
   password/role revokes the affected sessions immediately. Audit every account,
-  role, session and login-security action without recording secrets.
-- Add optional TOTP after core RBAC: require the current password for enrollment
-  and self-disable, use a short-lived server-side pre-auth challenge, and never
-  issue a full session until the second factor succeeds. Separately throttle
-  code/recovery attempts, confirm a code before activation, seal the secret and
-  show it only during enrollment. Show recovery codes once, store only hashes,
-  make them single-use, and invalidate the prior set on regeneration. Owner
-  reset and self-disable are distinct audited actions. No default credentials.
+  role, session and login-security action without recording secrets. No default
+  credentials are allowed.
 
 ### 4.1.5 Downloadable diagnostics bundle
 
@@ -691,7 +685,7 @@ signing/identity verification, and tags `v0.1.0`, `0.1.0`, `0.1` and `latest`
 that resolve to the same manifest digest.
 
 The pre-tag gate tests immutable candidate archives and an OCI digest from the
-exact release commit: accounts, optional MFA if enabled, a controller-only
+exact release commit: accounts, a controller-only
 speed test against a deterministic local adapter, diagnostics ZIP,
 fresh-container backup/restore,
 `v0.1.0-rc.1` upgrade and documented rollback. Promote those exact bytes and
@@ -722,7 +716,7 @@ when unsupported.
 
 1. SVG navigation and disclosure primitives.
 2. Landed account-store foundation, then multi-account API, server-side RBAC,
-   sessions and MFA; privileged new APIs do not land before their authorization
+   and sessions; privileged new APIs do not land before their authorization
    rules.
 3. Landed bounded controller logging and stored-only diagnostics ZIP.
 4. Dashboard composition and controller-only speed tests.

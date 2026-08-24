@@ -100,7 +100,7 @@ commit with their audit event or roll back together. Role-bearing sessions,
 server-side route/live authorization, My Account, owner administration and
 session listing/revocation are implemented. Owner writes require a five-minute
 password step-up. Revocation closes affected `/live` sockets and cancels
-in-flight requests. Optional MFA has not landed.
+in-flight requests.
 
 The stored-only Diagnostics surface is implemented for `owner`/`admin`:
 descriptor/preview, one active cancellable generation job, bounded terminal
@@ -534,7 +534,7 @@ are limited to the matching ASCII grammar. Store mutation methods soft-delete,
 preserve one enabled owner atomically and append the corresponding audit event
 inside the same transaction. The source layers server-side authorization,
 role-bearing sessions, account/session APIs and My Account/owner administration
-on that schema. MFA remains planned.
+on that schema.
 
 Maintenance runs every 5 minutes. The RAM-ring flush writes its completed
 `rollup_5m` rows in one transaction; hourly folding is count-weighted and never
@@ -816,8 +816,7 @@ absolute expiry. Schema 19 makes every existing administrator an enabled
 role; and a declarative policy authorizes every protected REST route and
 `/live`. My Account and owner administration provide account/session lifecycle
 controls. The session `done` channel makes revocation immediate for REST and
-`/live`; connection cleanup releases focus. Optional TOTP/recovery codes remain
-open. All mutating
+`/live`; connection cleanup releases focus. All mutating
 endpoints require header `X-Oonfee-CSRF` matching a per-session token.
 
 Diagnostics is owner/admin only. `GET /api/v1/diagnostics` returns the fixed
@@ -1315,7 +1314,7 @@ hardware, per PARITY-MATRIX.
 
 **M7 / Phase 4.1 — UI polish, controller operations and v0.1.0.** Incremental
 SVG navigation and disclosure primitives; freshness-aware Dashboard; bounded
-controller-host speed tests; server-side RBAC/accounts/sessions; optional MFA;
+controller-host speed tests; server-side RBAC/accounts/sessions;
 redacted diagnostics ZIP; encrypted portable backup/restore; final release
 hardening.
 
@@ -1328,7 +1327,7 @@ retained encrypted safety backup, session revocation, and persistent
 router-write suppression/resume are implemented. The live controller runs exact
 binary version `dev-phase41-live-schema19` at schema 19; its signed-in Dashboard,
 Accounts, Diagnostics, Backup & Restore, Devices and Topology routes passed smoke
-without browser errors. Optional MFA and gateway-run speed testing are deferred.
+without browser errors. Gateway-run speed testing is deferred.
 The final tag workflow owns the immutable release, isolated restore, vulnerability,
 signature, archive, image, and anonymous-verification gates.
 

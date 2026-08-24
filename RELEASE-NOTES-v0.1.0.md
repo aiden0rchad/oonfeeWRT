@@ -45,7 +45,7 @@ signature commands.
 - Discovery, inspection, diagnostics, backup, and controller speed testing do
   not change routers. Adoption, Apply, RF scans, and the optional official-feed
   LLDP package workflow remain separate acknowledged actions.
-- Optional TOTP MFA and gateway-run speed testing are deferred. Loaded latency
+- Gateway-run speed testing is deferred. Loaded latency
   and jitter are unavailable for the controller test method.
 - Hardware validation covers two OpenWrt 25.12.5 devices. Review
   `FRESH-START-VALIDATION.md` for exact evidence and remaining coverage gaps.

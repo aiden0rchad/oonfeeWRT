@@ -19,8 +19,8 @@ Dashboard/speed-test checkpoint, §5bn the historical schema-19 store foundation
 §5bo the account/RBAC/log foundation, §5bp the stored-diagnostics and
 online-backup foundation, §5bq the encrypted portable backup/restore source
 closure, and §5br the historical live schema-19 upgrade closure. The active
-release boundary at the start of §5 is final schema-19 `v0.1.0`; optional MFA
-and gateway-run speed testing are deferred.
+release boundary at the start of §5 is final schema-19 `v0.1.0`; gateway-run
+speed testing is deferred.
 
 Repo: <https://github.com/aiden0rchad/oonfeewrt> · License: Apache-2.0
 
@@ -461,8 +461,7 @@ backup/restore. Historical `v0.1.0-rc.1` remains the schema-17 upgrade baseline.
    transactional mutation audit. Role-bearing sessions, exhaustive server-side
    route/live authorization, My Account, owner account administration,
    five-minute password step-up and session listing/revocation are implemented.
-   Revocation closes `/live` and cancels in-flight requests. Optional TOTP and
-   recovery codes are deferred.
+   Revocation closes `/live` and cancels in-flight requests.
 3. **Diagnostics.** **Source slice landed 2026-08-22; live screen smoke passed
    2026-08-23:** a private bounded rotating controller JSONL sink mirrors
    accepted structured records. Owner/admin can preview, generate, cancel and
@@ -6028,7 +6027,7 @@ management REST API or UI, no role-bearing session, and no role-enforcing
 middleware for protected REST routes or the live channel. Existing session
 invalidation is immediate: logout, password change, REST expiry and `Sweep`
 close the affected session's `/live` WebSockets, whose disconnect cleanup
-releases every focused poll. Account-session listing/administration and MFA have
+releases every focused poll. Account-session listing/administration has
 not landed. Existing setup/login/self-password behavior continues to use the
 compatible account row; schema 19 was not yet evidence that least-privilege
 authorization was complete. §5bo supersedes that source boundary.
@@ -6063,7 +6062,7 @@ a late session.
 A mode-0600 bounded rotating `controller.jsonl` sink now mirrors accepted
 structured controller records for diagnostics. At this checkpoint it did not
 expose a download or make a router call. §5bp supersedes that diagnostics
-boundary. Optional MFA, encrypted portable backup/restore, live schema migration
+boundary. Encrypted portable backup/restore, live schema migration
 and signed-in browser proof remain open. The public speed-test provider has not
 been contacted.
 
@@ -6149,8 +6148,8 @@ validation, cancellation, no source/live-pair mutation, residue cleanup,
 filesystem/symlink/race defenses, prepared-pair ownership, restart intent and
 suppression. This is not live evidence: `v0.1.0-rc.1`, v40 and the lab database
 remain schema 17. No live schema-19 migration, signed-in backup/restore browser
-pass, controlled live restart, or router restore test has run. Optional MFA,
-remaining UI polish and final `v0.1.0` release evidence remain open.
+pass, controlled live restart, or router restore test has run. Remaining UI
+polish and final `v0.1.0` release evidence remain open.
 
 ---
 
@@ -6170,8 +6169,8 @@ verification.
 
 This remains historical live evidence, not publication state. The completed
 `v0.1.0` tag workflow and GitHub Release are authoritative. The release matrix
-owns isolated restore/clean-container proof; optional MFA and gateway-run speed
-testing are deferred.
+owns isolated restore/clean-container proof; gateway-run speed testing is
+deferred.
 
 ---
 

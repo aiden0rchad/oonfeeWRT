@@ -158,8 +158,8 @@ passphrases.
   not from a router. It uses approximately 15 MiB, is bounded to 30 seconds,
   and can temporarily saturate the WAN. Loaded latency and jitter are not
   measured.
-- Native controller TLS, TOTP MFA, cloud remote access, and gateway-run speed
-  tests are not included in v0.1.0.
+- Native controller TLS, cloud remote access, and gateway-run speed tests are
+  not included in v0.1.0.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
 

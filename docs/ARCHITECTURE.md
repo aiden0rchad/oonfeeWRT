@@ -33,7 +33,7 @@ live UI smoke passed Dashboard, Accounts, Diagnostics, Backup & Restore,
 Devices and Topology with no browser errors; fresh schema-17 rollback and
 schema-19 recovery sets also passed verification. The smoke did not execute a
 restore, diagnostics generation/download, public-provider speed test or router
-restore. Optional MFA is deferred. The completed `v0.1.0` tag workflow and
+restore. The completed `v0.1.0` tag workflow and
 GitHub Release, not this historical checkpoint, are the publication authority
 and own the isolated restore/container evidence.
 
@@ -123,7 +123,7 @@ bounded diagnostics ZIP job/API/UI. Diagnostics has no Fleet dependency and
 makes zero router management/API/SSH calls or router changes. The encrypted
 portable backup/restore service packages a consistent database/key pair,
 previews it in disposable staging, and applies a confirmed pair only through a
-controlled process restart. Optional MFA remains planned. All stay inside the
+controlled process restart. All stay inside the
 same controller process and SQLite trust boundary; none creates a router-side
 agent.
 
@@ -1120,7 +1120,7 @@ routes implement one owner/admin stored-evidence job with bounded history,
 cancellation and private ZIP download. The backup/restore routes implement the
 owner-only portable workflow described in Storage. Every backup/restore endpoint
 requires TLS or direct loopback; export start/download and restore mutations
-also require recent password reauthentication. Optional MFA remains open. These
+also require recent password reauthentication. These
 trust boundaries are not optional:
 
 - authorization is enforced server-side on every protected REST route and live
