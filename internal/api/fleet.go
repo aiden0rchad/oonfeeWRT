@@ -933,6 +933,7 @@ type dashboard struct {
 	Focused  int           `json:"focused_devices"`
 	Quiesced int           `json:"quiesced_devices"`
 	Events   []store.Event `json:"recent_events"`
+	Alerts   []store.Event `json:"recent_alert_events"`
 	Series   int           `json:"series_count"`
 }
 
@@ -1074,6 +1075,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if events, err := s.Store.QueryEventsKeyset(ctx,
 		store.EventQuery{Scope: "general", Limit: 20}); err == nil {
 		d.Events = events
+	}
+	if alerts, err := s.Store.QueryRecentGeneralAlerts(ctx, 8); err == nil {
+		if alerts == nil {
+			alerts = []store.Event{}
+		}
+		d.Alerts = alerts
+	} else {
+		s.Log.Debug("could not read dashboard alert events", "err", err)
 	}
 	if err := s.Store.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM series`).Scan(&d.Series); err != nil {

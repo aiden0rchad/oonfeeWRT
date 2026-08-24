@@ -68,7 +68,14 @@ describe('Radios', () => {
     render(<Radios />)
     expect((await screen.findAllByText('Gateway AP')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('radio0').length).toBeGreaterThan(0)
-    expect(screen.getByText(/DFS is unknown here/)).toBeTruthy()
+    const classification = screen.getByRole('group', { name: 'Warning: Channel classification' })
+    expect(within(classification).getByText(/DFS and channel exclusions are unknown here/i)).toBeTruthy()
+    const classificationToggle = within(classification).getByText('More information about channel classification')
+    const classificationDetails = classificationToggle.closest('details')
+    expect(classificationDetails?.open).toBe(false)
+    fireEvent.click(classificationToggle)
+    expect(classificationDetails?.open).toBe(true)
+    expect(within(classification).getByText(/freqlist\.restricted/)).toBeTruthy()
     const plan = screen.getByRole('list', { name: /Channel plan for 1 radios/ })
     expect(within(plan).getByLabelText('Channel 52, restricted, DFS unknown, exclusion unknown')).toBeTruthy()
 
@@ -80,6 +87,29 @@ describe('Radios', () => {
     for (const [, , , from, to] of api.stats.mock.calls) {
       expect(to - from).toBe(20 * 60)
     }
+  })
+
+  it('summarizes partial radio coverage and discloses source gaps', async () => {
+    api.radios.mockResolvedValueOnce({
+      ...response,
+      gaps: [
+        'device:7/radio0: channel list unavailable',
+        'device:8/radio1: inventory is stale',
+      ],
+    })
+
+    render(<Radios />)
+
+    const notice = await screen.findByRole('group', { name: 'Warning: Radio coverage' })
+    expect(within(notice).getByText(/2 source gaps are recorded/i)).toBeTruthy()
+    expect(within(notice).getByText(/missing data is not rendered as zero/i)).toBeTruthy()
+    const toggle = within(notice).getByText('More information about radio coverage')
+    const details = toggle.closest('details')
+    expect(details?.open).toBe(false)
+    fireEvent.click(toggle)
+    expect(details?.open).toBe(true)
+    expect(within(notice).getByText('device:7/radio0: channel list unavailable')).toBeTruthy()
+    expect(within(notice).getByText('device:8/radio1: inventory is stale')).toBeTruthy()
   })
 
   it('distinguishes an initial inventory failure from an empty radio fleet', async () => {

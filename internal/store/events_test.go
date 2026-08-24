@@ -76,3 +76,36 @@ func TestEventScopedFacetsUseWholeScopedResult(t *testing.T) {
 		t.Fatal("invalid scope accepted")
 	}
 }
+
+func TestRecentGeneralAlertsFiltersBeforeLimit(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	for _, event := range []Event{
+		{TS: 10, Category: "device", Severity: "warning", Event: "warning"},
+		{TS: 11, Category: "system", Severity: "error", Event: "error"},
+		{TS: 12, Category: "audit", Severity: "error", Event: "audit error"},
+		{TS: 13, Category: "device", Severity: "critical", Event: "unknown severity"},
+	} {
+		if err := db.LogEvent(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := int64(0); i < 30; i++ {
+		if err := db.LogEvent(ctx, Event{
+			TS: 20 + i, Category: "system", Severity: "info", Event: "routine",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	alerts, err := db.QueryRecentGeneralAlerts(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alerts) != 2 || alerts[0].Event != "error" || alerts[1].Event != "warning" {
+		t.Fatalf("alerts=%+v", alerts)
+	}
+	if _, err := db.QueryRecentGeneralAlerts(ctx, 1002); err == nil {
+		t.Fatal("oversized alert page accepted")
+	}
+}

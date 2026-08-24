@@ -13,7 +13,7 @@ import type {
   DeviceFunction,
   LLDPCapabilityResult,
 } from '../lib/api'
-import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, Notice, useColumnPrefs } from '../components/ui'
+import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, Notice, PageHeader, useColumnPrefs } from '../components/ui'
 import type { Column } from '../components/ui'
 import { TimeChart, fmt, ago, duration } from '../components/Chart'
 import { live } from '../lib/live'
@@ -22,10 +22,14 @@ import type { LiveStats } from '../lib/live'
 
 export function Devices({
   devices,
+  devicesLoaded = true,
+  devicesError = '',
   onAdopt,
   onChanged,
 }: {
   devices: Device[]
+  devicesLoaded?: boolean
+  devicesError?: string
   onAdopt?: () => void
   onChanged?: () => void
 }) {
@@ -38,6 +42,18 @@ export function Devices({
   // that says dragging is possible. Nothing anywhere said why.
   const [colPrefs, setColPrefs] = useColumnPrefs('devices')
   const [openID, setOpenID] = useState<number | null>(null)
+  const count = devicesLoaded
+    ? devices.length.toLocaleString()
+    : devicesError
+      ? 'Unavailable'
+      : '…'
+  const empty = !devicesLoaded
+    ? devicesError
+      ? 'Device inventory is unavailable. Retry when the controller is reachable.'
+      : 'Loading devices…'
+    : devicesError
+      ? 'No devices were present in the last successful inventory.'
+      : 'No devices yet. Adopt one to get started.'
 
   const columns: Column<Device>[] = [
     {
@@ -98,23 +114,26 @@ export function Devices({
   ]
 
   return (
-    <>
-      <h1 style={{ margin: '0 0 14px', fontSize: 20 }}>Devices</h1>
-      <Card
-        title={`Devices (${devices.length})`}
+    <div style={{ display: 'grid', gap: 14 }}>
+      <PageHeader
+        title="Devices"
+        purpose="Managed OpenWrt inventory, adoption status, and live device details."
         actions={onAdopt && <Button onClick={onAdopt}>Adopt a device</Button>}
+      />
+      <Card
+        title={`Managed devices (${count})`}
         pad={false}
       >
         <DataGrid
           tableLabel="Managed devices"
-          totalRows={devices.length}
+          totalRows={devicesLoaded ? devices.length : undefined}
           rows={devices}
           columns={columns}
           rowKey={(d) => d.mac}
           onRowClick={(d) => setOpenID(d.id)}
           prefs={colPrefs}
           onPrefsChange={setColPrefs}
-          empty="No devices yet. Adopt one to get started."
+          empty={empty}
         />
       </Card>
       {openID !== null && (
@@ -128,7 +147,7 @@ export function Devices({
           }}
         />
       )}
-    </>
+    </div>
   )
 }
 

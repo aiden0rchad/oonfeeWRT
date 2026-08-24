@@ -62,7 +62,9 @@ jobs:
       - name: Install and test UI
         run: |
           npm --prefix ui ci
+          npm --prefix ui run test:browser:install
           npm --prefix ui test
+          npm --prefix ui run test:browser
       - name: Audit UI dependencies
         run: npm --prefix ui audit --audit-level=high
       - name: Build UI and check budget

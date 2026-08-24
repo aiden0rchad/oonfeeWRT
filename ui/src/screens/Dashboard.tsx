@@ -6,6 +6,7 @@ import type {
   DashboardMetricPoint,
   SpeedTestCollection,
   SpeedTestJob,
+  TopologySnapshot,
 } from '../lib/api'
 import { Banner, Button, Card, Notice, Stat, Status, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
@@ -415,6 +416,140 @@ function InternetHealth({ data }: { data: DashboardData }) {
   )
 }
 
+function TopologySummary({ onOpenTopology }: { onOpenTopology?: () => void }) {
+  const [snapshot, setSnapshot] = useState<TopologySnapshot | null>(null)
+  const [error, setError] = useState('')
+  const generation = useRef(0)
+
+  const load = useCallback(async () => {
+    const request = ++generation.current
+    try {
+      const next = await api.topology()
+      if (request === generation.current) {
+        setSnapshot(next)
+        setError('')
+      }
+    } catch (cause) {
+      if (request === generation.current) setError(errorText(cause))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+    const timer = window.setInterval(load, 30_000)
+    return () => {
+      generation.current++
+      window.clearInterval(timer)
+    }
+  }, [load])
+
+  const nodes = snapshot?.nodes ?? []
+  const edges = snapshot?.edges ?? []
+  const nodeByID = new Map(nodes.map((node) => [node.id, node]))
+  const managedDevices = nodes.filter((node) => node.kind === 'device' && node.device_id != null).length
+  const placedClients = nodes.filter((node) => node.kind === 'client').length
+  const ambiguousLinks = edges.filter((edge) => edge.confidence === 'ambiguous').length
+  const lastKnown = snapshot?.last_known_edges?.length ?? 0
+  const infrastructureRelations = edges.flatMap((edge) => {
+    const parent = nodeByID.get(edge.parent_id)
+    const child = nodeByID.get(edge.child_id)
+    if (!parent || !child || child.kind !== 'device' ||
+        (parent.kind !== 'device' && parent.id !== 'synthetic:internet')) return []
+    return [{ edge, parent, child }]
+  }).sort((a, b) =>
+    a.parent.name.localeCompare(b.parent.name) ||
+    a.child.name.localeCompare(b.child.name) ||
+    String(a.edge.id).localeCompare(String(b.edge.id), undefined, { numeric: true }),
+  )
+  const relations = infrastructureRelations.slice(0, 3)
+
+  return (
+    <Card
+      title={<span id="dashboard-topology-heading">Network topology</span>}
+      actions={onOpenTopology && <Button onClick={onOpenTopology}>Open topology</Button>}
+    >
+      <div
+        className="dashboard-topology-summary"
+        role="region"
+        aria-labelledby="dashboard-topology-heading"
+      >
+        {!snapshot && !error && <div role="status">Loading topology summary…</div>}
+        {error && (
+          <Notice
+            tone="warning"
+            component="Topology summary"
+            summary={(
+              <div role={snapshot ? 'status' : 'alert'}>
+                {snapshot
+                  ? 'Topology refresh failed; the last successful snapshot remains visible.'
+                  : 'Topology summary is unavailable; no graph evidence is shown.'}
+              </div>
+            )}
+            details={error}
+            actions={<Button onClick={() => void load()}>Retry</Button>}
+          />
+        )}
+        {snapshot && (
+          <>
+            <div className="dashboard-topology-header">
+              <span
+                className="dashboard-topology-coverage"
+                data-complete={snapshot.complete}
+              >
+                {snapshot.complete
+                  ? 'Complete coverage'
+                  : snapshot.gaps.length > 0
+                    ? `Partial · ${snapshot.gaps.length} coverage issue${snapshot.gaps.length === 1 ? '' : 's'}`
+                    : 'Partial coverage'}
+              </span>
+              <span>Snapshot {agoMilliseconds(snapshot.at)}</span>
+            </div>
+            <div className="dashboard-topology-stats">
+              <div><span>Managed devices</span><strong className="num">{managedDevices}</strong></div>
+              <div><span>Active links</span><strong className="num">{edges.length}</strong></div>
+              <div><span>Placed clients</span><strong className="num">{placedClients}</strong></div>
+            </div>
+            {relations.length > 0 ? (
+              <ul className="dashboard-topology-links" aria-label="Active infrastructure links">
+                {relations.map(({ edge, parent, child }) => {
+                  const evidence = [edge.medium, edge.parent_port, edge.confidence].filter(Boolean)
+                  return (
+                    <li
+                      key={edge.id}
+                      aria-label={`${parent.name} to ${child.name}, ${evidence.join(', ')}`}
+                    >
+                      <span>{parent.name}</span>
+                      <span aria-hidden="true">→</span>
+                      <strong>{child.name}</strong>
+                      <small>{evidence.join(' · ')}</small>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <div className="dashboard-topology-empty">
+                No infrastructure links are currently observed. Managed devices remain counted without inventing placement.
+              </div>
+            )}
+            {infrastructureRelations.length > relations.length && (
+              <div className="dashboard-topology-note">
+                Showing {relations.length} of {infrastructureRelations.length} infrastructure links; open Topology for the complete graph.
+              </div>
+            )}
+            {(ambiguousLinks > 0 || lastKnown > 0) && (
+              <div className="dashboard-topology-note">
+                {ambiguousLinks > 0 && `${ambiguousLinks} active link${ambiguousLinks === 1 ? '' : 's'} ${ambiguousLinks === 1 ? 'has' : 'have'} ambiguous evidence.`}
+                {ambiguousLinks > 0 && lastKnown > 0 && ' '}
+                {lastKnown > 0 && `${lastKnown} last-known placement${lastKnown === 1 ? ' is' : 's are'} excluded from active links.`}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 /**
  * The fleet summary.
  *
@@ -422,9 +557,19 @@ function InternetHealth({ data }: { data: DashboardData }) {
  * Client Devices. It is intentionally not a sum of per-radio counters: those
  * counters have no client address and therefore cannot apply network scope.
  */
-export function Dashboard({ data }: { data: DashboardData }) {
+export function Dashboard({
+  data,
+  onOpenTopology,
+}: {
+  data: DashboardData
+  onOpenTopology?: () => void
+}) {
   const d = data.devices
-  const events = data.recent_events ?? []
+  const alertPayload = data.recent_alert_events
+  const alerts = (alertPayload ?? []).filter(
+    (event) => event.Severity === 'warning' || event.Severity === 'error',
+  )
+  const invalidAlerts = (alertPayload ?? []).length - alerts.length
   const wirelessUnknownOn = data.wireless_clients_unknown_on ?? []
   const missingWAN = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'missing')
 
@@ -567,6 +712,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
       )}
 
       <div className="dashboard-detail-grid">
+        <div className="dashboard-topology-card">
+          <TopologySummary onOpenTopology={onOpenTopology} />
+        </div>
         <Card title="Device status">
           <div style={{ display: 'grid', gap: 8 }}>
             {(
@@ -589,15 +737,29 @@ export function Dashboard({ data }: { data: DashboardData }) {
           </div>
         </Card>
 
-        <Card title="Recent events">
-          {events.length === 0 ? (
+        <Card title="Recent warnings and errors">
+          {alertPayload == null ? (
+            <div role="alert">
+              <Banner tone="warning">
+                The warning/error feed is unavailable. Its absence does not prove
+                that no alerts were retained; open Logs for the complete record.
+              </Banner>
+            </div>
+          ) : alerts.length === 0 && invalidAlerts === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              Nothing logged yet.
+              No retained warning or error events.
             </div>
           ) : (
             <div style={{ display: 'grid', gap: 6 }}>
-              {events.slice(0, 8).map((e, i) => (
-                <div key={i} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+              {invalidAlerts > 0 && (
+                <Banner tone="warning">
+                  {invalidAlerts} alert row{invalidAlerts === 1 ? '' : 's'} had an
+                  unrecognized severity and {invalidAlerts === 1 ? 'was' : 'were'} omitted.
+                  The feed is partial; open Logs for the complete record.
+                </Banner>
+              )}
+              {alerts.slice(0, 8).map((e) => (
+                <div key={e.ID} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
                   <span
                     style={{
                       color:

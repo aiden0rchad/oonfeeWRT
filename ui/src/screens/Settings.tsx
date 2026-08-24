@@ -20,7 +20,7 @@ import type {
   WLAN,
 } from '../lib/api'
 import {
-  Banner, Button, Card, DataGrid, Field, Prop, SlideOver, Toggle, Unknown,
+  Banner, Button, Card, DataGrid, Field, Notice, Prop, SlideOver, Toggle, Unknown,
 } from '../components/ui'
 import { ago } from '../components/Chart'
 import { Account } from './Account'
@@ -503,14 +503,18 @@ function NetworkSettings({ devices }: { devices: Device[] }) {
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
       {site.problems.length > 0 && (
-        <Banner tone="warning">
-          <strong>This configuration is not ready to apply:</strong>
-          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            {site.problems.map((p) => (
-              <li key={p}>{p}</li>
-            ))}
-          </ul>
-        </Banner>
+        <div role="alert">
+          <Notice
+            tone="warning"
+            component="Configuration readiness"
+            summary={`${site.problems.length} configuration problem${site.problems.length === 1 ? '' : 's'} block Apply.`}
+            closedLabel="More information about configuration problems"
+            openLabel="Hide configuration problems"
+            details={<ul style={{ margin: 0, paddingLeft: 18 }}>
+              {site.problems.map((p) => <li key={p}>{p}</li>)}
+            </ul>}
+          />
+        </div>
       )}
 
       <Card title="Site">
@@ -695,17 +699,27 @@ function NetworkSettings({ devices }: { devices: Device[] }) {
             )}
           </div>
         )}
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-          {applyWriteSummary(
-            showOperation ? operationID : '',
-            showOperation ? operation : null,
-            showOperation && recoveringOperation,
-          )} Apply
-          is the only step that writes, and it stops at the first device that
-          fails to limit a partial rollout. Devices that already applied stay
-          changed; the result names exactly where it stopped. Every change is
-          applied with a rollback armed — a device that comes back unhealthy
-          reverts itself.
+        <div style={{ marginTop: 8 }}>
+          <Notice
+            tone="accent"
+            component="Apply behavior"
+            summary={applyWriteSummary(
+              showOperation ? operationID : '',
+              showOperation ? operation : null,
+              showOperation && recoveringOperation,
+            )}
+            closedLabel="More information about Apply"
+            openLabel="Hide Apply information"
+            details={(
+              <div>
+                Apply is the only step that writes, and it stops at the first
+                device that fails to limit a partial rollout. Devices that
+                already applied stay changed; the result names exactly where it
+                stopped. Every change is applied with a rollback armed — a
+                device that comes back unhealthy reverts itself.
+              </div>
+            )}
+          />
         </div>
 
         {/* IMPLEMENTATION §6's traversal acknowledgment. The rollback protects
@@ -714,24 +728,35 @@ function NetworkSettings({ devices }: { devices: Device[] }) {
             before driving down it. */}
         {traversal.length > 0 && (
           <div style={{ marginTop: 10 }}>
-            <Banner tone="warning">
-              <div>
-                This change edits the network or firewall configuration of{' '}
-                <strong>{traversal.map((d) => d.name).join(', ')}</strong> — the
-                path this controller reaches {traversal.length === 1 ? 'it' : 'them'}{' '}
-                through.
-              </div>
-              <div style={{ marginTop: 4, fontSize: 11 }}>
+            <Notice
+              tone="warning"
+              component="Management path"
+              summary={(
+                <span>
+                  <strong>{traversal.map((d) => d.name).join(', ')}</strong>{' '}
+                  may become temporarily unreachable while this change edits the
+                  network or firewall path the controller uses to reach{' '}
+                  {traversal.length === 1 ? 'it' : 'them'}. An armed rollback
+                  restores {traversal.length === 1 ? 'it' : 'them'} to{' '}
+                  {traversal.length === 1 ? 'its' : 'their'} prior configuration
+                  if {traversal.length === 1 ? 'it does' : 'they do'} not return.
+                </span>
+              )}
+              closedLabel="More information about management-path rollback"
+              openLabel="Hide management-path rollback information"
+              details={(
+                <div>
                 It is applied with a rollback armed, so a device that comes back
                 unreachable restores itself within 90 seconds. You should still
                 know before, not after.
-              </div>
-              <Toggle
+                </div>
+              )}
+              actions={<Toggle
                 label="I understand — apply the network changes"
                 on={ackTraversal}
                 onChange={setAckTraversal}
-              />
-            </Banner>
+              />}
+            />
           </div>
         )}
 
@@ -761,40 +786,48 @@ function NetworkSettings({ devices }: { devices: Device[] }) {
         {/* The one hazard on this screen a rollback cannot undo. */}
         {fatal.length > 0 && (
           <div style={{ marginTop: 10 }}>
-            <Banner tone="critical">
-              <div>
+            <Notice
+              tone="critical"
+              component="Driver risk"
+              defaultOpen
+              summary={(
+                <span>
+                  <strong>The rollback does not cover this.</strong>{' '}
                 This change asks{' '}
                 <strong>
                   {[...new Set(fatal.map((f) => f.device))].join(', ')}
                 </strong>{' '}
                 to do something its wireless driver is known to get wrong badly
-                enough to take the radio down.
-              </div>
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }}>
-                {fatal.map((f) => (
-                  <li key={`${f.device}-${f.defect_id}`}>
-                    <strong>{f.device}</strong> — {f.summary}{' '}
-                    <span style={{ color: 'var(--text-muted)' }}>
-                      [{f.confidence}]
-                    </span>
-                  </li>
-                ))}
-              </ul>
-              {/* Said plainly, because the line above the Apply button promises
-                  the opposite and is right about every other change. */}
-              <div style={{ marginTop: 6, fontSize: 11 }}>
-                <strong>The rollback does not cover this.</strong> A radio that
-                stops answering cannot be reached to confirm or revert, and on
-                the reference hardware it stayed down until the device was
-                physically power-cycled. Details and a mitigation are under each
-                device below.
-              </div>
-              <Toggle
+                enough to take the radio down until someone physically
+                power-cycles the device.
+                </span>
+              )}
+              closedLabel="More information about the driver risk"
+              openLabel="Hide driver risk information"
+              details={(
+                <div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {fatal.map((f) => (
+                      <li key={`${f.device}-${f.defect_id}`}>
+                        <strong>{f.device}</strong> — {f.summary}{' '}
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          [{f.confidence}]
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div style={{ marginTop: 6 }}>
+                    A radio that stops answering cannot be reached to confirm or
+                    revert. Details and a mitigation are under each device below.
+                  </div>
+                </div>
+              )}
+              actions={<Toggle
                 label="I understand this can take the radio down until someone power-cycles it"
                 on={ackFatal}
                 onChange={setAckFatal}
-              />
-            </Banner>
+              />}
+            />
           </div>
         )}
 
@@ -2165,20 +2198,32 @@ function Preview({ p }: { p: PreviewResult }) {
       {p.devices.map((d) => (
         <div
           key={d.device_id}
-          style={{
-            border: '1px solid var(--border-strong)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            background: 'var(--surface-2)',
-          }}
+          style={{ display: 'grid', gap: 6 }}
         >
-          <div style={{ fontSize: 13, fontWeight: 600 }}>
-            {d.name}
-            <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>
-              {' '}
-              · {previewFunctionNames(d.functions, d.role)}
-            </span>
-          </div>
+          <Notice
+            tone={d.error || d.blocked || d.driver_defects?.some((f) => f.wlan && f.severity === 'radio-death')
+              ? 'critical'
+              : d.cautions?.length || d.touches_traversal || d.drift?.length
+                ? 'warning'
+                : 'accent'}
+            component={`Apply preview · ${d.name}`}
+            summary={(
+              <div>
+                <div>
+                  {d.name}{' '}
+                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                    · {previewFunctionNames(d.functions, d.role)}
+                  </span>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 11, fontWeight: 400 }}>
+                  {previewBucketSummary(d)}
+                </div>
+              </div>
+            )}
+            closedLabel={`Show technical details for ${d.name}`}
+            openLabel={`Hide technical details for ${d.name}`}
+            details={<PreviewDeviceDetails d={d} />}
+          />
 
           {d.error && <div role="alert"><Banner tone="critical">{d.error}</Banner></div>}
 
@@ -2194,101 +2239,13 @@ function Preview({ p }: { p: PreviewResult }) {
             </Banner>
           )}
 
-          {!d.error && !d.blocked && d.changes.length === 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              Already matches — nothing to do.
+          {d.driver_defects?.filter((f) => f.wlan).map((f) => (
+            <div role="alert" key={`${f.defect_id}.${f.wlan}`}>
+              <Banner tone={f.severity === 'radio-death' ? 'critical' : 'warning'}>
+                {driverDefectConsequence(d.name, f)}
+              </Banner>
             </div>
-          )}
-
-          {d.changes.length > 0 && (
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 11 }}>
-              {/* Keyed by index. Two changes can now name the SAME section —
-                  an option-to-list repair clears the option and then writes the
-                  section — so config.section is no longer unique and React was
-                  being handed duplicate keys. */}
-              {d.changes.map((c, i) => (
-                <li key={`${i}-${c.config}.${c.section}`}>
-                  <span
-                    style={{
-                      color:
-                        c.action === 'remove' && !c.option
-                          ? 'var(--critical)'
-                          : c.action === 'create'
-                            ? 'var(--good)'
-                            : 'var(--text-primary)',
-                    }}
-                  >
-                    {/* Removing ONE option is not removing the section, and
-                        must not be painted as though it were: it is half of a
-                        repair whose other half writes the same section back. */}
-                    {c.action === 'remove' && c.option ? 'clear' : c.action}
-                  </span>{' '}
-                  <code>
-                    {c.config}.{c.section}
-                    {c.option ? `.${c.option}` : ''}
-                  </code>
-                  {c.options && c.options.length > 0 && (
-                    <span style={{ color: 'var(--text-muted)' }}>
-                      {' '}
-                      — {c.options.length} option{c.options.length === 1 ? '' : 's'}
-                      {c.touches_key && ', including the passphrase'}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* Driver defects sit ABOVE the omissions and are styled as a
-              warning rather than a footnote, because the difference matters:
-              an omission is something the controller declined to do, and this
-              is something it is about to do to hardware documented not to
-              survive it. Each carries its confidence and a link, so the
-              operator can weigh a maintainer's statement differently from a
-              forum post — and so a warning that turns out to be stale folklore
-              can be traced and removed rather than repeated forever. */}
-          {d.driver_defects && d.driver_defects.length > 0 && (
-            <div style={{ fontSize: 11, marginTop: 6 }}>
-              {d.driver_defects.map((f) => (
-                <div
-                  key={`${f.defect_id}.${f.wlan ?? ''}`}
-                  style={{
-                    borderLeft: '2px solid var(--warn, #d08b28)',
-                    paddingLeft: 8,
-                    marginBottom: 6,
-                  }}
-                >
-                  <div style={{ color: 'var(--warn, #d08b28)' }}>
-                    {f.wlan ? `${f.wlan}: ` : 'This hardware: '}
-                    {f.summary}
-                    <span
-                      style={{ color: 'var(--text-muted)', marginLeft: 6 }}
-                      title={
-                        f.confidence === 'documented'
-                          ? "From the device's own OpenWrt page, its driver documentation, or a maintainer"
-                          : f.confidence === 'measured'
-                            ? 'Reproduced on hardware by this project'
-                            : f.confidence === 'reported'
-                              ? 'A filed, accepted bug report'
-                              : 'Repeated in forums with no primary source found — treat as a lead, not a fact'
-                      }
-                    >
-                      [{f.confidence}]
-                    </span>
-                  </div>
-                  <div style={{ color: 'var(--text-muted)' }}>{f.detail}</div>
-                  {f.mitigation && (
-                    <div style={{ color: 'var(--text-muted)' }}>
-                      What to do instead: {f.mitigation}
-                    </div>
-                  )}
-                  {f.source && (
-                    <div style={{ color: 'var(--text-muted)' }}>Source: {f.source}</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+          ))}
 
           {/* Three lists, because they were one and the heading was true of
               about a fifth of it. A layer-2 loop warning and a section kept in
@@ -2306,61 +2263,9 @@ function Preview({ p }: { p: PreviewResult }) {
             </Banner>
           )}
 
-          {d.omitted && d.omitted.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              Not rendered on this device:
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {d.omitted.map((o) => (
-                  <li key={o}>{o}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {d.undetermined && d.undetermined.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              Could not be determined, so nothing here was changed or removed:
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {d.undetermined.map((o) => (
-                  <li key={o}>{o}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* A probable cause, worded as one.
-              "device has no 5 GHz radio" describes a misconfigured band and a
-              radio that failed on Tuesday equally well, and the operator has
-              to act differently in each case. The server knows a capability
-              changed recently; it does not know that is why. Saying "may
-              explain" gives them the fact and leaves the inference where it
-              belongs. */}
-          {d.capability_cause && (
-            <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
-              This device's capabilities changed {ago(d.capability_cause.at)},
-              which may explain what is missing above:
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {d.capability_cause.changes.map((c) => (
-                  <li key={c} style={{ color: 'var(--text-secondary)' }}>{c}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           {d.touches_traversal && (
             <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
               Edits this device's network or firewall configuration.
-            </div>
-          )}
-
-          {d.deviations && d.deviations.length > 0 && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              This device deviates from the site model on purpose:
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {d.deviations.map((x) => (
-                  <li key={x}>{x}</li>
-                ))}
-              </ul>
             </div>
           )}
 
@@ -2379,6 +2284,169 @@ function Preview({ p }: { p: PreviewResult }) {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+type PreviewDevice = PreviewResult['devices'][number]
+type PreviewDriverDefect = NonNullable<PreviewDevice['driver_defects']>[number]
+
+function driverDefectConsequence(device: string, defect: PreviewDriverDefect): string {
+  const subject = `${defect.wlan}: ${defect.summary}`
+  if (defect.severity === 'radio-death') {
+    return `${subject} — Critical: This plan can take ${device}'s radio down until someone physically power-cycles the device. Rollback cannot cover a radio that stops answering.`
+  }
+  if (defect.severity === 'silently-ignored') {
+    return `${subject} — Silently ignored: Apply will write this setting, but the driver is known not to honour it.`
+  }
+  return `${subject} — Degraded behavior: Apply will write this setting, but the driver is known to degrade the requested behavior.`
+}
+
+function previewBucketSummary(d: PreviewDevice): string {
+  const buckets = [
+    ...(d.error ? ['planning error'] : []),
+    ...(d.blocked ? ['blocked'] : []),
+    `${d.changes.length} planned change${d.changes.length === 1 ? '' : 's'}`,
+    ...(d.cautions?.length
+      ? [`${d.cautions.length} caution${d.cautions.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.driver_defects?.length
+      ? [`${d.driver_defects.length} driver notice${d.driver_defects.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.omitted?.length
+      ? [`${d.omitted.length} omission${d.omitted.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.undetermined?.length
+      ? [`${d.undetermined.length} undetermined item${d.undetermined.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.capability_cause?.changes.length
+      ? [`${d.capability_cause.changes.length} capability change${d.capability_cause.changes.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.deviations?.length
+      ? [`${d.deviations.length} intentional deviation${d.deviations.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.drift?.length
+      ? [`${d.drift.length} drift item${d.drift.length === 1 ? '' : 's'}`]
+      : []),
+    ...(d.touches_traversal ? ['management path affected'] : []),
+  ]
+  return buckets.join(' · ')
+}
+
+function PreviewDeviceDetails({ d }: { d: PreviewDevice }) {
+  return (
+    <div style={{ display: 'grid', gap: 8, fontSize: 11 }}>
+      {d.changes.length === 0 ? (
+        <div>No configuration changes were planned for this device.</div>
+      ) : (
+        <div>
+          <strong>Exact configuration changes</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {d.changes.map((c, i) => (
+              <li key={`${i}-${c.config}.${c.section}`}>
+                <span
+                  style={{
+                    color:
+                      c.action === 'remove' && !c.option
+                        ? 'var(--critical)'
+                        : c.action === 'create'
+                          ? 'var(--good)'
+                          : 'var(--text-primary)',
+                  }}
+                >
+                  {c.action === 'remove' && c.option ? 'clear' : c.action}
+                </span>{' '}
+                <code>
+                  {c.config}.{c.section}
+                  {c.option ? `.${c.option}` : ''}
+                </code>
+                {c.options && c.options.length > 0 && (
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {' '}— {c.options.length} option{c.options.length === 1 ? '' : 's'}
+                    {c.touches_key && ', including the passphrase'}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {d.driver_defects && d.driver_defects.length > 0 && (
+        <div>
+          <strong>Driver evidence</strong>
+          {d.driver_defects.map((f) => (
+            <div
+              key={`${f.defect_id}.${f.wlan ?? ''}`}
+              style={{ borderLeft: '2px solid var(--warning)', paddingLeft: 8, marginTop: 6 }}
+            >
+              <div style={{ color: 'var(--warning)' }}>
+                {f.wlan ? `${f.wlan}: technical evidence` : `This hardware: ${f.summary}`}
+                <span
+                  style={{ color: 'var(--text-muted)', marginLeft: 6 }}
+                  title={
+                    f.confidence === 'documented'
+                      ? "From the device's own OpenWrt page, its driver documentation, or a maintainer"
+                      : f.confidence === 'measured'
+                        ? 'Reproduced on hardware by this project'
+                        : f.confidence === 'reported'
+                          ? 'A filed, accepted bug report'
+                          : 'Repeated in forums with no primary source found — treat as a lead, not a fact'
+                  }
+                >
+                  [{f.confidence}]
+                </span>
+              </div>
+              <div style={{ color: 'var(--text-muted)' }}>{f.detail}</div>
+              {f.mitigation && (
+                <div style={{ color: 'var(--text-muted)' }}>
+                  What to do instead: {f.mitigation}
+                </div>
+              )}
+              {f.source && <div style={{ color: 'var(--text-muted)' }}>Source: {f.source}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {d.omitted && d.omitted.length > 0 && (
+        <div>
+          <strong>Not rendered on this device</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {d.omitted.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {d.undetermined && d.undetermined.length > 0 && (
+        <div>
+          <strong>Could not be determined, so nothing here was changed or removed</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {d.undetermined.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {d.capability_cause && (
+        <div>
+          <strong>
+            This device&apos;s capabilities changed {ago(d.capability_cause.at)},
+            which may explain what is missing
+          </strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {d.capability_cause.changes.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {d.deviations && d.deviations.length > 0 && (
+        <div>
+          <strong>This device intentionally deviates from the site model</strong>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            {d.deviations.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -2767,12 +2835,15 @@ function Neighbours({ site }: { site: Site }) {
     >
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
-        Each access point is told the BSSIDs and channels of the others carrying
-        the same SSID, so a roaming client scans those channels instead of all of
-        them. No AP can learn this by itself. This runs automatically every 15
-        minutes and after every apply — an AP that restarts comes back with an
-        empty list, so it is re-checked rather than assumed.
+      <div style={{ marginBottom: 10 }}>
+        <Notice
+          tone="accent"
+          component="802.11k neighbour reports"
+          summary="Automatically refreshes neighbour reports every 15 minutes and after every Apply."
+          closedLabel="More information about neighbour reports"
+          openLabel="Hide neighbour report information"
+          details="Each access point is told the BSSIDs and channels of the others carrying the same SSID, so a roaming client scans those channels instead of all of them. No AP can learn this by itself. An AP that restarts comes back with an empty list, so it is re-checked rather than assumed."
+        />
       </div>
 
       {asked.length === 0 ? (
@@ -3071,12 +3142,22 @@ function Uplinks({
     <Card title="Wireless uplinks">
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10 }}>
-        A device with no cable to it can join one of your networks as a 4-address
-        bridge, putting its wired ports and its own access points on the network
-        over the air. The network has to accept bridges — that is the
-        <strong> Allow devices to join this network as a wireless bridge </strong>
-        switch on the network itself, and it is the half people forget.
+      <div style={{ marginBottom: 10 }}>
+        <Notice
+          tone="accent"
+          component="Wireless uplinks"
+          summary="Lets an uncabled device bridge a network over the air; that network must accept wireless bridges first."
+          closedLabel="More information about wireless uplinks"
+          openLabel="Hide wireless uplink information"
+          details={(
+            <span>
+              The device joins as a 4-address bridge, putting its wired ports and
+              its own access points on the network over the air. Enable{' '}
+              <strong>Allow devices to join this network as a wireless bridge</strong>{' '}
+              on the network itself before adding the uplink.
+            </span>
+          )}
+        />
       </div>
 
       {bridgeable.length === 0 ? (
