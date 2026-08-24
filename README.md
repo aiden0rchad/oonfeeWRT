@@ -1,577 +1,187 @@
 # oonfeeWRT
 
-A UniFi-grade management interface for the OpenWrt you already run.
+Self-hosted, UniFi-inspired management for stock OpenWrt.
 
-Not a fork. Not a firmware. Not a distribution. **A front end that connects to
-stock OpenWrt over its existing API and makes it manageable the way UniFi is.**
+[![Release](https://img.shields.io/github/v/release/aiden0rchad/oonfeeWRT)](https://github.com/aiden0rchad/oonfeeWRT/releases)
+[![CI](https://github.com/aiden0rchad/oonfeeWRT/actions/workflows/ci.yml/badge.svg)](https://github.com/aiden0rchad/oonfeeWRT/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/aiden0rchad/oonfeeWRT)](LICENSE)
 
-**Release baseline:** v0.1.0 uses schema 19. Its final source includes the
-polished Dashboard/navigation system; consent-bound controller-host speed
-tests; local owner/admin/operator/viewer accounts and session revocation;
-bounded redacted diagnostics ZIPs; and encrypted, previewed portable controller
-backup/restore with a persistent post-restore router-write gate.
+oonfeeWRT is a controller, not firmware. It runs on your server, NAS, mini-PC,
+or Mac and manages OpenWrt devices through their existing interfaces. Your
+routers stay on stock OpenWrt and continue to work with LuCI.
 
-The completed `v0.1.0` tag workflow, matching
-[GitHub Release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0),
-and GHCR manifest are the publication source of truth. That workflow gates four
-deterministic checksum archives, public `linux/amd64` + `linux/arm64` non-root
-scratch images, dependency vulnerability checks, SBOM/provenance, and a keyless
-OCI signature. Follow [`docs/INSTALL.md`](docs/INSTALL.md) only after the release
-is available. Historical
-[`v0.1.0-rc.1`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0-rc.1)
-remains the schema-17 upgrade and rollback baseline.
+## What it provides
 
-Speed tests are never automatic: the review identifies the Cloudflare endpoint,
-single-stream method, 15 MiB estimate, 30-second limit, privacy impact, and WAN
-saturation risk. Loaded latency and jitter stay unavailable because this method
-does not measure them. Diagnostics use stored controller evidence and make no
-router call. Backup export uses a separate passphrase; restore requires bounded
-preview, recent reauthentication, explicit destructive confirmation, and a
-controlled restart. Restored desired state is never automatically applied.
+- A fleet dashboard with WAN reachability, throughput, topology, clients,
+  radios, events, and controller-host speed tests.
+- Reviewed site configuration for networks, VLANs, DHCP, firewall zones, and
+  WLANs, with OpenWrt's rollback timer protecting every Apply.
+- Device adoption, health monitoring, telemetry, logs, RF tools, and explicit
+  source-coverage gaps instead of guessed data.
+- Local owner, administrator, operator, and read-only accounts with session
+  management and revocation.
+- Downloadable, redacted diagnostics bundles containing controller evidence and
+  stored router model, firmware, and capability data.
+- Encrypted controller backup and staged restore with compatibility checks,
+  controlled restart, and a persistent router-write gate.
+- Optional LLDP using the official OpenWrt `lldpd` package, with an exact plan,
+  separate consent, durable ownership records, and rollback.
 
-Optional TOTP MFA and gateway-run speed testing are deferred. A future gateway
-test remains a separate default-off official-feed capability with exact
-package, service, storage, and rollback review. No feature silently installs
-router code, packages, services, or firmware.
+## Project boundaries
 
-**Historical pre-tag v40 hardware checkpoint (2026-08-22):** both test routers
-were factory
-reset, re-adopted through the default-off ACL/login disclosure, and restored to
-the reviewed WPA2-only lab WLAN. Adoption installed no package. The separate,
-default-off LLDP capability was then proved end to end on both devices: exact
-official-feed plans, installation, physical-interface configuration, read-only
-diagnostics, hardened rollback to the stock package/service baselines, clean
-reinstallation, and measured AP-to-gateway topology. Each durable ledger row
-records only the observed additions (`libcap`, `libevent2-7`, and `lldpd`), the
-prior disabled/stopped `lldpd` service state, and the drift-checked configuration
-baseline. The v40 signed-in `/topology` deep link stayed on route and showed five
-nodes and four current links: gateway→Internet `wan`, AP→gateway `lan3`, and
-wireless test client→gateway `phy0-ap0` measured; wired test client→gateway
-`lan2` ambiguous. No reciprocal gateway→AP edge appeared. After a complete poll,
-the gateway association source was observed, the AP source was observed-empty,
-and only two truthful BusyBox VLAN-identity gaps remained. Progress, defects,
-and exact proof boundaries are recorded in
-[`docs/FRESH-START-VALIDATION.md`](docs/FRESH-START-VALIDATION.md).
+oonfeeWRT does not build or replace OpenWrt, run controller-authored software on
+routers, broker cloud access, or silently install packages.
 
-The merge-ready artifact is `dev-schema17-fresh-start-transparent-v40`
-(15,312,098 bytes; SHA-256
-`9c3a797c1470d8630f42dc77619007370aad553fae00078716a5a5a457c6b4cc`).
-Its settled normal/race/vet/tidy/module-verification, 274-test UI/build, bundle,
-diff, tree/history secret, and reproducibility gates all passed. An ignored,
-access-controlled final-RC recovery pair independently passed
-`recoverycheck` at schema 17 with two devices, two sealed credentials, four
-owned sections, one WLAN and no mesh; its passphrase and lab identifiers are
-intentionally excluded from the repository.
+Adoption can create only one scoped `oonfeewrt` login and one rpcd ACL JSON
+file after you approve the displayed plan. The router administrator credential
+used for that one-time action is not stored. Optional packages and
+configuration changes have separate review and consent flows.
 
-This v40 artifact is local release-candidate evidence, not itself a Git tag or
-published release asset. Building, restarting, checking, and copying recovery
-evidence changed no router state. FS-117 retains the superseded v39 runtime
-checkpoint rather than erasing that history.
+The controller changes only UCI sections it owns. Existing human-managed
+sections remain visible but are not silently rewritten.
 
-The Phase-4 completion and hardening work was merged through
-[PR #1](https://github.com/aiden0rchad/oonfeewrt/pull/1) as `ee15e2f`. At that
-checkpoint the local release gates passed: full Go normal and race suites,
-`go vet`, module-tidiness check, all 247 UI tests, production UI build, bundle
-budget, tree secret scan, `git diff --check` and reproducible binary check. This
-is a source checkpoint, not a tagged or packaged release.
+## Quick start with Docker Compose
 
-There is a controller you can run: a Go daemon and an embedded React UI that
-adopt an OpenWrt device, reconcile a site model onto it, and take themselves
-back off leaving the device byte-for-byte as it was — there is a test that
-asserts exactly that against real hardware. Devices are adopted, polled, charted
-and applied to today, on a Linksys WRT3200ACM and a TP-Link Archer C6 running
-OpenWrt 25.12.5.
+Requirements:
 
-What that does **not** mean: it has never run on more than two devices, and
-several features have never met the hardware they are for. Packaging the release
-candidate does not close those proof gaps. The section below says exactly which
-parts are unverified, and it is worth reading before installation.
+- Docker with Compose support.
+- A controller host that can reach each router's management address.
+- OpenWrt 21.02 or newer with SSH, `rpcd`, and the `uhttpd` ubus handler.
 
----
-
-## The positioning, precisely
-
-GL.iNet ships a friendly UI on top of OpenWrt — but it's their firmware, their
-fork, their maintenance burden, and it manages exactly one router. LuCI is stock
-and manages one device, exposing OpenWrt's full complexity with none of its
-ergonomics. UniFi has the ergonomics and the fleet view, but it's a closed
-appliance ecosystem.
-
-oonfeeWRT takes the third position:
-
-> **Stock OpenWrt firmware. Multiple devices. UniFi's ergonomics.**
-
-It deploys the way the Omada software controller and self-hosted UniFi Network
-do: **a Docker container you run yourself** — on a NAS, mini-PC, Pi, or home
-server — that connects out to your OpenWrt devices. One image, one volume,
-compose file included. The routers run nothing of ours; the controller has all
-the room it needs.
-
-You keep running whatever OpenWrt you already have, from wherever you already get
-it, upgraded on whatever schedule you like. oonfeeWRT connects to it, reads its
-state, and writes its config — the same config LuCI writes, through the same API
-LuCI uses.
-
-### The hard rule that defines this project
-
-**We do not maintain OpenWrt.** Not a fork, not a firmware image, not a build
-system, not a patch set, not a kernel module, not a device-side daemon we wrote.
-
-Everything oonfeeWRT touches on a device is either already in stock OpenWrt or
-already in the official package feeds. The optional **oonfeeWRT controller
-access payload** has only two possible device-side artifacts: **one JSON
-file**—an rpcd ACL granting a dedicated user scoped permissions—and the
-scoped login that adoption may create. Accepting its separate prompt installs
-or replaces that ACL file; it unlocks controller access to supported topology,
-radio channel/scan, OpenWrt log and fixed-target WAN ICMP observations. It does
-**not** install a package, binary, daemon, service or firmware. Leaving the box
-unchecked or cancelling leaves the router unchanged, and observations needing
-newer read grants stay visible as unavailable/partial source gaps.
-
-Separately, a post-adoption LLDP option can install the official OpenWrt
-`lldpd` package—not controller-authored code. It first requires permission to
-refresh the package index and shows the exact simulated package-manager plan.
-A second unchecked acknowledgement authorizes the package/service change. The
-controller records the complete package baseline and actual additions. A
-separate credentialed read-only plan identifies the exact physical interfaces;
-changing only `lldpd.config.interface` requires its own unchecked acknowledgement
-and retains the prior UCI export. Rollback shows another exact plan, restores and
-drift-checks that export, removes only the recorded added set, preserves every
-pre-existing package, restores the prior `lldpd` service state, and independently
-re-reads the final package/service state before clearing the ledger. Un-adoption
-is blocked while this rollback record exists.
-
-If a feature would require shipping controller-authored code that runs on the
-router, the feature is cut. That constraint is the entire reason this project
-can survive with a small team.
-
-### And we scope to what OpenWrt can already do
-
-No invented capabilities. If OpenWrt can't do it, oonfeeWRT doesn't pretend to.
-The value is *presentation and orchestration* of existing functionality, not new
-functionality.
-
----
-
-## Non-goals, stated plainly
-
-- ❌ Building, patching, or distributing OpenWrt firmware
-- ❌ A device-side agent or daemon of our own authorship
-- ❌ Adopting or managing UniFi hardware, or any non-OpenWrt device
-- ❌ Reimplementing Ubiquiti's inform protocol
-- ❌ Features OpenWrt doesn't already support
-- ❌ Cloud services, SSO, remote-access brokering
-- ❌ Replacing LuCI — oonfeeWRT coexists with it, permanently and safely
-
----
-
-## What you get
-
-One screen where you define a **site** — networks, VLANs, WiFi, firewall zones —
-and it reconciles onto every OpenWrt device you've pointed it at. Plus the live
-view UniFi is loved for: topology, clients, radios, traffic, logs.
-
-In the current source, topology, radios, client observability and Logs expose
-their limits instead of filling gaps: telemetry is durable rollups only; the
-`wifi-v1` experience score is null unless RSSI, retry delta and TX-failure delta
-all exist in the same sample; site latency/loss is one fixed gateway-vantage
-ICMP probe to `1.1.1.1`; RF scans are explicit and disruption-acknowledged; and
-router logs use bounded REST pagination with source coverage. The WebSocket is
-only the bounded `device.stats` focus/live channel, not a log stream.
-The schema-15 Policy Engine also has one cross-feature Master Table and a
-partial Object Manager: it compiles visible, unsaved IPv4 `Secure` drafts and
-static network routes; device/group routing, QoS and application outcomes stay
-explicitly gated.
-
-The initial 2026-08-20 live pass kept router capability refresh off. It showed
-four Topology nodes and three current links (partial), four history intervals,
-four stable radios with unknown channel-list/DFS evidence and no scan access,
-63 General log rows with missing router-log coverage, and 169 Audit rows with
-keyset pagination and detail. Client Observability joined client/AP/radio/path
-evidence while fixed-`1.1.1.1` ICMP and historical source coverage remained
-unavailable. The later, explicitly accepted scoped ACL refresh superseded only
-that source-access boundary: both routers then supplied current topology and
-OpenWrt-log observations, and the Gateway supplied fixed-target ICMP rollups.
-Historical source coverage remains unavailable rather than inferred, and no RF
-scan was run. Object Manager compiled one visible static-route draft; it was
-neither saved nor applied, so it changed neither the database nor a router. The
-subsequent bounded Phase-3 work created and removed one redundant
-documentation-network firewall policy, then put two physical iPhones on one
-isolated WRT BSS. Both proved distinct DHCP, fixed-IP WAN, DNS plus WAN and
-denial to a known-live LAN HTTP listener. Reciprocal raw Safari peer-IP failures
-were observed but lacked a known-live peer listener or positive control, so
-literal bidirectional peer data-plane isolation remains open. A durable cleanup
-operation removed only the proof WLAN, retained the
-operator-created Guest network on VLAN 3 and ended with a zero-change fleet
-plan. STATUS §5bk records the corrected boundary.
-
-Change an SSID password once. It lands on every AP across two bands each,
-correctly, with automatic rollback if anything goes wrong. That's the product.
-
----
-
-## What is NOT tested yet
-
-Stated up front rather than discovered later. Everything below is **built and
-unit-tested, and has never run on the hardware it is for** — because the lab has
-exactly two devices: a Linksys WRT3200ACM and a TP-Link Archer C6 v2.
-
-Nothing here is known to be broken. It is unverified, which is a different claim,
-and this project's whole position is that those two must not be blurred.
-
-| Feature | The claim nobody has checked | What would settle it |
-|---|---|---|
-| **Mesh `peered`** | that two nodes find each other and the backhaul carries traffic | a second *mesh-capable* device — only one of these two is: the WRT advertises mesh support and its driver then refuses to bring the interface up, which is one of the defects the controller warns about |
-| **Wireless uplink** | that a station associates and bridges | a device whose radio runs station mode — measured, *neither* of the two here does |
-| **Fan-out beyond two APs** | that a site applies cleanly across three or more | any third AP |
-| **Class B / second class-C generation budget** | that the passed ath79/QCA956X budget generalizes to a different constrained SoC/release generation | specifically an **MT7621** (class C) or **MT7981/Filogic** (class B) |
-| **Per-client accounting under *hardware* flow offload** | that the two genuinely conflict there | an MT7621-class part with hardware offload on |
-
-The budget row is the one worth not lumping in with the others: the exact
-60-minute gate passed on the class-C ath79/QCA956X C6 with zero poll failures,
-flash writes or package changes. An MT7621/Filogic device now adds ecosystem
-breadth rather than supplying the first constrained-device measurement.
-
-The gateway row was closed on 2026-08-19. After an explicit one-time operator
-conversion made the adopted Gateway + AP + Switch WRT VLAN-aware, the signed-in
-browser applied VLAN2, its static interface, configurable DHCP, firewall-zone
-LIST and forwarding/rules. A real Mac proved DHCP, DNS and WAN; Policy Engine
-blocked WAN while retaining DHCP/DNS and restored it; DHCP disable/custom pool
-behavior was also measured. oonfeeWRT still will not create the VLAN-aware
-precondition itself. STATUS §5be records the proof operations; §5bg records the
-confirmed cleanup that retained VLAN2, restored DHCP `100`/`150`/`12h`, removed
-the temporary WLAN and returned policy provenance to the legacy WAN-only
-default.
-
-**What HAS been verified on real hardware** — adoption, and un-adoption that
-leaves the device **byte-for-byte as it was**: adopt, apply a WLAN, un-adopt,
-and every UCI config and the ACL directory diff clean against a pre-adoption
-snapshot, with the two owned sections handed back and the login and ACL file
-gone (ROADMAP Phase 0's second proof, run 2026-08-17). Apply with an armed
-rollback, watched changing on air and reverting on air; 802.11r/k roaming across two APs; capability probing and the
-driver-defect warnings; telemetry and the whole UI. Plus one thing
-learned the hard way: on Marvell hardware, PMF (`ieee80211w`) kills the 5 GHz
-radio within ~90 seconds of a fast-transition roam and needs a physical power
-cycle. The controller warns before it lets you do that, with the measurement
-attached.
-
----
-
-## Getting it running
-
-The controller is required; router packages are optional and default-off. Every
-step below is what the code actually does today, verified against stock OpenWrt
-25.12.5 on two hardware classes.
-
-For checksummed release binaries, the multi-platform container, persistence,
-backup, upgrade and reverse-proxy instructions, use
-[`docs/INSTALL.md`](docs/INSTALL.md). The shorter path below builds from source.
-
-### The router: no controller-authored executable
-
-There is no oonfeeWRT package, custom feed, init script, firmware, or agent. A
-stock OpenWrt device already has the default-adoption prerequisites: `rpcd`, and
-`uhttpd` with the ubus handler enabled. Adoption requires a default-off
-acknowledgement before it uses **SSH access once** to install the controller
-access payload: one ACL JSON file and
-one scoped login. The review panel names the exact path and grants. They cover
-observations, later acknowledged Apply operations for controller-owned
-network/wireless/firewall/DHCP sections, and runtime 802.11k neighbour-list
-updates; client disconnect/steering is not granted. No package, binary, daemon,
-service, or firmware is installed by adoption. Optional official-feed packages,
-currently only `lldpd`, use the separate two-stage workflow described above.
-
-```
-Prerequisites on the device
-  1. OpenWrt 21.02 or newer, reachable on the network
-  2. SSH enabled (dropbear is on by default)
-  3. A root password set          <-- see the warning below
-```
-
-**Set a root password before adopting.** A stock OpenWrt with no root password
-authenticates *anything* — we measured it accepting an empty password, the
-correct one, and a deliberately wrong one over ubus, plus the SSH `none` method.
-Adoption probes for this and shows a warning, and it deliberately does not
-refuse, because you may be knowingly running that way on a trusted lab network.
-But it means the credential you type proves nothing about who you are:
+Create a private working directory and download the release Compose file:
 
 ```sh
-ROUTER_ADDRESS=192.0.2.1        # replace with the router's address
-ssh root@"$ROUTER_ADDRESS" passwd
+mkdir -p oonfeewrt
+cd oonfeewrt
+
+curl --fail --location \
+  --output docker-compose.yml \
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.0/deploy/docker-compose.yml
+
+umask 077
+head -c 32 /dev/urandom | base64 > passphrase
+sudo chown 65532:65532 passphrase
+sudo chmod 600 passphrase
+
+docker compose up -d
 ```
 
-After the separate controller-access-payload acknowledgement, adoption uses
-that credential to install or replace one ACL JSON file and create one scoped
-login, and never stores it. Removing the device asks for it again. Leaving the
-prompt unchecked or cancelling makes neither change; observations that require
-the capability remain visibly unavailable.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
+account. The default Compose configuration publishes HTTP only on host
+loopback, runs as UID 65532, drops all capabilities, uses a read-only root
+filesystem, and stores controller state in a named volume. It pulls
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.0` for `linux/amd64` or `linux/arm64`.
 
-### The controller
+The `passphrase` file unlocks the controller keyring and is not your owner
+account password. Back it up with the controller state and keep both private.
+`docker compose down -v` deletes the named data volume.
+
+Bridge networking works on Linux and Docker Desktop. Layer-2 discovery does not
+cross the bridge, so add routers by address. Linux host networking is an
+explicit opt-in described in the Compose file.
+
+For checksummed binaries, signature verification, reverse-proxy TLS,
+persistence, upgrades, and rollback, follow the
+[installation guide](docs/INSTALL.md).
+
+## First adoption
+
+1. Set a router root password if it does not already have one:
+
+   ```sh
+   ROUTER_ADDRESS=192.0.2.1
+   ssh -t root@"$ROUTER_ADDRESS" passwd
+   ```
+
+   The controller warns rather than blocking an explicitly trusted,
+   passwordless lab router. Do not rely on that outside isolated testing.
+
+2. In **Devices**, add the router by address or run the on-demand discovery
+   scan.
+3. Review the controller-access payload. Approving it creates the scoped login
+   and ACL; cancelling changes nothing.
+4. Inspect discovered capabilities and source gaps.
+5. Preview configuration before Apply. Router changes never happen merely
+   because a device was discovered or listed.
+
+## Safety model
+
+- Apply uses `uci.apply` with a rollback window, then confirms only after the
+  controller can read the expected state. An interrupted or unhealthy Apply
+  reverts on the router.
+- Ownership tags restrict changes and cleanup to controller-created sections.
+- RF scans, speed tests, capability installation, and other disruptive actions
+  require explicit acknowledgement.
+- Un-adoption restores or removes controller-owned configuration, then removes
+  the scoped login and ACL. It is blocked while an optional LLDP installation
+  still has a rollback record.
+- Restoring a controller never automatically applies restored desired
+  configuration. Router writes remain suppressed until an owner reviews and
+  explicitly resumes them.
+- The HTTP listener has no native TLS. Keep it on loopback or an isolated
+  management network, and use a trusted reverse proxy for remote access.
+
+## Backup and diagnostics
+
+Owners can use **Settings → Backup & Restore** to export an encrypted
+`.oowrtbak` file. Export requires recent account reauthentication and a
+separate passphrase that the controller does not retain. Restore decrypts and
+validates in disposable staging, shows a compatibility preview, creates a
+safety backup, and completes through a controlled restart.
+
+For filesystem-level recovery, `oonfeewrt.db` and `keyring.json` are one
+unit. The runtime passphrase cannot recreate a lost keyring. See the
+[installation guide](docs/INSTALL.md#back-up-and-upgrade) before copying live
+state.
+
+Diagnostics bundles are bounded, redacted ZIP files generated from stored
+controller evidence. They make no router management call and exclude
+credentials, WLAN keys, private keys, session material, and controller
+passphrases.
+
+## Current limitations
+
+- Hardware validation covers a Linksys WRT3200ACM and TP-Link Archer C6 v2 on
+  OpenWrt 25.12.5. Three-or-more-AP fan-out, real mesh backhaul, wireless
+  uplink, MT7621, and MT7981/Filogic remain unverified.
+- The speed test runs from the controller host or container through Cloudflare,
+  not from a router. It uses approximately 15 MiB, is bounded to 30 seconds,
+  and can temporarily saturate the WAN. Loaded latency and jitter are not
+  measured.
+- Native controller TLS, TOTP MFA, cloud remote access, and gateway-run speed
+  tests are not included in v0.1.0.
+- Optional LLDP may install official-feed packages. Adoption itself never
+  installs a package, daemon, service, firmware, or executable.
+
+Detailed hardware evidence and known gaps are in the
+[fresh-start validation record](docs/FRESH-START-VALIDATION.md) and
+[parity matrix](docs/PARITY-MATRIX.md).
+
+## Build from source
+
+Go 1.26.6 and Node.js 22 are the release toolchain.
 
 ```sh
-make build                    # npm ci + embedded UI + versioned static binary
+make check
+make build
 ./oonfeewrtd -data-dir "$PWD/.run" -listen 127.0.0.1:8080
 ```
 
-Run `make check` before deployment. A release build additionally requires
-`make release-check RELEASE_VERSION=vX.Y.Z`, which refuses a dirty tree and
-byte-compares two complete four-platform archive sets and their checksum
-manifests, then executes the host archive's controller and recovery checker.
-OCI verification uses an exact-tag, multi-platform, no-push build in the gate;
-the publish job rebuilds that immutable tag with SBOM/provenance, and the
-signed registry digest is the image's publication identity.
+For unattended startup, use `-passphrase-file` with a mode-`0600` file.
+oonfeeWRT rejects passphrases supplied through environment variables.
 
-On first start it asks for an **operator passphrase**, twice. That passphrase
-unwraps the controller keyring used to seal device credentials, WLAN and mesh
-keys, and secret-derived ownership verifiers at rest. There is no recovery if
-either the passphrase or the matching keyring is lost. Then open the address and
-create the administrator account the UI asks for. Perform that one-time setup
-through `localhost` or the controller's literal IPv4/IPv6 address; DNS hostnames
-are refused until an administrator exists to prevent first-run DNS rebinding.
+## Documentation
 
-### Finding the device
-
-The adopt screen has a **Scan** button that sweeps the networks this host is
-attached to and lists what answers as OpenWrt. It tells you how many addresses
-it will probe before it probes them, and what it is *not* covering and why —
-because a controller that quietly skipped your subnet would report "no devices
-found", which reads as a fact about your network rather than about itself.
-
-The probe sends **no password and creates no session**. It is one
-unauthenticated request asking the device to list what it can do, which stock
-OpenWrt answers to anyone who can reach the port. Scanning is on demand only:
-there is no periodic rescan, because sweeping your subnet on a timer forever is
-not something a controller should do unasked.
-
-It will not tell you the model. That needs a credential — stock OpenWrt refuses
-`system.board` to an unauthenticated caller — so the list shows the address and
-the shape of the device (radios up, gateway, DHCP server) and says the model is
-unknown until you sign in. Better a blank than a guess.
-
-**Add-by-address stays first-class**, and you will need it if the controller
-runs in a container on a bridge network or on Docker Desktop: there is no LAN
-layer 2 to sweep from there, so the scan will come up empty while adoption by
-address works perfectly. Discovery is a convenience; adoption never depends on
-it.
-
-For an unattended host (a container, a systemd unit) supply the passphrase from
-a file instead:
-
-```sh
-OONFEE_DATA_DIR=/data OONFEE_LISTEN=:8080 OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase   ./oonfeewrtd
-```
-
-The file must be mode `600` or it is refused. There is deliberately **no
-`OONFEE_PASSPHRASE` environment variable** — env is readable from `/proc`,
-inherited by child processes, and printed by `docker inspect` — and setting one
-is an error rather than being ignored, so the mistake is loud.
-
-Treat `oonfeewrt.db` and `keyring.json` as one restore unit. Back up a live WAL
-database with SQLite's backup API, or stop the controller cleanly so its
-checkpoint completes; pair that database snapshot with the keyring from the
-same controller state. A passphrase cannot recreate the keyring's random data
-key. Database backups made before schema 14 may contain plaintext WLAN/mesh keys
-and secret-derived ownership hashes, and migration does not rewrite or delete
-old backups. Keep them protected and require explicit operator confirmation
-before deleting them.
-
-Schema-19 source also exposes **Settings → Backup & Restore** to owners over TLS
-or direct loopback. Export requires a recent account-password reauthentication
-and a separate export passphrase of at least 16 characters (maximum 4096 UTF-8
-bytes); the controller never stores that passphrase. Restore preview requires
-it once, clears it, and confirmation requires it again plus the current
-controller boot/keyring passphrase. That runtime passphrase is not the signed-in
-account password and must remain stable with the persistent data volume across
-restarts. This workflow is present in v0.1.0; historical v0.1.0-rc.1 artifacts
-remain schema 17 and do not contain it.
-
-After a successful source-built restore, the prior controller is retained as a
-mode-0600 encrypted artifact at
-`<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`, protected by the
-same export passphrase used for the confirmed restore. It is not automatically
-expired by time. After the applied-restore audit receipt is safely cleared, the
-controller targets three recognized safety artifacts, fills available slots
-newest-first, and prunes the rest. It always preserves artifacts referenced by
-an active restore marker, receipt or suppression record, even if that
-temporarily exceeds three. Copy one promptly to protected backup storage for
-longer retention. It can be fed back through the same staged restore workflow.
-Router writes remain suppressed until owner review and explicit resume, although
-read-only monitoring may resume after the controlled restart. Explicit resume
-immediately re-enables automatic 802.11k neighbour maintenance and may write
-hostapd RRM neighbour state; it does not automatically Apply restored desired
-configuration.
-
-Router configuration archives are a separate secret boundary: a normal tarball
-contains wireless keys in plaintext. Encrypt the stream before retaining it,
-verify recovery by streaming decryption into archive inspection, and do not
-leave a temporary plaintext tar behind. The encrypted archive is only as safe
-and recoverable as its passphrase and encryption tooling.
-
-### What the setup is protecting, and what it is not
-
-Low friction and secure pull in opposite directions in exactly three places.
-Here is where each line was drawn, so you can move it knowingly:
-
-| Choice | Friction | What it buys |
-|---|---|---|
-| **No default credentials, anywhere.** First run creates the admin account interactively | one extra screen | A shipped default nobody rotates is the most common way a self-hosted controller ends up on the internet with a known password |
-| **The passphrase is not in the environment** | you must create a file for unattended boot | `/proc`, child processes and `docker inspect` never see it |
-| **A device with no root password is warned about, not refused** | none | You keep control of a real tradeoff; the controller's own login is password-protected regardless |
-
-And the parts that are simply free, because they cost you nothing to have:
-
-- **The controller does not run as root on your device.** After explicit
-  adoption/capability opt-in, it uses a dedicated `oonfeewrt` login scoped to
-  one ACL file. That login and JSON file are the maximum controller-access
-  footprint; neither is executable code. Review the ACL like code—it defines
-  the blast radius.
-- **The operator credential is never stored.** It is used for one transaction
-  and requested again at removal, because a controller that could delete its own
-  permissions could also widen them.
-- **Certificates and host keys are pinned on first use.** A device whose TLS
-  certificate or SSH host key changes is refused, not clicked through.
-- **Wireless keys are write-only through the API.** Authenticated WLAN and mesh
-  reads return `has_key`, never the key; legacy `?reveal=1` URLs remain redacted.
-  Leaving the key blank on an edit preserves the stored value.
-- **Removal is complete and tested.** Adopt, use, remove, and the device is
-  byte-for-byte as it was — there is a test that asserts exactly that against
-  real hardware.
-
-### One thing to decide about TLS
-
-At-rest sealing does not protect a key while the daemon is using it or while a
-browser submits a new one. Over plain HTTP the session cookie cannot carry the
-`Secure` attribute, because a browser silently drops a `Secure` cookie on an
-insecure origin and you would be unable to sign in at all. Use plain HTTP only
-on an explicitly trusted management network. If the controller is reachable
-from anywhere else, terminate TLS at a trusted reverse proxy. This release has
-no native controller TLS listener. Cookie attributes upgrade automatically once
-the proxy sends `X-Forwarded-Proto: https`.
-
----
-
-## Documents
-
-| File | What's in it |
-|---|---|
-| [`docs/INSTALL.md`](docs/INSTALL.md) | Binary and container installation, exact router opt-ins, persistence, TLS and recovery |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Components, transport, data model, provisioning + rollback, telemetry, capability probing |
-| [`docs/DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md) | Target hardware classes, hard resource budgets, where the cost actually is |
-| [`docs/PARITY-MATRIX.md`](docs/PARITY-MATRIX.md) | Every UniFi screen → OpenWrt source → verdict, with dependency tier |
-| [`docs/UI-SPEC.md`](docs/UI-SPEC.md) | Navigation map, layout system, validated design tokens, screen specs |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phases with acceptance criteria |
-| [`docs/RISKS.md`](docs/RISKS.md) | What kills this project |
-| [`RELEASE-NOTES-v0.1.0.md`](RELEASE-NOTES-v0.1.0.md) | v0.1.0 highlights, upgrade boundary, security scope and known limitations |
-
----
-
-## The single most important design decision
-
-Every config apply goes out as:
-
-```
-uci.set (batched, stages only) → uci.apply {rollback: true, timeout: 90}
-                               → poll uci.confirm until it succeeds
-                               → timer cancelled, change is permanent
-                               (if confirm never lands, the device reverts itself)
-```
-
-Note: **no `uci.commit` before `apply`** — apply is what commits the staged
-delta with the rollback snapshot. Committing first silently disarms the
-protection. See ARCHITECTURE §4.
-
-This mechanism already exists in OpenWrt — it is what LuCI's apply countdown
-uses. Build it in Phase 0 and test it by deliberately breaking a device. Without
-it, one bad VLAN push means a car trip, and the project dies in its first week of
-real use.
-
----
-
-## Target hardware, and the budget that follows
-
-Three classes, weakest one sets the rules: **A** WRT3200ACM (roomy — 512 MB RAM,
-256 MB NAND), **B** MT7981/Filogic AX3000 units (the sweet spot), **C** MT7621
-AX3000 units (880 MHz MIPS, often 16 MB flash — **this class sets the budget**).
-
-| Condition | CPU on class C | Flash writes |
-|---|---|---|
-| Idle, no UI open | < 0.5% | **zero** |
-| A UI screen showing this device is open | < 3% | **zero** |
-
-Zero new daemons by default. Everything beyond stock is opt-in per device with
-its cost stated. Collection is demand-driven: baseline ~60s always, focused
-5–10s only while someone is looking. See [`DEVICE-BUDGET.md`](docs/DEVICE-BUDGET.md).
-
-**The one tradeoff you can't engineer away** — now narrower than we thought.
-Per-client bandwidth accounting needs connection accounting, which *hardware*
-flow offloading bypasses on the MT7621-class parts that need it to route at
-gigabit. **Software** offloading does not: measured on kernel 6.12 with an
-nftables flowtable and a flow confirmed in the fast path, conntrack byte
-counters stayed complete. So the conflict is real only where hardware offload
-is, and remains untested there. Either way we never change offload settings
-silently — we state the tradeoff and let the user choose. Default: leave it
-alone, accounting off.
-
----
-
-## The second most important design decision
-
-**Ownership tagging.** oonfeeWRT only ever writes UCI sections it created, marked
-with `option oonfeewrt '1'`. Anything a human wrote in LuCI or over SSH is read
-for display and never touched. Conflicts are surfaced loudly, never resolved
-silently.
-
-You are a guest on someone else's router. Act like one.
-
----
+- [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.0 release notes](RELEASE-NOTES-v0.1.0.md)
+- [Architecture and security boundaries](docs/ARCHITECTURE.md)
+- [Hardware validation](docs/FRESH-START-VALIDATION.md)
+- [Feature parity and evidence](docs/PARITY-MATRIX.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Risk register](docs/RISKS.md)
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE), [`NOTICE`](NOTICE), and the
-generated [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES) bundle shipped with
-every archive and container image.
-
-That choice has a practical consequence worth stating, because it decides what
-this project may borrow from:
-
-| Source | License | Usable here |
-|---|---|---|
-| **LuCI** — drives the same rpcd/ubus API we do | Apache-2.0 | ✅ Compatible. Attribute in `NOTICE` |
-| `rpcd`, `uhttpd` interfaces | ISC | ✅ Permissive |
-| **GL.iNet firmware and packages** | GPL-2.0 | ❌ Incompatible with Apache-2.0 |
-| **[OpenSOHO](https://github.com/rubenbe/opensoho)** — nearest neighbour in intent | AGPL-3.0 | ❌ Read it, don't copy it |
-| **[OpenWISP](https://openwisp.org/)** — the incumbent, fleet/WISP scale | GPL-3.0 | ❌ Read it, don't copy it |
-| **[obsy/apcontroller](https://github.com/obsy/apcontroller)** — agentless, SSH push | GPL-3.0 | ❌ Read it, don't copy it |
-
-**On borrowing from the adjacent projects.** The question comes up, so: the
-copyleft ones are a **one-way door**. Apache-2.0 code can go *into* a GPL-3.0
-project; GPL-3.0 or AGPL-3.0 code cannot come *here* without relicensing all of
-oonfeeWRT. That is a licence fact, not a judgement about their quality — they
-are good projects, and the interfaces they drive (`ubus`, `uci`, `rpcd`) belong
-to OpenWrt and are free for anyone to read.
-
-It is also worth knowing how little overlap there would be. Each takes a
-device-side dependency this project's hard rule forbids: OpenSOHO needs
-`openwisp-config`, `openwisp-monitoring` and `luci-app-openwisp` installed;
-OpenWISP ships agent packages; apcontroller `scp`s a script and runs it over
-SSH. And the mechanism that costs the most effort here — `uci apply` with a
-rollback timer, health-gated before confirm — has no counterpart in any of
-them, because an agent-based design does not need one: a broken push just means
-the agent stops checking in. There is no code to lift for the hardest part.
-
-Worth reading for **design**, particularly OpenSOHO on per-device versus
-fleet-wide wifi modelling, and it does read state back off the device rather
-than only templating at it — the closest anyone comes to this project's
-position.
-
-This lands the right way round. LuCI is both the legally compatible option and
-the technically relevant one — it is the only widely-deployed client that talks
-to `rpcd` over HTTP the way a controller must, so its handling of sessions,
-batching and ACLs is grounded in the same constraints we measured.
-
-Vendor firmware, GL.iNet's included, is the opposite on both counts: licensed
-incompatibly, and architecturally inverted — it runs **on** the router, as root,
-over the local ubus socket, managing one device. Almost none of the behaviour
-this project had to discover (session-bound confirm, the two denial channels,
-ACL scoping, the armed-window token) is visible from that position, so there is
-little there to learn from even setting the license aside.
+Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
+[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES). Every release archive and
+container image includes the same notices.
