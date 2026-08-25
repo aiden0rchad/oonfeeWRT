@@ -10,6 +10,10 @@ oonfeeWRT is a controller, not firmware. It runs on your server, NAS, mini-PC,
 or Mac and manages OpenWrt devices through their existing interfaces. Your
 routers stay on stock OpenWrt and continue to work with LuCI.
 
+**Docker is optional.** Run the standalone binary directly on a supported
+64-bit Linux or macOS host, or use the container/Compose setup. The controller
+does not need a dedicated machine and is not installed on the managed routers.
+
 ## Preview
 
 [![oonfeeWRT live dashboard showing Internet health, speed tests, and fleet status](docs/images/dashboard-overview.jpg)](docs/images/dashboard-overview.jpg)
@@ -50,13 +54,53 @@ configuration changes have separate review and consent flows.
 The controller changes only UCI sections it owns. Existing human-managed
 sections remain visible but are not silently rewritten.
 
-## Quick start with Docker Compose
+## Installation options and requirements
+
+oonfeeWRT supports two equivalent ways to run the controller:
+
+| Method | Supported controller hosts | Notes |
+|---|---|---|
+| Standalone binary | `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` | No Docker required; the UI is embedded in the binary |
+| Container / Docker Compose | `linux/amd64`, `linux/arm64` images | Convenient for an existing NAS, mini-PC, SBC, or Docker Desktop host |
+
+A controller host must be able to reach each router's management address.
+Remote sites need an existing routed management network or VPN; oonfeeWRT does
+not provide cloud brokering or automatic NAT traversal.
+
+Managed routers require OpenWrt 21.02 or newer with SSH, `rpcd`, and the
+`uhttpd` ubus handler. Hardware and driver capabilities still vary, so begin
+with one non-critical device and review the detected capability gaps.
+
+A 64-bit host with 1 GB of RAM and 2 GB of free storage is a practical starting
+point. The controller's engineering envelope is at most 256 MB steady-state RSS
+at 25 devices, 2% of one modern CPU core for an idle fleet, and 2 GB of disk at
+the full 13-month retention depth.
+
+oonfeeWRT is not memory-only. Raw telemetry is held in RAM temporarily;
+completed rollups, configuration, accounts, events, and audit history are
+stored in SQLite. Preserve the data directory and its matching `keyring.json`
+and passphrase when running either installation method.
+
+### Run the standalone binary
+
+Download and checksum-verify the archive for your platform by following the
+[binary installation guide](docs/INSTALL.md#install-the-binary), then run:
+
+```sh
+install -d -m 0700 "$PWD/data"
+./oonfeewrtd -data-dir "$PWD/data" -listen 127.0.0.1:8080
+```
+
+The first interactive start asks you to create the controller passphrase. Open
+[http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
+account. For unattended startup, use `-passphrase-file` with a mode-`0600`
+file as described in the installation guide.
+
+### Run with Docker Compose
 
 Requirements:
 
 - Docker with Compose support.
-- A controller host that can reach each router's management address.
-- OpenWrt 21.02 or newer with SSH, `rpcd`, and the `uhttpd` ubus handler.
 
 Create a private working directory and download the release Compose file:
 
@@ -93,6 +137,34 @@ explicit opt-in described in the Compose file.
 For checksummed binaries, signature verification, reverse-proxy TLS,
 persistence, upgrades, and rollback, follow the
 [installation guide](docs/INSTALL.md).
+
+## Common questions
+
+### Is Docker required?
+
+No. Docker Compose is one quick-start option. The release also includes
+standalone 64-bit Linux and macOS binaries with the web UI embedded.
+
+### Does the controller run on an OpenWrt router?
+
+No. It runs separately on a computer, NAS, SBC, or server and manages stock
+OpenWrt devices. This keeps controller storage and upgrades away from the
+routers' limited flash, RAM, and firmware lifecycle.
+
+### Why does adoption ask for SSH access?
+
+SSH is a bounded bootstrap, cleanup, and separately approved optional-package
+path, not the steady-state management transport. Stock rpcd cannot create the
+scoped login and ACL through ubus, even when logged in as root. The administrator
+credential is used for the approved action and is not stored. Normal polling
+and configuration use rpcd/ubus.
+
+### What happens if a configuration change breaks connectivity?
+
+Every Apply is previewed and uses OpenWrt's rollback window. The controller
+confirms only after reconnecting and reading the expected state. If the router
+becomes unreachable or the operation is interrupted, OpenWrt rolls the change
+back. The controller also limits cleanup and writes to UCI sections it owns.
 
 ## First adoption
 
@@ -195,3 +267,21 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES). Every release archive and
 container image includes the same notices.
+
+## AI transparency
+
+AI coding tools have been used substantially during development to help draft
+and iterate on implementation code, tests, debugging, and documentation. The
+maintainer supplies the product direction, networking architecture, security
+boundaries, hardware knowledge, review, and final decisions, and remains
+responsible for what the project ships.
+
+AI output is not treated as evidence that the software is correct or secure.
+CI runs Go tests, `go vet`, the race detector, `govulncheck`, UI unit and browser
+tests, `npm audit`, release smoke tests, and repository/history secret scans.
+Hardware behavior is checked separately against physical OpenWrt devices and
+the known coverage gaps are published above.
+
+oonfeeWRT has not received an independent security audit or third-party
+penetration test. It is a new project: start with non-critical hardware, keep
+backups, review every proposed router change, and report unexpected behavior.
