@@ -27,6 +27,10 @@ const loadScale = 65536.0
 type call struct {
 	inv    ubus.Invocation
 	decode func(json.RawMessage, *Snapshot) error
+	// adaptiveWait is deterministic elapsed time deliberately spent inside the
+	// call. It remains part of Snapshot.Duration for diagnostics, but is not
+	// evidence that the router itself needs a slower polling interval.
+	adaptiveWait time.Duration
 	// radioInventory marks the optional getWirelessDevices source. Its outcome
 	// is tracked independently from system.info: a healthy device poll does not
 	// make a denied radio refresh current.
@@ -44,6 +48,17 @@ type call struct {
 	// optional marks a call whose failure degrades the snapshot rather than
 	// meaning the device is unreachable.
 	optional bool
+}
+
+// setBusyDuration removes only waits whose result decoded successfully from the
+// duration used by adaptive backoff. The total Snapshot.Duration is unchanged.
+func (snap *Snapshot) setBusyDuration(completedWait time.Duration) {
+	busy := snap.Duration - completedWait
+	if busy < 0 {
+		busy = 0
+	}
+	snap.busyDuration = busy
+	snap.busyDurationKnown = true
 }
 
 func degradationCause(err error, status ubus.Status) DegradationCause {
@@ -142,6 +157,7 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 			len(results), len(calls))
 		return snap
 	}
+	var completedWait time.Duration
 
 	for i, res := range results {
 		spec := calls[i]
@@ -185,12 +201,14 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 				return snap
 			}
 		} else {
+			completedWait += spec.adaptiveWait
 			snap.topologyAnswered(spec.topologySource)
 			if spec.assocIface != "" {
 				snap.AssocAnswered[spec.assocIface] = true
 			}
 		}
 	}
+	snap.setBusyDuration(completedWait)
 	// Decided by the ANSWERS, not by the intent.
 	//
 	// Having a current interface list is necessary and not sufficient. The

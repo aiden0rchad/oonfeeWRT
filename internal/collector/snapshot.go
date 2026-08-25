@@ -41,6 +41,11 @@ type Snapshot struct {
 	At       time.Time
 	Duration time.Duration
 
+	// busyDuration excludes deliberate call pacing only for adaptive backoff.
+	// Duration above remains the complete externally visible diagnostic.
+	busyDuration      time.Duration
+	busyDurationKnown bool
+
 	// Err is set when the poll as a whole failed — unreachable, not logged in,
 	// transport error. Every other field is then meaningless.
 	Err error

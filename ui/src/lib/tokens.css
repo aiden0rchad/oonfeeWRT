@@ -1103,7 +1103,6 @@ a {
 
 .dashboard-page-heading,
 .dashboard-section-heading,
-.dashboard-wan-context,
 .speedtest-active-heading {
   display: flex;
   align-items: center;
@@ -1144,7 +1143,25 @@ a {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.dashboard-operations-grid {
+  align-items: stretch;
+}
+
+.dashboard-detail-grid {
   align-items: start;
+}
+
+.dashboard-operations-grid > section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dashboard-operations-grid > section > div:last-child {
+  flex: 1;
+  min-height: 0;
 }
 
 .dashboard-topology-card {
@@ -1273,28 +1290,169 @@ a {
   color: var(--critical);
 }
 
-.dashboard-wan-context {
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+.dashboard-internet-health {
+  display: flex;
+  height: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.dashboard-wan-reachability {
+.dashboard-wan-path {
   display: grid;
-  justify-items: end;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, .72fr) auto minmax(0, 1.2fr);
+  align-items: stretch;
+  gap: 7px;
+  min-width: 0;
+}
+
+.dashboard-wan-path-node {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px 9px 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.dashboard-wan-path-node::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--series-1);
+  content: '';
+}
+
+.dashboard-wan-path-node:last-child::before {
+  background: var(--text-muted);
+}
+
+.dashboard-wan-path-node[data-state='up']::before {
+  background: var(--good);
+}
+
+.dashboard-wan-path-node[data-state='missing']::before {
+  background: var(--critical);
+}
+
+.dashboard-wan-path-node > span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-wan-path-node > strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-wan-path-link {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.dashboard-wan-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+
+.dashboard-wan-toolbar-actions,
+.dashboard-wan-coverage-key {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dashboard-wan-toolbar-actions {
+  justify-content: flex-end;
+  gap: 8px 12px;
+}
+
+.dashboard-wan-coverage-key {
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.dashboard-wan-coverage-key span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dashboard-wan-coverage-key span::before {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent-text);
+  content: '';
+}
+
+.dashboard-wan-coverage-key span[data-state='unavailable']::before {
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
 }
 
 .dashboard-wan-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  margin: 0 -14px;
-  background: var(--border);
+  flex: 1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(142px, 1fr));
+  gap: 8px;
+  min-height: 0;
 }
 
 .dashboard-metric {
+  --dashboard-trend-color: var(--series-1);
   min-width: 0;
-  padding: 12px 14px 8px;
-  background: var(--surface-1);
+  padding: 10px 11px 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--dashboard-trend-color) 7%, var(--surface-0)), var(--surface-0) 48%);
+}
+
+.dashboard-metric[data-tone='upload'] {
+  --dashboard-trend-color: var(--series-2);
+}
+
+.dashboard-metric[data-tone='latency'] {
+  --dashboard-trend-color: var(--series-7);
+}
+
+.dashboard-metric[data-tone='loss'] {
+  --dashboard-trend-color: var(--series-3);
+}
+
+.dashboard-metric-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-metric-heading > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-metric-label {
@@ -1303,43 +1461,126 @@ a {
 }
 
 .dashboard-metric-value {
-  min-height: 26px;
-  font-size: 18px;
+  min-height: 29px;
+  color: var(--text-primary);
+  font-size: 20px;
   font-weight: 600;
   text-align: left;
+}
+
+.dashboard-trend-figure {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  grid-template-rows: minmax(76px, 1fr) auto;
+  gap: 2px 6px;
+  min-height: 0;
+  margin: 0;
+}
+
+.dashboard-trend-scale {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-width: 0;
+  flex-direction: column;
+  padding: 8px 0 12px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .dashboard-trend {
   display: block;
   width: 100%;
-  height: 38px;
-  margin-top: 3px;
-  overflow: visible;
+  height: 100%;
+  min-height: 76px;
+  overflow: hidden;
 }
 
-.dashboard-trend-series {
-  fill: none;
-  stroke: var(--series-1);
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
-.dashboard-trend-point {
-  fill: var(--series-1);
-  stroke: var(--surface-1);
+.dashboard-trend-guide,
+.dashboard-trend-baseline {
+  stroke: var(--border);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
+.dashboard-trend-baseline {
+  stroke: var(--border-strong);
+}
+
+.dashboard-trend-bar,
+.dashboard-trend-coverage {
+  fill: var(--dashboard-trend-color);
+}
+
+.dashboard-trend-bar {
+  opacity: .82;
+}
+
+.dashboard-trend-bar[data-zero='true'] {
+  opacity: 1;
+}
+
+.dashboard-trend-coverage {
+  opacity: .72;
+}
+
 .dashboard-trend-gap {
-  fill: var(--text-muted);
-  fill-opacity: 0.08;
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: .5;
+  vector-effect: non-scaling-stroke;
+}
+
+.dashboard-trend-caption {
+  display: grid;
+  grid-column: 2;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.dashboard-trend-caption > span:nth-child(2) {
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.dashboard-trend-caption > span:last-child {
+  text-align: right;
+}
+
+.dashboard-trend-empty {
+  display: grid;
+  min-height: 84px;
+  place-items: center;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.dashboard-wan-table-wrap {
+  min-height: 0;
+  max-height: 334px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dashboard-wan-table thead {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  background: var(--surface-1);
 }
 
 .dashboard-wan-footnote {
-  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
 }
 
 .speedtest-active,
@@ -1704,7 +1945,7 @@ a {
 @media (max-width: 720px) {
   .dashboard-page-heading,
   .dashboard-section-heading,
-  .dashboard-wan-context,
+  .dashboard-wan-toolbar,
   .speedtest-active-heading,
   .speedtest-history-toolbar,
   .speedtest-chart-run > header {
@@ -1714,17 +1955,24 @@ a {
 
   .dashboard-page-heading > *,
   .dashboard-section-heading > *,
-  .dashboard-wan-context > * {
+  .dashboard-wan-toolbar > * {
     min-width: 0;
     max-width: 100%;
   }
 
-  .dashboard-wan-reachability {
-    justify-items: start;
+  .dashboard-wan-path {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-wan-path-link {
+    justify-self: center;
+    line-height: 8px;
+    transform: rotate(90deg);
   }
 
   .dashboard-wan-metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
   }
 
   .dashboard-topology-stats {

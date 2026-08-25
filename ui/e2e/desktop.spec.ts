@@ -1,5 +1,29 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+const dashboardObservedAt = Date.now() - 240_000
+const dashboardTimes = Array.from(
+  { length: 72 },
+  (_, index) => dashboardObservedAt - (71 - index) * 300_000,
+)
+
+function wanMetric(
+  kind: string,
+  unit: string,
+  value: number | null,
+  samples: Array<number | null>,
+  status: 'fresh' | 'last_observed' | 'unavailable' = 'fresh',
+) {
+  return {
+    kind,
+    unit,
+    meaning: `${kind} from the selected default-route interface`,
+    status,
+    value,
+    as_of: value == null ? null : dashboardObservedAt,
+    points: samples.map((sample, index) => ({ ts: dashboardTimes[index], value: sample })),
+  }
+}
+
 const dashboard = {
   devices: { total: 2, online: 2, offline: 0, pending: 0, unknown: 0 },
   wireless_clients: 1,
@@ -19,6 +43,32 @@ const dashboard = {
     Severity: 'warning',
     Event: 'fixture.warning',
   }],
+  wan: {
+    target: '1.1.1.1',
+    probe: 'icmp',
+    freshness: 'fresh',
+    as_of: dashboardObservedAt,
+    gateway: { device_id: 1, name: 'Gateway', route_interface: 'wan', series_key: 'wan' },
+    resolution: '5m',
+    bucket_ms: 300_000,
+    from: dashboardTimes[0],
+    to: dashboardTimes.at(-1),
+    metrics: {
+      download_bps: wanMetric('site_wan_download_bps', 'B/s', 13_125,
+        dashboardTimes.map((_, index) => index % 17 === 0
+          ? null
+          : index % 23 === 0 ? 0 : 12_000 + (index % 9) * 450)),
+      upload_bps: wanMetric('site_wan_upload_bps', 'B/s', 66.75,
+        dashboardTimes.map((_, index) => index % 19 === 7
+          ? null
+          : index % 29 === 0 ? 0 : 62 + (index % 8) * 1.25)),
+      latency_ms: wanMetric('site_wan_latency_ms', 'ms', 22,
+        dashboardTimes.map((_, index) => index % 31 === 4 ? null : 21 + (index % 8) * .2)),
+      loss_pct: wanMetric('site_wan_loss_pct', 'percent', 0,
+        dashboardTimes.map((_, index) => index % 31 === 5 ? null : index === 20 ? 1.2 : 0)),
+      reachable: wanMetric('site_wan_reachable', 'boolean', 1, []),
+    },
+  },
 }
 
 const topology = {
@@ -326,6 +376,25 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       await expect(page.getByText('fixture.warning')).toBeVisible()
       await expect(page.getByText('Complete coverage')).toBeVisible()
 
+      const health = page.getByRole('region', { name: 'Internet health details' })
+      const healthCharts = health.locator('.dashboard-wan-metrics')
+      await expect(healthCharts.getByRole('img')).toHaveCount(4)
+      await expect(page.getByLabel(/Throughput history for 2 completed tests/)).toBeVisible()
+      expect(await healthCharts.evaluate((element) =>
+        getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(2)
+      const operationCards = page.locator('.dashboard-operations-grid > section')
+      await expect(operationCards).toHaveCount(2)
+      const cardHeights = await operationCards.evaluateAll((cards) =>
+        cards.map((card) => card.getBoundingClientRect().height))
+      expect(Math.abs(cardHeights[0] - cardHeights[1])).toBeLessThanOrEqual(1)
+
+      const healthView = health.getByRole('group', { name: 'Internet health history view' })
+      await healthView.getByRole('button', { name: 'Table' }).click()
+      const healthTable = health.getByRole('region', { name: 'Internet health history table' })
+      await expect(healthTable.getByRole('row')).toHaveCount(73)
+      await expectWithinMain(page, healthTable)
+      await healthView.getByRole('button', { name: 'Chart' }).click()
+
       const overflow = await readOverflow(page)
       expect(overflow.document).toBeLessThanOrEqual(1)
       expect(overflow.main).toBeLessThanOrEqual(1)
@@ -485,6 +554,13 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
 
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+  const health = page.getByRole('region', { name: 'Internet health details' })
+  await expect(health.getByRole('img')).toHaveCount(4)
+  await expectWithinMain(page, health)
+  const healthView = health.getByRole('group', { name: 'Internet health history view' })
+  await healthView.getByRole('button', { name: 'Table' }).click()
+  await expectWithinMain(page, health.getByRole('region', { name: 'Internet health history table' }))
+  await healthView.getByRole('button', { name: 'Chart' }).click()
   const speedChart = page.getByLabel(/Throughput history for 2 completed tests/)
   await expect(speedChart).toBeVisible()
   await expectWithinMain(page, speedChart)
@@ -502,9 +578,10 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
   const lastTooltip = page.getByRole('tooltip').filter({ hasText: 'Upload 412.4 Mbps' })
   await expect(lastTooltip).toBeVisible()
   await expectWithinMain(page, lastTooltip)
-  await page.getByRole('button', { name: 'Table' }).click()
+  const speedView = page.getByRole('group', { name: 'Speed test history view' })
+  await speedView.getByRole('button', { name: 'Table' }).click()
   await expectWithinMain(page, page.getByRole('region', { name: 'Speed test result table' }))
-  await page.getByRole('button', { name: 'Chart' }).click()
+  await speedView.getByRole('button', { name: 'Chart' }).click()
   let overflow = await readOverflow(page)
   expect(overflow.document).toBeLessThanOrEqual(1)
   expect(overflow.main).toBeLessThanOrEqual(1)
@@ -547,6 +624,14 @@ for (const theme of ['dark', 'light'] as const) {
     for (const state of ['in-use', 'enabled', 'restricted', 'unknown']) {
       expect(await contrastRatio(page.locator(`.radio-channel[data-state="${state}"]`))).toBeGreaterThanOrEqual(4.5)
     }
+
+    await page.goto('/')
+    const health = page.getByRole('region', { name: 'Internet health details' })
+    await expect(health.getByRole('img')).toHaveCount(4)
+    await expectWithinMain(page, health)
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
     expect(unexpectedRequests).toEqual([])
   })
 }
