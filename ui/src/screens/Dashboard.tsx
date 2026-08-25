@@ -4,6 +4,7 @@ import type {
   Dashboard as DashboardData,
   DashboardMetric,
   DashboardMetricPoint,
+  DashboardWAN,
   SpeedTestCollection,
   SpeedTestJob,
   TopologySnapshot,
@@ -67,64 +68,124 @@ function speedTestProvenance(value: string | null | undefined) {
     : value || 'Controller host/container'
 }
 
-export function Trend({ label, points }: { label: string; points: DashboardMetricPoint[] }) {
-  const observed = points.flatMap((point) => point.value == null ? [] : [point.value])
-  if (observed.length === 0) return null
+type WANTrendTone = 'download' | 'upload' | 'latency' | 'loss'
 
-  const width = 180
-  const height = 38
-  const low = Math.min(...observed)
-  const high = Math.max(...observed)
-  const span = high - low
-  const x = (index: number) => points.length === 1 ? width / 2 : (index / (points.length - 1)) * width
-  const y = (value: number) => span === 0
-    ? height / 2
-    : height - 2 - ((value - low) / span) * (height - 4)
-  const segments: Array<{ path: string; count: number; x: number; y: number }> = []
-  const gaps: Array<{ from: number; to: number }> = []
-  let current = { path: '', count: 0, x: 0, y: 0 }
-  let gapStart = -1
+function validWANValue(kind: string, value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 &&
+    (!kind.endsWith('loss_pct') || value <= 100)
+}
+
+export function wanTrendCeiling(kind: string, values: number[]) {
+  if (kind.endsWith('loss_pct')) return 100
+  const peak = Math.max(0, ...values)
+  if (peak === 0) return kind.endsWith('latency_ms') ? 10 : 1
+  const target = peak * 1.1
+  const magnitude = 10 ** Math.floor(Math.log10(target))
+  const normalized = target / magnitude
+  const factor = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]
+    .find((candidate) => candidate >= normalized) ?? 10
+  return factor * magnitude
+}
+
+function missingRuns(points: DashboardMetricPoint[], kind: string) {
+  const runs: Array<{ from: number; to: number }> = []
+  let from = -1
   points.forEach((point, index) => {
-    if (point.value == null) {
-      if (current.count) segments.push(current)
-      current = { path: '', count: 0, x: 0, y: 0 }
-      if (gapStart < 0) gapStart = index
-      return
+    if (!validWANValue(kind, point.value)) {
+      if (from < 0) from = index
+    } else if (from >= 0) {
+      runs.push({ from, to: index - 1 })
+      from = -1
     }
-    if (gapStart >= 0) {
-      gaps.push({ from: gapStart, to: index - 1 })
-      gapStart = -1
-    }
-    const px = x(index)
-    const py = y(point.value)
-    current.path += `${current.path ? ' L' : 'M'} ${px.toFixed(1)} ${py.toFixed(1)}`
-    current.count++
-    current.x = px
-    current.y = py
   })
-  if (current.count) segments.push(current)
-  if (gapStart >= 0) gaps.push({ from: gapStart, to: points.length - 1 })
+  if (from >= 0) runs.push({ from, to: points.length - 1 })
+  return runs
+}
 
-  const gapX = (index: number) => Math.max(0, Math.min(width, x(index)))
+export function Trend({
+  label,
+  points,
+  kind = 'download_bps',
+  unit = 'bps',
+  tone = 'download',
+  format = formatRate,
+}: {
+  label: string
+  points: DashboardMetricPoint[]
+  kind?: string
+  unit?: string
+  tone?: WANTrendTone
+  format?: (value: number, unit?: string) => string
+}) {
+  const observed = points.flatMap((point) => validWANValue(kind, point.value) ? [point.value] : [])
   const missing = points.length - observed.length
+  if (observed.length === 0) {
+    return (
+      <div className="dashboard-trend-empty" role="img" aria-label={`${label}: no samples available in the past six hours`}>
+        No samples in the past 6 hours
+      </div>
+    )
+  }
+
+  const width = 320
+  const plotTop = 10
+  const plotBottom = 76
+  const railY = 84
+  const ceiling = wanTrendCeiling(kind, observed)
+  const slot = width / Math.max(1, points.length)
+  const barWidth = Math.max(1, slot * 0.68)
+  const gaps = missingRuns(points, kind)
 
   return (
-    <svg
-      className="dashboard-trend"
-      viewBox={`0 0 ${width} ${height}`}
-      role="img"
-      aria-label={`${label} six-hour trend: ${observed.length} available and ${missing} unavailable five-minute samples${missing ? '; shaded bands mark unavailable samples' : ''}`}
-      preserveAspectRatio="none"
-    >
-      {gaps.map(({ from, to }) => {
-        const left = gapX(from - 0.5)
-        const right = gapX(to + 0.5)
-        return <rect key={`${from}-${to}`} className="dashboard-trend-gap" x={left} width={right - left} height={height} />
-      })}
-      {segments.map((segment, index) => segment.count === 1
-        ? <circle key={index} className="dashboard-trend-point" cx={segment.x} cy={segment.y} r="2" />
-        : <path key={index} className="dashboard-trend-series" d={segment.path} />)}
-    </svg>
+    <figure className="dashboard-trend-figure" data-tone={tone}>
+      <div className="dashboard-trend-scale" aria-hidden>
+        <span>{format(ceiling, unit)}</span>
+        <span>0</span>
+      </div>
+      <svg
+        className="dashboard-trend"
+        viewBox={`0 0 ${width} 90`}
+        role="img"
+        aria-label={`${label}, past six hours in five-minute averages: ${observed.length} available and ${missing} unavailable samples; zero-based scale to ${format(ceiling, unit)}`}
+        preserveAspectRatio="none"
+      >
+        <line className="dashboard-trend-guide" x1="0" x2={width} y1={plotTop} y2={plotTop} />
+        <line className="dashboard-trend-guide" x1="0" x2={width} y1={(plotTop + plotBottom) / 2} y2={(plotTop + plotBottom) / 2} />
+        <line className="dashboard-trend-baseline" x1="0" x2={width} y1={plotBottom} y2={plotBottom} />
+        {points.map((point, index) => {
+          if (!validWANValue(kind, point.value)) return null
+          const scaled = point.value / ceiling
+          const height = point.value === 0 ? 2 : Math.max(2, scaled * (plotBottom - plotTop))
+          return (
+            <rect
+              key={`${point.ts}-${index}`}
+              className="dashboard-trend-bar"
+              data-zero={point.value === 0 ? 'true' : undefined}
+              x={index * slot + (slot - barWidth) / 2}
+              y={plotBottom - height}
+              width={barWidth}
+              height={height}
+            />
+          )
+        })}
+        <rect className="dashboard-trend-coverage" x="0" y={railY} width={width} height="4" />
+        {gaps.map(({ from, to }) => (
+          <rect
+            key={`${from}-${to}`}
+            className="dashboard-trend-gap"
+            x={from * slot}
+            y={railY}
+            width={(to - from + 1) * slot}
+            height="4"
+          />
+        ))}
+      </svg>
+      <figcaption className="dashboard-trend-caption">
+        <span>6h ago</span>
+        <span>{observed.length}/{points.length} samples</span>
+        <span>Now</span>
+      </figcaption>
+    </figure>
   )
 }
 
@@ -132,28 +193,40 @@ export function WANMetric({
   label,
   metric,
   format,
+  tone,
 }: {
   label: string
   metric?: DashboardMetric
   format: (value: number, unit?: string) => string
+  tone: WANTrendTone
 }) {
-  const available = metric?.value != null && metric.status !== 'unavailable'
-  const missing = metric?.points.filter((point) => point.value == null).length ?? 0
+  const available = validWANValue(metric?.kind ?? '', metric?.value) && metric?.status !== 'unavailable'
   const note = [
     metric?.status === 'fresh' && metric.as_of ? `Updated ${agoMilliseconds(metric.as_of)}` : '',
     metric?.status === 'last_observed' && metric.as_of ? `Last observed ${agoMilliseconds(metric.as_of)}` : '',
     !metric || metric.status === 'unavailable' ? 'Current value unavailable' : '',
-    missing ? `${missing} missing` : '',
   ].filter(Boolean).join(' · ')
   return (
-    <div className="dashboard-metric">
-      <div className="dashboard-metric-label">{label}</div>
+    <div className="dashboard-metric" data-tone={tone}>
+      <div className="dashboard-metric-heading">
+        <div className="dashboard-metric-label">{label}</div>
+        <span>Latest 5m average</span>
+      </div>
       <div className="dashboard-metric-value num">
         {available
           ? format(metric.value!, metric.unit)
           : <Unknown why={metric?.meaning || 'the controller has no matching WAN telemetry'} />}
       </div>
-      {metric && <Trend label={label} points={metric.points} />}
+      {metric && (
+        <Trend
+          label={label}
+          points={metric.points}
+          kind={metric.kind}
+          unit={metric.unit}
+          tone={tone}
+          format={format}
+        />
+      )}
       <div className="dashboard-metric-note">{note}</div>
     </div>
   )
@@ -573,7 +646,51 @@ function SpeedTestCard() {
   )
 }
 
+function WANHistoryTable({ wan }: { wan: DashboardWAN }) {
+  const metrics = [
+    wan.metrics.download_bps,
+    wan.metrics.upload_bps,
+    wan.metrics.latency_ms,
+    wan.metrics.loss_pct,
+  ]
+  const timestamps = [...new Set(metrics.flatMap((metric) => metric.points.map((point) => point.ts)))]
+    .sort((left, right) => left - right)
+  const values = metrics.map((metric) => new Map(metric.points.map((point) => [point.ts, point.value])))
+  const cell = (metric: DashboardMetric, value: number | null | undefined, format: (value: number, unit?: string) => string) =>
+    validWANValue(metric.kind, value) ? format(value, metric.unit) : 'Unavailable'
+
+  return (
+    <div className="dashboard-wan-table-wrap" role="region" aria-label="Internet health history table" tabIndex={0}>
+      <table className="speedtest-table dashboard-wan-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Download</th>
+            <th>Upload</th>
+            <th>Latency</th>
+            <th>Loss</th>
+          </tr>
+        </thead>
+        <tbody>
+          {timestamps.map((timestamp) => (
+            <tr key={timestamp}>
+              <td>
+                <time dateTime={new Date(timestamp).toISOString()}>{new Date(timestamp).toLocaleString()}</time>
+              </td>
+              <td className="num">{cell(wan.metrics.download_bps, values[0].get(timestamp), formatRate)}</td>
+              <td className="num">{cell(wan.metrics.upload_bps, values[1].get(timestamp), formatRate)}</td>
+              <td className="num">{cell(wan.metrics.latency_ms, values[2].get(timestamp), (value) => `${value.toFixed(1)} ms`)}</td>
+              <td className="num">{cell(wan.metrics.loss_pct, values[3].get(timestamp), (value) => `${value.toFixed(1)}%`)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function InternetHealth({ data }: { data: DashboardData }) {
+  const [view, setView] = useState<'chart' | 'table'>('chart')
   const wan = data.wan
   const missing = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'missing')
   const up = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'up')
@@ -590,37 +707,65 @@ function InternetHealth({ data }: { data: DashboardData }) {
         </span>
       )}
     >
-      <div className="dashboard-wan-context">
-        <div>
-          <strong>{wan?.gateway?.name ?? up[0]?.name ?? missing[0]?.name ?? 'Gateway unavailable'}</strong>
-          <div className="dashboard-metric-note">
-            {wan?.gateway?.route_interface
-              ? `Default route · ${wan.gateway.route_interface}`
-              : 'Default-route interface unavailable'}
+      <div className="dashboard-internet-health" role="region" aria-label="Internet health details">
+        <div className="dashboard-wan-path" role="group" aria-label="Observed gateway path">
+          <div className="dashboard-wan-path-node">
+            <span>Gateway</span>
+            <strong>{wan?.gateway?.name ?? up[0]?.name ?? missing[0]?.name ?? 'Unavailable'}</strong>
+          </div>
+          <span className="dashboard-wan-path-link" aria-hidden>→</span>
+          <div className="dashboard-wan-path-node">
+            <span>Default route</span>
+            <strong>{wan?.gateway?.route_interface ?? 'Unavailable'}</strong>
+          </div>
+          <span className="dashboard-wan-path-link" aria-hidden>→</span>
+          <div className="dashboard-wan-path-node" data-state={reachableValue == null ? 'unknown' : reachableValue > 0 ? 'up' : 'missing'}>
+            <span>External ICMP target · from gateway</span>
+            <strong>
+              {wan?.target ?? '1.1.1.1'} ·{' '}
+              {reachableValue == null || reachable?.status === 'unavailable'
+                ? <Unknown why={reachable?.meaning || 'fixed-target ICMP evidence is unavailable'} />
+                : reachableValue > 0 ? 'Reachable' : 'No reply'}
+            </strong>
           </div>
         </div>
-        <div className="dashboard-wan-reachability">
-          <span className="dashboard-metric-label">ICMP reachability to {wan?.target ?? '1.1.1.1'}</span>
-          <strong>
-            {reachableValue == null || reachable?.status === 'unavailable'
-              ? <Unknown why={reachable?.meaning || 'fixed-target ICMP evidence is unavailable'} />
-              : reachableValue > 0 ? 'Reachable' : 'No reply'}
-          </strong>
+
+        <div className="dashboard-wan-toolbar">
+          <div>
+            <div className="speedtest-history-heading">Recent network activity</div>
+            <div className="dashboard-metric-note">Past 6 hours · five-minute averages</div>
+          </div>
+          <div className="dashboard-wan-toolbar-actions">
+            <div className="dashboard-wan-coverage-key" aria-label="Sample coverage legend">
+              <span data-state="observed">Observed</span>
+              <span data-state="unavailable">Unavailable</span>
+            </div>
+            <div className="speedtest-view-toggle" role="group" aria-label="Internet health history view">
+              <Button aria-pressed={view === 'chart'} kind={view === 'chart' ? 'primary' : 'default'} onClick={() => setView('chart')}>
+                Chart
+              </Button>
+              <Button aria-pressed={view === 'table'} kind={view === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>
+                Table
+              </Button>
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="dashboard-wan-metrics">
-        <WANMetric label="Download traffic" metric={wan?.metrics.download_bps} format={formatRate} />
-        <WANMetric label="Upload traffic" metric={wan?.metrics.upload_bps} format={formatRate} />
-        <WANMetric label="ICMP latency" metric={wan?.metrics.latency_ms} format={(value) => `${value.toFixed(1)} ms`} />
-        <WANMetric label="ICMP loss" metric={wan?.metrics.loss_pct} format={(value) => `${value.toFixed(1)}%`} />
-      </div>
+        {view === 'chart' ? (
+          <div className="dashboard-wan-metrics">
+            <WANMetric label="Download traffic" metric={wan?.metrics.download_bps} format={formatRate} tone="download" />
+            <WANMetric label="Upload traffic" metric={wan?.metrics.upload_bps} format={formatRate} tone="upload" />
+            <WANMetric label="ICMP latency" metric={wan?.metrics.latency_ms} format={(value) => `${value.toFixed(1)} ms`} tone="latency" />
+            <WANMetric label="ICMP loss" metric={wan?.metrics.loss_pct} format={(value) => `${value.toFixed(1)}%`} tone="loss" />
+          </div>
+        ) : wan ? <WANHistoryTable wan={wan} /> : (
+          <div className="dashboard-trend-empty">Internet health history is unavailable.</div>
+        )}
 
-      <div className="dashboard-wan-footnote">
-        Fixed-target ICMP to {wan?.target ?? 'an unavailable target'} measures reachability, not gateway uptime.
-        {' '}Traffic charts appear only when telemetry matches the active default-route interface. Shaded spans are unavailable samples;
-        {' '}trend lines never bridge them.
-        {wan?.as_of ? ` Evidence ${wan.freshness === 'fresh' ? 'updated' : 'last observed'} ${agoMilliseconds(wan.as_of)}.` : ''}
+        <div className="dashboard-wan-footnote">
+          Traffic uses the active default-route interface. ICMP measures target reachability from the gateway, not gateway or ISP uptime.
+          {wan?.as_of ? ` Evidence ${wan.freshness === 'fresh' ? 'updated' : 'last observed'} ${agoMilliseconds(wan.as_of)}.` : ''}
+        </div>
       </div>
     </Card>
   )

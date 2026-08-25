@@ -75,6 +75,9 @@ func wanProbeCall() call {
 			},
 		}},
 		decode: decodeWANProbe, optional: true,
+		// BusyBox ping spaces three sends one second apart. That fixed two-second
+		// cadence measures the WAN, not router pressure.
+		adaptiveWait: time.Duration(wanProbePackets-1) * time.Second,
 	}
 }
 

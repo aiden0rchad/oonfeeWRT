@@ -5021,15 +5021,81 @@ describe('Dashboard', () => {
       } as never} />,
     )
 
-    expect(screen.getByText('Default route · wan')).toBeTruthy()
-    expect(screen.getByText('ICMP reachability to 1.1.1.1')).toBeTruthy()
-    expect(screen.getByText('Reachable')).toBeTruthy()
-    expect(screen.getByText('8.0 Mbps')).toBeTruthy()
-    expect(screen.getByText(/Last observed 2m ago/)).toBeTruthy()
-    expect(screen.getByText('12.4 ms')).toBeTruthy()
-    expect(screen.getByText('0.0%')).toBeTruthy()
-    expect(screen.getByText('Download traffic').parentElement?.textContent).not.toContain('0 bps')
-    expect(screen.getByText(/measures reachability, not gateway uptime/)).toBeTruthy()
+    const health = screen.getByRole('region', { name: 'Internet health details' })
+    const path = within(health).getByRole('group', { name: 'Observed gateway path' })
+    expect(within(path).getByText('Default route')).toBeTruthy()
+    expect(within(path).getByText('wan')).toBeTruthy()
+    expect(within(path).getByText('External ICMP target · from gateway')).toBeTruthy()
+    expect(within(path).getByText('1.1.1.1 · Reachable')).toBeTruthy()
+    expect(within(health).getByText('8.0 Mbps')).toBeTruthy()
+    expect(within(health).getByText(/Last observed 2m ago/)).toBeTruthy()
+    expect(within(health).getByText('12.4 ms')).toBeTruthy()
+    expect(within(health).getByText('0.0%')).toBeTruthy()
+    expect(within(health).getByText('Download traffic').closest('.dashboard-metric')?.textContent).not.toContain('0 bps')
+    expect(within(health).getAllByRole('img')).toHaveLength(4)
+    expect(within(health).getByText(/target reachability from the gateway, not gateway or ISP uptime/)).toBeTruthy()
+
+    const view = within(health).getByRole('group', { name: 'Internet health history view' })
+    fireEvent.click(within(view).getByRole('button', { name: 'Table' }))
+    expect(within(view).getByRole('button', { name: 'Table' }).getAttribute('aria-pressed')).toBe('true')
+    const tableRegion = within(health).getByRole('region', { name: 'Internet health history table' })
+    expect(within(tableRegion).getAllByRole('row')).toHaveLength(3)
+    expect(within(tableRegion).getAllByText('Unavailable')).toHaveLength(2)
+    expect(within(tableRegion).getAllByText('0.0%')).toHaveLength(2)
+    expect(within(tableRegion).getByText('8.0 Mbps')).toBeTruthy()
+  })
+
+  it('aligns sparse WAN history by timestamp and distinguishes unavailable samples from zero', async () => {
+    const now = Date.now() - 120_000
+    const timestamps = [now - 600_000, now - 300_000, now]
+    const metric = (kind: string, unit: string, points: Array<{ ts: number; value: number | null }>) => ({
+      kind,
+      unit,
+      meaning: `${kind} from the selected gateway`,
+      status: 'fresh',
+      value: points.at(-1)?.value ?? null,
+      as_of: now,
+      points,
+    })
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      wan: {
+        target: '1.1.1.1', probe: 'icmp', freshness: 'fresh', as_of: now,
+        gateway: { device_id: 1, name: 'Gateway', route_interface: 'wan', series_key: 'wan' },
+        resolution: '5m', bucket_ms: 300_000, from: timestamps[0], to: timestamps[2],
+        metrics: {
+          download_bps: metric('download_bps', 'B/s', [
+            { ts: timestamps[0], value: 0 },
+            { ts: timestamps[2], value: null },
+          ]),
+          upload_bps: metric('upload_bps', 'B/s', [
+            { ts: timestamps[1], value: 125_000 },
+            { ts: timestamps[2], value: 0 },
+          ]),
+          latency_ms: metric('latency_ms', 'ms', [
+            { ts: timestamps[0], value: null },
+            { ts: timestamps[1], value: 0 },
+          ]),
+          loss_pct: metric('loss_pct', 'percent', [{ ts: timestamps[2], value: 0 }]),
+          reachable: metric('reachable', 'boolean', [{ ts: timestamps[2], value: 1 }]),
+        },
+      },
+    } as never} />)
+
+    const health = screen.getByRole('region', { name: 'Internet health details' })
+    const view = within(health).getByRole('group', { name: 'Internet health history view' })
+    fireEvent.click(within(view).getByRole('button', { name: 'Table' }))
+    const table = within(health).getByRole('region', { name: 'Internet health history table' })
+    const rows = within(table).getAllByRole('row')
+    expect(within(rows[0]).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
+      'Time', 'Download', 'Upload', 'Latency', 'Loss',
+    ])
+    expect(rows.slice(1).map((row) => within(row).getAllByRole('cell').slice(1).map((cell) => cell.textContent))).toEqual([
+      ['0 bps', 'Unavailable', 'Unavailable', 'Unavailable'],
+      ['Unavailable', '1.0 Mbps', '0.0 ms', 'Unavailable'],
+      ['Unavailable', '0 bps', 'Unavailable', '0.0%'],
+    ])
   })
 
   it('keeps the selected active gateway healthy when another gateway has no route', async () => {
@@ -5120,8 +5186,9 @@ describe('Dashboard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Review speed test' }))
     await screen.findByText(/safety disclosures are unavailable or incomplete/)
-    expect(screen.getAllByText('Unavailable')).toHaveLength(2)
-    expect(screen.getByText('Privacy disclosure unavailable.')).toBeTruthy()
+    const review = screen.getByRole('group', { name: 'Information: Controller speed test' })
+    expect(within(review).getAllByText('Unavailable')).toHaveLength(2)
+    expect(within(review).getByText('Privacy disclosure unavailable.')).toBeTruthy()
     fireEvent.click(screen.getByRole('checkbox', { name: /may use data/i }))
     expect((screen.getByRole('button', { name: 'Start speed test' }) as HTMLButtonElement).disabled).toBe(true)
     expect(api.startSpeedTest).not.toHaveBeenCalled()

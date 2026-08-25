@@ -49,10 +49,13 @@ its public artifacts.
 All durable Phase-4 data is REST; the WebSocket supplies only `device.stats`
 focus/current updates.
 
-**v0.1.0 UI source and historical live checkpoint:** schema-19 source renders the polished WAN
-health and controller-speed-test cards. WAN charts use server-selected six-hour
-fixed-target ICMP and exact-interface throughput evidence with null gaps and
-freshness. The speed-test review shows controller-host vantage point, Cloudflare
+**Current schema-19 UI and historical live checkpoint:** the post-`v0.1.0` source
+renders equal-height WAN-health and controller-speed-test cards. Internet health
+shows the observed gateway, default-route interface and fixed-target probe as
+separate evidence, then plots server-selected six-hour throughput, latency and
+loss as zero-based five-minute activity columns. Missing buckets remain missing
+and appear only in a thin coverage rail; a table toggle exposes every aligned sample.
+The speed-test review shows controller-host vantage point, Cloudflare
 endpoint, single-stream method, 15 MiB estimate, 30-second limit, privacy and
 saturation before consent; Start binds a fresh acknowledgement to the reviewed
 `plan_id`, then shows progress/cancel and bounded history as paired

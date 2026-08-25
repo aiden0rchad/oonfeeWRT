@@ -48,8 +48,10 @@ func TestWANProbeUsesExactGatewayOnlyLowCadenceCall(t *testing.T) {
 				continue
 			}
 			got++
-			if !spec.optional || !reflect.DeepEqual(args["params"], wantParams) {
-				t.Fatalf("WAN call optional=%v args=%#v", spec.optional, spec.inv.Args)
+			if !spec.optional || spec.adaptiveWait != 2*time.Second ||
+				!reflect.DeepEqual(args["params"], wantParams) {
+				t.Fatalf("WAN call optional=%v adaptive wait=%v args=%#v",
+					spec.optional, spec.adaptiveWait, spec.inv.Args)
 			}
 		}
 		if got != want {
@@ -75,6 +77,58 @@ func TestWANProbeUsesExactGatewayOnlyLowCadenceCall(t *testing.T) {
 	p.mu.Unlock()
 	now = now.Add(wanProbeInterval)
 	assert(p.buildCalls(Baseline, []string{"phy0-ap0"}, map[string]string{"phy0-ap0": "ap"}), 0)
+}
+
+func TestGatewayProbePacingIsExcludedFromAdaptiveWidening(t *testing.T) {
+	c := New(newRecorder(), Options{
+		Baseline: time.Second, MaxInterval: time.Hour,
+		SlowPoll: DefaultSlowPoll, LoadLimit: DefaultLoadLimit, Log: quiet(),
+	})
+	p := newPoller(c, Target{DeviceID: 1, MAC: "aa", Gateway: true})
+	probeWait := wanProbeCall().adaptiveWait
+
+	snapshot := func(total, completedWait time.Duration) Snapshot {
+		t.Helper()
+		snap := Snapshot{Duration: total}
+		snap.setBusyDuration(completedWait)
+		return snap
+	}
+
+	clamped := snapshot(time.Second, probeWait)
+	if !clamped.busyDurationKnown || clamped.busyDuration != 0 {
+		t.Fatalf("busy duration below fixed pacing = %v known=%v, want 0 true",
+			clamped.busyDuration, clamped.busyDurationKnown)
+	}
+
+	ordinary := snapshot(2*time.Second+200*time.Millisecond, probeWait)
+	p.succeed(ordinary)
+	if ordinary.Duration != 2200*time.Millisecond {
+		t.Fatalf("diagnostic duration changed to %v", ordinary.Duration)
+	}
+	if ordinary.busyDuration != 200*time.Millisecond || p.widen != 0 {
+		t.Fatalf("ping plus normal core work: busy=%v widen=%d, want 200ms and 0",
+			ordinary.busyDuration, p.widen)
+	}
+
+	slow := snapshot(2*time.Second+1600*time.Millisecond, probeWait)
+	p.succeed(slow)
+	if slow.busyDuration != 1600*time.Millisecond || p.widen != 1 {
+		t.Fatalf("ping plus unexplained overhead: busy=%v widen=%d, want 1.6s and 1",
+			slow.busyDuration, p.widen)
+	}
+
+	// An RPC response is not enough: only a valid decoded ping result proves
+	// that the request spent the expected two seconds pacing packets.
+	p.widen = 0
+	invalid := snapshot(2*time.Second+200*time.Millisecond, 0)
+	if err := wanProbeCall().decode([]byte(`{"code":2,"stdout":"","stderr":"bad option"}`), &invalid); err == nil {
+		t.Fatal("invalid ping unexpectedly decoded")
+	}
+	p.succeed(invalid)
+	if invalid.busyDuration != 2200*time.Millisecond || p.widen != 1 {
+		t.Fatalf("invalid ping: busy=%v widen=%d, want full 2.2s and 1",
+			invalid.busyDuration, p.widen)
+	}
 }
 
 func TestAPOnlyTargetNeverSchedulesWANProbe(t *testing.T) {

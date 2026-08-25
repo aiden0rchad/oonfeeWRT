@@ -1362,16 +1362,21 @@ func (p *poller) succeed(snap Snapshot) {
 	}
 
 	// Evidence-based backoff, DEVICE-BUDGET §4.5. Widen on the device's own
-	// symptoms — its load average, or how long it took to answer us — and
+	// symptoms — its load average, or how long its non-paced work took — and
 	// recover one step at a time so a device sitting near the threshold does not
 	// flip rates every interval.
+	busyDuration := snap.Duration
+	if snap.busyDurationKnown {
+		busyDuration = snap.busyDuration
+	}
 	switch {
-	case snap.Load[0] >= p.c.opts.LoadLimit, snap.Duration >= p.c.opts.SlowPoll:
+	case snap.Load[0] >= p.c.opts.LoadLimit, busyDuration >= p.c.opts.SlowPoll:
 		if p.widen < maxWiden {
 			p.widen++
 			p.c.log.Info("widening poll interval; the device reports it is busy",
 				"device", snap.MAC, "load1", snap.Load[0],
-				"poll_ms", snap.Duration.Milliseconds(), "step", p.widen)
+				"poll_ms", snap.Duration.Milliseconds(),
+				"busy_ms", busyDuration.Milliseconds(), "step", p.widen)
 		}
 	case p.widen > 0:
 		p.widen--
