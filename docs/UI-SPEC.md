@@ -55,10 +55,12 @@ fixed-target ICMP and exact-interface throughput evidence with null gaps and
 freshness. The speed-test review shows controller-host vantage point, Cloudflare
 endpoint, single-stream method, 15 MiB estimate, 30-second limit, privacy and
 saturation before consent; Start binds a fresh acknowledgement to the reviewed
-`plan_id`, then shows progress/cancel and bounded history. Loaded latency/jitter
-display unavailable. Schema 19 also supplies role-bearing sessions, exhaustive
-server-side RBAC, My Account, owner account administration, password step-up and
-session revocation. The Diagnostics screen supplies the fixed stored-evidence
+`plan_id`, then shows progress/cancel and bounded history as paired
+download/upload bars on one zero-based Mbps scale, with a full table toggle.
+Loaded latency/jitter display unavailable. Schema 19 also supplies role-bearing
+sessions, exhaustive server-side RBAC, My Account, owner account administration,
+password step-up and session revocation. The Diagnostics screen supplies the
+fixed stored-evidence
 disclosure, one cancellable job, bounded history and private ZIP download for
 owner/admin; it makes zero router management/API/SSH calls and zero router
 changes. The bounded rotating controller log sink is implemented. The
@@ -395,7 +397,9 @@ and privacy implications. Start sends the descriptor's opaque `plan_id` with a
 fresh data-use acknowledgement; the server rejects a changed plan before
 creating a job. While running, show progress and Cancel; results show
 download/upload, idle/loaded latency, jitter, time, method and provenance with
-honest unavailable fields. A gateway-run test is a separately installed,
+honest unavailable fields. History defaults to grouped horizontal throughput
+bars; latency stays off the Mbps axis, and the table view retains every exact
+result and failure. A gateway-run test is a separately installed,
 default-off official-feed capability and never appears to be part of ordinary
 adoption or the controller Start button.
 
