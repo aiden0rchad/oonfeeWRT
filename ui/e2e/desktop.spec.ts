@@ -48,7 +48,24 @@ const topology = {
 }
 
 const speedTests = {
-  jobs: [],
+  jobs: [
+    {
+      id: '11111111111111111111111111111111', plan_id: `sha256:${'a'.repeat(64)}`,
+      state: 'completed', phase: 'complete', progress_percent: 100,
+      provider: 'Cloudflare', method: 'single stream', provenance: 'controller-host', endpoint: 'speed.cloudflare.com',
+      estimated_bytes: 15_000_000, created_at: Date.now() - 86_430_000, finished_at: Date.now() - 86_400_000,
+      download_mbps: 125.3, upload_mbps: 107.4, idle_latency_ms: 18.2, idle_jitter_ms: 2.4,
+      loaded_latency_ms: null, loaded_jitter_ms: null, bytes_downloaded: 12_000_000, bytes_uploaded: 3_000_000,
+    },
+    {
+      id: '22222222222222222222222222222222', plan_id: `sha256:${'a'.repeat(64)}`,
+      state: 'completed', phase: 'complete', progress_percent: 100,
+      provider: 'Cloudflare', method: 'single stream', provenance: 'controller-host', endpoint: 'speed.cloudflare.com',
+      estimated_bytes: 15_000_000, created_at: Date.now() - 172_830_000, finished_at: Date.now() - 172_800_000,
+      download_mbps: 216.3, upload_mbps: 412.4, idle_latency_ms: 12.1, idle_jitter_ms: 1.8,
+      loaded_latency_ms: null, loaded_jitter_ms: null, bytes_downloaded: 12_000_000, bytes_uploaded: 3_000_000,
+    },
+  ],
   active: null,
   test: {
     plan_id: `sha256:${'a'.repeat(64)}`,
@@ -468,6 +485,26 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
 
   await page.goto('/')
   await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+  const speedChart = page.getByLabel(/Throughput history for 2 completed tests/)
+  await expect(speedChart).toBeVisible()
+  await expectWithinMain(page, speedChart)
+  const downloadBar = page.getByRole('meter', { name: 'Download throughput' }).first()
+  await downloadBar.focus()
+  await expect(page.getByRole('tooltip').filter({ hasText: 'Download 125.3 Mbps' })).toBeVisible()
+  const [trackBox, scaleBox] = await Promise.all([
+    downloadBar.boundingBox(),
+    page.locator('.speedtest-chart-scale').boundingBox(),
+  ])
+  expect(Math.abs(trackBox!.x - scaleBox!.x)).toBeLessThanOrEqual(1)
+  expect(Math.abs(trackBox!.x + trackBox!.width - scaleBox!.x - scaleBox!.width)).toBeLessThanOrEqual(1)
+  const lastUpload = page.getByRole('meter', { name: 'Upload throughput' }).last()
+  await lastUpload.focus()
+  const lastTooltip = page.getByRole('tooltip').filter({ hasText: 'Upload 412.4 Mbps' })
+  await expect(lastTooltip).toBeVisible()
+  await expectWithinMain(page, lastTooltip)
+  await page.getByRole('button', { name: 'Table' }).click()
+  await expectWithinMain(page, page.getByRole('region', { name: 'Speed test result table' }))
+  await page.getByRole('button', { name: 'Chart' }).click()
   let overflow = await readOverflow(page)
   expect(overflow.document).toBeLessThanOrEqual(1)
   expect(overflow.main).toBeLessThanOrEqual(1)

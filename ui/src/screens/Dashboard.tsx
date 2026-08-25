@@ -27,12 +27,30 @@ function formatBytes(value: number) {
   return `${value} B`
 }
 
+function validTestValue(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function formatTestRate(value: number | null | undefined) {
-  return value == null ? '—' : `${value.toFixed(1)} Mbps`
+  return validTestValue(value) ? `${value.toFixed(1)} Mbps` : '—'
 }
 
 function formatMilliseconds(value: number | null | undefined) {
-  return value == null ? '—' : `${value.toFixed(1)} ms`
+  return validTestValue(value) ? `${value.toFixed(1)} ms` : '—'
+}
+
+export function speedTestScale(jobs: SpeedTestJob[]) {
+  const values = jobs.flatMap((job) => [job.download_mbps, job.upload_mbps])
+    .filter(validTestValue)
+  if (values.length === 0) return 1
+  const peak = Math.max(...values)
+  if (peak === 0) return 1
+  const target = peak * 1.1
+  const magnitude = 10 ** Math.floor(Math.log10(target))
+  const normalized = target / magnitude
+  const factor = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]
+    .find((candidate) => candidate >= normalized) ?? 10
+  return factor * magnitude
 }
 
 function errorText(error: unknown) {
@@ -145,6 +163,183 @@ function mergeSpeedTest(current: SpeedTestCollection | null, job: SpeedTestJob) 
   if (!current) return null
   const jobs = [job, ...current.jobs.filter((item) => item.id !== job.id)]
   return { ...current, jobs, active: job.state === 'completed' || job.state === 'failed' ? null : job }
+}
+
+function SpeedTestRateBar({
+  job,
+  label,
+  series,
+  value,
+  scale,
+}: {
+  job: SpeedTestJob
+  label: 'Download' | 'Upload'
+  series: 'download' | 'upload'
+  value: number | null | undefined
+  scale: number
+}) {
+  const available = validTestValue(value)
+  const tooltipID = `speedtest-${job.id}-${series}`
+  const time = new Date(job.finished_at ?? job.created_at).toLocaleString()
+  return (
+    <div className="speedtest-bar-row">
+      <span className="speedtest-bar-label">{label}</span>
+      <span className="speedtest-bar-wrap">
+        {available ? (
+          <span
+            className="speedtest-bar-track"
+            role="meter"
+            tabIndex={0}
+            aria-label={`${label} throughput`}
+            aria-valuemin={0}
+            aria-valuemax={scale}
+            aria-valuenow={value}
+            aria-valuetext={`${value.toFixed(1)} Mbps`}
+            aria-describedby={tooltipID}
+          >
+            <span
+              className="speedtest-bar-fill"
+              data-series={series}
+              style={{ width: `${(value / scale) * 100}%` }}
+            />
+          </span>
+        ) : (
+          <span className="speedtest-bar-track" data-unavailable="true" aria-label={`${label} throughput unavailable`} />
+        )}
+        {available && (
+          <span className="speedtest-bar-tooltip" id={tooltipID} role="tooltip">
+            {label} {value.toFixed(1)} Mbps · {time} · {job.provider} · {speedTestProvenance(job.provenance)}
+          </span>
+        )}
+      </span>
+      <span className="speedtest-bar-value num">{formatTestRate(value)}</span>
+    </div>
+  )
+}
+
+function SpeedTestResponsiveness({ job }: { job: SpeedTestJob }) {
+  const idleAvailable = validTestValue(job.idle_latency_ms) || validTestValue(job.idle_jitter_ms)
+  const loadedAvailable = validTestValue(job.loaded_latency_ms) || validTestValue(job.loaded_jitter_ms)
+  return (
+    <div className="speedtest-responsiveness">
+      <span>
+        Idle {idleAvailable
+          ? `${formatMilliseconds(job.idle_latency_ms)} latency · ${formatMilliseconds(job.idle_jitter_ms)} jitter`
+          : 'unavailable'}
+      </span>
+      <span>
+        Loaded {loadedAvailable
+          ? `${formatMilliseconds(job.loaded_latency_ms)} latency · ${formatMilliseconds(job.loaded_jitter_ms)} jitter`
+          : 'unavailable'}
+      </span>
+    </div>
+  )
+}
+
+export function SpeedTestHistory({ jobs }: { jobs: SpeedTestJob[] }) {
+  const [view, setView] = useState<'chart' | 'table'>('chart')
+  const charted = jobs.filter((job) => job.state === 'completed' && (
+    validTestValue(job.download_mbps) || validTestValue(job.upload_mbps)
+  ))
+  const uncharted = jobs.filter((job) => !charted.includes(job))
+  const scale = speedTestScale(charted)
+
+  return (
+    <div className="speedtest-history">
+      <div className="speedtest-history-toolbar">
+        <div>
+          <div className="speedtest-history-heading">Recent performance</div>
+          <div className="dashboard-metric-note">Five most recent tests · controller host/container</div>
+        </div>
+        <div className="speedtest-view-toggle" role="group" aria-label="Speed test history view">
+          <Button aria-pressed={view === 'chart'} kind={view === 'chart' ? 'primary' : 'default'} onClick={() => setView('chart')}>
+            Chart
+          </Button>
+          <Button aria-pressed={view === 'table'} kind={view === 'table' ? 'primary' : 'default'} onClick={() => setView('table')}>
+            Table
+          </Button>
+        </div>
+      </div>
+
+      {view === 'chart' ? (
+        charted.length === 0 ? (
+          <div className="speedtest-chart-empty" role="img" aria-label="No completed speed tests have chartable throughput results">
+            No completed throughput results to chart.
+          </div>
+        ) : (
+          <figure
+            className="speedtest-chart"
+            aria-label={`Throughput history for ${charted.length} completed test${charted.length === 1 ? '' : 's'}, shared scale zero to ${scale} megabits per second`}
+          >
+            <div className="speedtest-chart-legend" aria-label="Throughput series legend">
+              <span><i data-series="download" aria-hidden />Download</span>
+              <span><i data-series="upload" aria-hidden />Upload</span>
+            </div>
+            <div className="speedtest-chart-scale" aria-hidden>
+              <span>0</span>
+              <span>{scale.toFixed(scale < 10 ? 1 : 0)} Mbps</span>
+            </div>
+            <div className="speedtest-chart-runs">
+              {charted.map((job) => (
+                <section className="speedtest-chart-run" key={job.id} aria-label={`Completed test from ${new Date(job.finished_at ?? job.created_at).toLocaleString()}`}>
+                  <header>
+                    <strong>{agoMilliseconds(job.finished_at ?? job.created_at)}</strong>
+                    <span>{job.provider} · {job.method}</span>
+                  </header>
+                  <SpeedTestRateBar job={job} label="Download" series="download" value={job.download_mbps} scale={scale} />
+                  <SpeedTestRateBar job={job} label="Upload" series="upload" value={job.upload_mbps} scale={scale} />
+                  <SpeedTestResponsiveness job={job} />
+                </section>
+              ))}
+            </div>
+          </figure>
+        )
+      ) : (
+        <div className="speedtest-table-wrap" role="region" aria-label="Speed test result table" tabIndex={0}>
+          <table className="speedtest-table">
+            <thead>
+              <tr>
+                <th>Test</th>
+                <th>Status</th>
+                <th>Download</th>
+                <th>Upload</th>
+                <th>Idle latency</th>
+                <th>Idle jitter</th>
+                <th>Loaded latency</th>
+                <th>Loaded jitter</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={job.id}>
+                  <td>
+                    <time dateTime={new Date(job.finished_at ?? job.created_at).toISOString()}>
+                      {new Date(job.finished_at ?? job.created_at).toLocaleString()}
+                    </time>
+                    <small>{job.provider} · {job.method} · {speedTestProvenance(job.provenance)}</small>
+                  </td>
+                  <td>{job.state}{job.error ? <small>{job.error}</small> : null}</td>
+                  <td className="num">{formatTestRate(job.download_mbps)}</td>
+                  <td className="num">{formatTestRate(job.upload_mbps)}</td>
+                  <td className="num">{formatMilliseconds(job.idle_latency_ms)}</td>
+                  <td className="num">{formatMilliseconds(job.idle_jitter_ms)}</td>
+                  <td className="num">{formatMilliseconds(job.loaded_latency_ms)}</td>
+                  <td className="num">{formatMilliseconds(job.loaded_jitter_ms)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {view === 'chart' && uncharted.map((job) => (
+        <div className="speedtest-uncharted" key={job.id}>
+          <Status value={job.state} />
+          <span>{job.error || 'Throughput result unavailable'} · {agoMilliseconds(job.finished_at ?? job.created_at)}</span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 function SpeedTestCard() {
@@ -366,29 +561,14 @@ function SpeedTestCard() {
         </div>
       )}
 
-      <div className="speedtest-history">
-        <div className="speedtest-history-heading">Recent tests</div>
-        {history.length === 0 ? (
+      {history.length === 0 ? (
+        <div className="speedtest-history">
+          <div className="speedtest-history-heading">Recent performance</div>
           <div className="dashboard-metric-note">
-            {collection == null && !error ? 'Loading history…' : 'No completed tests yet.'}
+            {collection == null && !error ? 'Loading history…' : 'No tests yet.'}
           </div>
-        ) : history.map((job) => (
-          <div className="speedtest-history-row" key={job.id}>
-            <div>
-              <strong>{job.state}</strong>
-              <div className="dashboard-metric-note">
-                {job.provider} · {job.method} · {speedTestProvenance(job.provenance)}
-                {' '}· {agoMilliseconds(job.finished_at ?? job.created_at)}
-              </div>
-            </div>
-            <div className="speedtest-history-result num">
-              {job.state === 'completed'
-                ? `${formatTestRate(job.download_mbps)} ↓ · ${formatTestRate(job.upload_mbps)} ↑ · ${formatMilliseconds(job.idle_latency_ms)} idle latency · ${formatMilliseconds(job.idle_jitter_ms)} idle jitter · ${formatMilliseconds(job.loaded_latency_ms)} loaded latency · ${formatMilliseconds(job.loaded_jitter_ms)} loaded jitter`
-                : job.error || 'No result'}
-            </div>
-          </div>
-        ))}
-      </div>
+        </div>
+      ) : <SpeedTestHistory jobs={history} />}
     </Card>
   )
 }
