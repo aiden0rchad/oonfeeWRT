@@ -243,6 +243,7 @@ export function Accounts({
     <div className="account-page">
       <Notice
         tone="accent"
+        popoverDetails
         component="Account authorization"
         summary="Only owners can administer controller accounts."
         details="This tab is a convenience, not the security boundary. The controller checks the signed-in account role on every request and records account changes in the audit history."

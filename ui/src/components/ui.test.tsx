@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { Banner, Button, DataGrid, FilterRail, Notice, PageHeader, Pager, SlideOver, Stat, Unknown, useColumnPrefs } from './ui'
 import type { Column, ColumnPrefs } from './ui'
@@ -103,30 +103,161 @@ describe('Banner', () => {
 })
 
 describe('Notice', () => {
-  it('keeps an authored summary visible and exposes details with native semantics', () => {
+  it('compacts routine guidance without weakening disclosure or action semantics', () => {
     render(
-      <Notice
-        tone="warning"
-        component="Topology"
-        summary="Some link evidence is unavailable."
-        details="The LLDP source did not report a neighbour on lan3."
-      />,
+      <>
+        <Notice
+          tone="accent"
+          compact
+          component="Routine guidance"
+          summary="The short explanation stays visible."
+          details="The full explanation stays collapsed."
+          actions={<Button>Review</Button>}
+        />
+        <Notice
+          compact
+          component="Coverage"
+          summary="Some evidence is unavailable."
+          details="One router did not report."
+        />
+      </>,
     )
 
-    expect(screen.getByRole('group', { name: 'Warning: Topology' })).toBeTruthy()
+    const info = screen.getByRole('group', { name: 'Information: Routine guidance' })
+    const warning = screen.getByRole('group', { name: 'Warning: Coverage' })
+    expect(info.getAttribute('data-compact')).toBe('true')
+    expect(warning.getAttribute('data-compact')).toBe('true')
+    expect(within(info).getByText('Info')).toBeTruthy()
+    expect(within(warning).getByText('Warning')).toBeTruthy()
+    expect(within(info).getByText('The short explanation stays visible.')).toBeTruthy()
+
+    const disclosures = [info, warning].map((notice) => notice.querySelector('details') as HTMLDetailsElement)
+    const controlledIDs = disclosures.map((disclosure) => {
+      const toggle = disclosure.querySelector('summary') as HTMLElement
+      expect(disclosure.open).toBe(false)
+      expect(toggle.getAttribute('aria-expanded')).toBe('false')
+      const id = toggle.getAttribute('aria-controls')
+      expect(document.getElementById(id!)).toBeTruthy()
+      return id
+    })
+    expect(new Set(controlledIDs).size).toBe(2)
+    expect(within(info).getByRole('button', { name: 'Review' }).closest('details')).toBeNull()
+  })
+
+  it('keeps summary and live severity semantics visible while details open in a nonmodal dialog', () => {
+    render(
+      <div role="status" aria-live="polite">
+        <Notice
+          tone="accent"
+          component="Topology"
+          summary="Some link evidence is unavailable."
+          details="The LLDP source did not report a neighbour on lan3."
+          popoverDetails
+        />
+      </div>,
+    )
+
+    expect(screen.getByRole('status').getAttribute('aria-live')).toBe('polite')
+    expect(screen.getByRole('group', { name: 'Information: Topology' })).toBeTruthy()
     expect(screen.getByText('Some link evidence is unavailable.')).toBeTruthy()
-    const toggle = screen.getByText('More information').closest('summary') as HTMLElement
-    const disclosure = toggle.closest('details') as HTMLDetailsElement
-    expect(toggle.tagName).toBe('SUMMARY')
+    const toggle = screen.getByRole('button', { name: 'More information about Topology' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(disclosure.open).toBe(false)
 
     toggle.focus()
     expect(document.activeElement).toBe(toggle)
-    fireEvent.click(toggle)
-    expect(disclosure.open).toBe(true)
-    expect(screen.getByText('Hide information').getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByText('The LLDP source did not report a neighbour on lan3.')).toBeTruthy()
+    fireEvent.click(toggle, { detail: 0 })
+    expect(screen.getByRole('button', { name: 'Hide information about Topology' }).getAttribute('aria-expanded')).toBe('true')
+    const dialog = screen.getByRole('dialog', { name: 'Information: Topology' })
+    expect(dialog.getAttribute('aria-modal')).toBe('false')
+    expect(within(dialog).getByText('The LLDP source did not report a neighbour on lan3.')).toBeTruthy()
+  })
+
+  it('keeps warning details inline even when popover presentation is requested', () => {
+    render(
+      <Notice
+        popoverDetails
+        component="Optional controller access payload"
+        summary="Adoption adds one scoped rpcd ACL file and login."
+        details="Exact router changes remain reviewable inline."
+      />,
+    )
+
+    const warning = screen.getByRole('group', {
+      name: 'Warning: Optional controller access payload',
+    })
+    expect(warning.querySelector('details')).toBeTruthy()
+    expect(within(warning).queryByRole('button', {
+      name: /More information about Optional controller access payload/,
+    })).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('gives adjacent passive information triggers unique accessible names', () => {
+    render(
+      <>
+        <Notice
+          tone="accent"
+          popoverDetails
+          component="Controller sessions"
+          summary="Sessions expire automatically."
+          details="Session details."
+        />
+        <Notice
+          tone="accent"
+          popoverDetails
+          component="Account authorization"
+          summary="Roles are enforced by the server."
+          details="Authorization details."
+        />
+      </>,
+    )
+
+    expect(screen.getByRole('button', {
+      name: 'More information about Controller sessions',
+    })).toBeTruthy()
+    expect(screen.getByRole('button', {
+      name: 'More information about Account authorization',
+    })).toBeTruthy()
+  })
+
+  it('dismisses mouse-opened details on leave but pins keyboard and touch activation', async () => {
+    render(
+      <Notice
+        tone="accent"
+        component="Metrics"
+        summary="Counts use current scoped evidence."
+        details="Offline and unadopted devices are excluded."
+        popoverDetails
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: 'More information about Metrics' })
+    const region = trigger.closest('.details-popover') as HTMLElement
+
+    fireEvent.pointerEnter(region, { pointerType: 'mouse' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.pointerDown(trigger, { pointerType: 'mouse' })
+    fireEvent.click(trigger, { detail: 1 })
+    expect(screen.getByRole('dialog', { name: 'Information: Metrics' })).toBeTruthy()
+    fireEvent.pointerLeave(region, { pointerType: 'mouse' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(trigger, { detail: 0 })
+    fireEvent.pointerLeave(region, { pointerType: 'mouse' })
+    expect(screen.getByRole('dialog', { name: 'Information: Metrics' })).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.pointerDown(trigger, { pointerType: 'touch' })
+    fireEvent.click(trigger, { detail: 1 })
+    fireEvent.pointerLeave(region, { pointerType: 'mouse' })
+    expect(screen.getByRole('dialog', { name: 'Information: Metrics' })).toBeTruthy()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(trigger, { detail: 0 })
+    fireEvent.click(screen.getByRole('button', { name: 'Close Information: Metrics' }))
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it('opens an active capability plan while keeping consent actions outside it', () => {
@@ -150,14 +281,17 @@ describe('Notice', () => {
     const review = screen.getByRole('button', { name: 'Review' })
     expect(review.closest('details')).toBeNull()
     expect((screen.getByText('More information').closest('details') as HTMLDetailsElement).open).toBe(false)
+    expect(screen.queryByRole('dialog')).toBeNull()
 
     fireEvent.click(review)
     const install = screen.getByRole('button', { name: 'Install capability' })
     const cancel = screen.getByRole('button', { name: 'Cancel' })
-    expect((screen.getByText('Hide information').closest('details') as HTMLDetailsElement).open).toBe(true)
+    const disclosure = screen.getByText('Hide information').closest('details') as HTMLDetailsElement
+    expect(disclosure.open).toBe(true)
     expect(install.closest('details')).toBeNull()
     expect(cancel.closest('details')).toBeNull()
-    expect(screen.getByText(/Install lldpd/)).toBeTruthy()
+    expect(within(disclosure).getByText(/Install lldpd/)).toBeTruthy()
+    expect(screen.queryByRole('dialog')).toBeNull()
 
     fireEvent.click(cancel)
     expect((screen.getByText('More information').closest('details') as HTMLDetailsElement).open).toBe(false)

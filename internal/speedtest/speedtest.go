@@ -15,13 +15,18 @@ import (
 	"time"
 )
 
-const MaxHistory = 50
+const (
+	// MaxHistory is the number of terminal results retained in the controller store.
+	MaxHistory = 3
+	// MaxListLimit preserves the public list endpoint's accepted query range.
+	MaxListLimit = 50
+)
 
 var (
 	ErrActive      = errors.New("a speed test is already active")
 	ErrNotFound    = errors.New("speed test not found")
 	ErrTerminal    = errors.New("speed test is already finished")
-	ErrPlanChanged = errors.New("speed test plan changed; review it and acknowledge again")
+	ErrPlanChanged = errors.New("speed test plan changed; refresh the plan and run again")
 )
 
 type Descriptor struct {

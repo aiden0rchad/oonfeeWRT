@@ -115,6 +115,14 @@ const speedTests = {
       download_mbps: 216.3, upload_mbps: 412.4, idle_latency_ms: 12.1, idle_jitter_ms: 1.8,
       loaded_latency_ms: null, loaded_jitter_ms: null, bytes_downloaded: 12_000_000, bytes_uploaded: 3_000_000,
     },
+    {
+      id: '33333333333333333333333333333333', plan_id: `sha256:${'a'.repeat(64)}`,
+      state: 'completed', phase: 'complete', progress_percent: 100,
+      provider: 'Cloudflare', method: 'single stream', provenance: 'controller-host', endpoint: 'speed.cloudflare.com',
+      estimated_bytes: 15_000_000, created_at: Date.now() - 259_230_000, finished_at: Date.now() - 259_200_000,
+      download_mbps: 117.8, upload_mbps: 105.5, idle_latency_ms: 15.4, idle_jitter_ms: 2.1,
+      loaded_latency_ms: null, loaded_jitter_ms: null, bytes_downloaded: 12_000_000, bytes_uploaded: 3_000_000,
+    },
   ],
   active: null,
   test: {
@@ -128,7 +136,7 @@ const speedTests = {
     estimated_bytes: 15_000_000,
     max_duration_seconds: 30,
   },
-  limits: { max_history: 20 },
+  limits: { max_history: 3 },
   disclosure: {
     vantage_point: 'controller-host',
     router_management_calls: false,
@@ -290,8 +298,36 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/devices': { devices: [] },
       '/api/v1/clients': clientPage,
       '/api/v1/events': {
-        events: [],
-        total: 0,
+        events: [{
+          ID: 1,
+          TS: 1_788_000_000,
+          DeviceID: 1,
+          Category: 'system',
+          Severity: 'warning',
+          Event: 'openwrt.ipv6_ra_no_default_route',
+          Detail: {
+            message: 'odhcpd[81]: No default route present, setting ra_lifetime to 0!',
+            priority: 28,
+            occurrences: 37,
+          },
+          Source: 'openwrt-logd',
+          SourceID: '81',
+          SourceBoot: 'fixture',
+          IngestedAt: 1_788_000_000_000,
+          ClientMAC: '',
+          Action: '',
+          Direction: '',
+          InIface: '',
+          OutIface: '',
+          SrcIP: '',
+          DstIP: '',
+          SrcPort: null,
+          DstPort: null,
+          ZoneIn: '',
+          ZoneOut: '',
+          PolicyID: null,
+        }],
+        total: 1,
         limit: 100,
         scope: 'general',
         next_before: null,
@@ -379,7 +415,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       const health = page.getByRole('region', { name: 'Internet health details' })
       const healthCharts = health.locator('.dashboard-wan-metrics')
       await expect(healthCharts.getByRole('img')).toHaveCount(4)
-      await expect(page.getByLabel(/Throughput history for 2 completed tests/)).toBeVisible()
+      await expect(page.getByLabel(/Throughput history for 3 completed tests/)).toBeVisible()
       expect(await healthCharts.evaluate((element) =>
         getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(2)
       const operationCards = page.locator('.dashboard-operations-grid > section')
@@ -400,7 +436,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       expect(overflow.main).toBeLessThanOrEqual(1)
 
       const noticeSummary = page.locator('.notice-summary', {
-        hasText: 'Counts use current, scoped evidence',
+        hasText: 'Current scoped evidence',
       })
       const lines = await noticeSummary.evaluate((element) => {
         const style = getComputedStyle(element)
@@ -410,21 +446,140 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
 
       const disclosure = page
         .getByRole('group', { name: 'Information: Dashboard metrics' })
-        .locator('summary')
+        .locator('button[aria-haspopup="dialog"]')
+      await expect(disclosure).toHaveAccessibleName('How these counts are calculated')
       const details = page.getByText(/“Wireless clients” is the same count/)
       await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
       await expect(details).toBeHidden()
       await disclosure.focus()
       await disclosure.press('Enter')
       await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
-      await expect(disclosure).toBeFocused()
-      await expect(details).toBeVisible()
+      const metricDialog = page.getByRole('dialog', { name: 'Information: Dashboard metrics' })
+      await expect(metricDialog).toBeVisible()
+      await expect(metricDialog.getByRole('button', {
+        name: 'Close Information: Dashboard metrics',
+      })).toBeFocused()
+      await expectWithinMain(page, metricDialog)
+      await expect(metricDialog.getByText(/“Wireless clients” is the same count/)).toBeVisible()
       const expandedOverflow = await readOverflow(page)
       expect(expandedOverflow.document).toBeLessThanOrEqual(1)
       expect(expandedOverflow.main).toBeLessThanOrEqual(1)
+      await page.keyboard.press('Escape')
+      await expect(metricDialog).toBeHidden()
+      await expect(disclosure).toBeFocused()
       expect(unexpectedRequests).toEqual([])
     })
   }
+}
+
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+]) {
+  test(`${viewport.width}px routine help and speed-test impact stay compact`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    const unexpectedRequests = await installControllerFixture(page)
+
+    await page.goto('/')
+    const speed = page.getByRole('group', { name: 'Controller speed test' })
+    const metrics = page.getByRole('group', { name: 'Information: Dashboard metrics' })
+    await expectWithinMain(page, speed)
+    await expect(metrics).toHaveAttribute('data-compact', 'true')
+    await expectWithinMain(page, metrics)
+    const run = speed.getByRole('button', { name: 'Run speed test' })
+    const impact = speed.getByRole('button', { name: 'Impact & consent' })
+    await expect(run).toBeVisible()
+    await expect(run).toHaveAttribute('aria-describedby', /.+/)
+    await expect(speed).toContainText(/15 MB \+ overhead.*30 seconds.*no router calls or changes.*public IP/i)
+    await expect(speed.getByRole('checkbox')).toHaveCount(0)
+    await impact.click()
+    const impactDialog = page.getByRole('dialog', { name: 'Speed test impact & consent' })
+    await expect(impactDialog).toBeVisible()
+    await expectWithinMain(page, impactDialog)
+    await page.mouse.move(2, viewport.height - 2)
+    await expect(impactDialog).toBeHidden()
+    await impact.focus()
+    await impact.press('Enter')
+    await expect(impactDialog).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(impactDialog).toBeHidden()
+    await expect(impact).toBeFocused()
+    if (viewport.width >= 1000) {
+      expect((await speed.boundingBox())!.height).toBeLessThanOrEqual(90)
+      expect((await metrics.boundingBox())!.height).toBeLessThanOrEqual(64)
+    }
+
+    const metricDisclosure = metrics.locator('button[aria-haspopup="dialog"]')
+    await expect(metricDisclosure).toHaveAccessibleName('How these counts are calculated')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'false')
+    expect((await metricDisclosure.boundingBox())!.height).toBeGreaterThanOrEqual(24)
+    await metricDisclosure.focus()
+    await metricDisclosure.press('Enter')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'true')
+    const metricDialog = page.getByRole('dialog', { name: 'Information: Dashboard metrics' })
+    await expect(metricDialog).toBeVisible()
+    await expectWithinMain(page, metricDialog)
+    await page.keyboard.press('Escape')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'false')
+    await expect(metricDisclosure).toBeFocused()
+
+    await page.goto('/logs')
+    const sources = page.getByRole('group', { name: 'Information: General event sources' })
+    const ipv6 = page.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
+    for (const notice of [sources, ipv6]) {
+      await expect(notice).toHaveAttribute('data-compact', 'true')
+      await expectWithinMain(page, notice)
+    }
+    await expect(ipv6.getByText('Warning', { exact: true })).toBeVisible()
+    await expect(ipv6.getByText(/IPv6-only.*does not indicate an IPv4 outage/)).toBeVisible()
+    const sourceDisclosure = sources.getByRole('button', {
+      name: 'More information about event sources',
+    })
+    await sourceDisclosure.focus()
+    await sourceDisclosure.press('Enter')
+    const sourceDialog = page.getByRole('dialog', { name: 'Information: General event sources' })
+    await expect(sourceDialog).toBeVisible()
+    await expectWithinMain(page, sourceDialog)
+    await expect(sourceDialog).toContainText(/Packet-flow\/NFLOG/)
+    await page.keyboard.press('Escape')
+    await expect(sourceDialog).toBeHidden()
+    await expect(sourceDisclosure).toBeFocused()
+    await expect(ipv6.locator('details')).toHaveCount(1)
+    await expect(ipv6.locator('.details-popover')).toHaveCount(0)
+    if (viewport.width >= 1000) {
+      expect((await sources.boundingBox())!.height).toBeLessThanOrEqual(64)
+      expect((await ipv6.boundingBox())!.height).toBeLessThanOrEqual(72)
+      const borders = await sources.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { perimeter: style.borderTopColor, rail: style.borderLeftColor }
+      })
+      expect(borders.perimeter).not.toBe(borders.rail)
+    }
+
+    await page.goto('/settings')
+    const uplinks = page.getByRole('group', { name: 'Information: Wireless uplinks' })
+    const neighbours = page.getByRole('group', { name: 'Information: 802.11k neighbour reports' })
+    for (const notice of [uplinks, neighbours]) {
+      await expect(notice).toHaveAttribute('data-compact', 'true')
+      await expectWithinMain(page, notice)
+    }
+    const uplinkDisclosure = uplinks.getByRole('button', {
+      name: 'More information about wireless uplinks',
+    })
+    await uplinkDisclosure.focus()
+    await uplinkDisclosure.press('Enter')
+    const uplinkDialog = page.getByRole('dialog', { name: 'Information: Wireless uplinks' })
+    await expect(uplinkDialog).toBeVisible()
+    await expectWithinMain(page, uplinkDialog)
+    await page.keyboard.press('Escape')
+    await expect(uplinkDisclosure).toBeFocused()
+
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
 }
 
 test('Topology keeps review actions visible while technical detail is collapsed', async ({ page }) => {
@@ -561,7 +716,7 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
   await healthView.getByRole('button', { name: 'Table' }).click()
   await expectWithinMain(page, health.getByRole('region', { name: 'Internet health history table' }))
   await healthView.getByRole('button', { name: 'Chart' }).click()
-  const speedChart = page.getByLabel(/Throughput history for 2 completed tests/)
+  const speedChart = page.getByLabel(/Throughput history for 3 completed tests/)
   await expect(speedChart).toBeVisible()
   await expectWithinMain(page, speedChart)
   const downloadBar = page.getByRole('meter', { name: 'Download throughput' }).first()
@@ -575,7 +730,7 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
   expect(Math.abs(trackBox!.x + trackBox!.width - scaleBox!.x - scaleBox!.width)).toBeLessThanOrEqual(1)
   const lastUpload = page.getByRole('meter', { name: 'Upload throughput' }).last()
   await lastUpload.focus()
-  const lastTooltip = page.getByRole('tooltip').filter({ hasText: 'Upload 412.4 Mbps' })
+  const lastTooltip = page.getByRole('tooltip').filter({ hasText: 'Upload 105.5 Mbps' })
   await expect(lastTooltip).toBeVisible()
   await expectWithinMain(page, lastTooltip)
   const speedView = page.getByRole('group', { name: 'Speed test history view' })

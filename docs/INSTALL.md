@@ -3,8 +3,8 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets final schema-19 release `v0.1.0`. The
-[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.0)
+This guide targets schema-19 patch release `v0.1.1`. The
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.1)
 and its completed tag workflow are the publication source of truth; run the
 download commands only after that release is available. Back up both the
 controller and each router before using it on a network you cannot afford to
@@ -51,7 +51,7 @@ Set the release and platform. On macOS, `uname -m` reports `x86_64` rather than
 the archive's `amd64`, so normalize it:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.1.1
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -86,7 +86,7 @@ sudo install -m 0755 "$NAME/oonfeewrt-recoverycheck" \
 
 Create separate private directories for persistent state and the unattended
 passphrase. The database and `keyring.json` are created in the data directory.
-Keep that directory mode `0700`. v0.1.0 also forces newly created SQLite
+Keep that directory mode `0700`. v0.1.0 and later force newly created SQLite
 database, WAL, and SHM files to mode `0600`. Historical `v0.1.0-rc.1` relied on
 the process umask for its sidecars, so keep `umask 077` during an RC upgrade.
 
@@ -113,7 +113,7 @@ first run and once after each restart.
 ## Run the container
 
 After the tag workflow succeeds, its immutable release tag is
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.0`. It is multi-platform, defaults to
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.1`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
 backups straightforward on both Linux and Docker Desktop.
@@ -121,8 +121,8 @@ backups straightforward on both Linux and Docker Desktop.
 Install `cosign` from the
 [official Sigstore instructions](https://docs.sigstore.dev/cosign/system_config/installation/),
 then verify the GitHub Actions keyless identity before first use. Stable aliases
-`0.1.0`, `0.1`, and `latest` resolve to the same final manifest, but deployments
-should pin `v0.1.0` or its reported digest.
+`0.1.1`, `0.1`, and `latest` resolve to the same final manifest, but deployments
+should pin `v0.1.1` or its reported digest.
 
 ```sh
 [ "$(id -u)" -ne 0 ] || { echo "run Docker as a non-root user" >&2; exit 1; }
@@ -139,9 +139,9 @@ to host loopback. Layer-2 discovery does not cross the bridge; adopt by address.
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.0" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.1" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.1
 
 docker run -d \
   --name oonfeewrt \
@@ -158,13 +158,19 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.1
 ```
 
 The release archive also includes `docker-compose.yml`. It uses the same final
 image, a named data volume, a mode-0600 passphrase file owned by UID 65532, and
 the loopback-only bridge mapping above. Host networking is documented in the
 file but remains an explicit Linux-only opt-in.
+
+Set the exact image version when using that file:
+
+```sh
+OONFEE_VERSION=v0.1.1 docker compose up -d
+```
 
 On Linux, full ARP/mDNS discovery requires host networking. Replace the `-p`
 line with `--network host` and set

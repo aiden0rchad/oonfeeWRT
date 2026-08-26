@@ -17,6 +17,14 @@ afterEach(() => {
 })
 
 describe('response trust boundary', () => {
+  it('requests the three retained speed-test attempts by default', async () => {
+    vi.mocked(fetch).mockResolvedValue(ok({ jobs: [], active: null }))
+
+    await api.speedTests()
+
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/speedtests?limit=3')
+  })
+
   it.each([
     ['empty', '', 503],
     ['plain text', 'upstream unavailable', 502],
@@ -582,7 +590,7 @@ describe('radio scan API contract', () => {
 })
 
 describe('speed test API contract', () => {
-  it('binds the data-use acknowledgement to the exact reviewed plan', async () => {
+  it('binds the data-use acknowledgement to the exact current plan', async () => {
     vi.mocked(fetch).mockResolvedValue(ok({ id: 'job', state: 'queued' }))
     const planID = `sha256:${'a'.repeat(64)}`
 

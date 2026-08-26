@@ -48,14 +48,16 @@ func (db *DB) SpeedTest(ctx context.Context, id string) (*speedtest.Job, error) 
 		`SELECT `+speedTestColumns+` FROM speed_tests WHERE id=?`, id))
 }
 
+// SpeedTests returns terminal history; ActiveSpeedTest owns live job state.
 func (db *DB) SpeedTests(ctx context.Context, limit int) ([]speedtest.Job, error) {
 	if limit < 1 {
-		limit = 20
-	} else if limit > speedtest.MaxHistory {
 		limit = speedtest.MaxHistory
+	} else if limit > speedtest.MaxListLimit {
+		limit = speedtest.MaxListLimit
 	}
 	rows, err := db.sql.QueryContext(ctx, `SELECT `+speedTestColumns+`
-FROM speed_tests ORDER BY created_at DESC,id DESC LIMIT ?`, limit)
+FROM speed_tests WHERE state IN ('completed','failed')
+ORDER BY created_at DESC,id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: list speed tests: %w", err)
 	}
@@ -156,8 +158,8 @@ WHERE id=? AND state IN ('queued','running','cancelling')`, state, state, progre
 	return nil
 }
 
-// RecoverSpeedTests marks work abandoned by a previous controller process.
-// Daemon startup calls it before accepting requests.
+// RecoverSpeedTests marks work abandoned by a previous controller process and
+// enforces terminal retention. Daemon startup calls it before accepting requests.
 func (db *DB) RecoverSpeedTests(ctx context.Context, at int64) ([]speedtest.Job, error) {
 	tx, err := db.sql.BeginTx(ctx, nil)
 	if err != nil {
@@ -181,39 +183,35 @@ FROM speed_tests WHERE state IN ('queued','running','cancelling') ORDER BY creat
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if len(jobs) == 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
-		return jobs, nil
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE speed_tests
+	if len(jobs) > 0 {
+		_, err = tx.ExecContext(ctx, `UPDATE speed_tests
 SET state='failed',phase='failed',finished_at=max(?,created_at,coalesce(started_at,created_at)),error='controller restarted before the speed test finished'
 WHERE state IN ('queued','running','cancelling')`, at)
-	if err != nil {
-		return nil, fmt.Errorf("store: recover interrupted speed tests: %w", err)
-	}
-	for _, job := range jobs {
-		recoveredAt := at
-		if recoveredAt < job.CreatedAt {
-			recoveredAt = job.CreatedAt
-		}
-		if job.StartedAt != nil && recoveredAt < *job.StartedAt {
-			recoveredAt = *job.StartedAt
-		}
-		event, detail, err := normalizeEvent(Event{TS: recoveredAt / 1000, IngestedAt: recoveredAt,
-			Category: "audit", Severity: "error", Event: "speedtest.failure",
-			Detail: map[string]any{
-				"job_id": job.ID, "username": job.ActorUsername,
-				"provider": job.Provider, "method": job.Method,
-				"provenance": job.Provenance, "plan_id": job.PlanID,
-				"reason": "controller restarted before the speed test finished",
-			}})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("store: recover interrupted speed tests: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, appendEventSQL, eventInsertArgs(event, detail)...); err != nil {
-			return nil, fmt.Errorf("store: audit interrupted speed test: %w", err)
+		for _, job := range jobs {
+			recoveredAt := at
+			if recoveredAt < job.CreatedAt {
+				recoveredAt = job.CreatedAt
+			}
+			if job.StartedAt != nil && recoveredAt < *job.StartedAt {
+				recoveredAt = *job.StartedAt
+			}
+			event, detail, err := normalizeEvent(Event{TS: recoveredAt / 1000, IngestedAt: recoveredAt,
+				Category: "audit", Severity: "error", Event: "speedtest.failure",
+				Detail: map[string]any{
+					"job_id": job.ID, "username": job.ActorUsername,
+					"provider": job.Provider, "method": job.Method,
+					"provenance": job.Provenance, "plan_id": job.PlanID,
+					"reason": "controller restarted before the speed test finished",
+				}})
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.ExecContext(ctx, appendEventSQL, eventInsertArgs(event, detail)...); err != nil {
+				return nil, fmt.Errorf("store: audit interrupted speed test: %w", err)
+			}
 		}
 	}
 	if err := pruneSpeedTestsOn(ctx, tx, speedtest.MaxHistory); err != nil {

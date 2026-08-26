@@ -56,6 +56,39 @@ func TestSpeedTestsEnforceOneActiveAndBoundHistory(t *testing.T) {
 	}
 }
 
+func TestSpeedTestsKeepActiveSeparateFromTerminalHistory(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	for i, id := range []string{"one", "two", "three", "four"} {
+		job := speedJob(id, int64(i+1))
+		if err := db.CreateSpeedTest(ctx, job, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishSpeedTest(ctx, id, "completed", speedtest.Measurement{}, "",
+			job.CreatedAt+1, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	active := speedJob("active", 5)
+	if err := db.CreateSpeedTest(ctx, active, speedtest.MaxHistory); err != nil {
+		t.Fatal(err)
+	}
+	history, err := db.SpeedTests(ctx, speedtest.MaxListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[0].ID != "four" || history[1].ID != "three" || history[2].ID != "two" {
+		t.Fatalf("history=%+v", history)
+	}
+	gotActive, err := db.ActiveSpeedTest(ctx)
+	if err != nil || gotActive == nil || gotActive.ID != active.ID {
+		t.Fatalf("active=%+v err=%v", gotActive, err)
+	}
+	if _, err := db.SpeedTest(ctx, "one"); !errors.Is(err, speedtest.ErrNotFound) {
+		t.Fatalf("oldest terminal result was not pruned: %v", err)
+	}
+}
+
 func TestSpeedTestCreateAndFinishRollbackWhenPruneFails(t *testing.T) {
 	db := open(t)
 	ctx := context.Background()
@@ -188,6 +221,40 @@ func TestRecoverSpeedTestsBoundsHistory(t *testing.T) {
 	}
 	if _, err := db.SpeedTest(ctx, "complete-00"); !errors.Is(err, speedtest.ErrNotFound) {
 		t.Fatalf("oldest recovered history entry was not pruned: %v", err)
+	}
+}
+
+func TestRecoverSpeedTestsPrunesExistingHistoryWithoutActiveWork(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	for i, id := range []string{"one", "two", "three", "four"} {
+		job := speedJob(id, int64(i+1))
+		if err := db.CreateSpeedTest(ctx, job, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.FinishSpeedTest(ctx, id, "completed", speedtest.Measurement{}, "",
+			job.CreatedAt+1, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.LogEvent(ctx, Event{TS: job.CreatedAt, Category: "audit", Severity: "info",
+			Event: "speedtest.complete", Detail: map[string]any{"job_id": id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recovered, err := db.RecoverSpeedTests(ctx, 10)
+	if err != nil || len(recovered) != 0 {
+		t.Fatalf("recovered=%+v err=%v", recovered, err)
+	}
+	history, err := db.SpeedTests(ctx, speedtest.MaxListLimit)
+	if err != nil || len(history) != 3 || history[0].ID != "four" || history[1].ID != "three" || history[2].ID != "two" {
+		t.Fatalf("history=%+v err=%v", history, err)
+	}
+	if _, err := db.SpeedTest(ctx, "one"); !errors.Is(err, speedtest.ErrNotFound) {
+		t.Fatalf("oldest terminal result was not pruned: %v", err)
+	}
+	events, err := db.RecentEvents(ctx, 10)
+	if err != nil || len(events) != 4 {
+		t.Fatalf("audit events=%+v err=%v", events, err)
 	}
 }
 

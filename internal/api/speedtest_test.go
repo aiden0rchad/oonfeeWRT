@@ -108,6 +108,10 @@ func TestSpeedTestAPIRequiresConsentAndNeverTouchesFleet(t *testing.T) {
 		t.Fatalf("list: %d %s", list.Code, list.Body.String())
 	}
 	body := h.json(list)
+	limits, ok := body["limits"].(map[string]any)
+	if !ok || limits["max_history"] != float64(speedtest.MaxHistory) {
+		t.Fatalf("limits=%v", body["limits"])
+	}
 	test, ok := body["test"].(map[string]any)
 	if !ok || test["provider"] != "local-test" || test["provenance"] != "controller-host" ||
 		test["endpoint"] != "http://127.0.0.1" || test["download_endpoint"] != "http://127.0.0.1/down" ||
@@ -198,6 +202,74 @@ func TestSpeedTestAPIRequiresConsentAndNeverTouchesFleet(t *testing.T) {
 			t.Errorf("missing audit event %s", event)
 		}
 	}
+}
+
+func TestSpeedTestAPIKeepsActiveSeparateFromThreeResultHistory(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	runner := &controlledSpeedRunner{started: make(chan struct{}), release: make(chan struct{})}
+	installSpeedRunner(h, runner)
+	ctx := context.Background()
+	for i, id := range []string{"one", "two", "three", "four"} {
+		job := speedtest.Job{ID: id, State: "queued", Phase: "queued",
+			Provider: "local-test", Method: "controller-http-single-stream-v1",
+			Provenance: "controller-host", Endpoint: "http://127.0.0.1",
+			EstimatedBytes: 3000, PlanID: runner.Descriptor().PlanID(),
+			ActorAdminID: 1, ActorUsername: "admin", CreatedAt: int64(i + 1)}
+		if err := h.db.CreateSpeedTest(ctx, job, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.db.FinishSpeedTest(ctx, id, "completed", speedtest.Measurement{}, "",
+			job.CreatedAt+1, speedtest.MaxListLimit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := h.do(http.MethodPost, "/api/v1/speedtests", map[string]any{
+		"acknowledge_data_use": true, "plan_id": runner.Descriptor().PlanID(),
+	})
+	if started.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", started.Code, started.Body.String())
+	}
+	activeID := h.json(started)["id"].(string)
+	<-runner.started
+
+	list := h.do(http.MethodGet, "/api/v1/speedtests?limit=50", nil)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", list.Code, list.Body.String())
+	}
+	body := h.json(list)
+	jobs, ok := body["jobs"].([]any)
+	if !ok || len(jobs) != 3 {
+		t.Fatalf("jobs=%v", body["jobs"])
+	}
+	for _, item := range jobs {
+		job := item.(map[string]any)
+		if job["id"] == activeID || (job["state"] != "completed" && job["state"] != "failed") {
+			t.Fatalf("active job leaked into history: %v", job)
+		}
+	}
+	active, ok := body["active"].(map[string]any)
+	if !ok || active["id"] != activeID {
+		t.Fatalf("active=%v", body["active"])
+	}
+	limits := body["limits"].(map[string]any)
+	if limits["max_history"] != float64(3) {
+		t.Fatalf("limits=%v", limits)
+	}
+	if oldest := h.do(http.MethodGet, "/api/v1/speedtests/one", nil); oldest.Code != http.StatusNotFound {
+		t.Fatalf("oldest: %d %s", oldest.Code, oldest.Body.String())
+	}
+	overLimit := h.do(http.MethodGet, "/api/v1/speedtests?limit=51", nil)
+	if overLimit.Code != http.StatusBadRequest ||
+		h.json(overLimit)["error"] != "limit must be between 1 and 50" {
+		t.Fatalf("over limit: %d %s", overLimit.Code, overLimit.Body.String())
+	}
+
+	cancelled := h.do(http.MethodPost, "/api/v1/speedtests/"+activeID+"/cancel", map[string]any{})
+	if cancelled.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", cancelled.Code, cancelled.Body.String())
+	}
+	waitSpeedJob(t, h.db, activeID, "failed")
 }
 
 func TestSpeedTestAPICompletesWithNullableLoadedMetrics(t *testing.T) {

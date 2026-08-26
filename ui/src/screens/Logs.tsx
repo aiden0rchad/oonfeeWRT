@@ -313,11 +313,13 @@ export function Logs() {
             </div>
           )}
           {scope === 'general' && (
-            <div style={{ padding: '12px 12px 0' }}>
+            <div className="logs-notice-row">
               <Notice
                 tone="accent"
+                popoverDetails
+                compact
                 component="General event sources"
-                summary="General combines controller events, router syslog and hostapd association events."
+                summary="Controller events, router syslog, and hostapd association events."
                 details="Packet-flow/NFLOG, GeoIP and application identity are not collected in this phase; blank enrichment fields mean unavailable, not no traffic."
                 closedLabel="More information about event sources"
                 openLabel="Hide event source information"
@@ -325,8 +327,9 @@ export function Logs() {
             </div>
           )}
           {scope === 'general' && page && !coverage.complete && (
-            <div style={{ padding: '12px 12px 0' }}>
+            <div className="logs-notice-row">
               <Notice
+                compact
                 component="Router log coverage"
                 summary={(
                   <div role="status">
@@ -344,8 +347,9 @@ export function Logs() {
             </div>
           )}
           {clockSkew && (
-            <div style={{ padding: '12px 12px 0' }}>
+            <div className="logs-notice-row">
               <Notice
+                compact
                 component="Router clock"
                 summary={(
                   <div role="status">
@@ -361,14 +365,15 @@ export function Logs() {
             </div>
           )}
           {scope === 'general' && ipv6RAConditions.length > 0 && (
-            <div style={{ padding: '12px 12px 0' }}>
+            <div className="logs-notice-row">
               <Notice
                 tone="warning"
+                compact
                 component="IPv6 router advertisements"
                 summary={(
                   <div role="status">
-                    OpenWrt reported no usable IPv6 default route while sending router
-                    advertisements. This concerns IPv6 and does not indicate an IPv4 outage.
+                    OpenWrt found no usable IPv6 default route for router advertisements.
+                    {' '}This warning is IPv6-only; it does not indicate an IPv4 outage.
                   </div>
                 )}
                 details={`${ipv6RAOccurrences.toLocaleString()} reported occurrence${ipv6RAOccurrences === 1 ? '' : 's'} ${ipv6RAOccurrences === 1 ? 'is' : 'are'} condensed into ${ipv6RAConditions.length} condition record${ipv6RAConditions.length === 1 ? '' : 's'} on this page. The original warning priority, message, first and latest source timestamps remain in event detail.`}

@@ -36,6 +36,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"echo \"$image:$minor\"",
 		"echo \"$image:latest\"",
 		"notes=\"RELEASE-NOTES-${GITHUB_REF_NAME}.md\"",
+		"cmp -s \"$notes\" RELEASE-NOTES.md",
 		"./tools/release-build.sh \"$GITHUB_REF_NAME\" \"$release_dir\"",
 		"path: ${{ runner.temp }}/release/*",
 		"--notes-file dist/RELEASE-NOTES.md",

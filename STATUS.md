@@ -475,8 +475,10 @@ backup/restore. Historical `v0.1.0-rc.1` remains the schema-17 upgrade baseline.
    interface-series key. The consent-bound controller-host Cloudflare job is
    single-stream, 15 MiB/30 seconds, one-active, cancellable, audited and
    restart-recovered; it makes no router management/API/SSH call or router
-   change. Consent is bound to the exact reviewed descriptor plan ID; a changed
-   plan is rejected before a job is created. Loaded latency/jitter remain
+   change. Selecting Run is a fresh acknowledgement bound to the exact current
+   descriptor plan ID; a changed plan is rejected before a job is created. The
+   three newest terminal attempts are retained separately from active work.
+   Loaded latency/jitter remain
    unavailable. Public-provider execution remains explicit and separate from
    deterministic release tests. A gateway-run test stays deferred to a separately
    installed official-feed capability with an exact plan and rollback.

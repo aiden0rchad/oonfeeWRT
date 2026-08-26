@@ -1,6 +1,6 @@
 # oonfeeWRT controller — self-hosted network management.
 #
-#   docker compose up -d
+#   OONFEE_VERSION=vX.Y.Z docker compose up -d
 #   open http://127.0.0.1:8080 on the controller host
 #
 # NETWORKING — the safe, portable bridge mode is the default:
@@ -15,7 +15,7 @@
 
 services:
   oonfeewrt:
-    image: ghcr.io/aiden0rchad/oonfeewrt:v0.1.0
+    image: "ghcr.io/aiden0rchad/oonfeewrt:${OONFEE_VERSION:?set OONFEE_VERSION to a release tag}"
     container_name: oonfeewrt
     restart: unless-stopped
 

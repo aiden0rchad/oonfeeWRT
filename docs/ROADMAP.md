@@ -468,23 +468,27 @@ open.
 
 ### 4.1.2 Speed tests
 
-Source status: controller mode is implemented as an explicitly consented,
+Source status: controller mode is implemented as an explicitly acknowledged,
 single-stream Cloudflare direct test with a 15 MiB estimate and 30-second hard
 limit. The pre-run descriptor names vantage point, endpoint, method, privacy and
 saturation; jobs are durable, one-active, bounded-history, cancellable, audited
-and restart-recovered. Consent is bound to the reviewed deterministic `plan_id`;
-a changed plan is rejected before job creation. There is no Fleet/router
+and restart-recovered. The launcher keeps material impact visible and puts exact
+details in a nonmodal popover; selecting Run is the fresh acknowledgement bound
+to the current deterministic `plan_id`. A changed plan is rejected before job
+creation. There is no Fleet/router
 dependency. Loaded latency and jitter remain null because this method does not
 measure them. No public-provider speed test has run; the live Dashboard route
 has passed signed-in smoke.
 
-The first implementation runs from the **controller host/container**. It changes
-nothing on a router and must say so beside the Start button. Before every run,
-show the vantage point, provider/endpoint, estimated data use, timeout, privacy
-implications and the fact that the test may temporarily saturate the WAN.
+The first implementation runs from the **controller host/container**. It makes
+no router call or change and must say so beside the Run button. Before every
+run, keep provider, vantage point, estimated data use, timeout, privacy and
+temporary WAN-saturation impact visible; exact endpoints and method remain
+available from the keyboard/touch-accessible impact popover.
 
-- Persist bounded history for download/upload throughput, idle/loaded latency,
-  jitter, method, provider, timestamp and provenance. Unknown fields stay null.
+- Persist the three newest terminal attempts with download/upload throughput,
+  idle/loaded latency, jitter, method, provider, timestamp and provenance.
+  Unknown fields stay null; the separate active job never crowds out history.
 - Use server-side `queued`, `running`, `cancelling`, `completed` and `failed`
   jobs; allow one active controller test, hard-limit time and bytes, expose
   progress/cancel, and audit start/cancel/complete/failure.
@@ -514,27 +518,31 @@ Source status: authored `Notice` summaries now cover Dashboard methodology,
 topology/radio/log coverage, Policy lifecycle and Zone Matrix scope, Apply
 readiness/behavior/management-path/driver-risk/per-device previews, adoption and
 optional capabilities, diagnostics, backup/restore, neighbour reports and
-wireless-uplink guidance. Actions and acknowledgements stay outside collapsed
-details, critical consequences remain visible, and RF scan consent remains fully
-visible. Remaining control-adjacent Settings help stays inline by design; other
-long Settings guidance remains an incremental cleanup.
+wireless-uplink guidance. Passive information on Dashboard methodology, general
+event sources, account/session guidance, Zone Matrix scope, neighbour reports
+and wireless uplinks now uses the shared nonmodal details popover. Warnings,
+errors, adoption authorization, Apply plans, actions and acknowledgements remain
+inline; critical consequences and RF scan consent remain fully visible.
+Remaining control-adjacent Settings help stays inline by design; other long
+Settings guidance remains an incremental cleanup.
 
-Extend the existing passive long-`Banner` collapse into one authored disclosure
-contract: `summary`, `details`, severity, affected component and always-visible
-actions. The collapsed view is one or two lines and `More information` exposes
-the complete technical text; nothing is discarded or duplicated for assistive
-technology.
+Use one authored disclosure contract: `summary`, `details`, severity, affected
+component and always-visible actions. A passive informational row stays one or
+two lines and `More information` opens the complete technical text without
+changing page height. Inline warnings and errors retain their existing details;
+nothing is discarded or duplicated for assistive technology.
 
 - Apply it to Dashboard explanations, topology/radio/log coverage, adoption and
   ACL prompts, LLDP and other optional capabilities, RF scans, Apply previews,
   diagnostics, backup/restore and long Settings help.
-- Informational, coverage and optional-feature details default closed.
+- Passive informational details may use the popover and default closed. Coverage
+  warnings, errors, authorization and optional-feature consent remain inline.
 - Security, destructive and connectivity-loss notices remain prominent. An
   optional capability starts as a compact summary plus `Review`; after Review,
   its exact router mutation/rollback, fresh checkbox and action remain visible
   and default-open. Never auto-collapse an active consent plan.
-- Mouse and keyboard expansion, `aria-expanded`, focus treatment and representative
-  collapsed desktop screenshots are release-tested.
+- Mouse, keyboard and touch opening, dismissal, `aria-expanded`, focus return,
+  narrow containment and representative desktop layouts are release-tested.
 
 ### 4.1.4 Accounts, roles and sessions
 
