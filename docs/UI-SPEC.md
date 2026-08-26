@@ -134,8 +134,11 @@ ad hoc prose or character-count truncation. Its authored one- or two-line
 summary always names severity, affected component and consequence. `More
 information` expands the complete technical details with native keyboard
 semantics and `aria-expanded`; action buttons and acknowledgements remain
-visible outside the collapsed region. Informational and coverage details default
-closed. An optional capability initially shows a compact summary plus `Review`;
+visible outside the collapsed region. Routine, non-blocking guidance may use a
+compact row with a neutral perimeter and tone rail; warnings keep a visible
+severity label. Consent, retry, blocking, active-operation and critical notices
+retain the full treatment. Informational and coverage details default closed.
+An optional capability initially shows a compact summary plus `Review`;
 once reviewed, the exact router mutation/rollback, fresh acknowledgement and
 action remain visible/default-open. Security, destructive, connectivity-loss
 and active-operation essentials are never line-clamped. Apply this contract to

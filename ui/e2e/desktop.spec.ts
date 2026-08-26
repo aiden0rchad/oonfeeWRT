@@ -290,8 +290,36 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/devices': { devices: [] },
       '/api/v1/clients': clientPage,
       '/api/v1/events': {
-        events: [],
-        total: 0,
+        events: [{
+          ID: 1,
+          TS: 1_788_000_000,
+          DeviceID: 1,
+          Category: 'system',
+          Severity: 'warning',
+          Event: 'openwrt.ipv6_ra_no_default_route',
+          Detail: {
+            message: 'odhcpd[81]: No default route present, setting ra_lifetime to 0!',
+            priority: 28,
+            occurrences: 37,
+          },
+          Source: 'openwrt-logd',
+          SourceID: '81',
+          SourceBoot: 'fixture',
+          IngestedAt: 1_788_000_000_000,
+          ClientMAC: '',
+          Action: '',
+          Direction: '',
+          InIface: '',
+          OutIface: '',
+          SrcIP: '',
+          DstIP: '',
+          SrcPort: null,
+          DstPort: null,
+          ZoneIn: '',
+          ZoneOut: '',
+          PolicyID: null,
+        }],
+        total: 1,
         limit: 100,
         scope: 'general',
         next_before: null,
@@ -400,7 +428,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       expect(overflow.main).toBeLessThanOrEqual(1)
 
       const noticeSummary = page.locator('.notice-summary', {
-        hasText: 'Counts use current, scoped evidence',
+        hasText: 'Current scoped evidence',
       })
       const lines = await noticeSummary.evaluate((element) => {
         const style = getComputedStyle(element)
@@ -425,6 +453,72 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       expect(unexpectedRequests).toEqual([])
     })
   }
+}
+
+for (const viewport of [
+  { width: 1280, height: 720 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+]) {
+  test(`${viewport.width}px routine notices stay compact without weakening warnings`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    const unexpectedRequests = await installControllerFixture(page)
+
+    await page.goto('/')
+    const speed = page.getByRole('group', { name: 'Information: Controller speed test' })
+    const metrics = page.getByRole('group', { name: 'Information: Dashboard metrics' })
+    for (const notice of [speed, metrics]) {
+      await expect(notice).toHaveAttribute('data-compact', 'true')
+      await expectWithinMain(page, notice)
+    }
+    await expect(speed.getByRole('button', { name: 'Review speed test' })).toBeVisible()
+    if (viewport.width >= 1000) {
+      expect((await speed.boundingBox())!.height).toBeLessThanOrEqual(84)
+      expect((await metrics.boundingBox())!.height).toBeLessThanOrEqual(64)
+    }
+
+    const metricDisclosure = metrics.locator('summary')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'false')
+    expect((await metricDisclosure.boundingBox())!.height).toBeGreaterThanOrEqual(24)
+    await metricDisclosure.focus()
+    await metricDisclosure.press('Enter')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'true')
+    await expect(metricDisclosure).toBeFocused()
+    await metricDisclosure.press('Space')
+    await expect(metricDisclosure).toHaveAttribute('aria-expanded', 'false')
+
+    await page.goto('/logs')
+    const sources = page.getByRole('group', { name: 'Information: General event sources' })
+    const ipv6 = page.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
+    for (const notice of [sources, ipv6]) {
+      await expect(notice).toHaveAttribute('data-compact', 'true')
+      await expectWithinMain(page, notice)
+    }
+    await expect(ipv6.getByText('Warning', { exact: true })).toBeVisible()
+    await expect(ipv6.getByText(/IPv6-only.*does not indicate an IPv4 outage/)).toBeVisible()
+    if (viewport.width >= 1000) {
+      expect((await sources.boundingBox())!.height).toBeLessThanOrEqual(64)
+      expect((await ipv6.boundingBox())!.height).toBeLessThanOrEqual(72)
+      const borders = await sources.evaluate((element) => {
+        const style = getComputedStyle(element)
+        return { perimeter: style.borderTopColor, rail: style.borderLeftColor }
+      })
+      expect(borders.perimeter).not.toBe(borders.rail)
+    }
+
+    await page.goto('/settings')
+    const uplinks = page.getByRole('group', { name: 'Information: Wireless uplinks' })
+    const neighbours = page.getByRole('group', { name: 'Information: 802.11k neighbour reports' })
+    for (const notice of [uplinks, neighbours]) {
+      await expect(notice).toHaveAttribute('data-compact', 'true')
+      await expectWithinMain(page, notice)
+    }
+
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
 }
 
 test('Topology keeps review actions visible while technical detail is collapsed', async ({ page }) => {

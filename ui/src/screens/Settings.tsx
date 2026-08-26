@@ -2836,11 +2836,12 @@ function Neighbours({ site }: { site: Site }) {
     >
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
-      <div style={{ marginBottom: 10 }}>
+      <div className="settings-compact-notice">
         <Notice
           tone="accent"
+          compact
           component="802.11k neighbour reports"
-          summary="Automatically refreshes neighbour reports every 15 minutes and after every Apply."
+          summary="Refreshes automatically every 15 minutes and after Apply."
           closedLabel="More information about neighbour reports"
           openLabel="Hide neighbour report information"
           details="Each access point is told the BSSIDs and channels of the others carrying the same SSID, so a roaming client scans those channels instead of all of them. No AP can learn this by itself. An AP that restarts comes back with an empty list, so it is re-checked rather than assumed."
@@ -3144,11 +3145,12 @@ function Uplinks({
     <Card title="Wireless uplinks">
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
 
-      <div style={{ marginBottom: 10 }}>
+      <div className="settings-compact-notice">
         <Notice
           tone="accent"
+          compact
           component="Wireless uplinks"
-          summary="Lets an uncabled device bridge a network over the air; that network must accept wireless bridges first."
+          summary="Bridges an uncabled device over Wi-Fi; the target network must allow wireless bridges."
           closedLabel="More information about wireless uplinks"
           openLabel="Hide wireless uplink information"
           details={(

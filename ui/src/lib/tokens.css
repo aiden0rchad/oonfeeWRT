@@ -359,6 +359,114 @@ a {
   margin-top: 8px;
 }
 
+/* Routine guidance is a quiet, single-row annotation. Explicit opt-in keeps
+   consent, recovery, active-operation and critical surfaces at full weight. */
+.notice[data-compact='true'] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  padding: 6px 8px;
+  border-color: var(--border);
+  border-left: 3px solid var(--notice-tone);
+  background: var(--surface-1);
+}
+
+.notice[data-compact='true'][data-tone='critical'] {
+  border-color: var(--critical);
+  border-left-color: var(--critical);
+}
+
+.notice[data-compact='true'] .notice-context {
+  flex: 0 0 auto;
+  gap: 4px;
+  line-height: 1.35;
+}
+
+.notice[data-compact='true'] .notice-summary {
+  flex: 1 1 120px;
+  min-width: 0;
+  margin-top: 0;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.notice[data-compact='true'] .notice-disclosure {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.notice[data-compact='true'] .notice-disclosure > summary {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-top: 0;
+  line-height: 1.25;
+}
+
+.notice[data-compact='true'] .notice-disclosure[open] {
+  flex: 1 0 100%;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.notice[data-compact='true'] .notice-details {
+  margin-top: 6px;
+}
+
+.notice[data-compact='true'] .notice-actions {
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+@media (min-width: 721px) {
+  .notice[data-compact='true'] {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .notice[data-compact='true'] .notice-context {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .notice[data-compact='true'] .notice-summary {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .notice[data-compact='true'] .notice-disclosure {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .notice[data-compact='true'] .notice-actions {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .notice[data-compact='true'] .notice-disclosure[open] {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .notice[data-compact='true'][data-actions='true'] .notice-summary {
+    grid-column: 2 / -1;
+  }
+
+  .notice[data-compact='true'][data-actions='true'] .notice-disclosure:not([open]) {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
+
+  .notice[data-compact='true'][data-actions='true'] .notice-disclosure[open] ~ .notice-actions {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: end;
+  }
+}
+
 .settings-page,
 .account-page {
   display: grid;
@@ -449,6 +557,14 @@ a {
   display: grid;
   gap: 12px;
   min-width: 0;
+}
+
+.logs-notice-row {
+  padding: 8px 12px 0;
+}
+
+.settings-compact-notice {
+  margin-bottom: 6px;
 }
 
 .radio-stat-grid,

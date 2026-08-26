@@ -293,6 +293,7 @@ export function Notice({
   summary,
   details,
   defaultOpen = false,
+  compact = false,
   actions,
   closedLabel = 'More information',
   openLabel = 'Hide information',
@@ -302,6 +303,9 @@ export function Notice({
   summary: ReactNode
   details: ReactNode
   defaultOpen?: boolean
+  /** Use for routine guidance and non-blocking conditions. Consent, retry,
+   *  acknowledgement, active-operation and critical notices stay standard. */
+  compact?: boolean
   actions?: ReactNode
   closedLabel?: string
   openLabel?: string
@@ -309,6 +313,7 @@ export function Notice({
   const [open, setOpen] = useState(defaultOpen)
   const detailsID = useId()
   const toneLabel = tone === 'accent' ? 'Information' : tone === 'critical' ? 'Critical' : 'Warning'
+  const visibleToneLabel = compact && tone === 'accent' ? 'Info' : toneLabel
 
   // A capability can render compactly, fetch its exact plan from a visible
   // Review action, then expand it. Synchronize both lifecycle transitions so
@@ -321,11 +326,13 @@ export function Notice({
     <div
       className="notice"
       data-tone={tone}
+      data-compact={compact ? 'true' : undefined}
+      data-actions={actions != null ? 'true' : undefined}
       role="group"
       aria-label={`${toneLabel}: ${component}`}
     >
       <div className="notice-context">
-        <span>{toneLabel}</span>
+        <span>{visibleToneLabel}</span>
         <span aria-hidden="true">·</span>
         <span>{component}</span>
       </div>

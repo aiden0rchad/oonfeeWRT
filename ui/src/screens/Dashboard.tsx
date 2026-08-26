@@ -566,11 +566,12 @@ function SpeedTestCard() {
       ) : (
         <Notice
           tone="accent"
+          compact={!review}
           component="Controller speed test"
-          summary="Runs from this controller host/container; it does not install packages or change router settings."
+          summary="Runs on the controller; it installs no packages and makes no router changes."
           defaultOpen={review}
-          closedLabel="Test impact and consent"
-          openLabel="Hide test impact"
+          closedLabel="Impact and consent"
+          openLabel="Hide impact"
           details={(
             <div style={{ display: 'grid', gap: 8 }}>
               <div>
@@ -1023,8 +1024,9 @@ export function Dashboard({
 
       <Notice
         tone="accent"
+        compact
         component="Dashboard metrics"
-        summary="Counts use current, scoped evidence; definitions and exclusions are available below."
+        summary="Current scoped evidence; definitions and exclusions are available."
         closedLabel="How these counts are calculated"
         openLabel="Hide count definitions"
         details={(

@@ -103,6 +103,48 @@ describe('Banner', () => {
 })
 
 describe('Notice', () => {
+  it('compacts routine guidance without weakening disclosure or action semantics', () => {
+    render(
+      <>
+        <Notice
+          tone="accent"
+          compact
+          component="Routine guidance"
+          summary="The short explanation stays visible."
+          details="The full explanation stays collapsed."
+          actions={<Button>Review</Button>}
+        />
+        <Notice
+          compact
+          component="Coverage"
+          summary="Some evidence is unavailable."
+          details="One router did not report."
+        />
+      </>,
+    )
+
+    const info = screen.getByRole('group', { name: 'Information: Routine guidance' })
+    const warning = screen.getByRole('group', { name: 'Warning: Coverage' })
+    expect(info.getAttribute('data-compact')).toBe('true')
+    expect(warning.getAttribute('data-compact')).toBe('true')
+    expect(within(info).getByText('Info')).toBeTruthy()
+    expect(within(warning).getByText('Warning')).toBeTruthy()
+    expect(within(info).getByText('The short explanation stays visible.')).toBeTruthy()
+
+    const disclosures = [info, warning].map((notice) => notice.querySelector('details') as HTMLDetailsElement)
+    const controlledIDs = disclosures.map((disclosure) => {
+      const summary = disclosure.querySelector('summary') as HTMLElement
+      expect(disclosure.open).toBe(false)
+      expect(summary.getAttribute('aria-expanded')).toBe('false')
+      const id = summary.getAttribute('aria-controls')
+      expect(id).toBeTruthy()
+      expect(document.getElementById(id!)).toBeTruthy()
+      return id
+    })
+    expect(new Set(controlledIDs).size).toBe(2)
+    expect(within(info).getByRole('button', { name: 'Review' }).closest('details')).toBeNull()
+  })
+
   it('keeps an authored summary visible and exposes details with native semantics', () => {
     render(
       <Notice

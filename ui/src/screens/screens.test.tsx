@@ -2599,7 +2599,8 @@ describe('Settings — neighbour reports', () => {
     const notice = await screen.findByRole('group', {
       name: 'Information: 802.11k neighbour reports',
     })
-    expect(within(notice).getByText(/every 15 minutes and after every Apply/)).toBeTruthy()
+    expect(notice.getAttribute('data-compact')).toBe('true')
+    expect(within(notice).getByText(/every 15 minutes and after Apply/)).toBeTruthy()
     const toggle = within(notice).getByText('More information about neighbour reports')
     const details = toggle.closest('details') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -2995,7 +2996,8 @@ describe('Settings — wireless uplinks', () => {
     render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
 
     const notice = await screen.findByRole('group', { name: 'Information: Wireless uplinks' })
-    expect(within(notice).getByText(/network must accept wireless bridges first/)).toBeTruthy()
+    expect(notice.getAttribute('data-compact')).toBe('true')
+    expect(within(notice).getByText(/target network must allow wireless bridges/)).toBeTruthy()
     const toggle = within(notice).getByText('More information about wireless uplinks')
     const details = toggle.closest('details') as HTMLDetailsElement
     expect(details.open).toBe(false)
@@ -4246,7 +4248,10 @@ describe('Logs', () => {
     const { unmount } = render(<Logs />)
     expectSinglePageHeading('Logs')
     expect(screen.getByText(/Controller, router, and audit events/)).toBeTruthy()
+    const sourceNotice = screen.getByRole('group', { name: 'Information: General event sources' })
+    expect(sourceNotice.getAttribute('data-compact')).toBe('true')
     const coverageNotice = await screen.findByRole('group', { name: 'Warning: Router log coverage' })
+    expect(coverageNotice.getAttribute('data-compact')).toBe('true')
     expect(within(coverageNotice).getByText(/Router log coverage is incomplete/)).toBeTruthy()
     expect(within(coverageNotice).getByText(/an empty result is not proven/)).toBeTruthy()
     const coverageToggle = within(coverageNotice).getByText('More information about log coverage')
@@ -4427,8 +4432,9 @@ describe('Logs', () => {
 
 	expect(await screen.findByText(/IPv6 router advertisements have no usable default route · 37 occurrences/)).toBeTruthy()
 	const notice = screen.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
+	expect(notice.getAttribute('data-compact')).toBe('true')
 	expect(within(notice).getByRole('status').textContent ?? '').toMatch(
-	  /does not indicate an IPv4 outage/i,
+	  /IPv6-only.*does not indicate an IPv4 outage/i,
 	)
 	const toggle = within(notice).getByText('More information about this IPv6 warning')
 	const details = toggle.closest('details') as HTMLDetailsElement
@@ -4926,7 +4932,9 @@ describe('Dashboard', () => {
     const { Dashboard } = await import('./Dashboard')
     render(<Dashboard data={data as never} />)
 
-    expect(screen.getByText(/Counts use current, scoped evidence/)).toBeTruthy()
+    const metricNotice = screen.getByRole('group', { name: 'Information: Dashboard metrics' })
+    expect(metricNotice.getAttribute('data-compact')).toBe('true')
+    expect(within(metricNotice).getByText(/Current scoped evidence/)).toBeTruthy()
     const summary = screen.getByText('How these counts are calculated').closest('summary') as HTMLElement
     const disclosure = summary.closest('details') as HTMLDetailsElement
     expect(disclosure.open).toBe(false)
@@ -5144,7 +5152,12 @@ describe('Dashboard', () => {
     render(<Dashboard data={data as never} />)
     await waitFor(() => expect(api.speedTests).toHaveBeenCalledWith(20))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review speed test' }))
+    const speedNotice = screen.getByRole('group', { name: 'Information: Controller speed test' })
+    const reviewSpeedTest = screen.getByRole('button', { name: 'Review speed test' })
+    expect(speedNotice.getAttribute('data-compact')).toBe('true')
+    expect(reviewSpeedTest.closest('details')).toBeNull()
+    fireEvent.click(reviewSpeedTest)
+    expect(speedNotice.getAttribute('data-compact')).toBeNull()
     expect(screen.getByText('librespeed')).toBeTruthy()
     expect(screen.getByText('https://speed.example')).toBeTruthy()
     expect(screen.getByText('https://speed.example/down')).toBeTruthy()
