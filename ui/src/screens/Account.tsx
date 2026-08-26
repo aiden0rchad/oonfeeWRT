@@ -151,6 +151,7 @@ export function Account({
         <div style={{ padding: 14, borderBottom: '1px solid var(--border)' }}>
           <Notice
             tone="accent"
+            popoverDetails
             component="Controller sessions"
             summary="Review where this account is signed in and revoke access you do not recognize."
             details="Session records live in controller memory. Restarting the controller invalidates all sessions. Peer addresses identify the connection seen by the controller and may be a proxy address."

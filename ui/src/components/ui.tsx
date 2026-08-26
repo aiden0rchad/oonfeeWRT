@@ -1,4 +1,4 @@
-import { Children, isValidElement, useEffect, useId, useRef, useState } from 'react'
+import { Children, isValidElement, useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { CSSProperties, MouseEventHandler, ReactNode } from 'react'
 import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
 import type { ColumnPrefs } from '../lib/columns'
@@ -149,6 +149,7 @@ export function Button({
   type = 'button',
   style,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
   'aria-pressed': ariaPressed,
 }: {
   children: ReactNode
@@ -158,12 +159,14 @@ export function Button({
   type?: 'button' | 'submit'
   style?: CSSProperties
   'aria-label'?: string
+  'aria-describedby'?: string
   'aria-pressed'?: boolean
 }) {
   return (
     <button
       type={type}
       aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
       aria-pressed={ariaPressed}
       onClick={onClick}
       disabled={disabled}
@@ -284,9 +287,145 @@ export function Unknown({ why }: { why: string }) {
 
 export type NoticeTone = 'warning' | 'critical' | 'accent'
 
-/** Authored progressive disclosure. Unlike Banner's compatibility-oriented
- *  length heuristic, Notice keeps the consequence, affected component and
- *  actions visible while native details/summary owns the full explanation. */
+/** Nonmodal details that stay out of the document flow. A mouse-opened panel
+ *  dismisses when the pointer leaves; keyboard and touch activation persist
+ *  until an explicit close, Escape, or an outside press. */
+export function DetailsPopover({
+  triggerLabel,
+  openTriggerLabel = triggerLabel,
+  triggerAriaLabel = triggerLabel,
+  openTriggerAriaLabel = openTriggerLabel,
+  title,
+  children,
+  className = '',
+  panelClassName = '',
+}: {
+  triggerLabel: string
+  openTriggerLabel?: string
+  triggerAriaLabel?: string
+  openTriggerAriaLabel?: string
+  title: string
+  children: ReactNode
+  className?: string
+  panelClassName?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const regionRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const openMode = useRef<'mouse' | 'persistent' | null>(null)
+  const pointerType = useRef('')
+  const focusPanelOnOpen = useRef(false)
+  const panelID = useId()
+  const titleID = useId()
+  const supportsPopover = typeof HTMLElement !== 'undefined' &&
+    typeof HTMLElement.prototype.showPopover === 'function'
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false)
+    openMode.current = null
+    pointerType.current = ''
+    focusPanelOnOpen.current = false
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    try {
+      if (open) panelRef.current?.showPopover?.()
+      else panelRef.current?.hidePopover?.()
+    } catch {
+      // `hidden` remains the fallback where the Popover API is unavailable.
+    }
+    if (open && focusPanelOnOpen.current) {
+      focusPanelOnOpen.current = false
+      window.requestAnimationFrame(() => closeRef.current?.focus())
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!regionRef.current?.contains(event.target as Node)) close()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      close(true)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [close, open])
+
+  return (
+    <div
+      ref={regionRef}
+      className={`details-popover ${className}`.trim()}
+      onPointerLeave={(event) => {
+        if (event.pointerType === 'mouse' && openMode.current === 'mouse') close()
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="details-popover-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={panelID}
+        aria-label={open ? openTriggerAriaLabel : triggerAriaLabel}
+        onPointerDown={(event) => { pointerType.current = event.pointerType }}
+        onClick={(event) => {
+          if (open) {
+            close()
+            return
+          }
+          const keyboard = event.detail === 0
+          const persistent = keyboard || pointerType.current !== 'mouse'
+          openMode.current = persistent ? 'persistent' : 'mouse'
+          focusPanelOnOpen.current = keyboard
+          pointerType.current = ''
+          setOpen(true)
+        }}
+      >
+        {open ? openTriggerLabel : triggerLabel}
+      </button>
+      <div
+        ref={panelRef}
+        id={panelID}
+        className={`details-popover-panel ${panelClassName}`.trim()}
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleID}
+        popover={supportsPopover ? 'manual' : undefined}
+        hidden={!supportsPopover && !open}
+        onFocusCapture={() => { openMode.current = 'persistent' }}
+      >
+        <div className="details-popover-heading">
+          <strong id={titleID}>{title}</strong>
+          <button
+            ref={closeRef}
+            type="button"
+            className="details-popover-close"
+            aria-label={`Close ${title}`}
+            onClick={() => close(true)}
+          >
+            ×
+          </button>
+        </div>
+        <div className="details-popover-content">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Authored progressive disclosure. Consequences, affected components, and
+ *  actions stay visible. Passive informational details use a nonmodal popover;
+ *  warnings, errors, actions, and active plans stay inline. */
 export function Notice({
   tone = 'warning',
   component,
@@ -297,6 +436,7 @@ export function Notice({
   actions,
   closedLabel = 'More information',
   openLabel = 'Hide information',
+  popoverDetails = false,
 }: {
   tone?: NoticeTone
   component: string
@@ -309,17 +449,19 @@ export function Notice({
   actions?: ReactNode
   closedLabel?: string
   openLabel?: string
+  /** Move supplemental detail into a nonmodal popover. Use only for passive
+   *  informational copy; warnings, errors, actions, and active plans stay inline. */
+  popoverDetails?: boolean
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const [inlineOpen, setInlineOpen] = useState(defaultOpen)
   const detailsID = useId()
   const toneLabel = tone === 'accent' ? 'Information' : tone === 'critical' ? 'Critical' : 'Warning'
   const visibleToneLabel = compact && tone === 'accent' ? 'Info' : toneLabel
+  const popover = popoverDetails && tone === 'accent' && !defaultOpen &&
+    actions == null && !bannerHasAction(details)
 
-  // A capability can render compactly, fetch its exact plan from a visible
-  // Review action, then expand it. Synchronize both lifecycle transitions so
-  // Cancel closes details along with the active plan.
   useEffect(() => {
-    setOpen(defaultOpen)
+    setInlineOpen(defaultOpen)
   }, [defaultOpen])
 
   return (
@@ -337,18 +479,33 @@ export function Notice({
         <span>{component}</span>
       </div>
       <div className="notice-summary">{summary}</div>
-      <details
-        className="notice-disclosure"
-        open={open}
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-      >
-        <summary aria-controls={detailsID} aria-expanded={open}>
-          {open ? openLabel : closedLabel}
-        </summary>
-        <div id={detailsID} className="notice-details">
+      {!popover ? (
+        <details
+          className="notice-disclosure"
+          data-mode="inline"
+          open={inlineOpen}
+          onToggle={(event) => setInlineOpen(event.currentTarget.open)}
+        >
+          <summary aria-controls={detailsID} aria-expanded={inlineOpen}>
+            {inlineOpen ? openLabel : closedLabel}
+          </summary>
+          <div id={detailsID} className="notice-inline-details">{details}</div>
+        </details>
+      ) : (
+        <DetailsPopover
+          className="notice-disclosure"
+          panelClassName="notice-details"
+          triggerLabel={closedLabel}
+          openTriggerLabel={openLabel}
+          triggerAriaLabel={closedLabel === 'More information'
+            ? `More information about ${component}` : closedLabel}
+          openTriggerAriaLabel={openLabel === 'Hide information'
+            ? `Hide information about ${component}` : openLabel}
+          title={`${toneLabel}: ${component}`}
+        >
           {details}
-        </div>
-      </details>
+        </DetailsPopover>
+      )}
       {actions != null && <div className="notice-actions">{actions}</div>}
     </div>
   )

@@ -20,7 +20,7 @@ func TestReleaseBuildContract(t *testing.T) {
 		"golang:1.26.6-alpine@sha256:",
 		`LABEL org.opencontainers.image.licenses="Apache-2.0"`,
 		"COPY LICENSE NOTICE THIRD_PARTY_LICENSES /licenses/",
-		"COPY RELEASE-NOTES-v0.1.0.md /release/",
+		"COPY RELEASE-NOTES.md /release/",
 		"COPY deploy/docker-compose.yml /release/docker-compose.yml",
 		`HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/oonfeewrtd", "-healthcheck"]`,
 	} {
@@ -124,14 +124,15 @@ func TestReleaseBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, packaged := range []string{
-		"THIRD_PARTY_LICENSES", "RELEASE-NOTES-v0.1.0.md", "deploy/docker-compose.yml",
+		"THIRD_PARTY_LICENSES", `cp RELEASE-NOTES.md "$stage/RELEASE-NOTES.md"`,
+		"deploy/docker-compose.yml",
 		"generate-third-party-licenses.py --check",
 	} {
 		if !strings.Contains(string(releaseScript), packaged) {
 			t.Errorf("release archives lost %q", packaged)
 		}
 	}
-	for _, artifact := range []string{"../THIRD_PARTY_LICENSES", "../RELEASE-NOTES-v0.1.0.md"} {
+	for _, artifact := range []string{"../THIRD_PARTY_LICENSES", "../RELEASE-NOTES.md"} {
 		info, err := os.Stat(artifact)
 		if err != nil {
 			t.Fatal(err)
@@ -163,7 +164,8 @@ func TestReleaseBuildContract(t *testing.T) {
 	for _, hardening := range []string{
 		"read_only: true", "/tmp:rw,noexec,nosuid,nodev", "cap_drop:",
 		"- ALL", "no-new-privileges:true", "create_host_path: false",
-		"image: ghcr.io/aiden0rchad/oonfeewrt:v0.1.0", `- "127.0.0.1:8080:8080"`,
+		`image: "ghcr.io/aiden0rchad/oonfeewrt:${OONFEE_VERSION:?set OONFEE_VERSION to a release tag}"`,
+		`- "127.0.0.1:8080:8080"`,
 	} {
 		if !strings.Contains(string(compose), hardening) {
 			t.Errorf("compose lost runtime hardening %q", hardening)

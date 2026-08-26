@@ -1105,10 +1105,11 @@ long synchronous response. The default runner uses Cloudflare's direct download
 and upload endpoints from the controller host, with a 10 MiB download, 5 MiB
 upload, five idle-latency probes, one active job and a 30-second hard bound.
 The GET descriptor includes a deterministic `plan_id`; Start requires both
-`acknowledge_data_use:true` and that exact reviewed ID, and rejects a changed
-plan with 409 before creating a job. It rejects redirects and has no Fleet/router
-dependency. Loaded latency/jitter remain null because the single-stream method
-does not probe them under load.
+`acknowledge_data_use:true` and that exact current ID, and rejects a changed
+plan with 409 before creating a job. Terminal history retains the three newest
+attempts separately from the active job. It rejects redirects and has no
+Fleet/router dependency. Loaded latency/jitter remain null because the
+single-stream method does not probe them under load.
 No public-provider speed test has run; current evidence is source and local-test
 coverage only.
 

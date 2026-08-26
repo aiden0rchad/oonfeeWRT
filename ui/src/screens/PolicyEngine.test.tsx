@@ -157,21 +157,26 @@ describe('Policy Engine', () => {
     expect(screen.queryByRole('button', { name: /Edit Internet \/ WAN policy/i })).toBeNull()
     const scope = screen.getByRole('group', { name: 'Information: Zone Matrix scope' })
     expect(within(scope).getByText(/manages whole-zone forwarding only/i)).toBeTruthy()
-    const scopeToggle = within(scope).getByText('More information about Zone Matrix scope')
-    const scopeDetails = scopeToggle.closest('details')
-    expect(scopeDetails?.open).toBe(false)
+    const scopeToggle = within(scope).getByRole('button', {
+      name: 'More information about Zone Matrix scope',
+    })
+    expect(scopeToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(scope.querySelector('details')).toBeNull()
     fireEvent.click(scopeToggle)
-    expect(scopeDetails?.open).toBe(true)
-    expect(scope.textContent).toMatch(
+    expect(scopeToggle.getAttribute('aria-expanded')).toBe('true')
+    const scopeDetails = screen.getByRole('dialog', {
+      name: 'Information: Zone Matrix scope',
+    })
+    expect(scopeDetails.textContent).toMatch(
       /WAN-initiated allow rules, port forwards, per-client or per-port rules, application filtering, QoS, and DPI are not implemented by this Zone Matrix editor/i,
     )
-    expect(scope.textContent).toMatch(
+    expect(scopeDetails.textContent).toMatch(
       /explicit gateway policies it also reads active nftables transit hooks and reachable rules/i,
     )
-    expect(scope.textContent).toMatch(
+    expect(scopeDetails.textContent).toMatch(
       /terse runtime view cannot prove include-file provenance or inspect set contents/i,
     )
-    expect(scope.textContent).toMatch(
+    expect(scopeDetails.textContent).toMatch(
       /!fw4: attribution comments can be imitated by direct custom rules/i,
     )
   })

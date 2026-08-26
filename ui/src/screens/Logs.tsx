@@ -316,6 +316,7 @@ export function Logs() {
             <div className="logs-notice-row">
               <Notice
                 tone="accent"
+                popoverDetails
                 compact
                 component="General event sources"
                 summary="Controller events, router syslog, and hostapd association events."

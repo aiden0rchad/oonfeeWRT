@@ -2839,6 +2839,7 @@ function Neighbours({ site }: { site: Site }) {
       <div className="settings-compact-notice">
         <Notice
           tone="accent"
+          popoverDetails
           compact
           component="802.11k neighbour reports"
           summary="Refreshes automatically every 15 minutes and after Apply."
@@ -3148,6 +3149,7 @@ function Uplinks({
       <div className="settings-compact-notice">
         <Notice
           tone="accent"
+          popoverDetails
           compact
           component="Wireless uplinks"
           summary="Bridges an uncabled device over Wi-Fi; the target network must allow wireless bridges."

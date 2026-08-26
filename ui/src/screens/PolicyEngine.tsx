@@ -412,6 +412,7 @@ function ZoneMatrix({ zones, openEditor }: {
     <div style={{ display: 'grid', gap: 14 }}>
       <Notice
         tone="accent"
+        popoverDetails
         component="Zone Matrix scope"
         summary="The Zone Matrix manages whole-zone forwarding only. Use Master Table for explicit firewall, port-forward, and route records."
         closedLabel="More information about Zone Matrix scope"

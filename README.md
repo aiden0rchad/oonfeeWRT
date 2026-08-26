@@ -110,21 +110,21 @@ cd oonfeewrt
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.0/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.1/deploy/docker-compose.yml
 
 umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
-docker compose up -d
+OONFEE_VERSION=v0.1.1 docker compose up -d
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.0` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.1` for `linux/amd64` or `linux/arm64`.
 
 The `passphrase` file unlocks the controller keyring and is not your owner
 account password. Back it up with the controller state and keep both private.
@@ -231,7 +231,7 @@ passphrases.
   and can temporarily saturate the WAN. Loaded latency and jitter are not
   measured.
 - Native controller TLS, cloud remote access, and gateway-run speed tests are
-  not included in v0.1.0.
+  not included in v0.1.1.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
 
@@ -255,6 +255,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 ## Documentation
 
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.1 release notes](RELEASE-NOTES-v0.1.1.md)
 - [v0.1.0 release notes](RELEASE-NOTES-v0.1.0.md)
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
 - [Hardware validation](docs/FRESH-START-VALIDATION.md)

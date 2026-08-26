@@ -12,6 +12,10 @@ case "$version" in
     exit 2
     ;;
 esac
+test -f RELEASE-NOTES.md || {
+  echo "release build: missing RELEASE-NOTES.md" >&2
+  exit 1
+}
 if [ -L "$out" ] || { [ -d "$out" ] && [ -n "$(find "$out" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
   echo "release build: output must be a new or empty directory: $out" >&2
   exit 1
@@ -47,8 +51,9 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
     -ldflags "-s -w -buildid=" \
     -o "$stage/oonfeewrt-recoverycheck" ./tools/recoverycheck
-  cp LICENSE NOTICE THIRD_PARTY_LICENSES RELEASE-NOTES-v0.1.0.md \
-    deploy/docker-compose.yml docs/INSTALL.md docs/FRESH-START-VALIDATION.md "$stage/"
+  cp LICENSE NOTICE THIRD_PARTY_LICENSES deploy/docker-compose.yml \
+    docs/INSTALL.md docs/FRESH-START-VALIDATION.md "$stage/"
+  cp RELEASE-NOTES.md "$stage/RELEASE-NOTES.md"
 
   python3 - "$stage" "$out/$name.tar.gz" "$epoch" "$name" <<'PY'
 import gzip

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type {
   Dashboard as DashboardData,
@@ -322,7 +322,7 @@ export function SpeedTestHistory({ jobs }: { jobs: SpeedTestJob[] }) {
       <div className="speedtest-history-toolbar">
         <div>
           <div className="speedtest-history-heading">Recent performance</div>
-          <div className="dashboard-metric-note">Five most recent tests · controller host/container</div>
+          <div className="dashboard-metric-note">Up to three recent attempts · controller host/container</div>
         </div>
         <div className="speedtest-view-toggle" role="group" aria-label="Speed test history view">
           <Button aria-pressed={view === 'chart'} kind={view === 'chart' ? 'primary' : 'default'} onClick={() => setView('chart')}>
@@ -415,21 +415,163 @@ export function SpeedTestHistory({ jobs }: { jobs: SpeedTestJob[] }) {
   )
 }
 
+function SpeedTestImpact({
+  plan,
+  disclosure,
+}: {
+  plan: SpeedTestCollection['test'] | undefined
+  disclosure: SpeedTestCollection['disclosure'] | undefined
+}) {
+  const [open, setOpen] = useState(false)
+  const regionRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const openMode = useRef<'mouse' | 'persistent' | null>(null)
+  const pointerType = useRef('')
+  const previousPlanID = useRef(plan?.plan_id)
+  const panelID = useId()
+  const titleID = useId()
+  const supportsPopover = typeof HTMLElement !== 'undefined' &&
+    typeof HTMLElement.prototype.showPopover === 'function'
+
+  const close = useCallback((restoreFocus = false) => {
+    setOpen(false)
+    openMode.current = null
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    try {
+      if (open) panelRef.current?.showPopover?.()
+      else panelRef.current?.hidePopover?.()
+    } catch {
+      // The panel is still rendered as a fixed-position fallback.
+    }
+    if (open && openMode.current === 'persistent' && pointerType.current === '') {
+      window.requestAnimationFrame(() => closeRef.current?.focus())
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      if (!regionRef.current?.contains(event.target as Node)) close()
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      close(true)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [close, open])
+
+  useEffect(() => {
+    if (previousPlanID.current === plan?.plan_id) return
+    previousPlanID.current = plan?.plan_id
+    if (open) close()
+  }, [close, open, plan?.plan_id])
+
+  const data = plan?.estimated_bytes && plan.estimated_bytes > 0
+    ? `About ${formatBytes(plan.estimated_bytes)} plus protocol overhead`
+    : 'Data estimate unavailable'
+  const duration = plan?.max_duration_seconds && plan.max_duration_seconds > 0
+    ? `Up to ${plan.max_duration_seconds} seconds`
+    : 'Duration unavailable'
+
+  return (
+    <div
+      ref={regionRef}
+      className="speedtest-impact"
+      onPointerLeave={(event) => {
+        if (event.pointerType === 'mouse' && openMode.current !== 'persistent') close()
+      }}
+    >
+      <button
+        ref={triggerRef}
+        type="button"
+        className="speedtest-impact-trigger"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={panelID}
+        onPointerDown={(event) => { pointerType.current = event.pointerType }}
+        onClick={(event) => {
+          if (open) {
+            close()
+            return
+          }
+          const persistent = event.detail === 0 || pointerType.current !== 'mouse'
+          openMode.current = persistent ? 'persistent' : 'mouse'
+          if (event.detail === 0) pointerType.current = ''
+          setOpen(true)
+        }}
+      >
+        Impact &amp; consent
+      </button>
+      <div
+        ref={panelRef}
+        id={panelID}
+        className="speedtest-impact-popover"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleID}
+        popover={supportsPopover ? 'manual' : undefined}
+        hidden={!supportsPopover && !open}
+        onFocusCapture={() => { openMode.current = 'persistent' }}
+      >
+        <div className="speedtest-impact-heading">
+          <strong id={titleID}>Speed test impact &amp; consent</strong>
+          <button
+            ref={closeRef}
+            type="button"
+            className="speedtest-impact-close"
+            aria-label="Close speed test impact and consent"
+            onClick={() => close(true)}
+          >
+            ×
+          </button>
+        </div>
+        <dl className="speedtest-plan">
+          <div><dt>Vantage point</dt><dd>{disclosure?.vantage_point ? speedTestProvenance(disclosure.vantage_point) : 'Unavailable'}</dd></div>
+          <div><dt>Provider</dt><dd>{plan?.provider || 'Unavailable'}</dd></div>
+          <div><dt>Provider origin</dt><dd>{plan?.endpoint || 'Unavailable'}</dd></div>
+          <div><dt>Method</dt><dd>{plan?.method || 'Unavailable'}</dd></div>
+          <div><dt>Data</dt><dd>{data}</dd></div>
+          <div><dt>Duration</dt><dd>{duration}</dd></div>
+          <div><dt>Download endpoint</dt><dd>{plan?.download_endpoint || 'Unavailable'}</dd></div>
+          <div><dt>Upload endpoint</dt><dd>{plan?.upload_endpoint || 'Unavailable'}</dd></div>
+          <div><dt>Router management calls</dt><dd><code>{typeof disclosure?.router_management_calls === 'boolean' ? String(disclosure.router_management_calls) : 'Unavailable'}</code></dd></div>
+          <div><dt>Router changes</dt><dd><code>{typeof disclosure?.router_changes === 'boolean' ? String(disclosure.router_changes) : 'Unavailable'}</code></dd></div>
+        </dl>
+        <p>{disclosure?.saturation_warning || 'Connection-impact disclosure unavailable.'}</p>
+        <p>{disclosure?.privacy || 'Public-IP disclosure unavailable.'}</p>
+        <p className="dashboard-metric-note">
+          Selecting Run speed test acknowledges this data use and possible temporary saturation.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 function SpeedTestCard() {
   const [collection, setCollection] = useState<SpeedTestCollection | null>(null)
-  const [review, setReview] = useState(false)
-  const [acknowledgedPlanID, setAcknowledgedPlanID] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const refreshGeneration = useRef(0)
   const refreshInFlight = useRef<Promise<SpeedTestCollection | null> | null>(null)
+  const startInFlight = useRef(false)
   const planID = collection?.test?.plan_id ?? ''
-  const acknowledged = planID !== '' && acknowledgedPlanID === planID
+  const consequenceID = useId()
 
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return refreshInFlight.current
     const generation = ++refreshGeneration.current
-    const request = api.speedTests(20).then((next) => {
+    const request = api.speedTests(3).then((next) => {
       if (generation === refreshGeneration.current) {
         setCollection(next)
         setError('')
@@ -460,8 +602,8 @@ function SpeedTestCard() {
   }, [collection?.active?.id, refresh])
 
   const start = async () => {
-    if (!acknowledged || collection?.active) return
-    setAcknowledgedPlanID('')
+    if (startInFlight.current || busy || !planReady || !planID || collection?.active) return
+    startInFlight.current = true
     refreshGeneration.current++
     refreshInFlight.current = null
     setBusy(true)
@@ -471,13 +613,12 @@ function SpeedTestCard() {
       refreshGeneration.current++
       refreshInFlight.current = null
       setCollection((current) => mergeSpeedTest(current, job))
-      setReview(false)
-      setAcknowledgedPlanID('')
       void refresh()
     } catch (cause) {
       setError(errorText(cause))
       void refresh()
     } finally {
+      startInFlight.current = false
       setBusy(false)
     }
   }
@@ -517,7 +658,29 @@ function SpeedTestCard() {
   )
   const maxDuration = plan?.max_duration_seconds
   const estimatedBytes = plan?.estimated_bytes
-  const history = (collection?.jobs ?? []).filter((job) => !active || job.id !== active.id).slice(0, 5)
+  const history = (collection?.jobs ?? []).filter((job) => !active || job.id !== active.id).slice(0, 3)
+  const provider = plan?.provider || 'Provider unavailable'
+  const providerRoute = plan?.provider && plan.endpoint
+    ? `${plan.provider} via ${plan.endpoint}`
+    : 'provider or endpoint unavailable'
+  const vantage = disclosure?.vantage_point === 'controller-host'
+    ? 'controller host'
+    : 'vantage point unavailable'
+  const data = estimatedBytes && estimatedBytes > 0
+    ? `~${formatBytes(estimatedBytes)} + overhead`
+    : 'data estimate unavailable'
+  const duration = maxDuration && maxDuration > 0
+    ? `up to ${maxDuration} seconds`
+    : 'duration unavailable'
+  const saturation = disclosure?.saturation_warning?.trim()
+    ? 'may temporarily saturate WAN'
+    : 'saturation disclosure unavailable'
+  const privacy = disclosure?.privacy?.trim()
+    ? `public IP visible to ${provider}`
+    : 'public-IP disclosure unavailable'
+  const routerImpact = disclosure?.router_management_calls === false && disclosure.router_changes === false
+    ? 'no router calls or changes'
+    : 'router safety unavailable'
 
   return (
     <Card
@@ -564,68 +727,27 @@ function SpeedTestCard() {
           </div>
         </div>
       ) : (
-        <Notice
-          tone="accent"
-          compact={!review}
-          component="Controller speed test"
-          summary="Runs on the controller; it installs no packages and makes no router changes."
-          defaultOpen={review}
-          closedLabel="Impact and consent"
-          openLabel="Hide impact"
-          details={(
-            <div style={{ display: 'grid', gap: 8 }}>
-              <div>
-                The test can temporarily saturate the Internet connection for up to{' '}
-                {maxDuration ? `${maxDuration} seconds` : 'the controller limit'}
-                {' '}and transfers approximately{' '}
-                {estimatedBytes ? formatBytes(estimatedBytes) : 'an unavailable amount of data'}
-                {' '}plus protocol overhead.
-              </div>
-              {plan && (
-                <dl className="speedtest-plan">
-                  <div><dt>Vantage point</dt><dd>{disclosure?.vantage_point ? speedTestProvenance(disclosure.vantage_point) : 'Unavailable'}</dd></div>
-                  <div><dt>Provider</dt><dd>{plan.provider || 'Unavailable'}</dd></div>
-                  <div><dt>Provider origin</dt><dd>{plan.endpoint || 'Unavailable'}</dd></div>
-                  <div><dt>Download endpoint</dt><dd>{plan.download_endpoint || 'Unavailable'}</dd></div>
-                  <div><dt>Upload endpoint</dt><dd>{plan.upload_endpoint || 'Unavailable'}</dd></div>
-                  <div><dt>Method</dt><dd>{plan.method || 'Unavailable'}</dd></div>
-                  <div><dt>Router management calls</dt><dd><code>{typeof disclosure?.router_management_calls === 'boolean' ? String(disclosure.router_management_calls) : 'Unavailable'}</code></dd></div>
-                  <div><dt>Router changes</dt><dd><code>{typeof disclosure?.router_changes === 'boolean' ? String(disclosure.router_changes) : 'Unavailable'}</code></dd></div>
-                </dl>
-              )}
-              {!planReady && (
-                <div className="speedtest-plan-unavailable" role="status">
-                  Exact provider, endpoints, method, provenance, limits, and safety disclosures are unavailable or incomplete; Start remains disabled.
-                </div>
-              )}
-              <div>
-                {disclosure?.privacy || 'Privacy disclosure unavailable.'}
-              </div>
-              {disclosure?.saturation_warning && <div>{disclosure.saturation_warning}</div>}
-              <label className="speedtest-consent">
-                <input
-                  type="checkbox"
-                  checked={acknowledged}
-                  onChange={(event) => setAcknowledgedPlanID(event.target.checked ? planID : '')}
-                />
-                <span>I understand this may use data and temporarily saturate the connection.</span>
-              </label>
+        <div className="speedtest-launch" role="group" aria-label="Controller speed test">
+          <div id={consequenceID} className="speedtest-launch-consequence">
+            {providerRoute} · {vantage} · {data} · {duration} · {routerImpact} · {saturation} · {privacy}
+          </div>
+          {!planReady && (
+            <div className="speedtest-plan-unavailable" role="status">
+              Exact provider, endpoints, method, provenance, limits, and safety disclosures are unavailable or incomplete; Run remains disabled.
             </div>
           )}
-          actions={review ? (
-            <>
-              <Button disabled={busy} onClick={() => {
-                setReview(false)
-                setAcknowledgedPlanID('')
-              }}>Cancel review</Button>
-              <Button kind="primary" disabled={busy || !acknowledged || !planReady} onClick={start}>
-                {busy ? 'Starting…' : 'Start speed test'}
-              </Button>
-            </>
-          ) : (
-            <Button onClick={() => setReview(true)}>Review speed test</Button>
-          )}
-        />
+          <div className="speedtest-launch-actions">
+            <SpeedTestImpact plan={plan} disclosure={disclosure} />
+            <Button
+              kind="primary"
+              disabled={busy || !planReady}
+              aria-describedby={consequenceID}
+              onClick={start}
+            >
+              {busy ? 'Starting…' : 'Run speed test'}
+            </Button>
+          </div>
+        </div>
       )}
 
       {error && (
@@ -1024,6 +1146,7 @@ export function Dashboard({
 
       <Notice
         tone="accent"
+        popoverDetails
         compact
         component="Dashboard metrics"
         summary="Current scoped evidence; definitions and exclusions are available."

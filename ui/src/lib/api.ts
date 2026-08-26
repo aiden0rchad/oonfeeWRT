@@ -1813,7 +1813,7 @@ export const api = {
     }),
 
   dashboard: () => get<Dashboard>('/dashboard'),
-  speedTests: (limit = 20) =>
+  speedTests: (limit = 3) =>
     get<SpeedTestCollection>(`/speedtests?limit=${encodeURIComponent(limit)}`),
   speedTest: (id: string) => get<SpeedTestJob>(`/speedtests/${encodeURIComponent(id)}`),
   startSpeedTest: (planID: string, acknowledgeDataUse: boolean) =>

@@ -55,10 +55,12 @@ shows the observed gateway, default-route interface and fixed-target probe as
 separate evidence, then plots server-selected six-hour throughput, latency and
 loss as zero-based five-minute activity columns. Missing buckets remain missing
 and appear only in a thin coverage rail; a table toggle exposes every aligned sample.
-The speed-test review shows controller-host vantage point, Cloudflare
-endpoint, single-stream method, 15 MiB estimate, 30-second limit, privacy and
-saturation before consent; Start binds a fresh acknowledgement to the reviewed
-`plan_id`, then shows progress/cancel and bounded history as paired
+The speed-test launcher keeps provider, controller-host vantage point, 15 MiB
+estimate, 30-second limit, no-router-change boundary, saturation and public-IP
+exposure visible beside `Run speed test`. A nonmodal popover exposes the exact
+endpoint and method before the run. Selecting Run is the fresh data-use
+acknowledgement bound to the current `plan_id`; it then shows progress/cancel
+and the three retained terminal attempts as paired
 download/upload bars on one zero-based Mbps scale, with a full table toggle.
 Loaded latency/jitter display unavailable. Schema 19 also supplies role-bearing
 sessions, exhaustive server-side RBAC, My Account, owner account administration,
@@ -131,19 +133,24 @@ and mini-charts. Used for: device detail, client detail, log entry detail.
 
 **Progressive disclosure.** Use one `Notice`/`Disclosure` primitive instead of
 ad hoc prose or character-count truncation. Its authored one- or two-line
-summary always names severity, affected component and consequence. `More
-information` expands the complete technical details with native keyboard
-semantics and `aria-expanded`; action buttons and acknowledgements remain
-visible outside the collapsed region. Routine, non-blocking guidance may use a
-compact row with a neutral perimeter and tone rail; warnings keep a visible
-severity label. Consent, retry, blocking, active-operation and critical notices
-retain the full treatment. Informational and coverage details default closed.
-An optional capability initially shows a compact summary plus `Review`;
-once reviewed, the exact router mutation/rollback, fresh acknowledgement and
-action remain visible/default-open. Security, destructive, connectivity-loss
-and active-operation essentials are never line-clamped. Apply this contract to
-coverage gaps, adoption/ACL, LLDP, RF scan, speed test, Apply preview,
-diagnostics, backup/restore and long Settings help.
+summary always names severity, affected component and consequence. Passive
+informational help may put its supplemental detail in a nonmodal popover that
+supports mouse, keyboard and touch, reports `aria-expanded`, closes on Escape or
+outside press, and never changes page height. Warnings, errors, authorization,
+consent, retry, blocking, active-operation and critical notices keep their
+details inline; their severity, consequence, action and acknowledgement never
+move into a popover. Routine guidance may use a compact row with a neutral
+perimeter and tone rail. Informational details default closed.
+An optional capability that mutates a router initially shows a compact summary
+plus `Review`; once reviewed, the exact mutation/rollback, fresh acknowledgement
+and action remain visible/default-open. The controller-host speed test is the
+bounded exception: material impact stays visible beside Run, exact details use
+a nonmodal popover, and Run itself is the fresh plan-bound acknowledgement.
+Security, destructive, connectivity-loss and active-operation essentials are
+never line-clamped. The adoption/ACL payload remains inline because it grants
+controller access. Apply this contract to coverage gaps, LLDP, RF scan, Apply
+preview, diagnostics, backup/restore and long Settings help without floating
+their warnings or controls.
 
 ---
 
@@ -397,17 +404,20 @@ Cards link to the corresponding filtered screen; count methodology moves behind
 The speed-test card defaults to **Controller test** and says `Runs from the
 controller host/container; makes no router management call or change`. It also
 states that test traffic follows the controller host's normal route and may
-saturate the gateway/WAN. Before Start, show
-vantage point, provider/endpoint, estimated data use, saturation impact, timeout
-and privacy implications. Start sends the descriptor's opaque `plan_id` with a
-fresh data-use acknowledgement; the server rejects a changed plan before
-creating a job. While running, show progress and Cancel; results show
+saturate the gateway/WAN. Before Run, keep provider, vantage point, estimated
+data use, saturation impact, timeout, privacy implications and the
+no-router-change boundary visible. Expose exact endpoints and method in a
+keyboard/touch-accessible nonmodal popover. Selecting Run sends the descriptor's
+opaque `plan_id` with a fresh data-use acknowledgement; the server rejects a
+changed plan before creating a job. While running, show progress and Cancel;
+results show
 download/upload, idle/loaded latency, jitter, time, method and provenance with
-honest unavailable fields. History defaults to grouped horizontal throughput
-bars; latency stays off the Mbps axis, and the table view retains every exact
-result and failure. A gateway-run test is a separately installed,
+honest unavailable fields. Retain the three newest terminal attempts. History
+defaults to grouped horizontal throughput bars; latency stays off the Mbps
+axis, and the table view retains every displayed result and failure. A
+gateway-run test is a separately installed,
 default-off official-feed capability and never appears to be part of ordinary
-adoption or the controller Start button.
+adoption or the controller Run button.
 
 **Topology.** Filter rail. Canvas: tidy tree, internet at top only when a
 gateway default-route observation supports it. Node = icon + label;

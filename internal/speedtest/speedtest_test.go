@@ -8,15 +8,18 @@ import (
 )
 
 type memoryRepo struct {
-	mu       sync.Mutex
-	job      *Job
-	finished chan struct{}
+	mu               sync.Mutex
+	job              *Job
+	createMaxHistory int
+	finishMaxHistory int
+	finished         chan struct{}
 }
 
-func (r *memoryRepo) CreateSpeedTest(_ context.Context, job Job, _ int) error {
+func (r *memoryRepo) CreateSpeedTest(_ context.Context, job Job, maxHistory int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.job = &job
+	r.createMaxHistory = maxHistory
 	return nil
 }
 
@@ -47,9 +50,10 @@ func (r *memoryRepo) UpdateSpeedTestProgress(context.Context, string, Progress) 
 func (r *memoryRepo) RequestSpeedTestCancel(context.Context, string) error            { return nil }
 
 func (r *memoryRepo) FinishSpeedTest(_ context.Context, _, state string, _ Measurement,
-	detail string, at int64, _ int) error {
+	detail string, at int64, maxHistory int) error {
 	r.mu.Lock()
 	r.job.State, r.job.FinishedAt = state, &at
+	r.finishMaxHistory = maxHistory
 	if detail != "" {
 		r.job.Error = &detail
 	}
@@ -100,6 +104,9 @@ func TestManagerClampsBackwardClock(t *testing.T) {
 	stored, err := repo.SpeedTest(context.Background(), job.ID)
 	if err != nil || stored.FinishedAt == nil || *stored.FinishedAt != job.CreatedAt {
 		t.Fatalf("finished job=%+v err=%v", stored, err)
+	}
+	if repo.createMaxHistory != 3 || repo.finishMaxHistory != 3 {
+		t.Fatalf("retention create=%d finish=%d, want 3", repo.createMaxHistory, repo.finishMaxHistory)
 	}
 	if !manager.Close(time.Second) {
 		t.Fatal("manager did not drain")

@@ -101,6 +101,7 @@ jobs:
           release_dir="$RUNNER_TEMP/release"
           notes="RELEASE-NOTES-${GITHUB_REF_NAME}.md"
           test -f "$notes"
+          cmp -s "$notes" RELEASE-NOTES.md
           ./tools/release-build.sh "$GITHUB_REF_NAME" "$release_dir"
           (cd "$release_dir" && sha256sum --check SHA256SUMS)
           cp "$notes" "$release_dir/RELEASE-NOTES.md"

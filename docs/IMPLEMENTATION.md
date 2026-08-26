@@ -80,11 +80,13 @@ match exactly. The React Dashboard renders these semantics.
 The authenticated `/api/v1/speedtests` start/status/cancel/history surface uses
 a bounded controller-host runner: Cloudflare direct endpoints, method
 `controller-http-single-stream-v1`, 10 MiB download, 5 MiB upload, five idle
-latency probes, 30-second timeout, one active job and at most 50 terminal rows.
+latency probes, 30-second timeout, one active job and three terminal rows.
 The descriptor exposes endpoint/provenance/data estimate/privacy/saturation and
-a deterministic `plan_id` before consent. Start requires the current reviewed
-ID plus `acknowledge_data_use:true`; a changed plan returns 409 before creating
-a job. Redirects fail closed; lifecycle events are audited; cancel and
+a deterministic `plan_id` before acknowledgement. Material impact stays beside
+the Run action and exact details remain available in a nonmodal popover.
+Selecting Run sends the current ID plus `acknowledge_data_use:true`; a changed
+plan returns 409 before creating a job. Redirects fail closed; lifecycle events
+are audited; cancel and
 startup recovery reach durable terminal state. The package has no Fleet/router
 dependency and performs no router call or change. Loaded latency/jitter remain
 null because the method does not measure them. No public-provider speed test has

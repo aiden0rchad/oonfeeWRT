@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,11 +49,12 @@ type speedTestsResponse struct {
 }
 
 func (s *Server) handleSpeedTests(w http.ResponseWriter, r *http.Request) {
-	limit := 20
+	limit := speedtest.MaxHistory
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
-		if err != nil || parsed < 1 || parsed > speedtest.MaxHistory {
-			writeErr(w, http.StatusBadRequest, "limit must be between 1 and 50")
+		if err != nil || parsed < 1 || parsed > speedtest.MaxListLimit {
+			writeErr(w, http.StatusBadRequest,
+				fmt.Sprintf("limit must be between 1 and %d", speedtest.MaxListLimit))
 			return
 		}
 		limit = parsed
