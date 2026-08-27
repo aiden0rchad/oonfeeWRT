@@ -489,7 +489,8 @@ not alter `/etc/shadow` or set the password itself.
 
 Before Adopt, **Inspect capabilities** reuses the address and administrator
 ubus credential for a read-only probe. Its card shows model/firmware/radios,
-observed LAN/WAN ports, nullable active-WAN-default-route and LAN-DHCP evidence,
+the board-declared LAN device separately from independently addressable switch
+ports, the WAN device, nullable active-WAN-default-route and LAN-DHCP evidence,
 switch mode, recommendations and inspection limits. Say explicitly that it
 creates no router account or configuration. A failed inspection may fall back
 to direct adoption, whose scoped-login probe still runs after bootstrap.

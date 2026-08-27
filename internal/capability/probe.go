@@ -98,12 +98,14 @@ func probeBoard(ctx context.Context, c *ubus.Client, r *Registry) error {
 // wireless config perfectly well, and failing adoption over it would refuse a
 // device for lacking something most deployments never use. What must not
 // happen is inventing port names — the renderer reports the absence instead.
+type boardNetwork struct {
+	Ports  []string `json:"ports"`
+	Device string   `json:"device"`
+}
+
 func probePorts(ctx context.Context, c *ubus.Client, r *Registry) {
 	var out struct {
-		Network map[string]struct {
-			Ports  []string `json:"ports"`
-			Device string   `json:"device"`
-		} `json:"network"`
+		Network map[string]boardNetwork `json:"network"`
 	}
 	if err := c.Call(ctx, "luci-rpc", "getBoardJSON", nil, &out); err != nil {
 		r.Notes = append(r.Notes, "wired port layout could not be read "+
@@ -111,7 +113,11 @@ func probePorts(ctx context.Context, c *ubus.Client, r *Registry) {
 			"onto physical ports on this device until it can")
 		return
 	}
-	if lan, ok := out.Network["lan"]; ok {
+	applyBoardPorts(r, out.Network)
+}
+
+func applyBoardPorts(r *Registry, network map[string]boardNetwork) {
+	if lan, ok := network["lan"]; ok {
 		r.Ports.LAN = lan.Ports
 		// A board with switch ports bridges them; one with a single lan device
 		// names it directly. Both are real layouts.
@@ -121,7 +127,7 @@ func probePorts(ctx context.Context, c *ubus.Client, r *Registry) {
 			r.Ports.Bridge = lan.Device
 		}
 	}
-	if wan, ok := out.Network["wan"]; ok {
+	if wan, ok := network["wan"]; ok {
 		r.Ports.WAN = wan.Device
 	}
 }
@@ -1392,6 +1398,9 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 		} `json:"config"`
 		Interfaces []struct {
 			IfName string `json:"ifname"`
+			Config struct {
+				Mode string `json:"mode"`
+			} `json:"config"`
 		} `json:"interfaces"`
 	}
 	callErr := c.Call(ctx, "luci-rpc", "getWirelessDevices", nil, &wl)
@@ -1410,6 +1419,7 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 	out := make([]radioEntry, 0, len(wl))
 	for radio, v := range wl {
 		e := radioEntry{radio: radio}
+		sampleMode := ""
 		e.band = v.Config.Band
 		switch ch := v.Config.Channel.(type) {
 		case float64:
@@ -1420,11 +1430,17 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 			}
 		}
 		for _, i := range v.Interfaces {
-			if i.IfName != "" {
-				e.iface = i.IfName
-				known[i.IfName] = true
-				break
+			if i.IfName == "" {
+				continue
 			}
+			// Sample one interface per physical radio, but account for every
+			// interface on it. iwinfo.devices lists BSSes; treating the second
+			// and later BSS as another radio made two-radio APs report 3, 4, or 6.
+			if e.iface == "" || (sampleMode != "ap" && i.Config.Mode == "ap") {
+				e.iface = i.IfName
+				sampleMode = i.Config.Mode
+			}
+			known[i.IfName] = true
 		}
 		out = append(out, e)
 	}

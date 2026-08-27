@@ -113,6 +113,30 @@ func TestSwitchModeDoesNotPromiseLegacyVLANControl(t *testing.T) {
 	}
 }
 
+func TestDirectLANDeviceDoesNotInventSwitchSupport(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Ports = capability.Ports{Bridge: "eth1", WAN: "eth0"}
+	caps.Radios = []capability.Radio{{Device: "radio0"}, {Device: "radio1"}}
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Set(capability.FeatDSA, capability.Absent)
+	caps.Set(capability.FeatSwitchPorts, capability.Absent)
+
+	supported, recommended, unknown := assessFunctions(caps, gatewayEvidence{
+		routeKnown: true, activeDefault: true, dhcpKnown: true,
+	})
+	for _, got := range [][]string{supported, recommended, unknown} {
+		if containsString(got, "switch") {
+			t.Fatalf("direct LAN device invented Switch support: supported=%v recommended=%v unknown=%v",
+				supported, recommended, unknown)
+		}
+	}
+	if !containsString(supported, "gateway") || !containsString(supported, "ap") ||
+		switchMode(caps) != "none" {
+		t.Fatalf("direct-LAN gateway/AP assessment is wrong: supported=%v mode=%q",
+			supported, switchMode(caps))
+	}
+}
+
 func containsString(in []string, want string) bool {
 	for _, got := range in {
 		if got == want {
@@ -139,6 +163,9 @@ func TestInspectProbesWithoutBootstrappingOrWritingInventory(t *testing.T) {
 	}
 	if res.MAC == "" || res.Model == "" || res.RadioCount == nil || *res.RadioCount != 2 {
 		t.Fatalf("inspection returned incomplete measured facts: %+v", res)
+	}
+	if res.LANDevice != "br-lan" || len(res.LANPorts) != 4 || res.WANPort != "wan" {
+		t.Fatalf("inspection lost the board's wired layout: %+v", res)
 	}
 	for _, want := range []string{"gateway", "ap", "switch"} {
 		if !containsString(res.FunctionsRecommended, want) {

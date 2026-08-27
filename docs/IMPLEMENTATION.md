@@ -985,6 +985,7 @@ conveniences:
 - `POST /api/v1/devices/inspect` accepts only the device address and
   administrator ubus credential. It performs a read-only authenticated probe
   and returns model/class/firmware/radios/ports,
+  `lan_device` separately from independently managed `lan_ports`,
   `functions_supported|recommended|unknown`, `switch_mode`, and nullable
   `gateway_evidence.active_wan_default_route|lan_dhcp_enabled`. It never opens
   SSH, bootstraps the controller, installs a package or writes inventory;

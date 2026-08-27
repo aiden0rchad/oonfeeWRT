@@ -55,7 +55,8 @@ func (d *Daemon) Inspect(ctx context.Context, req api.InspectRequest) (*api.Insp
 	out := &api.InspectResult{
 		MAC: mac, Model: caps.Board.Model, Class: string(caps.Class),
 		Firmware: caps.Board.Release, RadioCount: radioCount,
-		LANPorts: append([]string{}, caps.Ports.LAN...), WANPort: caps.Ports.WAN,
+		LANDevice: caps.Ports.Bridge,
+		LANPorts:  append([]string{}, caps.Ports.LAN...), WANPort: caps.Ports.WAN,
 		SwitchMode:           switchMode(caps),
 		FunctionsSupported:   append([]string{}, supported...),
 		FunctionsRecommended: append([]string{}, recommended...),

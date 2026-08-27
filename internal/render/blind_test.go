@@ -498,6 +498,9 @@ func TestBoardWithNoTaggablePortsIsAnAnswerNotABlindSpot(t *testing.T) {
 			strings.Contains(o.Reason, "eth0.1") && o.Kind != KindUndetermined {
 			said = true
 		}
+		if strings.Contains(o.Reason, "swconfig") {
+			t.Errorf("invented swconfig on a generic direct-interface board: %q", o.Reason)
+		}
 		if strings.Contains(o.Reason, "did not report its wired port layout") {
 			t.Errorf("claimed the read failed on a board that answered: %q", o.Reason)
 		}

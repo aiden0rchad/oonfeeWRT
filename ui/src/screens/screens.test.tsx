@@ -436,7 +436,7 @@ describe('Adopt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('Linksys WRT3200ACM')).toBeTruthy()
-    expect(screen.getByText('4 observed: lan1, lan2, lan3, lan4')).toBeTruthy()
+    expect(screen.getByText('4 switch ports: lan1, lan2, lan3, lan4')).toBeTruthy()
     expect(screen.getAllByText(/Gateway recommendation evidence/).length).toBe(2)
     expect(screen.getByText(/DSA detected.*existing VLAN-aware LAN bridge/)).toBeTruthy()
     for (const label of ['Gateway', 'Access point', 'Switch']) {
@@ -517,6 +517,7 @@ describe('Adopt', () => {
         class: 'C',
         firmware: 'OpenWrt',
         radio_count: 1,
+        lan_device: 'eth0.1',
         lan_ports: [],
         wan_port: '',
         switch_mode: 'observe-only',
@@ -539,6 +540,7 @@ describe('Adopt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('Router B')).toBeTruthy()
+    expect(screen.getByText('LAN device: eth0.1 (legacy switch ports observed separately)')).toBeTruthy()
     await act(async () =>
       resolveFirst({
         mac: 'aa:aa:aa:aa:aa:aa',
@@ -665,10 +667,47 @@ describe('Adopt', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
-    expect(await screen.findByText('2 observed: lan1, lan2')).toBeTruthy()
+    expect(await screen.findByText('2 switch ports: lan1, lan2')).toBeTruthy()
     expect(screen.getByText(/Observe only.*no per-port or managed-VLAN configuration/)).toBeTruthy()
     expect(screen.getByText(/Unknown.*inspection could not determine this/)).toBeTruthy()
     expect(screen.getByText('Not enabled')).toBeTruthy()
+  })
+
+  it('reports a direct LAN device without inventing switch ports or radios', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    api.inspectDevice.mockResolvedValue({
+      mac: 'aa:bb:cc:dd:ee:19',
+      model: 'Cudy M3000 v2 with Motorcomm YT8821',
+      class: 'B',
+      firmware: 'OpenWrt 25.12.5',
+      radio_count: 2,
+      lan_device: 'eth1',
+      lan_ports: [],
+      wan_port: 'eth0',
+      switch_mode: 'none',
+      functions_supported: ['gateway', 'ap'],
+      functions_recommended: ['gateway', 'ap'],
+      gateway_evidence: {
+        active_wan_default_route: true,
+        lan_dhcp_enabled: false,
+      },
+    })
+
+    render(<Adopt onAdopted={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.19' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+
+    expect(await screen.findByText('Cudy M3000 v2 with Motorcomm YT8821')).toBeTruthy()
+    expect(screen.getByText('Single interface: eth1 (no separate switch)')).toBeTruthy()
+    expect(screen.getByText('eth0')).toBeTruthy()
+    expect(screen.getByText('No switch capability observed')).toBeTruthy()
+    const radioRow = screen.getByText('Radios').parentElement
+    expect(radioRow && within(radioRow).getByText('2')).toBeTruthy()
+    expect(screen.queryByText('None observed')).toBeNull()
+    expect((screen.getByRole('checkbox', { name: /^Switch\b/ }) as HTMLInputElement).checked).toBe(false)
   })
 
   it('requires at least one independently selected device function', async () => {

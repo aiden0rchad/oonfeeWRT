@@ -614,10 +614,8 @@ function Inspection({ result }: { result: InspectResult }) {
       <Prop label="Radios">
         {result.radio_count ?? 'Unknown — radio inventory was not observable'}
       </Prop>
-      <Prop label="LAN ports observed">
-        {result.lan_ports.length > 0
-          ? `${result.lan_ports.length} observed: ${result.lan_ports.join(', ')}`
-          : 'None observed'}
+      <Prop label="LAN layout observed">
+        {lanLayoutText(result)}
       </Prop>
       <Prop label="WAN port observed">{result.wan_port || 'None'}</Prop>
       <Prop label="Active WAN default route">
@@ -665,6 +663,23 @@ function functionNames(functions: DeviceFunction[]): string {
   return functions
     .map((value) => FUNCTIONS.find((item) => item.value === value)?.label ?? value)
     .join(', ')
+}
+
+function lanLayoutText(result: InspectResult): string {
+  if (result.lan_ports.length > 0) {
+    return `${result.lan_ports.length} switch ports: ${result.lan_ports.join(', ')}`
+  }
+  if (!result.lan_device) return 'Unknown — board did not report a LAN layout'
+  switch (result.switch_mode) {
+    case 'observe-only':
+      return `LAN device: ${result.lan_device} (legacy switch ports observed separately)`
+    case 'dsa-conditional':
+      return `LAN bridge: ${result.lan_device} (named switch ports unavailable)`
+    case 'unknown':
+      return `LAN device: ${result.lan_device} (switch layout unknown)`
+    default:
+      return `Single interface: ${result.lan_device} (no separate switch)`
+  }
 }
 
 function evidenceText(value: boolean | null, yes: string, no: string): string {

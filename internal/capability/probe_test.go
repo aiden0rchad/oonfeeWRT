@@ -676,3 +676,75 @@ func TestRadioInventoryFallsBackWhenIWInfoDevicesIsDenied(t *testing.T) {
 		}
 	}
 }
+
+func TestMultipleBSSesAreNotCountedAsPhysicalRadios(t *testing.T) {
+	c := dial(t)
+	ctx := context.Background()
+	if err := c.Call(ctx, "__test", "reset", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Call(ctx, "__test", "reset", nil, nil) })
+	for _, extra := range []struct{ radio, ifname string }{
+		{"radio0", "wlan0-guest"}, {"radio0", "wlan0-iot"},
+		{"radio1", "wlan1-guest"}, {"radio1", "wlan1-iot"},
+	} {
+		if err := c.Call(ctx, "__test", "add_wifi_iface", map[string]any{
+			"radio": extra.radio, "ifname": extra.ifname, "mode": "ap",
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var devs struct {
+		Devices []string `json:"devices"`
+	}
+	if err := c.Call(ctx, "iwinfo", "devices", nil, &devs); err != nil {
+		t.Fatal(err)
+	}
+	if len(devs.Devices) != 6 {
+		t.Fatalf("fixture has %d BSS interfaces, want 6: %v", len(devs.Devices), devs.Devices)
+	}
+	r, err := Probe(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Radios) != 2 {
+		t.Fatalf("six BSSes on two physical radios reported %d radios: %+v", len(r.Radios), r.Radios)
+	}
+}
+
+func TestRadioSamplingPrefersAPOverEarlierStationInterface(t *testing.T) {
+	c := dial(t)
+	ctx := context.Background()
+	if err := c.Call(ctx, "__test", "disable_radios", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Call(ctx, "__test", "reset", nil, nil) })
+	for _, iface := range []struct{ radio, ifname, mode string }{
+		{"radio0", "radio0-sta", "sta"}, {"radio0", "wlan0", "ap"},
+		{"radio1", "radio1-sta", "sta"}, {"radio1", "wlan1", "ap"},
+	} {
+		if err := c.Call(ctx, "__test", "add_wifi_iface", map[string]any{
+			"radio": iface.radio, "ifname": iface.ifname, "mode": iface.mode,
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := Probe(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Radios) != 2 || r.Radios[0].Device != "wlan0" || r.Radios[1].Device != "wlan1" {
+		t.Fatalf("radio sampling did not prefer AP interfaces: %+v", r.Radios)
+	}
+}
+
+func TestBoardPortsKeepDirectLANSeparateFromSwitchMembers(t *testing.T) {
+	r := NewRegistry()
+	applyBoardPorts(r, map[string]boardNetwork{
+		"lan": {Device: "eth1"},
+		"wan": {Device: "eth0"},
+	})
+	if r.Ports.Bridge != "eth1" || r.Ports.WAN != "eth0" || len(r.Ports.LAN) != 0 {
+		t.Fatalf("direct two-GMAC layout decoded as %+v", r.Ports)
+	}
+}

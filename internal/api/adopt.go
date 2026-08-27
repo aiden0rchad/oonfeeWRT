@@ -38,13 +38,17 @@ type InspectRequest struct {
 // InspectResult is the measured evidence used by the function picker. Unknown
 // is explicit so a denied check cannot masquerade as unsupported hardware.
 type InspectResult struct {
-	MAC        string   `json:"mac"`
-	Model      string   `json:"model"`
-	Class      string   `json:"class"`
-	Firmware   string   `json:"firmware"`
-	RadioCount *int     `json:"radio_count"`
-	LANPorts   []string `json:"lan_ports"`
-	WANPort    string   `json:"wan_port,omitempty"`
+	MAC        string `json:"mac"`
+	Model      string `json:"model"`
+	Class      string `json:"class"`
+	Firmware   string `json:"firmware"`
+	RadioCount *int   `json:"radio_count"`
+	// LANDevice is the board-declared LAN device. On a no-switch router this
+	// is the physical LAN interface (for example eth1); on DSA it is normally
+	// br-lan. LANPorts remains the independently addressable switch members.
+	LANDevice string   `json:"lan_device,omitempty"`
+	LANPorts  []string `json:"lan_ports"`
+	WANPort   string   `json:"wan_port,omitempty"`
 	// SwitchMode is dsa-conditional, observe-only, unknown, or none. Even DSA
 	// mode is conditional because the controller will not turn VLAN filtering
 	// on by rewriting the device's existing LAN bridge.

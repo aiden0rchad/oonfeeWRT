@@ -879,6 +879,9 @@ export interface InspectResult {
   class: string
   firmware: string
   radio_count: number | null
+  /** Board-declared LAN device. A no-switch router may expose only this. */
+  lan_device?: string
+  /** Independently addressable switch members, not a direct LAN device. */
   lan_ports: string[]
   wan_port?: string
   /** What inspection can safely claim about the switch. DSA support remains
