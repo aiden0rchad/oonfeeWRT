@@ -41,3 +41,6 @@ __pycache__/
 /dist/
 ui/playwright-report/
 ui/test-results/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/node_modules/
