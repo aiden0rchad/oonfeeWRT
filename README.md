@@ -5,6 +5,12 @@ Self-hosted, UniFi-inspired management for stock OpenWrt.
 [![Release](https://img.shields.io/github/v/release/aiden0rchad/oonfeeWRT)](https://github.com/aiden0rchad/oonfeeWRT/releases)
 [![CI](https://github.com/aiden0rchad/oonfeeWRT/actions/workflows/ci.yml/badge.svg)](https://github.com/aiden0rchad/oonfeeWRT/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/aiden0rchad/oonfeeWRT)](LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-capabilities%20%26%20guides-2a78d6)](https://aiden0rchad.github.io/oonfeeWRT/)
+
+**[Explore the complete documentation →](https://aiden0rchad.github.io/oonfeeWRT/)**
+Capabilities, guided setup, safe configuration, operations, security,
+troubleshooting, and engineering reference—with full-text search and light/dark
+themes.
 
 oonfeeWRT is a controller, not firmware. It runs on your server, NAS, mini-PC,
 or Mac and manages OpenWrt devices through their existing interfaces. Your
@@ -254,6 +260,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 ## Documentation
 
+- [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
 - [v0.1.1 release notes](RELEASE-NOTES-v0.1.1.md)
 - [v0.1.0 release notes](RELEASE-NOTES-v0.1.0.md)
