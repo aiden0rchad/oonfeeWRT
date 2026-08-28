@@ -181,7 +181,7 @@ line with `--network host` and set
 Keep the controller on loopback and proxy it from the same host. A minimal Caddy
 site is:
 
-```caddyfile
+```text
 oonfeewrt.example.internal {
     reverse_proxy 127.0.0.1:8080
 }

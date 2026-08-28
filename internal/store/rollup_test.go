@@ -44,7 +44,7 @@ func TestWriteRollupsCreatesSeriesOnce(t *testing.T) {
 	db := open(t)
 	seedDevices(t, db, 1)
 
-	base := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC).Unix()
+	base := time.Now().UTC().Add(-time.Hour).Truncate(5 * time.Minute).Unix()
 	in := rows(1, "iface_rx_bps", "eth0", base,
 		[4]float64{100, 50, 150, 12},
 		[4]float64{200, 100, 300, 12})
@@ -141,7 +141,7 @@ func TestWriteRollupsIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
 	seedDevices(t, db, 1)
-	base := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC).Unix()
+	base := time.Now().UTC().Add(-time.Hour).Truncate(5 * time.Minute).Unix()
 	in := rows(1, "sys_load1", "", base, [4]float64{1, 1, 1, 5})
 
 	for range 3 {

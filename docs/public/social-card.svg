@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="oonfeeWRT Documentation">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop stop-color="#0f1114"/>
+      <stop offset="1" stop-color="#182b42"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#3987e5" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#3987e5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="980" cy="120" r="430" fill="url(#glow)"/>
+  <g transform="translate(86 88)">
+    <rect width="92" height="92" rx="22" fill="#18569f"/>
+    <path d="M23 56h10v14H23zm21-20h10v34H44zm21-15h10v49H65z" fill="#fff"/>
+    <path d="M18 20h58" stroke="#63d0c7" stroke-width="7" stroke-linecap="round"/>
+  </g>
+  <text x="86" y="277" fill="#f2f4f7" font-family="system-ui,sans-serif" font-size="72" font-weight="740">oonfeeWRT</text>
+  <text x="86" y="359" fill="#62a8f6" font-family="system-ui,sans-serif" font-size="48" font-weight="650">Documentation</text>
+  <text x="86" y="432" fill="#aeb4be" font-family="system-ui,sans-serif" font-size="29">Self-hosted management for stock OpenWrt.</text>
+  <text x="86" y="478" fill="#aeb4be" font-family="system-ui,sans-serif" font-size="29">Install. Adopt. Observe. Configure safely.</text>
+  <g fill="none" stroke="#54cbc2" stroke-width="5">
+    <circle cx="885" cy="348" r="24"/>
+    <circle cx="1035" cy="282" r="24"/>
+    <circle cx="1015" cy="444" r="24"/>
+    <path d="m906 337 107-46m-107 70 87 70"/>
+  </g>
+</svg>
