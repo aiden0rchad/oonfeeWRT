@@ -988,7 +988,7 @@ func TestInferCreatesInternetOnlyFromActiveDefaultRouteEvidence(t *testing.T) {
 		Devices: []InventoryDevice{{ID: 1, PrimaryMAC: wrtMAC}},
 		Uplinks: []Uplink{
 			{DeviceID: 1, Interface: "wan", Active: false},
-			{DeviceID: 1, Interface: "wan.2", Active: true},
+			{DeviceID: 1, Interface: "pppoe-wan", LogicalInterface: "wan", Active: true},
 		},
 		Sources: []model.TopologySourceObservation{observedSource(1, SourceDefaultRoute)},
 	})
@@ -996,8 +996,13 @@ func TestInferCreatesInternetOnlyFromActiveDefaultRouteEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Edges) != 1 || result.Edges[0].ParentNode != InternetNode ||
-		result.Edges[0].ChildNode != "device:"+wrtMAC || result.Edges[0].ParentDeviceID != nil {
+		result.Edges[0].ChildNode != "device:"+wrtMAC || result.Edges[0].ParentDeviceID != nil ||
+		result.Edges[0].ParentPort != "pppoe-wan" {
 		t.Fatalf("uplink edge = %#v", result.Edges)
+	}
+	detail := result.Edges[0].Evidence[0].Detail
+	if detail["interface"] != "pppoe-wan" || detail["logical_interface"] != "wan" {
+		t.Fatalf("uplink evidence=%v", detail)
 	}
 }
 

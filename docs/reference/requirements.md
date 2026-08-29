@@ -1,12 +1,12 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.2.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.3.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.2**.
+v0.1.3**.
 
 ## Controller host
 
@@ -111,7 +111,7 @@ requirement.
 
 ## Browser-to-controller security
 
-v0.1.2 has no native TLS listener. Choose one of these deployments:
+v0.1.3 has no native TLS listener. Choose one of these deployments:
 
 1. bind to `127.0.0.1:8080` and use it only from the host;
 2. keep the controller on loopback and publish it through a trusted TLS reverse
@@ -147,15 +147,15 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.2:
+For v0.1.3:
 
-- download release archives and `SHA256SUMS` from the v0.1.2 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.3 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.2`. Stable aliases
+The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.3`. Stable aliases
 exist, but deployments should pin the exact version or digest.
 
 ## Source-build requirements
@@ -181,7 +181,7 @@ The stable release's published hardware record covers:
 - TP-Link Archer C6 v2;
 
 both on OpenWrt 25.12.5. The Archer C6 v2 also passed the full 60-minute class-C
-polling/resource budget harness. v0.1.2 adds external, reporter-confirmed
+polling/resource budget harness. v0.1.3 adds external, reporter-confirmed
 read-only inspection evidence for a Cudy M3000 v2 with Motorcomm YT8821 on
 OpenWrt 25.12.5 (`mediatek/filogic`): two physical radios, direct LAN `eth1`,
 WAN `eth0`, and no independent switch ports.
@@ -197,7 +197,7 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.2` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.3` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.

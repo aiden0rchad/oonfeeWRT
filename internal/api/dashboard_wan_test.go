@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,50 @@ func TestDashboardWANUsesObservedGatewayAndReturnsBoundedNullSafeSeries(t *testi
 	if wan.Metrics.Reachable.Value == nil || *wan.Metrics.Reachable.Value != 1 ||
 		wan.AsOf == nil || *wan.AsOf != to.UnixMilli() {
 		t.Fatalf("reachability/as-of = value %v as_of %v", wan.Metrics.Reachable.Value, wan.AsOf)
+	}
+}
+
+func TestDeviceDetailUsesProvedPPPoEL3DeviceForThroughput(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	gateway := seedDashboardGateway(t, h, "pppoe-gateway", "pppoe-wan", now, now)
+	if err := h.db.WriteRollups(context.Background(), []store.RollupRow{{
+		DeviceID: gateway.ID, Kind: string(telemetry.KindIfaceRx), Key: "pppoe-wan",
+		TS: now.Truncate(time.Hour).Unix(), Avg: 100, Cnt: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/devices/"+strconv.FormatInt(gateway.ID, 10), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.WANInterface == nil || *detail.WANInterface != "pppoe-wan" {
+		t.Fatalf("wan_interface=%v", detail.WANInterface)
+	}
+}
+
+func TestDeviceDetailSerializesExplicitWANAbsence(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	device := h.seedDevice("access-point", true, nil)
+	w := h.do(http.MethodGet, "/api/v1/devices/"+strconv.FormatInt(device.ID, 10), nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("device detail: %d %s", w.Code, w.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	value, ok := body["wan_interface"]
+	if !ok || string(value) != "null" {
+		t.Fatalf("wan_interface=%s present=%v", value, ok)
 	}
 }
 

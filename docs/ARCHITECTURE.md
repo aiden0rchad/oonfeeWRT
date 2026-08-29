@@ -726,19 +726,26 @@ network it connects to. Measured on the reference device: of 16 known hosts, 7
 were neighbours on the upstream network behind the WAN port and only 3 were
 actual clients.
 
-Scope comes from `network.interface dump`, on the same slow refresh cadence as
-the radio list and inside the same batch, so it costs no extra requests. A host
-is:
+Scope combines `network.interface dump` with the installed kernel IPv4 route
+table, on the same slow refresh cadence and inside the same batch. Netifd
+supplies logical interfaces, `l3_device` mappings and subnets. The kernel table
+supplies the one usable, lowest-metric main-table default device. Both must
+answer before cached scope is replaced. A host is:
 
 | Scope | Meaning |
 |---|---|
 | `local` | its address is in a subnet of an interface that does **not** carry the default route |
 | `upstream` | its address is in a subnet of the interface that **does** — a neighbour on the uplink, not a client |
-| `unknown` | no observed address, or an address in no interface's subnet |
+| `unknown` | no observed address, an address in no interface's subnet, or an incomplete kernel-route/interface observation |
 
-**Upstream is decided by the routing table, never by an interface being named
-`wan`.** The name is a convention; a device bridged onto an existing network can
-carry the default route on the interface called `lan`.
+**Upstream is decided by the installed kernel route, never by an interface
+being named `wan` or by netifd candidate order.** The kernel device is matched
+back to exactly one active logical interface through `l3_device`; this maps a
+logical PPPoE `wan` to its runtime counter device such as `pppoe-wan`. An
+older dump that omits `l3_device` may use an exact configured-device or logical
+name match, but never a first-interface guess. An ambiguous or unreadable
+mapping stays unknown and preserves the prior cache. Custom policy-routing
+rules are not inferred from the main table.
 
 `unknown` is a real answer and must not collapse into `local`. A host that has
 not been shown to be on this network must not be counted as one — that is the

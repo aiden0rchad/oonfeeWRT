@@ -25,6 +25,8 @@ const (
 	SourceBridgeSTP    = "brctl.showstp"
 	SourceAssociations = "hostapd.get_clients"
 	SourceLLDP         = "lldp"
+	// SourceDefaultRoute is the durable compatibility key for the composite
+	// kernel-route plus network.interface.dump observation.
 	SourceDefaultRoute = "network.interface.dump"
 )
 
@@ -78,9 +80,10 @@ type LLDPLink struct {
 // Uplink proves an active default-route attachment. Device role alone never
 // creates the synthetic internet node or this edge.
 type Uplink struct {
-	DeviceID  int64
-	Interface string
-	Active    bool
+	DeviceID         int64
+	Interface        string
+	LogicalInterface string
+	Active           bool
 }
 
 type InferenceInput struct {
@@ -353,13 +356,17 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 		if !validInterfaceName(uplink.Interface) {
 			return InferenceResult{}, errors.New("topology: valid active uplink interface is required")
 		}
+		detail := map[string]any{"interface": uplink.Interface, "active": true}
+		if uplink.LogicalInterface != "" && uplink.LogicalInterface != uplink.Interface {
+			detail["logical_interface"] = uplink.LogicalInterface
+		}
 		add(model.TopologyEdge{
 			ChildNode: child, ParentNode: InternetNode,
 			ParentPort: uplink.Interface, Medium: "uplink", Confidence: "measured",
 			ValidFrom: input.At, LastSeen: input.At,
 		}, EdgeEvidence{
 			Kind: "default_route", Source: SourceDefaultRoute, DeviceID: uplink.DeviceID,
-			Detail: map[string]any{"interface": uplink.Interface, "active": true},
+			Detail: detail,
 		})
 	}
 

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
@@ -1225,13 +1226,16 @@ func TestDecodeNetworksReadsSubnetsAndTheDefaultRoute(t *testing.T) {
 	raw := []byte(`{"interface":[
 	  {"interface":"lan","up":true,"ipv4-address":[{"address":"192.168.1.1","mask":24}],"route":[]},
 	  {"interface":"loopback","up":true,"ipv4-address":[{"address":"127.0.0.1","mask":8}],"route":[]},
-	  {"interface":"wan","up":true,"ipv4-address":[{"address":"10.7.46.69","mask":24}],
+	  {"interface":"wan","up":true,"l3_device":"pppoe-wan","ipv4-address":[{"address":"10.7.46.69","mask":24}],
 	   "route":[{"target":"0.0.0.0","mask":0,"nexthop":"10.7.46.1"}]},
 	  {"interface":"wan6","up":true,"ipv4-address":[],
 	   "route":[{"target":"fd9f::","mask":64,"nexthop":"::"}]}
 	]}`)
-	var s Snapshot
+	s := Snapshot{mainIPv4RouteKnown: true, mainIPv4Device: "pppoe-wan"}
 	if err := decodeNetworks(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finalizeNetworks(); err != nil {
 		t.Fatal(err)
 	}
 	if !s.askedNetworks {
@@ -1253,6 +1257,10 @@ func TestDecodeNetworksReadsSubnetsAndTheDefaultRoute(t *testing.T) {
 	if n := byName["wan"]; n.CIDR != "10.7.46.69/24" || !n.Upstream {
 		t.Errorf("wan = %+v, want 10.7.46.69/24 upstream", n)
 	}
+	if len(s.Topology.Uplinks) != 1 || s.Topology.Uplinks[0].Interface != "pppoe-wan" ||
+		s.Topology.Uplinks[0].LogicalInterface != "wan" {
+		t.Fatalf("uplinks=%+v", s.Topology.Uplinks)
+	}
 }
 
 // An IPv6-only default route must not mark an interface upstream for IPv4
@@ -1262,13 +1270,87 @@ func TestDecodeNetworksIgnoresNonDefaultRoutes(t *testing.T) {
 	  {"interface":"lan","ipv4-address":[{"address":"192.168.1.1","mask":24}],
 	   "route":[{"target":"10.9.0.0","mask":16,"nexthop":"192.168.1.9"}]}
 	]}`)
-	var s Snapshot
+	s := Snapshot{mainIPv4RouteKnown: true}
 	if err := decodeNetworks(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finalizeNetworks(); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.Networks) != 1 || s.Networks[0].Upstream {
 		t.Errorf("a static route to 10.9.0.0/16 made the interface upstream: %+v",
 			s.Networks)
+	}
+}
+
+func TestNetworksUseKernelMainRouteInsteadOfNetifdCandidateOrder(t *testing.T) {
+	routeRaw := json.RawMessage(`{"code":0,"stdout":"default via 192.0.2.1 dev pppoe-wan proto static\n","stderr":""}`)
+	networkRaw := json.RawMessage(`{"interface":[
+	  {"interface":"draytek_mgmt","up":true,"l3_device":"br-lan.6",
+	   "ipv4-address":[{"address":"192.168.6.1","mask":24}],
+	   "route":[{"target":"0.0.0.0","mask":0}]},
+	  {"interface":"wan","up":true,"proto":"pppoe","l3_device":"pppoe-wan",
+	   "ipv4-address":[{"address":"198.51.100.7","mask":32}],
+	   "route":[{"target":"0.0.0.0","mask":0}]}
+	]}`)
+	s := Snapshot{DeviceID: 7}
+	if err := decodeMainIPv4Route(routeRaw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := decodeNetworks(networkRaw, &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finalizeNetworks(); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Network{}
+	for _, network := range s.Networks {
+		byName[network.Name] = network
+	}
+	if byName["draytek_mgmt"].Upstream || !byName["wan"].Upstream {
+		t.Fatalf("networks=%+v", s.Networks)
+	}
+	if len(s.Topology.Uplinks) != 1 || s.Topology.Uplinks[0] != (topology.Uplink{
+		DeviceID: 7, Interface: "pppoe-wan", LogicalInterface: "wan", Active: true,
+	}) {
+		t.Fatalf("uplinks=%+v", s.Topology.Uplinks)
+	}
+}
+
+func TestNetworksFailClosedWhenKernelDeviceCannotBeMapped(t *testing.T) {
+	s := Snapshot{
+		Networks:           []Network{{Name: "old", CIDR: "192.168.1.1/24"}},
+		mainIPv4RouteKnown: true,
+		mainIPv4Device:     "pppoe-wan",
+	}
+	if err := decodeNetworks(json.RawMessage(`{"interface":[
+	  {"interface":"wan","up":true,"l3_device":"eth0","ipv4-address":[{"address":"192.0.2.2","mask":24}]}
+	]}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finalizeNetworks(); err == nil {
+		t.Fatal("missing logical-to-L3 mapping was accepted")
+	}
+	if s.askedNetworks || len(s.Networks) != 1 || s.Networks[0].Name != "old" {
+		t.Fatalf("failed mapping replaced cached networks: %+v", s.Networks)
+	}
+}
+
+func TestNetworksMapDirectWANWhenOlderDumpOmitsL3Device(t *testing.T) {
+	s := Snapshot{mainIPv4RouteKnown: true, mainIPv4Device: "eth0"}
+	if err := decodeNetworks(json.RawMessage(`{"interface":[
+	  {"interface":"wan","up":true,"device":"eth0",
+	   "ipv4-address":[{"address":"192.0.2.2","mask":24}],
+	   "route":[{"target":"0.0.0.0","mask":0}]}
+	]}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.finalizeNetworks(); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Networks) != 1 || !s.Networks[0].Upstream ||
+		len(s.Topology.Uplinks) != 1 || s.Topology.Uplinks[0].Interface != "eth0" {
+		t.Fatalf("direct WAN mapping: networks=%+v uplinks=%+v", s.Networks, s.Topology.Uplinks)
 	}
 }
 

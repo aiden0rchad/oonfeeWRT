@@ -847,6 +847,9 @@ def exec_cmd(rid, cmd, params):
     if cmd == "brctl" and len(params) == 2 and params[0] == "showmacs":
         return out(0, "port no mac addr is local? ageing timer\n"
                       "  1 aa:bb:cc:11:22:33 no 12.34\n")
+    if cmd == "ip" and params == ["-4", "route", "show", "table", "all"]:
+        return out(0, "default via 203.0.113.1 dev wan proto static\n"
+                      "192.168.1.0/24 dev br-lan scope link\n")
     if cmd == "nlbw":
         return out(0, '{"columns":["mac","conns","rx_bytes","rx_pkts",'
                       '"tx_bytes","tx_pkts"],"data":['
@@ -940,6 +943,7 @@ def runtime_interfaces():
                    "proto": section.get("proto", "")}
             if section.get("device"):
                 row["device"] = section["device"]
+                row["l3_device"] = section["device"]
             if section.get("ipaddr") and section.get("netmask"):
                 try:
                     prefix = ipaddress.IPv4Network(
@@ -1307,6 +1311,8 @@ def handle_one(req):
         for row in interfaces:
             if row["interface"] == "wan":
                 row["ipv4-address"] = [{"address": "203.0.113.7", "mask": 24}]
+                row["route"] = [{"target": "0.0.0.0", "mask": 0,
+                                 "nexthop": "203.0.113.1"}]
         return ok(rid, {"interface": interfaces})
     if obj == "network.device" and meth == "status":
         return ok(rid, {"br-lan": {"up": True, "carrier": True, "mtu": 1500,

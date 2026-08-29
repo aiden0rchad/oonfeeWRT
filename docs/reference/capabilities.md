@@ -1,36 +1,36 @@
 ---
 title: Capabilities and limits
-description: What oonfeeWRT v0.1.2 can do, what depends on device evidence, and what is unavailable.
+description: What oonfeeWRT v0.1.3 can do, what depends on device evidence, and what is unavailable.
 ---
 
 # Capabilities and limits
 
-This is the user-facing capability boundary for **oonfeeWRT v0.1.2**. It is
+This is the user-facing capability boundary for **oonfeeWRT v0.1.3**. It is
 intentionally narrower than the long-term roadmap.
 
 ## How to read status
 
 | Status | Meaning |
 |---|---|
-| **Shipped** | Present in v0.1.2 source, UI/API, and automated tests |
+| **Shipped** | Present in v0.1.3 source, UI/API, and automated tests |
 | **Hardware-verified** | Exercised on the published physical-router validation setup |
 | **Capability-dependent** | Shipped, but visibility or operation depends on the router, driver, package set, and measured source |
 | **Source-tested only** | Automated contracts exist, but the published hardware run did not execute the disruptive or optional operation |
 | **Unverified** | Intended/shipped path lacks the stated physical topology or hardware proof |
-| **Unavailable** | Not provided by v0.1.2 or deliberately outside the project boundary |
+| **Unavailable** | Not provided by v0.1.3 or deliberately outside the project boundary |
 
 An unavailable measurement is not a zero. The UI distinguishes unknown,
 unsupported, stale, partial, and observed-empty evidence.
 
 ## Deployment and controller
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Standalone Linux/macOS controller | **Shipped** | amd64 and arm64 release archives |
 | Linux container/Compose deployment | **Shipped** | amd64/arm64, non-root scratch image, read-only root filesystem in supplied Compose setup |
 | Embedded web UI | **Shipped** | One process; no separate web server |
 | Local SQLite storage | **Shipped** | WAL mode; database and keyring must be backed up together |
-| Light and dark controller themes | **Shipped** | UI-side switch; v0.1.2 defaults to dark and does not persist the choice across reloads |
+| Light and dark controller themes | **Shipped** | UI-side switch; v0.1.3 defaults to dark and does not persist the choice across reloads |
 | Native controller TLS | **Unavailable** | Use a trusted reverse proxy or trusted isolated management LAN |
 | Cloud account or relay | **Unavailable** | Self-hosted only |
 | Multi-site/NAT traversal | **Unavailable by design** | Use an existing routed management network or VPN |
@@ -38,7 +38,7 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Discovery, inspection, and adoption
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Add router by management address | **Shipped, hardware-verified** | Works without layer-2 discovery |
 | On-demand discovery | **Shipped** | ARP/mDNS coverage depends on host/container networking |
@@ -52,7 +52,7 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Fleet visibility and telemetry
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Device inventory, health, model, firmware, uptime | **Shipped, hardware-verified** | Freshness and source gaps remain visible |
 | Interface throughput and durable metric history | **Shipped, hardware-verified** | Five-minute rollups for 14 days; hourly for 396 days |
@@ -64,18 +64,18 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Dashboard and WAN evidence
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Fleet status and warning/error summary | **Shipped** | Partial data is disclosed rather than flattened |
 | WAN reachability charts/table | **Shipped, hardware-verified** | Gateway sends three ICMP probes to fixed `1.1.1.1` at most once per minute; this is not full ISP uptime, HTTP, or DNS validation |
 | WAN/interface throughput | **Shipped** | Source and missing-sample provenance are shown |
 | Controller-host speed test | **Shipped** | Cloudflare endpoint, about 15 MiB, one active job, 30-second hard bound, three terminal results retained |
-| Gateway-run speed test | **Unavailable in v0.1.2** | Would need a separately approved router capability |
+| Gateway-run speed test | **Unavailable in v0.1.3** | Would need a separately approved router capability |
 | Loaded latency and loaded jitter | **Unavailable** | The controller-host method reports idle latency/jitter only |
 
 ## Topology
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Internet → gateway → infrastructure → client graph | **Shipped, hardware-verified** | Inferred from route, FDB/neighbor, association, and optional LLDP evidence |
 | Current measured/inferred source labels | **Shipped** | Ambiguous links stay ambiguous; expired evidence can leave an online device unplaced |
@@ -86,18 +86,18 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Clients and observability
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Client inventory, address/name/vendor hints, association and connection source | **Shipped, hardware-verified** | Depends on host hints, DHCP/neighbor and wireless sources available on each router |
 | Current wireless signal/rates/retries | **Capability-dependent, hardware-verified** | Driver/hostapd source gaps are disclosed |
 | Client observability timeline | **Shipped, hardware-verified** | Joins bounded exact events, topology intervals, AP/radio/path evidence, and rollups at one cursor |
 | Wi-Fi experience score | **Shipped, capability-dependent** | Requires RSSI, retry delta, and TX-failure delta in one sample; missing inputs do not get reweighted |
 | Private-MAC indication | **Shipped** | Warning from the locally administered MAC bit, not identity proof |
-| Durable per-client application usage | **Unavailable** | Requires optional accounting/DPI not shipped as a v0.1.2 controller capability |
+| Durable per-client application usage | **Unavailable** | Requires optional accounting/DPI not shipped as a v0.1.3 controller capability |
 
 ## Radios and RF
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Radio inventory, band, channel, width, power, client count | **Shipped, hardware-verified** | Stable radio identity is separated from driver naming |
 | Channel-plan view | **Shipped, hardware-verified** | Shows In use, Enabled, Restricted, or Unknown from actual frequency evidence |
@@ -110,14 +110,14 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Site configuration
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Site-wide WLANs and AP groups | **Shipped, hardware-verified** | Deterministic fan-out to selected APs; write-only secrets remain redacted after save |
 | 2.4/5/6 GHz and WPA2/WPA3/OWE/open WLAN fields | **Shipped, capability-dependent** | Includes PMF and 802.11r/k/v fields; hardware defects and missing support can block or warn |
 | Networks, VLANs, addressing, and DHCP intent | **Shipped** | Rendered only to devices with the required Gateway/Switch function and capabilities |
 | Firewall zones and directed forwarding | **Shipped** | Controller-owned firewall4 sections only |
 | IPv4 policy records, static routes, and port forwards | **Shipped** | Preview/gates remain authoritative; application-based matching is unavailable without DPI |
-| Client block and fixed-IPv4 desired policy | **Shipped** | Per-client rate limiting, QoS/SQM, and application/DPI policy backends are unavailable in v0.1.2 |
+| Client block and fixed-IPv4 desired policy | **Shipped** | Per-client rate limiting, QoS/SQM, and application/DPI policy backends are unavailable in v0.1.3 |
 | Per-device overrides | **Shipped** | Limited to WLAN publication, hidden beacon, isolation, and client limit; SSID/key/security/PMF/roaming settings cannot diverge per AP |
 | Preview and multi-device Apply | **Shipped, hardware-verified** | Full-fleet preflight, OpenWrt rollback timer, runtime verification, durable receipts |
 | Automatic silent reconciliation of every desired edit | **Unavailable by design** | Saving does not Apply; operator review remains required |
@@ -141,7 +141,7 @@ The following release boundaries remain:
 
 ## Accounts, backup, and diagnostics
 
-| Capability | v0.1.2 status | Important boundary |
+| Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Owner, Administrator, Operator, Read-only roles | **Shipped** | Server-enforced; see [Permissions](../concepts/permissions.md) |
 | Session inventory/revocation and password step-up | **Shipped** | Sessions are in memory and end on restart |
@@ -159,7 +159,7 @@ class-C polling/resource budget: 209 poll batches, no failures, and no observed
 overlay write. That fresh-start evidence was produced through the pre-stable/RC
 workflow and underlies the stable release.
 
-v0.1.2 additionally carries external, reporter-confirmed read-only inspection
+v0.1.3 additionally carries external, reporter-confirmed read-only inspection
 evidence for one Cudy M3000 v2/MT7981 Filogic variant. It proves physical-radio
 counting and its direct LAN/WAN layout only; it does not prove adoption, Apply,
 tagged VLAN management, operational telemetry, resource budgets, or other
@@ -176,7 +176,7 @@ cycle. The safely demonstrated configuration was WPA2-only, PMF disabled, FT
 disabled, and 802.11k/v enabled after cold boot. Do not generalize a WLAN option
 being present in the model into proof that this router can run it safely.
 
-The current controller serves REST/WebSocket routes under `/api/v1`, but v0.1.2
+The current controller serves REST/WebSocket routes under `/api/v1`, but v0.1.3
 does not publish a stable third-party API compatibility guarantee. Treat that
 surface as the controller/UI contract unless a future release documents one.
 

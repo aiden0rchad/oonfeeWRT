@@ -1107,7 +1107,7 @@ describe('Clients', () => {
       clientPage({
         total: 1,
         scope_note:
-          'Unknown can mean network.interface.dump could not be read. Open Devices and check What the controller cannot read here.',
+          'Unknown can mean network-interface or installed-route evidence could not be read. Open Devices and check What the controller cannot read here.',
         clients: [
           {
             mac: 'aa:bb:cc:dd:ee:03',
@@ -1125,7 +1125,7 @@ describe('Clients', () => {
     render(<Clients />)
     await waitFor(() => expect(screen.getByText('unplaced')).toBeTruthy())
 
-    const rowReason = document.querySelector('[title*="network.interface.dump"]')
+    const rowReason = document.querySelector('[title*="installed-route evidence"]')
     if (!rowReason) throw new Error('the unknown-scope cell omits unreadable subnet data')
     expect(rowReason.getAttribute('title')).toMatch(/Open Devices/)
     expect(screen.getByRole('note').textContent).toMatch(/What the controller cannot read here/)
@@ -1929,6 +1929,30 @@ describe('Devices — re-probe panel', () => {
     expect(within(panel).getByText('AP · Switch')).toBeTruthy()
     fireEvent.click(within(panel).getByRole('button', { name: 'Rename ap-1' }))
     expect(within(panel).getByLabelText('New name for ap-1')).toBeTruthy()
+  })
+
+  it('uses the proved PPPoE device for throughput', async () => {
+    api.device.mockResolvedValue({
+      ...detail,
+      interfaces: ['wan', 'pppoe-wan'],
+      wan_interface: 'pppoe-wan',
+    })
+    await openPanel()
+    const panel = screen.getByRole('dialog', { name: 'ap-1' })
+    expect(within(panel).getByText('Throughput — pppoe-wan')).toBeTruthy()
+  })
+
+  it('keeps the legacy interface fallback for an older controller response', async () => {
+    await openPanel()
+    const panel = screen.getByRole('dialog', { name: 'ap-1' })
+    expect(within(panel).getByText('Throughput — wan')).toBeTruthy()
+  })
+
+  it('does not guess a throughput device after an explicit absence', async () => {
+    api.device.mockResolvedValue({ ...detail, interfaces: ['wan'], wan_interface: null })
+    await openPanel()
+    const panel = screen.getByRole('dialog', { name: 'ap-1' })
+    expect(within(panel).queryByText(/^Throughput/)).toBeNull()
   })
 
   it('renders an omitted live station signal as unavailable, not zero dBm', async () => {

@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.2.
+description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.3.
 ---
 
 # Troubleshooting
@@ -17,7 +17,7 @@ until you know the previous operation's terminal state.
    oonfeewrtd -version
    ```
 
-   Expected for this guide: `v0.1.2`.
+   Expected for this guide: `v0.1.3`.
 
 2. Check controller liveness using the same listener configuration as the
    running process:
@@ -261,7 +261,7 @@ seconds. Only one test may be active.
 - Verify the controller host/container has HTTPS and DNS access to the provider.
 - Run during a quiet period if saturation affects clients.
 - Do not interpret the result as router-local forwarding performance.
-- Loaded latency and jitter are unavailable in v0.1.2.
+- Loaded latency and jitter are unavailable in v0.1.3.
 
 ## Diagnostics or backup download expired
 
@@ -312,8 +312,8 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 ## Upgrade or rollback trouble
 
-v0.1.2 and v0.1.1 both use schema 19. A clean binary/image rollback from
-v0.1.2 to v0.1.1 is schema-compatible, but keep the v0.1.2 data pair first.
+v0.1.3 and v0.1.2 both use schema 19. A clean binary/image rollback from
+v0.1.3 to v0.1.2 is schema-compatible, but keep the v0.1.3 data pair first.
 
 Rollback to historical `v0.1.0-rc.1` is different: that daemon uses schema 17
 and must not open schema-19 state. Stop the controller and restore the untouched

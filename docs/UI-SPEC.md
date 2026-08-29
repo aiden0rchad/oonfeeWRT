@@ -396,6 +396,9 @@ then add WAN interface download/upload throughput, fixed-target ICMP
 reachability/freshness/latency/loss, recent warning/critical events, a compact
 topology summary and speed-test history. `site_wan_*` comes from the selected
 gateway; interface counters state download/upload direction and freshness.
+The displayed route interface and counter key come from the installed kernel
+default-route device, including PPPoE names such as `pppoe-wan`; the UI never
+guesses from the first available interface series.
 Label the availability strip `ICMP reachability to 1.1.1.1`, never ISP uptime.
 Missing or stale evidence reads `Unavailable` or `Last observed`, never zero.
 Cards link to the corresponding filtered screen; count methodology moves behind

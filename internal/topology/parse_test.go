@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+func TestParseIPv4MainDefaultRouteSelectsKernelMainRoute(t *testing.T) {
+	got, found, err := ParseIPv4MainDefaultRoute([]byte(`default via 192.0.2.9 dev backup-wan proto static metric 90
+default via 192.0.2.1 dev pppoe-wan proto static metric 10
+default via 192.0.2.2 dev br-lan.6 table 100 metric 0
+default from 198.51.100.0/24 via 192.0.2.3 dev draytek_mgmt table main metric 0
+default via 192.0.2.4 dev stale-wan metric 1 linkdown
+192.0.2.0/24 dev br-lan.6 scope link
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != "pppoe-wan" {
+		t.Fatalf("route=(%q,%v), want pppoe-wan", got, found)
+	}
+}
+
+func TestParseIPv4MainDefaultRouteEmptyAndAmbiguous(t *testing.T) {
+	for _, raw := range []string{"", "192.0.2.0/24 dev eth0\n"} {
+		if got, found, err := ParseIPv4MainDefaultRoute([]byte(raw)); err != nil || found || got != "" {
+			t.Fatalf("no default=(%q,%v,%v)", got, found, err)
+		}
+	}
+	_, _, err := ParseIPv4MainDefaultRoute([]byte("default dev wan metric 10\ndefault dev lte metric 10\n"))
+	if err == nil || !strings.Contains(err.Error(), "ambiguous equal-metric") {
+		t.Fatalf("ambiguous error=%v", err)
+	}
+}
+
+func TestParseIPv4MainDefaultRouteRejectsMalformedEvidence(t *testing.T) {
+	for _, raw := range []string{
+		"default via secret dev wan\n",
+		"default dev bad/interface\n",
+		"default dev wan metric 1 metric 2\n",
+		"default dev wan from secret\n",
+		"default dev wan mystery value\n",
+		"default nexthop dev wan weight 1\n",
+	} {
+		if _, _, err := ParseIPv4MainDefaultRoute([]byte(raw)); err == nil {
+			t.Errorf("accepted %q", raw)
+		}
+	}
+}
+
 func TestParseNeighborsBusyBoxIPv4AndIPv6(t *testing.T) {
 	ipv4 := []byte(`192.168.1.37 dev br-lan lladdr AA:BB:CC:DD:EE:01 ref 1 used 7/5/3 probes 2 REACHABLE
 192.168.1.38 dev br-lan FAILED

@@ -155,6 +155,15 @@ type Snapshot struct {
 	// from "did not ask" — the same distinction IfacesFresh exists for.
 	askedNetworks bool
 
+	// Network refresh is a composite observation: netifd supplies logical
+	// interfaces and subnets, while the kernel route table supplies the L3
+	// device that actually carries the main IPv4 default route. Both must decode
+	// before cached network scope is replaced.
+	networkDumpKnown   bool
+	networkCandidates  []networkCandidate
+	mainIPv4RouteKnown bool
+	mainIPv4Device     string
+
 	Uptime     int64
 	Load       [3]float64 // 1/5/15 minute, already unscaled from /65536
 	Memory     Memory
@@ -394,9 +403,9 @@ type Host struct {
 // its own clients, indistinguishably. Measured on the reference device: 8 of
 // its 16 known hosts were neighbours on the uplink, not clients.
 //
-// Upstream is taken from the routing table rather than from the interface being
-// named "wan". The name is a convention and nothing enforces it; carrying the
-// default route is what actually makes an interface the way out.
+// Upstream is taken from the installed kernel main route, then matched to the
+// logical interface's l3_device. It is never inferred from a name or from
+// netifd candidate order.
 type Network struct {
 	Name     string `json:"name"`     // netifd's logical name: "lan", "wan"
 	CIDR     string `json:"cidr"`     // "192.168.1.1/24"

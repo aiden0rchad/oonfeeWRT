@@ -260,6 +260,9 @@ export interface TakeoverBrief {
 export interface DeviceDetail extends Device {
   capabilities: Registry | null
   interfaces: string[]
+  /** Current kernel L3 device carrying the proved IPv4 default route. Null is
+   * an explicit absence; undefined means an older controller response. */
+  wan_interface?: string | null
   radios: string[]
   stations: string[]
   degraded?: Degradation[]

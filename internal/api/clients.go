@@ -333,7 +333,7 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 			"subnets their address falls in; \"upstream\" means the interface " +
 			"carrying the default route. Unknown means no address was observed, " +
 			"the address matched none of the successfully read subnets, or a " +
-			"device's network.interface.dump could not be read. Open Devices and " +
+			"device's network-interface or installed-route evidence could not be read. Open Devices and " +
 			"check \"What the controller cannot read here\"; re-probe transient " +
 			"failures, and re-adopt only when it reports a permanent permission gap",
 	})

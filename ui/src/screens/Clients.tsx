@@ -236,7 +236,7 @@ export function Clients() {
             upstream
           </span>
         ) : (
-          <Unknown why="placement is unknown because no address was seen, the address matched none of the successfully read subnets, or a device's network.interface.dump could not be read. Open Devices and check ‘What the controller cannot read here’; re-probe transient failures and re-adopt only for a permanent permission gap." />
+          <Unknown why="placement is unknown because no address was seen, the address matched none of the successfully read subnets, or a device's network-interface or installed-route evidence could not be read. Open Devices and check ‘What the controller cannot read here’; re-probe transient failures and re-adopt only for a permanent permission gap." />
         ),
       sortBy: (c) => c.scope,
     },

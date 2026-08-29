@@ -318,9 +318,11 @@ export function DeviceDetailPanel({
     </div>
   )
   const wanKey =
-    detail.interfaces.find((i) => i === 'wan') ??
-    detail.interfaces.find((i) => i.startsWith('eth')) ??
-    detail.interfaces[0]
+    detail.wan_interface === undefined
+      ? detail.interfaces.find((i) => i === 'wan') ??
+        detail.interfaces.find((i) => i.startsWith('eth')) ??
+        detail.interfaces[0]
+      : detail.wan_interface ?? undefined
 
   if (removing) {
     return (

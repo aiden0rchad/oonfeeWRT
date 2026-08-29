@@ -59,6 +59,169 @@ func DecodeExecOutput(raw []byte) (ExecOutput, error) {
 	return out, nil
 }
 
+// ParseIPv4MainDefaultRoute returns the one usable, lowest-metric main-table
+// IPv4 default device from stock BusyBox `ip -4 route show table all` output.
+// The installed kernel table is stronger evidence than netifd intent, which
+// may retain a route whose installation failed. Policy routing remains outside
+// this observation and must not be inferred from it.
+func ParseIPv4MainDefaultRoute(raw []byte) (string, bool, error) {
+	bestDevice := ""
+	bestMetric := 0
+	found := false
+	for lineNo, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		device, metric, eligible, err := parseIPv4DefaultRouteLine(fields)
+		if err != nil {
+			return "", false, fmt.Errorf("line %d: %w", lineNo+1, err)
+		}
+		if !eligible {
+			continue
+		}
+		if !found || metric < bestMetric {
+			bestDevice, bestMetric, found = device, metric, true
+			continue
+		}
+		if metric == bestMetric && device != bestDevice {
+			return "", false, fmt.Errorf("ambiguous equal-metric default routes on %q and %q", bestDevice, device)
+		}
+	}
+	return bestDevice, found, nil
+}
+
+func parseIPv4DefaultRouteLine(fields []string) (string, int, bool, error) {
+	index := 0
+	eligible := true
+	if routeType(fields[0]) {
+		eligible = strings.EqualFold(fields[0], "unicast")
+		index++
+	}
+	if index >= len(fields) || fields[index] != "default" {
+		return "", 0, false, nil
+	}
+	index++
+	device := ""
+	metric := 0
+	viaSet, metricSet, tableSet, sourceSet := false, false, false, false
+	for index < len(fields) {
+		keyword := fields[index]
+		index++
+		value := func() (string, error) {
+			if index >= len(fields) {
+				return "", fmt.Errorf("%s has no value", keyword)
+			}
+			out := fields[index]
+			index++
+			return out, nil
+		}
+		switch keyword {
+		case "via":
+			if viaSet {
+				return "", 0, false, fmt.Errorf("route has multiple gateways")
+			}
+			viaSet = true
+			gateway, err := value()
+			if err != nil {
+				return "", 0, false, err
+			}
+			if gateway == "inet" {
+				gateway, err = value()
+				if err != nil {
+					return "", 0, false, err
+				}
+			}
+			if parsed := net.ParseIP(gateway); parsed == nil || parsed.To4() == nil {
+				return "", 0, false, fmt.Errorf("invalid IPv4 gateway %q", gateway)
+			}
+		case "dev":
+			if device != "" {
+				return "", 0, false, fmt.Errorf("route has multiple interfaces")
+			}
+			var err error
+			device, err = value()
+			if err != nil {
+				return "", 0, false, err
+			}
+			if !validInterfaceName(device) {
+				return "", 0, false, fmt.Errorf("invalid interface %q", device)
+			}
+		case "metric":
+			if metricSet {
+				return "", 0, false, fmt.Errorf("route has multiple metrics")
+			}
+			metricSet = true
+			rawMetric, err := value()
+			if err != nil {
+				return "", 0, false, err
+			}
+			parsed, err := strconv.Atoi(rawMetric)
+			if err != nil || parsed < 0 {
+				return "", 0, false, fmt.Errorf("invalid metric %q", rawMetric)
+			}
+			metric = parsed
+		case "table":
+			if tableSet {
+				return "", 0, false, fmt.Errorf("route has multiple tables")
+			}
+			tableSet = true
+			table, err := value()
+			if err != nil {
+				return "", 0, false, err
+			}
+			eligible = eligible && (table == "main" || table == "254")
+		case "from":
+			if sourceSet {
+				return "", 0, false, fmt.Errorf("route has multiple sources")
+			}
+			sourceSet = true
+			source, err := value()
+			if err != nil {
+				return "", 0, false, err
+			}
+			unconstrained := source == "all" || source == "0.0.0.0/0"
+			if !unconstrained {
+				if ip := net.ParseIP(source); ip == nil || ip.To4() == nil {
+					if _, subnet, parseErr := net.ParseCIDR(source); parseErr != nil || subnet == nil || subnet.IP.To4() == nil {
+						return "", 0, false, fmt.Errorf("invalid IPv4 source")
+					}
+				}
+			}
+			eligible = eligible && unconstrained
+		case "proto", "scope", "src", "pref", "expires", "mtu", "advmss", "hoplimit", "realm",
+			"rtt", "rttvar", "rto_min", "ssthresh", "cwnd", "initcwnd", "initrwnd", "features",
+			"quickack", "congctl", "fastopen_no_cookie", "uid", "nhid":
+			if _, err := value(); err != nil {
+				return "", 0, false, err
+			}
+		case "linkdown", "dead":
+			eligible = false
+		case "onlink", "pervasive", "offload", "trap", "notify", "cache":
+		case "nexthop":
+			return "", 0, false, fmt.Errorf("multipath default route is not supported")
+		default:
+			return "", 0, false, fmt.Errorf("unsupported default-route attribute %q", keyword)
+		}
+	}
+	if !eligible {
+		return "", 0, false, nil
+	}
+	if device == "" {
+		return "", 0, false, fmt.Errorf("default route has no interface")
+	}
+	return device, metric, true, nil
+}
+
+func routeType(raw string) bool {
+	switch strings.ToLower(raw) {
+	case "unicast", "local", "broadcast", "multicast", "throw", "unreachable", "prohibit", "blackhole", "nat", "anycast":
+		return true
+	default:
+		return false
+	}
+}
+
 // Neighbor is one row from `ip -4/-6 neigh show`.
 type Neighbor struct {
 	Family           int      `json:"family"`

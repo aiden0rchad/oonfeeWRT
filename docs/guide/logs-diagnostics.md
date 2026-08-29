@@ -34,7 +34,7 @@ A useful incident filter sequence:
 6. note source gaps and timestamps;
 7. correlate with Dashboard, Client Observability, or Topology at the same time.
 
-v0.1.2 does not provide a device or free-text search filter on the Logs page.
+v0.1.3 does not provide a device or free-text search filter on the Logs page.
 
 ## Retention boundaries
 

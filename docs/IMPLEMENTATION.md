@@ -1760,17 +1760,17 @@ with the network it connects to. On the reference device, of 16 known hosts:
 | no observed IPv4 at all | **4** |
 | the device's own interface MACs, already filtered | 2 |
 
-`network.interface dump` returns each logical interface with its IPv4 subnets
-and its routes, and costs one more invocation in the existing batch on the
-15-minute rediscovery cadence. Measured after adding it: idle **1.00
-polls/min**, observed **6.00 req/min**, zero flash writes — identical to before,
-with 118 more bytes per poll (9,677 → 9,795).
+`network.interface dump` returns each logical interface and its IPv4 subnets.
+The current collector pairs it with the already allow-listed, read-only
+`ip -4 route show table all` command on the 15-minute rediscovery cadence. Both
+remain invocations inside the existing batch, so this adds no HTTP request or
+flash write.
 
-The upstream interface is the one carrying `0.0.0.0/0`, taken from the routing
-table rather than from the interface being named `wan`. On this device `wan` and
-the default route coincide, but nothing enforces that: a device bridged onto an
-existing network can have the default route on `lan`, and both directions are
-unit-tested.
+The upstream interface is the active logical interface whose `l3_device`
+matches the unique usable main-table kernel default. On a plain DHCP WAN these
+names often coincide. On PPPoE, logical `wan` can map to runtime `pppoe-wan`;
+that runtime device is also the traffic-counter key. Netifd default-route
+candidates are not treated as installed-route proof.
 
 Two storage rules that follow from the refresh cadence:
 
