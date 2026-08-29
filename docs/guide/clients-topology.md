@@ -20,7 +20,7 @@ Filters operate on the complete matching result before pagination:
 - connection evidence (**Wireless**, **Unknown**, or all).
 
 The current table does not claim that an endpoint is wired merely because no
-managed AP reports it, and v0.1.2 has no client text-search or source-coverage
+managed AP reports it, and v0.1.3 has no client text-search or source-coverage
 filter.
 
 The count above the table is the filtered total, not merely the number of rows

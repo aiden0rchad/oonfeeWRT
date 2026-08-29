@@ -92,12 +92,12 @@ controller's public IP and test requests are visible to Cloudflare.
 1. Open **Dashboard**.
 2. Open the impact and consent details and review the exact endpoint, limits,
    controller-host vantage point, and data-use disclosure.
-3. Select **Run speed test**. In v0.1.2 this action is the explicit,
+3. Select **Run speed test**. In v0.1.3 this action is the explicit,
    plan-bound acknowledgement and starts the test immediately.
 4. Leave the Dashboard open to watch progress.
 
 The result can include download, upload, idle latency, and idle jitter. Loaded
-latency and loaded jitter are not measured in v0.1.2. The controller retains
+latency and loaded jitter are not measured in v0.1.3. The controller retains
 the newest three terminal attempts, including failed or cancelled attempts, so
 a failure does not disappear from history.
 
@@ -144,12 +144,13 @@ When the Dashboard looks unhealthy:
 
 | Symptom | Likely explanation | What to do |
 |---|---|---|
-| Internet health is unavailable | No managed Gateway, stale route evidence, failed poll, or insufficient ACL/source coverage | Open the Gateway device, review functions and source gaps, then reprobe or refresh the ACL if the UI identifies a missing permission |
+| Internet health is unavailable | No managed Gateway, stale/incomplete kernel-route and interface evidence, failed poll, or insufficient ACL/source coverage | Open the Gateway device, review functions and source gaps, then reprobe or refresh the ACL if the UI identifies a missing permission |
 | Wireless count is incomplete | One or more AP-function devices lack fresh station evidence | Open **Devices**, find the named coverage gaps, and wait for or troubleshoot their focused poll |
 | Charts show gaps | The bucket had no valid samples; the controller restarted, device was unreachable, or a source failed | Use the accessible table and Logs; do not interpret the gap as zero |
 | Speed test is much slower than expected | Container/VPN path, concurrent traffic, controller-host limits, or shared WAN saturation | Verify the host path and repeat during a controlled quiet window only if another 15 MiB test is acceptable |
 | Speed test fails immediately | Controller cannot reach the Cloudflare endpoints or the job was refused by current state | Check controller logs, DNS/HTTPS egress, and whether another test is active |
 | A device is online but WAN health is missing | Device management reachability and Gateway Internet evidence are separate | Verify the Gateway function, default route source, and probe result on that device |
+| A PPPoE or modem-management interface is selected incorrectly | Netifd may advertise more than one default-route candidate, while counters use the PPPoE L3 device | Upgrade to a controller with kernel-route/L3 mapping support; do not rename interfaces as a workaround. Custom policy routing remains an explicit evidence gap |
 
 ## Related guides
 

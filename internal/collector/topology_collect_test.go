@@ -43,6 +43,7 @@ func TestTopologyCallsUseExactStockCommandsAndSlowCadence(t *testing.T) {
 		}
 		for _, exact := range []string{
 			"/sbin/ip [-4 neigh show]", "/sbin/ip [-6 neigh show]",
+			"/sbin/ip [-4 route show table all]",
 			"/usr/sbin/brctl [showmacs br-lan]", "/usr/sbin/brctl [showstp br-lan]",
 			"/usr/sbin/lldpcli [-f json show neighbors hidden]",
 		} {
@@ -51,10 +52,10 @@ func TestTopologyCallsUseExactStockCommandsAndSlowCadence(t *testing.T) {
 			}
 		}
 	}
-	assert(p.buildCalls(Baseline, nil, nil), 8)
+	assert(p.buildCalls(Baseline, nil, nil), 9)
 	assert(p.buildCalls(Baseline, nil, nil), 0)
 	now = now.Add(rediscoverInterval)
-	assert(p.buildCalls(Baseline, nil, nil), 8)
+	assert(p.buildCalls(Baseline, nil, nil), 9)
 }
 
 func TestTopologySelectiveDecodersMapStableRadiosAndPortMediaWithoutSecrets(t *testing.T) {
@@ -132,6 +133,41 @@ func TestTopologySourceAggregationFailsClosedAcrossSeveralBridges(t *testing.T) 
 	}
 	if got := snap.Topology.Sources[0].Reason; got != "source call failure: transport error" {
 		t.Fatalf("reason=%q", got)
+	}
+}
+
+func TestDefaultRouteCompositeFailurePreservesCachedNetworks(t *testing.T) {
+	snap := Snapshot{DeviceID: 8, At: time.Unix(1_800_000_000, 0),
+		Networks: []Network{{Name: "cached", CIDR: "192.168.1.1/24"}}}
+	snap.prepareTopology([]call{
+		{topologySource: topology.SourceDefaultRoute},
+		{topologySource: topology.SourceDefaultRoute},
+	})
+	snap.topologyFailed(topology.SourceDefaultRoute, CausePermission)
+	if err := decodeNetworks(json.RawMessage(`{"interface":[
+	  {"interface":"wan","up":true,"l3_device":"pppoe-wan",
+	   "ipv4-address":[{"address":"192.0.2.2","mask":32}],
+	   "route":[{"target":"0.0.0.0","mask":0}]}
+	]}`), &snap); err != nil {
+		t.Fatal(err)
+	}
+	snap.topologyAnswered(topology.SourceDefaultRoute)
+	if err := snap.finalizeNetworks(); err != nil {
+		t.Fatal(err)
+	}
+	snap.finalizeTopology()
+	if snap.askedNetworks || len(snap.Networks) != 1 || snap.Networks[0].Name != "cached" {
+		t.Fatalf("failed composite replaced cache: %+v", snap.Networks)
+	}
+	state := topologySourceState(snap.Topology.Sources, topology.SourceDefaultRoute)
+	reason := ""
+	for _, source := range snap.Topology.Sources {
+		if source.Source == topology.SourceDefaultRoute {
+			reason = source.Reason
+		}
+	}
+	if state != model.TopologySourceError || !strings.Contains(reason, "permission") {
+		t.Fatalf("source=%s reason=%q", state, reason)
 	}
 }
 

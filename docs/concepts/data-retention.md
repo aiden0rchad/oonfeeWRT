@@ -5,7 +5,7 @@ description: What oonfeeWRT stores, for how long, and what must be backed up tog
 
 # Data and retention
 
-oonfeeWRT v0.1.2 keeps configuration, evidence, and audit history locally. It
+oonfeeWRT v0.1.3 keeps configuration, evidence, and audit history locally. It
 does not require a cloud account or external database.
 
 ## Storage locations

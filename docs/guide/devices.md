@@ -230,7 +230,7 @@ from the controller.
 |---|---|---|
 | Scan finds no device | Bridged-container subnet visibility, routed subnet, subnet size, or controller reachability | Add the router by hostname or IPv4 address; verify the controller can route to its management endpoint |
 | Inspection cannot connect | Address, administrator password, selected HTTP/HTTPS protocol, `rpcd`, `uhttpd` ubus handler, or firewall | Verify the ubus management endpoint from the controller host; SSH is not used by inspection |
-| Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.2 |
+| Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.3 |
 | Host key or certificate changed | Factory reset, firmware reinstall, address reuse, interception | Verify identity out of band before force-un-adopting and adopting the device again |
 | Metrics say unavailable | Source not readable, driver lacks metric, ACL gap, or no completed poll | Read the source explanation; reprobe or refresh ACL only when it names a repairable cause |
 | Device flips offline/online | Slow polls, unstable transport, adaptive backoff, overloaded router | Review poll duration, overhead, controller logs, and network path before shortening intervals |

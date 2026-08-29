@@ -225,6 +225,15 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 	// none of them reached the device in a useful sense.
 	snap.APsFresh = listed && snap.apStatusOK == askedAPs
 	snap.LogsFresh = snap.logReadOK && snap.logBootOK && snap.logPIDOK
+	if err := snap.finalizeNetworks(); err != nil {
+		if snap.Topology.Cycle {
+			snap.topologyFailed(topology.SourceDefaultRoute, CauseDecode)
+		}
+		snap.Degraded = append(snap.Degraded, Degradation{
+			Object: "network.interface", Method: "dump", Target: "main IPv4 route mapping",
+			Cause: CauseDecode, Err: fmt.Sprintf("decode: %v", err),
+		})
+	}
 	snap.Topology.Sources = append(snap.Topology.Sources, topologyAssociationSource(&snap))
 	snap.finalizeTopology()
 	return snap
@@ -464,22 +473,21 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 	}
 	needNetworks := p.needNetworks()
 	if needNetworks || needTopology {
-		// Same reasoning as the radio list: in the batch, on the slow cadence,
-		// and used by the poll that asked for it rather than the next one — the
-		// hosts it classifies arrive in this same batch. Subnets change when a
-		// human renumbers a network or a WAN lease moves, neither of which
-		// happens between polls.
-		calls = append(calls, call{
-			inv:      ubus.Invocation{Object: "network.interface", Method: "dump"},
-			decode:   decodeNetworks,
-			optional: true,
-			topologySource: func() string {
-				if needTopology {
-					return topology.SourceDefaultRoute
-				}
-				return ""
-			}(),
-		})
+		// netifd supplies logical interfaces and subnets, but it can retain a
+		// default-route candidate that the kernel did not install. Pair it with
+		// the already allow-listed kernel table so PPPoE and management networks
+		// resolve to the device that actually carries the route.
+		source := ""
+		if needTopology {
+			source = topology.SourceDefaultRoute
+		}
+		calls = append(calls,
+			call{inv: ubus.Invocation{Object: "file", Method: "exec", Args: map[string]any{
+				"command": "/sbin/ip", "params": []string{"-4", "route", "show", "table", "all"},
+			}}, decode: decodeMainIPv4Route, optional: true, topologySource: source},
+			call{inv: ubus.Invocation{Object: "network.interface", Method: "dump"},
+				decode: decodeNetworks, optional: true, topologySource: source},
+		)
 		// Stamped on the ATTEMPT, not on the answer. A device whose ACL does not
 		// grant network.interface would otherwise never set the timestamp and so
 		// would re-request the call on every single poll, forever, for an answer
@@ -934,12 +942,39 @@ func decodeHostHints(raw json.RawMessage, s *Snapshot) error {
 //
 // Loopback is skipped: nothing in a host list is ever 127.x, and keeping it
 // would let a bad address match something.
+type networkCandidate struct {
+	name, device, l3Device string
+	up, defaultIPv4        bool
+	addresses              []struct {
+		address string
+		mask    int
+	}
+}
+
+func decodeMainIPv4Route(raw json.RawMessage, s *Snapshot) error {
+	exec, err := topology.DecodeExecOutput(raw)
+	if err != nil {
+		return err
+	}
+	device, found, err := topology.ParseIPv4MainDefaultRoute(exec.Stdout)
+	if err != nil {
+		return err
+	}
+	s.mainIPv4RouteKnown = true
+	if found {
+		s.mainIPv4Device = device
+	}
+	return nil
+}
+
 func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
 	var v struct {
 		Interface []struct {
-			Name string `json:"interface"`
-			Up   bool   `json:"up"`
-			IPv4 []struct {
+			Name     string `json:"interface"`
+			Up       bool   `json:"up"`
+			Device   string `json:"device"`
+			L3Device string `json:"l3_device"`
+			IPv4     []struct {
 				Address string `json:"address"`
 				Mask    int    `json:"mask"`
 			} `json:"ipv4-address"`
@@ -952,14 +987,12 @@ func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return err
 	}
-	out := make([]Network, 0, len(v.Interface))
+	candidates := make([]networkCandidate, 0, len(v.Interface))
 	for _, i := range v.Interface {
-		upstream := false
-		for _, r := range i.Route {
-			// The default route, which is what actually makes an interface the
-			// way out. Not the interface being called "wan".
-			if r.Target == "0.0.0.0" && r.Mask == 0 {
-				upstream = true
+		candidate := networkCandidate{name: i.Name, device: i.Device, l3Device: i.L3Device, up: i.Up}
+		for _, route := range i.Route {
+			if route.Target == "0.0.0.0" && route.Mask == 0 {
+				candidate.defaultIPv4 = true
 				break
 			}
 		}
@@ -971,21 +1004,70 @@ func decodeNetworks(raw json.RawMessage, s *Snapshot) error {
 			if a.Mask < 0 || a.Mask > 32 {
 				continue
 			}
-			out = append(out, Network{
-				Name:     i.Name,
-				CIDR:     fmt.Sprintf("%s/%d", a.Address, a.Mask),
-				Upstream: upstream,
-			})
+			candidate.addresses = append(candidate.addresses, struct {
+				address string
+				mask    int
+			}{address: a.Address, mask: a.Mask})
 		}
-		if upstream && i.Up {
-			s.Topology.Uplinks = append(s.Topology.Uplinks, topology.Uplink{
-				DeviceID: s.DeviceID, Interface: i.Name, Active: true,
-			})
+		candidates = append(candidates, candidate)
+	}
+	s.networkCandidates = candidates
+	s.networkDumpKnown = true
+	return nil
+}
+
+func (s *Snapshot) finalizeNetworks() error {
+	if !s.networkDumpKnown || !s.mainIPv4RouteKnown {
+		return nil
+	}
+	logical := ""
+	if s.mainIPv4Device != "" {
+		for _, match := range []func(networkCandidate) bool{
+			func(candidate networkCandidate) bool { return candidate.l3Device == s.mainIPv4Device },
+			func(candidate networkCandidate) bool {
+				return candidate.l3Device == "" && candidate.device == s.mainIPv4Device
+			},
+			func(candidate networkCandidate) bool {
+				return candidate.l3Device == "" && candidate.device == "" && candidate.name == s.mainIPv4Device
+			},
+		} {
+			matches := []string{}
+			for _, candidate := range s.networkCandidates {
+				if candidate.up && candidate.defaultIPv4 && match(candidate) {
+					matches = append(matches, candidate.name)
+				}
+			}
+			if len(matches) > 1 {
+				return fmt.Errorf("kernel route device %q maps to several logical interfaces: %s",
+					s.mainIPv4Device, strings.Join(matches, ", "))
+			}
+			if len(matches) == 1 {
+				logical = matches[0]
+				break
+			}
+		}
+		if logical == "" {
+			return fmt.Errorf("kernel route device %q has no active logical interface", s.mainIPv4Device)
 		}
 	}
-	s.topologyEvidence(topology.SourceDefaultRoute, len(s.Topology.Uplinks))
-	s.Networks = out
+
+	networks := []Network{}
+	for _, candidate := range s.networkCandidates {
+		for _, address := range candidate.addresses {
+			networks = append(networks, Network{Name: candidate.name,
+				CIDR:     fmt.Sprintf("%s/%d", address.address, address.mask),
+				Upstream: candidate.name == logical && logical != ""})
+		}
+	}
+	uplinks := []topology.Uplink{}
+	if s.mainIPv4Device != "" {
+		uplinks = append(uplinks, topology.Uplink{DeviceID: s.DeviceID,
+			Interface: s.mainIPv4Device, LogicalInterface: logical, Active: true})
+	}
+	s.Networks = networks
+	s.Topology.Uplinks = uplinks
 	s.askedNetworks = true
+	s.topologyEvidence(topology.SourceDefaultRoute, len(uplinks))
 	return nil
 }
 

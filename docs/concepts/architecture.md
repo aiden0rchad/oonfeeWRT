@@ -5,7 +5,7 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture shipped in **oonfeeWRT v0.1.2**. For the
+This page describes the architecture shipped in **oonfeeWRT v0.1.3**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
@@ -126,7 +126,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.2
+failed topology read from looking like an empty network. The exact v0.1.3
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ## Site model and ownership
@@ -184,7 +184,7 @@ LAN ARP or mDNS discovery. Linux host networking can enable full local
 discovery, but exposes the listener according to the host's network and
 firewall configuration.
 
-The v0.1.2 HTTP listener has no native TLS. Keep it on loopback or a trusted,
+The v0.1.3 HTTP listener has no native TLS. Keep it on loopback or a trusted,
 isolated management network and use a trusted reverse proxy for remote browser
 access. Review [Requirements](../reference/requirements.md) before deployment.
 

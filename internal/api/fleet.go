@@ -142,6 +142,10 @@ type deviceDetail struct {
 	Interfaces []string `json:"interfaces"`
 	Radios     []string `json:"radios"`
 	Stations   []string `json:"stations"`
+	// WANInterface is the current kernel L3 device proven by the default-route
+	// topology edge. Null means no current proof; clients must not guess from
+	// the metric catalog.
+	WANInterface *string `json:"wan_interface"`
 
 	// Degraded is what the last poll could not read on this device, why, and what
 	// each gap costs. Permanent ACL/driver limitations and failures of the latest
@@ -394,6 +398,10 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 	detail.Interfaces, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindIfaceRx))
 	detail.Radios, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindChanBusy))
 	detail.Stations, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindStaRSSI))
+	if _, gateway := s.dashboardGatewayTopology(ctx, []*store.Device{d}, s.now()); gateway != nil {
+		wan := gateway.RouteInterface
+		detail.WANInterface = &wan
+	}
 	writeJSON(w, http.StatusOK, detail)
 }
 

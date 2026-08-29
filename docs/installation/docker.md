@@ -1,6 +1,6 @@
 # Install with Docker
 
-The v0.1.2 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
+The v0.1.3 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
 
 > **Outcome:** oonfeeWRT runs as non-root in a hardened container, publishes HTTP only on host loopback, and persists state in a named Docker volume.
 
@@ -28,7 +28,7 @@ Keep `docker-compose.yml` and `passphrase` in this private directory. The contro
 ```sh
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.2/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.3/deploy/docker-compose.yml
 ```
 
 The file pins the image version through the required `OONFEE_VERSION` value instead of silently following `latest`.
@@ -46,16 +46,16 @@ The Compose service runs as UID/GID 65532, so the bind-mounted mode-`0600` file 
 
 This is the controller runtime/boot passphrase, not an owner account password. Store a protected recovery copy separately.
 
-## 4. Start v0.1.2
+## 4. Start v0.1.3
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose up -d
+OONFEE_VERSION=v0.1.3 docker compose up -d
 ```
 
 The release image is:
 
 ```text
-ghcr.io/aiden0rchad/oonfeewrt:v0.1.2
+ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
 ```
 
 The supplied service hardening includes:
@@ -72,8 +72,8 @@ The supplied service hardening includes:
 ## 5. Verify the service
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose ps
-OONFEE_VERSION=v0.1.2 docker compose logs --tail=100 oonfeewrt
+OONFEE_VERSION=v0.1.3 docker compose ps
+OONFEE_VERSION=v0.1.3 docker compose logs --tail=100 oonfeewrt
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
@@ -111,16 +111,16 @@ Host mode exposes the daemon directly according to its listen address. Review ho
 
 ## Optional: verify the published image signature
 
-Install `cosign` using Sigstore's official instructions, then verify the v0.1.2 GitHub Actions identity:
+Install `cosign` using Sigstore's official instructions, then verify the v0.1.3 GitHub Actions identity:
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.2" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.3" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.2
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
 ```
 
-Deployments should pin `v0.1.2` or the reported digest. The `0.1.2`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
+Deployments should pin `v0.1.3` or the reported digest. The `0.1.3`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
 
 ## Optional: run without Compose
 
@@ -150,7 +150,7 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.2
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
 ```
 
 ## Stop and restart safely
@@ -158,8 +158,8 @@ docker run -d \
 Compose sends SIGTERM and allows 150 seconds for shutdown:
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose stop
-OONFEE_VERSION=v0.1.2 docker compose start
+OONFEE_VERSION=v0.1.3 docker compose stop
+OONFEE_VERSION=v0.1.3 docker compose start
 ```
 
 The longer grace period lets an Apply that reached OpenWrt's rollback-protected stage finish its confirm decision. Do not force-kill the container during an Apply unless the host itself is failing.
@@ -182,7 +182,7 @@ Confirm that `passphrase` is a file, not a directory.
 Inspect the startup error:
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose logs --tail=200 oonfeewrt
+OONFEE_VERSION=v0.1.3 docker compose logs --tail=200 oonfeewrt
 ```
 
 Common causes are a missing/unreadable passphrase, the wrong passphrase for the volume's keyring, a missing keyring beside an existing database, an unsupported database downgrade, or port 8080 already in use.
@@ -204,13 +204,13 @@ The default mapping is intentionally loopback-only. Add [trusted reverse-proxy T
 This removes the container but preserves the named volume:
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose down
+OONFEE_VERSION=v0.1.3 docker compose down
 ```
 
 This also deletes the named volume and controller state:
 
 ```sh
-OONFEE_VERSION=v0.1.2 docker compose down -v
+OONFEE_VERSION=v0.1.3 docker compose down -v
 ```
 
 Use `-v` only after a verified backup and only when deletion is intentional.

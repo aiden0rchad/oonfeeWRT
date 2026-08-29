@@ -311,6 +311,7 @@ func TestWANProbeACLDenialStaysUnknownAndOnlyDegradesPoll(t *testing.T) {
 		c:          New(newRecorder(), Options{Now: func() time.Time { return now }, Log: quiet()}),
 		target:     Target{DeviceID: 1, Gateway: true},
 		topologyAt: now, // keep ping as this poll's only file.exec call
+		netAt:      now,
 		meshAt:     now,
 	}
 	client, err := mockConnect(t)(ctx)

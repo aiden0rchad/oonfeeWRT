@@ -5,7 +5,7 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.2**.
+Answers below describe **oonfeeWRT v0.1.3**.
 
 ## What is oonfeeWRT?
 
@@ -95,7 +95,7 @@ modules, and package sets vary. The controller probes each device and reports
 unsupported, unavailable, stale, and partial facts.
 
 The full published physical record covers a Linksys WRT3200ACM and TP-Link
-Archer C6 v2 on OpenWrt 25.12.5. v0.1.2 additionally has reporter-confirmed,
+Archer C6 v2 on OpenWrt 25.12.5. v0.1.3 additionally has reporter-confirmed,
 read-only inspection evidence for one Cudy M3000 v2/Filogic variant; it does not
 claim adoption, Apply, VLAN, or broader Filogic validation. Other devices may
 work with different gaps.
@@ -128,11 +128,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.2.
+v0.1.3.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.2. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.3. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -191,10 +191,10 @@ OpenWrt logs for 24 hours, closed topology intervals for 31 days, 100,000
 controller/audit events, and the newest three terminal speed tests. See the
 complete [retention table](../concepts/data-retention.md).
 
-## Can I downgrade from v0.1.2?
+## Can I downgrade from v0.1.3?
 
-v0.1.2 and v0.1.1 both use schema 19, so a clean binary/image rollback is
-schema-compatible; preserve the v0.1.2 data pair first.
+v0.1.3 and v0.1.2 both use schema 19, so a clean binary/image rollback is
+schema-compatible; preserve the v0.1.3 data pair first.
 
 Historical `v0.1.0-rc.1` uses schema 17. Rolling back that far requires the
 untouched pre-upgrade schema-17 database, matching keyring, prior passphrase,
@@ -209,7 +209,7 @@ and old binary/image together. Do not open schema-19 data with the RC daemon.
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.2.
+- DPI/application flow history on constrained routers in v0.1.3.
 
 ## Where should I start?
 

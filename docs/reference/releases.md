@@ -1,17 +1,18 @@
 # Release notes
 
-The documentation describes the current patch release, **v0.1.2**. Release
+The documentation describes the current patch release, **v0.1.3**. Release
 artifacts, checksums, container digests, signatures, and attached notes on the
 GitHub release are the publication source of truth.
 
 ## Current release
 
-- [v0.1.2 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.2)
-- [v0.1.2 notes in the repository](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.2.md)
+- [v0.1.3 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.3)
+- [v0.1.3 notes in the repository](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.3.md)
 - [All GitHub releases](https://github.com/aiden0rchad/oonfeeWRT/releases)
 
-## Earlier release
+## Earlier releases
 
+- [v0.1.2 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.2.md)
 - [v0.1.1 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.1.md)
 - [v0.1.0 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.0.md)
 
@@ -20,7 +21,7 @@ Before upgrading, read both the release notes and [Upgrade and roll back](../ins
 ## Verify what you run
 
 For a standalone archive, verify its entry in `SHA256SUMS` before extracting
-or installing it. For the OCI image, pin `v0.1.2` or the immutable digest and
+or installing it. For the OCI image, pin `v0.1.3` or the immutable digest and
 verify the GitHub Actions keyless signature as shown in the [Docker Compose
 guide](../installation/docker.md).
 
