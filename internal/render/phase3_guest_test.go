@@ -150,6 +150,8 @@ func TestNonIsolatedWLANOmitsUnsupportedFalseAndClearsStaleBridgeIsolation(t *te
 func TestPhase3GuestProofTruthfullyOmitsLegacyC6(t *testing.T) {
 	caps := dualBandCaps()
 	caps.Ports = capability.Ports{Bridge: "eth0.1", WAN: "eth0.2"}
+	caps.Set(capability.FeatDSA, capability.Absent)
+	caps.Set(capability.FeatSwitchPorts, capability.Present)
 	doc, rep, err := Render(phase3GuestSite(), model.Device{
 		ID: 2, Functions: model.DeviceFunctions{model.FunctionAP, model.FunctionSwitch},
 	}, caps, Existing{})

@@ -15,7 +15,7 @@ and the concrete draft so broad access is not hidden behind friendly labels.
 - Begin with a narrow test rule and a known client.
 - Know how you will retain management access if the rule is wrong.
 
-The Policy Engine is IPv4-focused in v0.1.1. QoS, application/DPI identity,
+The Policy Engine is IPv4-focused in v0.1.2. QoS, application/DPI identity,
 proved priority semantics, switch ACLs, device/group routing, and advanced
 traffic classification remain unavailable or gated.
 

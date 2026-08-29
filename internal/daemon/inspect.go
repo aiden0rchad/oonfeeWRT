@@ -46,6 +46,10 @@ func (d *Daemon) Inspect(ctx context.Context, req api.InspectRequest) (*api.Insp
 	}
 	evidence := inspectGatewayEvidence(ctx, c, caps.Ports.WAN)
 	supported, recommended, unknown := assessFunctions(caps, evidence)
+	mode := switchMode(caps)
+	report, reportErr := buildCompatibilityReport(
+		d.Config.Version, caps, supported, unknown, mode, req.Host, req.Username, req.Password, mac,
+	)
 
 	var radioCount *int
 	if caps.RadioInventory.Decided() {
@@ -55,15 +59,20 @@ func (d *Daemon) Inspect(ctx context.Context, req api.InspectRequest) (*api.Insp
 	out := &api.InspectResult{
 		MAC: mac, Model: caps.Board.Model, Class: string(caps.Class),
 		Firmware: caps.Board.Release, RadioCount: radioCount,
-		LANPorts: append([]string{}, caps.Ports.LAN...), WANPort: caps.Ports.WAN,
-		SwitchMode:           switchMode(caps),
+		LANDevice: caps.Ports.Bridge,
+		LANPorts:  append([]string{}, caps.Ports.LAN...), WANPort: caps.Ports.WAN,
+		SwitchMode:           mode,
 		FunctionsSupported:   append([]string{}, supported...),
 		FunctionsRecommended: append([]string{}, recommended...),
 		FunctionsUnknown:     unknown, Notes: append([]string(nil), caps.Notes...),
+		CompatibilityReport: report,
 		GatewayEvidence: api.GatewayEvidence{
 			ActiveWANDefaultRoute: evidence.routePointer(),
 			LANDHCPEnabled:        evidence.dhcpPointer(),
 		},
+	}
+	if reportErr != nil {
+		out.Notes = append(out.Notes, "sanitized compatibility report unavailable because the measured evidence was outside its strict safety bounds")
 	}
 	switch out.SwitchMode {
 	case "dsa-conditional":

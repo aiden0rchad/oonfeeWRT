@@ -985,9 +985,17 @@ conveniences:
 - `POST /api/v1/devices/inspect` accepts only the device address and
   administrator ubus credential. It performs a read-only authenticated probe
   and returns model/class/firmware/radios/ports,
+  `lan_device` separately from independently managed `lan_ports`,
   `functions_supported|recommended|unknown`, `switch_mode`, and nullable
   `gateway_evidence.active_wan_default_route|lan_dhcp_enabled`. It never opens
   SSH, bootstraps the controller, installs a package or writes inventory;
+- that response may include `compatibility_report`, a versioned server-built
+  allowlist of bounded board/firmware/radio/port/known-feature and supported
+  function facts. It excludes request data, MAC, free-text notes, runtime
+  radio/PHY and bridge-member identity, network configuration, clients,
+  telemetry and timestamps. Board-declared LAN/WAN labels remain. The browser
+  downloads only this nested DTO; export performs no additional router call,
+  persistence or upload;
 - inspect/adopt resolves a hostname once per workflow and pins the chosen IP
   across HTTP, SSH and verification. Plain HTTP persists that IP; HTTPS may
   retain the name only with the observed certificate identity pin;

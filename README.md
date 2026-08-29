@@ -38,6 +38,9 @@ does not need a dedicated machine and is not installed on the managed routers.
   WLANs, with OpenWrt's rollback timer protecting every Apply.
 - Device adoption, health monitoring, telemetry, logs, RF tools, and explicit
   source-coverage gaps instead of guessed data.
+- A sanitized, versioned compatibility-report download after read-only Inspect,
+  with hardware/capability evidence but no address, MAC, credentials, network
+  configuration, clients, timestamps, or free-text notes.
 - Local owner, administrator, operator, and read-only accounts with session
   management and revocation.
 - Downloadable, redacted diagnostics bundles containing controller evidence and
@@ -116,21 +119,21 @@ cd oonfeewrt
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.1/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.2/deploy/docker-compose.yml
 
 umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
-OONFEE_VERSION=v0.1.1 docker compose up -d
+OONFEE_VERSION=v0.1.2 docker compose up -d
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.1` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.2` for `linux/amd64` or `linux/arm64`.
 
 The `passphrase` file unlocks the controller keyring and is not your owner
 account password. Back it up with the controller state and keep both private.
@@ -229,15 +232,18 @@ passphrases.
 
 ## Current limitations
 
-- Hardware validation covers a Linksys WRT3200ACM and TP-Link Archer C6 v2 on
-  OpenWrt 25.12.5. Three-or-more-AP fan-out, real mesh backhaul, wireless
-  uplink, MT7621, and MT7981/Filogic remain unverified.
+- End-to-end hardware validation covers a Linksys WRT3200ACM and TP-Link Archer
+  C6 v2 on OpenWrt 25.12.5. Read-only inspection is additionally
+  reporter-confirmed on one Cudy M3000 v2/MT7981 Filogic variant; adoption,
+  Apply, VLANs, polling budgets, and other Filogic boards remain unverified.
+  Three-or-more-AP fan-out, real mesh backhaul, wireless uplink, and MT7621
+  also remain unverified.
 - The speed test runs from the controller host or container through Cloudflare,
   not from a router. It uses approximately 15 MiB, is bounded to 30 seconds,
   and can temporarily saturate the WAN. Loaded latency and jitter are not
   measured.
 - Native controller TLS, cloud remote access, and gateway-run speed tests are
-  not included in v0.1.1.
+  not included in v0.1.2.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
 
@@ -262,6 +268,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.2 release notes](RELEASE-NOTES-v0.1.2.md)
 - [v0.1.1 release notes](RELEASE-NOTES-v0.1.1.md)
 - [v0.1.0 release notes](RELEASE-NOTES-v0.1.0.md)
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)

@@ -98,6 +98,22 @@ func vlanPrerequisite(bridge string) string {
 		bridge, bridge, bridge, bridge)
 }
 
+func singleInterfaceVLANLimitation(caps *capability.Registry, device string) string {
+	if caps.State(capability.FeatDSA) == capability.Absent &&
+		caps.State(capability.FeatSwitchPorts) == capability.Present {
+		return fmt.Sprintf("this board presents its LAN as a single interface (%s) "+
+			"rather than switch ports that can be tagged individually, so oonfeeWRT "+
+			"cannot add a tagged VLAN to it. This measured legacy layout uses "+
+			"swconfig, which oonfeeWRT observes but does not manage", device)
+	}
+	return fmt.Sprintf("this board presents its LAN as a single interface (%s) "+
+		"rather than switch ports that can be tagged individually. oonfeeWRT "+
+		"does not yet create tagged VLAN attachments on single-interface LANs, "+
+		"so it leaves this board's existing LAN and VLAN configuration untouched. "+
+		"The layout was read successfully; this is a management limit, not missing "+
+		"hardware", device)
+}
+
 // zoneMember is one network's claim on a firewall zone: the zone name the
 // operator asked for, and the interface section that has to end up inside it.
 //
@@ -181,13 +197,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		return nil, omissions, none
 	case len(ports.LAN) == 0:
 		omissions = append(omissions, Omission{
-			WLAN: n.Name,
-			Reason: fmt.Sprintf("this board presents its LAN as a single "+
-				"interface (%s) rather than switch ports that can be tagged "+
-				"individually, so oonfeeWRT cannot add a tagged VLAN to it. That "+
-				"is what the board itself reports, not something the controller "+
-				"failed to read — on this hardware wired VLANs are configured "+
-				"through swconfig, which oonfeeWRT does not manage", ports.Bridge),
+			WLAN: n.Name, Reason: singleInterfaceVLANLimitation(caps, ports.Bridge),
 		})
 		return nil, omissions, none
 	}

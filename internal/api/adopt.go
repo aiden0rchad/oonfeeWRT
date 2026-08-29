@@ -38,13 +38,17 @@ type InspectRequest struct {
 // InspectResult is the measured evidence used by the function picker. Unknown
 // is explicit so a denied check cannot masquerade as unsupported hardware.
 type InspectResult struct {
-	MAC        string   `json:"mac"`
-	Model      string   `json:"model"`
-	Class      string   `json:"class"`
-	Firmware   string   `json:"firmware"`
-	RadioCount *int     `json:"radio_count"`
-	LANPorts   []string `json:"lan_ports"`
-	WANPort    string   `json:"wan_port,omitempty"`
+	MAC        string `json:"mac"`
+	Model      string `json:"model"`
+	Class      string `json:"class"`
+	Firmware   string `json:"firmware"`
+	RadioCount *int   `json:"radio_count"`
+	// LANDevice is the board-declared LAN device. On a no-switch router this
+	// is the physical LAN interface (for example eth1); on DSA it is normally
+	// br-lan. LANPorts remains the independently addressable switch members.
+	LANDevice string   `json:"lan_device,omitempty"`
+	LANPorts  []string `json:"lan_ports"`
+	WANPort   string   `json:"wan_port,omitempty"`
 	// SwitchMode is dsa-conditional, observe-only, unknown, or none. Even DSA
 	// mode is conditional because the controller will not turn VLAN filtering
 	// on by rewriting the device's existing LAN bridge.
@@ -55,6 +59,79 @@ type InspectResult struct {
 	GatewayEvidence      GatewayEvidence `json:"gateway_evidence"`
 	Unobservable         []string        `json:"unobservable,omitempty"`
 	Notes                []string        `json:"notes,omitempty"`
+	// CompatibilityReport is a separate allowlisted document intended for
+	// sharing. It deliberately excludes the MAC, request endpoint, credentials,
+	// free-text probe notes, and live network configuration.
+	CompatibilityReport *CompatibilityReport `json:"compatibility_report,omitempty"`
+}
+
+// CompatibilityReport is a versioned, share-safe projection of a read-only
+// capability probe. Keep this DTO explicit: InspectResult and Registry both
+// contain fields that must never enter a public hardware report.
+type CompatibilityReport struct {
+	Format            string                 `json:"format"`
+	FormatVersion     int                    `json:"format_version"`
+	ControllerVersion string                 `json:"controller_version"`
+	Evidence          CompatibilityEvidence  `json:"evidence"`
+	Privacy           CompatibilityPrivacy   `json:"privacy"`
+	Hardware          CompatibilityHardware  `json:"hardware"`
+	Features          []CompatibilityFeature `json:"features"`
+	Functions         CompatibilityFunctions `json:"functions"`
+}
+
+type CompatibilityEvidence struct {
+	Source        string `json:"source"`
+	RouterChanges bool   `json:"router_changes"`
+	Persisted     bool   `json:"persisted"`
+}
+
+type CompatibilityPrivacy struct {
+	Sanitized bool     `json:"sanitized"`
+	Excluded  []string `json:"excluded"`
+}
+
+type CompatibilityHardware struct {
+	Board               CompatibilityBoard   `json:"board"`
+	Class               string               `json:"class"`
+	RadioInventoryState string               `json:"radio_inventory_state"`
+	RadioCount          *int                 `json:"radio_count"`
+	Radios              []CompatibilityRadio `json:"radios"`
+	Ports               CompatibilityPorts   `json:"ports"`
+}
+
+type CompatibilityBoard struct {
+	Model      string `json:"model"`
+	BoardName  string `json:"board_name"`
+	System     string `json:"system"`
+	Kernel     string `json:"kernel"`
+	Target     string `json:"target"`
+	Release    string `json:"release"`
+	RootFSType string `json:"rootfs_type"`
+}
+
+type CompatibilityRadio struct {
+	Band           string   `json:"band"`
+	Hardware       string   `json:"hardware"`
+	HWModes        []string `json:"hw_modes"`
+	SurveyState    string   `json:"survey_state"`
+	NoiseStability string   `json:"noise_stability"`
+}
+
+type CompatibilityPorts struct {
+	LANDevice  string   `json:"lan_device,omitempty"`
+	LANPorts   []string `json:"lan_ports"`
+	WANDevice  string   `json:"wan_device,omitempty"`
+	SwitchMode string   `json:"switch_mode"`
+}
+
+type CompatibilityFeature struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+type CompatibilityFunctions struct {
+	Supported []string `json:"supported"`
+	Unknown   []string `json:"unknown"`
 }
 
 // GatewayEvidence separates a measured false from a refused read. Nil means

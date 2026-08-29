@@ -489,10 +489,16 @@ not alter `/etc/shadow` or set the password itself.
 
 Before Adopt, **Inspect capabilities** reuses the address and administrator
 ubus credential for a read-only probe. Its card shows model/firmware/radios,
-observed LAN/WAN ports, nullable active-WAN-default-route and LAN-DHCP evidence,
+the board-declared LAN device separately from independently addressable switch
+ports, the WAN device, nullable active-WAN-default-route and LAN-DHCP evidence,
 switch mode, recommendations and inspection limits. Say explicitly that it
 creates no router account or configuration. A failed inspection may fall back
 to direct adoption, whose scoped-login probe still runs after bootstrap.
+After a successful inspection, offer **Export sanitized compatibility report**.
+Download only the server-produced versioned allowlist; never serialize the raw
+inspection result or form state. Name the excluded address, MAC, credentials,
+network configuration, clients, timestamps and free-text notes beside the
+button. Older responses without the report show no export action.
 
 The function picker uses independent checkboxes for **Gateway**, **Access
 Point** and **Switch** and requires at least one. Mark a function `recommended`

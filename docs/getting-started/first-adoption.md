@@ -83,6 +83,12 @@ Inspection uses authenticated, read-only ubus calls. It creates no inventory row
 
 An **Unknown** result means the credential, ACL, rpcd module, or driver did not supply enough evidence. It does not mean the feature is absent.
 
+To share hardware support evidence, select **Export sanitized compatibility
+report**. The local JSON download contains only allowlisted hardware, firmware,
+port/radio, feature-state, and supported-function facts. It excludes the router
+address, MAC, credentials, network configuration, clients, timestamps, and
+free-text notes, makes no extra router call, and is not uploaded automatically.
+
 ## 4. Select device functions
 
 Select at least one function:
