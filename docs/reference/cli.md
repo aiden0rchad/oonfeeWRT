@@ -1,11 +1,11 @@
 ---
 title: CLI and environment reference
-description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.1.
+description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.2.
 ---
 
 # CLI and environment reference
 
-This reference applies to the **v0.1.1** release executables
+This reference applies to the **v0.1.2** release executables
 `oonfeewrtd` and `oonfeewrt-recoverycheck`.
 
 ## `oonfeewrtd`
@@ -24,7 +24,7 @@ oonfeewrtd [flags]
 | `-log-level <level>` | `info` | One of `debug`, `info`, `warn`, `error` |
 | `-healthcheck` | false | Probe the configured listener's `/healthz` and exit without opening controller data |
 | `-version` | false | Print the embedded version and exit without opening controller data |
-| `-h`, `-help` | — | Print standard flag help; v0.1.1 then exits non-zero (a known CLI quirk) |
+| `-h`, `-help` | — | Print standard flag help; v0.1.2 then exits non-zero (a known CLI quirk) |
 
 Flags are parsed after environment configuration, so an explicit flag overrides
 a valid corresponding environment value. Environment loading/validation happens
@@ -78,10 +78,10 @@ starting with an empty keyring.
 oonfeewrtd -version
 ```
 
-For release v0.1.1 the output must be:
+For release v0.1.2 the output must be:
 
 ```text
-v0.1.1
+v0.1.2
 ```
 
 ### Interactive local start

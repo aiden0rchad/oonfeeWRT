@@ -41,7 +41,7 @@ capability evidence determine what each Preview can safely render.
 A VLAN ID labels traffic; it does not configure every switch between the
 controller and the client. oonfeeWRT will not silently convert a bridge that is
 not already VLAN-aware. Legacy swconfig port writes remain observe-only in
-v0.1.1 because port topology and safe mutation are hardware-specific.
+v0.1.2 because port topology and safe mutation are hardware-specific.
 
 ### DHCP
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { CompatibilityReport } from '../lib/api'
 
 /**
  * Screen-level tests.
@@ -436,7 +437,7 @@ describe('Adopt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('Linksys WRT3200ACM')).toBeTruthy()
-    expect(screen.getByText('4 observed: lan1, lan2, lan3, lan4')).toBeTruthy()
+    expect(screen.getByText('4 switch ports: lan1, lan2, lan3, lan4')).toBeTruthy()
     expect(screen.getAllByText(/Gateway recommendation evidence/).length).toBe(2)
     expect(screen.getByText(/DSA detected.*existing VLAN-aware LAN bridge/)).toBeTruthy()
     for (const label of ['Gateway', 'Access point', 'Switch']) {
@@ -517,6 +518,7 @@ describe('Adopt', () => {
         class: 'C',
         firmware: 'OpenWrt',
         radio_count: 1,
+        lan_device: 'eth0.1',
         lan_ports: [],
         wan_port: '',
         switch_mode: 'observe-only',
@@ -539,6 +541,7 @@ describe('Adopt', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
     expect(await screen.findByText('Router B')).toBeTruthy()
+    expect(screen.getByText('LAN device: eth0.1 (legacy switch ports observed separately)')).toBeTruthy()
     await act(async () =>
       resolveFirst({
         mac: 'aa:aa:aa:aa:aa:aa',
@@ -665,10 +668,162 @@ describe('Adopt', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
 
-    expect(await screen.findByText('2 observed: lan1, lan2')).toBeTruthy()
+    expect(await screen.findByText('2 switch ports: lan1, lan2')).toBeTruthy()
     expect(screen.getByText(/Observe only.*no per-port or managed-VLAN configuration/)).toBeTruthy()
     expect(screen.getByText(/Unknown.*inspection could not determine this/)).toBeTruthy()
     expect(screen.getByText('Not enabled')).toBeTruthy()
+  })
+
+  it('reports a direct LAN device without inventing switch ports or radios', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    api.inspectDevice.mockResolvedValue({
+      mac: 'aa:bb:cc:dd:ee:19',
+      model: 'Cudy M3000 v2 with Motorcomm YT8821',
+      class: 'B',
+      firmware: 'OpenWrt 25.12.5',
+      radio_count: 2,
+      lan_device: 'eth1',
+      lan_ports: [],
+      wan_port: 'eth0',
+      switch_mode: 'none',
+      functions_supported: ['gateway', 'ap'],
+      functions_recommended: ['gateway', 'ap'],
+      gateway_evidence: {
+        active_wan_default_route: true,
+        lan_dhcp_enabled: false,
+      },
+    })
+
+    render(<Adopt onAdopted={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Address'), {
+      target: { value: '192.0.2.19' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+
+    expect(await screen.findByText('Cudy M3000 v2 with Motorcomm YT8821')).toBeTruthy()
+    expect(screen.getByText('Single interface: eth1 (no separate switch)')).toBeTruthy()
+    expect(screen.getByText('eth0')).toBeTruthy()
+    expect(screen.getByText('No switch capability observed')).toBeTruthy()
+    const radioRow = screen.getByText('Radios').parentElement
+    expect(radioRow && within(radioRow).getByText('2')).toBeTruthy()
+    expect(screen.queryByText('None observed')).toBeNull()
+    expect((screen.getByRole('checkbox', { name: /^Switch\b/ }) as HTMLInputElement).checked).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Export sanitized compatibility report' })).toBeNull()
+    expect(screen.getByText(/compatibility report is unavailable/i)).toBeTruthy()
+  })
+
+  it('downloads only the server-produced sanitized compatibility report', async () => {
+    const report: CompatibilityReport = {
+      format: 'oonfeewrt-compatibility-report',
+      format_version: 1,
+      controller_version: 'v0.1.2-test',
+      evidence: {
+        source: 'read-only-inspection',
+        router_changes: false,
+        persisted: false,
+      },
+      privacy: {
+        sanitized: true,
+        excluded: [
+          'credentials and secrets',
+          'router identifiers and site identity',
+          'free-text probe notes',
+          'live telemetry and timestamps',
+          'network configuration',
+        ],
+      },
+      hardware: {
+        board: {
+          model: 'Cudy M3000 v2 with Motorcomm YT8821',
+          board_name: 'cudy,m3000-v2-yt8821',
+          system: 'MediaTek MT7981',
+          kernel: '6.12.63',
+          target: 'mediatek/filogic',
+          release: 'OpenWrt 25.12.5',
+          rootfs_type: 'squashfs',
+        },
+        class: 'B',
+        radio_inventory_state: 'present',
+        radio_count: 2,
+        radios: [],
+        ports: {
+          lan_device: 'eth1',
+          lan_ports: [],
+          wan_device: 'eth0',
+          switch_mode: 'none',
+        },
+      },
+      features: [{ name: 'dsa', state: 'absent' }],
+      functions: { supported: ['ap', 'gateway'], unknown: [] },
+    }
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    api.inspectDevice.mockResolvedValue({
+      mac: 'aa:bb:cc:dd:ee:19',
+      model: report.hardware.board.model,
+      class: 'B',
+      firmware: report.hardware.board.release,
+      radio_count: 2,
+      lan_device: 'eth1',
+      lan_ports: [],
+      wan_port: 'eth0',
+      switch_mode: 'none',
+      functions_supported: ['gateway', 'ap'],
+      functions_recommended: ['gateway', 'ap'],
+      gateway_evidence: {
+        active_wan_default_route: true,
+        lan_dhcp_enabled: false,
+      },
+      notes: ['OMIT-RAW-NOTE'],
+      compatibility_report: report,
+    })
+
+    const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:compatibility-report')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    let filename = ''
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      filename = this.download
+    })
+    try {
+      render(<Adopt onAdopted={vi.fn()} />)
+      expect(screen.queryByRole('button', { name: 'Export sanitized compatibility report' })).toBeNull()
+      fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.19' } })
+      fireEvent.change(screen.getByLabelText('Device password (for ubus)'), {
+        target: { value: 'FORM-CREDENTIAL-SENTINEL' },
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Export sanitized compatibility report' }))
+
+      expect(filename).toBe('oonfeewrt-compatibility-report.json')
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      const downloaded = createObjectURL.mock.calls[0][0]
+      expect(downloaded).toBeInstanceOf(Blob)
+      expect(downloaded.type).toBe('application/json;charset=utf-8')
+      await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith('blob:compatibility-report'))
+      const exported = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onerror = () => reject(reader.error)
+        reader.onload = () => resolve(String(reader.result))
+        reader.readAsText(downloaded)
+      })
+      expect(JSON.parse(exported)).toEqual(report)
+      for (const forbidden of [
+        '192.0.2.19', 'aa:bb:cc:dd:ee:19', 'FORM-CREDENTIAL-SENTINEL', 'OMIT-RAW-NOTE',
+      ]) {
+        expect(exported).not.toContain(forbidden)
+      }
+    } finally {
+      click.mockRestore()
+      if (createDescriptor) Object.defineProperty(URL, 'createObjectURL', createDescriptor)
+      else delete (URL as { createObjectURL?: unknown }).createObjectURL
+      if (revokeDescriptor) Object.defineProperty(URL, 'revokeObjectURL', revokeDescriptor)
+      else delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL
+    }
   })
 
   it('requires at least one independently selected device function', async () => {

@@ -1,6 +1,6 @@
 # Put TLS in front of the controller
 
-oonfeeWRT v0.1.1 serves HTTP and WebSocket traffic but has no native TLS listener. Keep it on loopback and let a trusted reverse proxy terminate HTTPS.
+oonfeeWRT v0.1.2 serves HTTP and WebSocket traffic but has no native TLS listener. Keep it on loopback and let a trusted reverse proxy terminate HTTPS.
 
 > **Outcome:** Browsers connect to a trusted `https://` address while the controller remains reachable only as `127.0.0.1:8080` on its host.
 

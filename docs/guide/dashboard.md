@@ -92,12 +92,12 @@ controller's public IP and test requests are visible to Cloudflare.
 1. Open **Dashboard**.
 2. Open the impact and consent details and review the exact endpoint, limits,
    controller-host vantage point, and data-use disclosure.
-3. Select **Run speed test**. In v0.1.1 this action is the explicit,
+3. Select **Run speed test**. In v0.1.2 this action is the explicit,
    plan-bound acknowledgement and starts the test immediately.
 4. Leave the Dashboard open to watch progress.
 
 The result can include download, upload, idle latency, and idle jitter. Loaded
-latency and loaded jitter are not measured in v0.1.1. The controller retains
+latency and loaded jitter are not measured in v0.1.2. The controller retains
 the newest three terminal attempts, including failed or cancelled attempts, so
 a failure does not disappear from history.
 

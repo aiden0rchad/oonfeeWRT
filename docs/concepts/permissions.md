@@ -5,7 +5,7 @@ description: Controller roles, step-up authentication, sessions, and the separat
 
 # Permissions and sessions
 
-oonfeeWRT v0.1.1 has local controller accounts with four enforced roles. These
+oonfeeWRT v0.1.2 has local controller accounts with four enforced roles. These
 are not OpenWrt accounts: controller authorization and router access are
 separate boundaries.
 
@@ -32,6 +32,7 @@ general event stream is readable by lower roles.
 | Run controller-host speed test or cancel one | No | Yes | Yes | Yes |
 | Run an acknowledged RF scan or on-air verification | No | Yes | Yes | Yes |
 | Discover, inspect, adopt, re-probe, rename, or un-adopt a device | No | No | Yes | Yes |
+| Export a sanitized compatibility report after Inspect | No | No | Yes | Yes |
 | Edit WLANs, networks, zones, policies, groups, meshes, uplinks, or overrides | No | No | Yes | Yes |
 | Preview and Apply configuration | No | No | Yes | Yes |
 | Generate/download diagnostics | No | No | Yes | Yes |
@@ -72,7 +73,7 @@ letting old authorization continue.
 Sessions exist only in controller memory. A controller restart signs everyone
 out, including a restart performed during restore.
 
-| Control | v0.1.1 behavior |
+| Control | v0.1.2 behavior |
 |---|---|
 | Idle expiry | 12 hours after last use |
 | Absolute expiry | 7 days after creation, even when active |
@@ -134,7 +135,7 @@ See [Architecture](./architecture.md) and [Safety model](./safety.md).
 
 ## Deployment implications
 
-The v0.1.1 listener is plain HTTP. Cookies are marked `Secure` only when the
+The v0.1.2 listener is plain HTTP. Cookies are marked `Secure` only when the
 request is TLS or the reverse proxy supplies `X-Forwarded-Proto: https`.
 Therefore:
 

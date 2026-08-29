@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../lib/api'
 import type {
   AdoptResult,
+  CompatibilityReport,
   DeviceFunction,
   Discovered,
   InspectResult,
@@ -614,10 +615,8 @@ function Inspection({ result }: { result: InspectResult }) {
       <Prop label="Radios">
         {result.radio_count ?? 'Unknown — radio inventory was not observable'}
       </Prop>
-      <Prop label="LAN ports observed">
-        {result.lan_ports.length > 0
-          ? `${result.lan_ports.length} observed: ${result.lan_ports.join(', ')}`
-          : 'None observed'}
+      <Prop label="LAN layout observed">
+        {lanLayoutText(result)}
       </Prop>
       <Prop label="WAN port observed">{result.wan_port || 'None'}</Prop>
       <Prop label="Active WAN default route">
@@ -657,14 +656,71 @@ function Inspection({ result }: { result: InspectResult }) {
           </ul>
         </details>
       )}
+      {result.compatibility_report ? (
+        <div style={{ marginTop: 4 }}>
+          <Button
+            type="button"
+            onClick={() => downloadCompatibilityReport(result.compatibility_report!)}
+          >
+            Export sanitized compatibility report
+          </Button>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5 }}>
+            Downloads hardware, firmware, port, radio, and capability evidence.
+            Excludes the address, MAC, credentials, network configuration, clients,
+            timestamps, and free-text probe notes.
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          A sanitized compatibility report is unavailable for this inspection.
+        </div>
+      )}
     </div>
   )
+}
+
+function downloadCompatibilityReport(report: CompatibilityReport) {
+  const blob = new Blob([compatibilityReportJSON(report)], {
+    type: 'application/json;charset=utf-8',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'oonfeewrt-compatibility-report.json'
+  document.body.appendChild(link)
+  try {
+    link.click()
+  } finally {
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+}
+
+function compatibilityReportJSON(report: CompatibilityReport): string {
+  return `${JSON.stringify(report, null, 2)}\n`
 }
 
 function functionNames(functions: DeviceFunction[]): string {
   return functions
     .map((value) => FUNCTIONS.find((item) => item.value === value)?.label ?? value)
     .join(', ')
+}
+
+function lanLayoutText(result: InspectResult): string {
+  if (result.lan_ports.length > 0) {
+    return `${result.lan_ports.length} switch ports: ${result.lan_ports.join(', ')}`
+  }
+  if (!result.lan_device) return 'Unknown — board did not report a LAN layout'
+  switch (result.switch_mode) {
+    case 'observe-only':
+      return `LAN device: ${result.lan_device} (legacy switch ports observed separately)`
+    case 'dsa-conditional':
+      return `LAN bridge: ${result.lan_device} (named switch ports unavailable)`
+    case 'unknown':
+      return `LAN device: ${result.lan_device} (switch layout unknown)`
+    default:
+      return `Single interface: ${result.lan_device} (no separate switch)`
+  }
 }
 
 function evidenceText(value: boolean | null, yes: string, no: string): string {

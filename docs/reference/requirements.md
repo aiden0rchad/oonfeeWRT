@@ -1,12 +1,12 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.1.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.2.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.1**.
+v0.1.2**.
 
 ## Controller host
 
@@ -111,7 +111,7 @@ requirement.
 
 ## Browser-to-controller security
 
-v0.1.1 has no native TLS listener. Choose one of these deployments:
+v0.1.2 has no native TLS listener. Choose one of these deployments:
 
 1. bind to `127.0.0.1:8080` and use it only from the host;
 2. keep the controller on loopback and publish it through a trusted TLS reverse
@@ -147,15 +147,15 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.1:
+For v0.1.2:
 
-- download release archives and `SHA256SUMS` from the v0.1.1 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.2 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.1`. Stable aliases
+The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.2`. Stable aliases
 exist, but deployments should pin the exact version or digest.
 
 ## Source-build requirements
@@ -180,12 +180,16 @@ The stable release's published hardware record covers:
 - Linksys WRT3200ACM; and
 - TP-Link Archer C6 v2;
 
-both on OpenWrt 25.12.5. Three-or-more-AP fan-out, real mesh backhaul, wireless
-uplink, MT7621, and MT7981/Filogic remain unverified for the release. The Archer
-C6 v2 also passed the full 60-minute class-C polling/resource budget harness.
-The record was produced through the pre-stable/RC workflow that underlies
-v0.1.1; the patch release did not rerun the complete hardware procedure, and
-its router-operation code was unchanged.
+both on OpenWrt 25.12.5. The Archer C6 v2 also passed the full 60-minute class-C
+polling/resource budget harness. v0.1.2 adds external, reporter-confirmed
+read-only inspection evidence for a Cudy M3000 v2 with Motorcomm YT8821 on
+OpenWrt 25.12.5 (`mediatek/filogic`): two physical radios, direct LAN `eth1`,
+WAN `eth0`, and no independent switch ports.
+
+That Cudy evidence does not cover adoption/bootstrap, Apply/rollback, WLAN and
+client operation, tagged VLAN management, polling/resource budgets, topology,
+RF scans, speed tests, un-adoption, or other Filogic boards. Three-or-more-AP
+fan-out, real mesh backhaul, wireless uplink, and MT7621 also remain unverified.
 
 This is evidence, not an allow-list. Another OpenWrt device may work, partially
 work, or expose driver-specific gaps. Adopt one non-critical device first and
@@ -193,7 +197,7 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.1` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.2` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.

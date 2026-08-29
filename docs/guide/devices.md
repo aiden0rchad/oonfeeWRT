@@ -60,6 +60,26 @@ Unknown is not the same as absent. If the controller could not read a source,
 the inspection should say so. Fix the source or accept the limitation; do not
 convert the gap into a capability claim.
 
+### Export a sanitized compatibility report
+
+After a successful inspection, select **Export sanitized compatibility
+report** to download `oonfeewrt-compatibility-report.json`. The versioned JSON
+contains bounded board, firmware, radio, port, known feature-state, and
+supported-function evidence. It is useful when reporting whether a new OpenWrt
+target is recognized correctly.
+
+The export is a server-built allowlist, not a copy of the inspection response.
+It excludes the management address, MAC, credentials, user-assigned device and
+site identity, network configuration, clients, live telemetry, timestamps,
+runtime radio/PHY and bridge-member identifiers, and free-text probe notes.
+Board-declared LAN/WAN labels remain because they are compatibility evidence.
+Export makes no additional router call, writes no controller state, and
+uploads nothing.
+
+If the button is absent, the server is older or the measured evidence exceeded
+the report's strict safety bounds. Do not substitute a screenshot or raw API
+response when it would expose identifiers.
+
 ::: danger Identity pins begin at adoption
 Read-only inspection uses ubus and does not open SSH. Adoption records the SSH
 host key and, for HTTPS management, the rpcd certificate fingerprint. Later
@@ -210,7 +230,7 @@ from the controller.
 |---|---|---|
 | Scan finds no device | Bridged-container subnet visibility, routed subnet, subnet size, or controller reachability | Add the router by hostname or IPv4 address; verify the controller can route to its management endpoint |
 | Inspection cannot connect | Address, administrator password, selected HTTP/HTTPS protocol, `rpcd`, `uhttpd` ubus handler, or firewall | Verify the ubus management endpoint from the controller host; SSH is not used by inspection |
-| Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.1 |
+| Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.2 |
 | Host key or certificate changed | Factory reset, firmware reinstall, address reuse, interception | Verify identity out of band before force-un-adopting and adopting the device again |
 | Metrics say unavailable | Source not readable, driver lacks metric, ACL gap, or no completed poll | Read the source explanation; reprobe or refresh ACL only when it names a repairable cause |
 | Device flips offline/online | Slow polls, unstable transport, adaptive backoff, overloaded router | Review poll duration, overhead, controller logs, and network path before shortening intervals |

@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.1** codebase. The repository's
+This page orients contributors to the **v0.1.2** codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -253,7 +253,7 @@ verifies public aliases, and finally publishes the GitHub release.
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.1
+make release-check RELEASE_VERSION=v0.1.2
 ```
 
 only from the exact intended clean release tree. A local build from another

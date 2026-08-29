@@ -92,12 +92,15 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
 
 ## Current limits to keep in mind
 
-- The stable release's published physical record covers a Linksys WRT3200ACM and TP-Link Archer C6 v2 on OpenWrt 25.12.5. That record came from the pre-stable/RC workflow underlying v0.1.1; the patch release did not rerun the complete procedure. Other targets may work but do not have the same published evidence.
+- End-to-end physical evidence covers a Linksys WRT3200ACM and TP-Link Archer
+  C6 v2 on OpenWrt 25.12.5. v0.1.2 also has reporter-confirmed read-only Inspect
+  evidence for one Cudy M3000 v2/Filogic variant, but not adoption, Apply, VLAN,
+  resource-budget, or broader Filogic validation.
 - Only one managed Gateway is supported.
 - Docker bridge mode cannot perform layer-2 discovery; add the router by address.
 - The controller has no native TLS listener.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
-- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.1.
+- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.2.
 
 ## Next steps
 

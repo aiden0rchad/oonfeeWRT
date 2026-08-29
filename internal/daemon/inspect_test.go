@@ -113,6 +113,30 @@ func TestSwitchModeDoesNotPromiseLegacyVLANControl(t *testing.T) {
 	}
 }
 
+func TestDirectLANDeviceDoesNotInventSwitchSupport(t *testing.T) {
+	caps := capability.NewRegistry()
+	caps.Ports = capability.Ports{Bridge: "eth1", WAN: "eth0"}
+	caps.Radios = []capability.Radio{{Device: "radio0"}, {Device: "radio1"}}
+	caps.Set(capability.FeatSurvey, capability.Present)
+	caps.Set(capability.FeatDSA, capability.Absent)
+	caps.Set(capability.FeatSwitchPorts, capability.Absent)
+
+	supported, recommended, unknown := assessFunctions(caps, gatewayEvidence{
+		routeKnown: true, activeDefault: true, dhcpKnown: true,
+	})
+	for _, got := range [][]string{supported, recommended, unknown} {
+		if containsString(got, "switch") {
+			t.Fatalf("direct LAN device invented Switch support: supported=%v recommended=%v unknown=%v",
+				supported, recommended, unknown)
+		}
+	}
+	if !containsString(supported, "gateway") || !containsString(supported, "ap") ||
+		switchMode(caps) != "none" {
+		t.Fatalf("direct-LAN gateway/AP assessment is wrong: supported=%v mode=%q",
+			supported, switchMode(caps))
+	}
+}
+
 func containsString(in []string, want string) bool {
 	for _, got := range in {
 		if got == want {
@@ -140,6 +164,9 @@ func TestInspectProbesWithoutBootstrappingOrWritingInventory(t *testing.T) {
 	if res.MAC == "" || res.Model == "" || res.RadioCount == nil || *res.RadioCount != 2 {
 		t.Fatalf("inspection returned incomplete measured facts: %+v", res)
 	}
+	if res.LANDevice != "br-lan" || len(res.LANPorts) != 4 || res.WANPort != "wan" {
+		t.Fatalf("inspection lost the board's wired layout: %+v", res)
+	}
 	for _, want := range []string{"gateway", "ap", "switch"} {
 		if !containsString(res.FunctionsRecommended, want) {
 			t.Errorf("mock WRT recommendation %v omits %q", res.FunctionsRecommended, want)
@@ -147,6 +174,11 @@ func TestInspectProbesWithoutBootstrappingOrWritingInventory(t *testing.T) {
 	}
 	if res.SwitchMode != "dsa-conditional" {
 		t.Errorf("switch mode=%q, want dsa-conditional", res.SwitchMode)
+	}
+	if res.CompatibilityReport == nil || res.CompatibilityReport.FormatVersion != 1 ||
+		res.CompatibilityReport.Evidence.Source != "read-only-inspection" ||
+		res.CompatibilityReport.Evidence.RouterChanges || res.CompatibilityReport.Evidence.Persisted {
+		t.Fatalf("inspection did not return a safe compatibility report: %+v", res.CompatibilityReport)
 	}
 	devices, err := d.Store.Devices(ctx)
 	if err != nil || len(devices) != 0 {
@@ -168,6 +200,64 @@ func TestInspectProbesWithoutBootstrappingOrWritingInventory(t *testing.T) {
 	}
 	if len(written.Paths) != 0 {
 		t.Fatalf("inspection wrote device files: %v", written.Paths)
+	}
+}
+
+func TestInspectPreservesCudyM3000V2DirectLANShape(t *testing.T) {
+	ctx := context.Background()
+	addr := startMock(t)
+	c := ubus.New(ubus.Options{Host: addr})
+	defer c.Close()
+	if err := c.Login(ctx, "root", "good"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Call(ctx, "__test", "set_board", map[string]any{
+		"board": map[string]any{
+			"kernel": "6.12.63", "hostname": "cudy-m3000",
+			"system": "ARMv8 Processor rev 4", "model": "Cudy M3000 v2",
+			"board_name": "cudy,m3000-v2-yt8821", "rootfs_type": "squashfs",
+			"release": map[string]any{
+				"distribution": "OpenWrt", "version": "25.12.5", "revision": "r-test",
+				"target": "mediatek/filogic", "description": "OpenWrt 25.12.5",
+			},
+		},
+		"network": map[string]any{
+			"lan": map[string]any{"device": "eth1"},
+			"wan": map[string]any{"device": "eth0"},
+		},
+		"network_devices": map[string]any{
+			"eth0":  map[string]any{"devtype": "ethernet"},
+			"eth1":  map[string]any{"devtype": "ethernet"},
+			"wlan0": map[string]any{"devtype": "wlan"},
+			"wlan1": map[string]any{"devtype": "wlan"},
+		},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := Open(ctx, testConfig(t, "inspect-cudy-m3000"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	res, err := d.Inspect(ctx, api.InspectRequest{
+		Host: addr, Username: "root", Password: "good",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Model != "Cudy M3000 v2" || res.Class != "B" || res.RadioCount == nil || *res.RadioCount != 2 ||
+		res.LANDevice != "eth1" || len(res.LANPorts) != 0 || res.WANPort != "eth0" ||
+		res.SwitchMode != "none" || containsString(res.FunctionsSupported, "switch") ||
+		containsString(res.FunctionsRecommended, "switch") {
+		t.Fatalf("Cudy inspection shape was not preserved: %+v", res)
+	}
+	report := res.CompatibilityReport
+	if report == nil || report.Hardware.Board.Target != "mediatek/filogic" ||
+		report.Hardware.Class != "B" || report.Hardware.Ports.LANDevice != "eth1" ||
+		report.Hardware.Ports.WANDevice != "eth0" || len(report.Hardware.Ports.LANPorts) != 0 ||
+		report.Hardware.Ports.SwitchMode != "none" || containsString(report.Functions.Supported, "switch") {
+		t.Fatalf("Cudy compatibility report was not preserved: %+v", report)
 	}
 }
 
