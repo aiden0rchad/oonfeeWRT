@@ -72,10 +72,12 @@ Existing human-managed UCI sections remain foreign and read-only. A conflict blo
 3. Create the first owner account.
 4. In **Adopt a device**, enter the router address and existing administrator login.
 5. Run **Inspect capabilities**. This is a read-only ubus operation.
-6. Review and select the device's Gateway, AP, and/or Switch functions.
-7. Review and acknowledge the controller access payload, then Adopt.
-8. Confirm that the device is online and review unavailable capability sources.
-9. Make desired-state changes only when ready. **Preview** first, read every warning, then **Apply**.
+6. Optionally download the sanitized compatibility report if you need to share
+   bounded hardware-support evidence.
+7. Review and select the device's Gateway, AP, and/or Switch functions.
+8. Review and acknowledge the controller access payload, then Adopt.
+9. Confirm that the device is online and review unavailable capability sources.
+10. Make desired-state changes only when ready. **Preview** first, read every warning, then **Apply**.
 
 ## What the interface covers
 
@@ -95,9 +97,16 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
 - End-to-end physical evidence covers a Linksys WRT3200ACM and TP-Link Archer
   C6 v2 on OpenWrt 25.12.5. v0.1.3 also has reporter-confirmed read-only Inspect
   evidence for one Cudy M3000 v2/Filogic variant, but not adoption, Apply, VLAN,
-  resource-budget, or broader Filogic validation.
+  WLAN/client operation, resource budgets, topology, RF scans, speed tests,
+  un-adoption, or broader Filogic validation.
 - Only one managed Gateway is supported.
-- Docker bridge mode cannot perform layer-2 discovery; add the router by address.
+- Internet-uplink evidence models one effective main-table IPv4 default route.
+  Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
+  `mwan3`, manual WAN selection, and bond-member monitoring are not modeled.
+  Collection runs on the slower network/topology cycle, not as a rapid
+  failover monitor.
+- The discovery scan probes TCP `/ubus` on eligible interface subnets; it does
+  not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
 - Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.3.

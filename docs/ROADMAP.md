@@ -10,6 +10,15 @@ UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
 shape of Phases 4 and 6 below, but does **not** justify skipping the safety and
 site-model work ahead of them.
 
+**Current patch roll-up (v0.1.3):** v0.1.2 shipped the bounded, sanitized,
+browser-local compatibility report on successful read-only Inspect and corrected
+physical-radio/direct-Ethernet inspection for the externally reported Cudy
+M3000 v2 variant. v0.1.3 replaced WAN interface-name heuristics with a
+read-only installed-route + active-netifd proof, including logical PPPoE `wan`
+to runtime counter device `pppoe-wan`. Equal-best defaults, multipath, custom
+policy routing, `mwan3`, manual selection, per-uplink health and bond-member
+attribution remain explicit gaps. Neither patch broadens router writes.
+
 ---
 
 ## Phase 0 — Transport & safety (the foundation)
@@ -70,7 +79,9 @@ user-visible.
   session → pin cert/host key → discard the original credential. Inspection
   performs no SSH/bootstrap/store write. A second managed Gateway is refused
   before device contact; AP-only is valid in an empty fleet with an external
-  gateway.
+  gateway. A successful Inspect may also return the server-built compatibility
+  report; downloading it adds no router request, persistence or upload, and an
+  unsafe/oversized report is omitted without failing Inspect.
 - **Un-adoption**, in the same sprint: remove user + ACL, optionally revert every
   UCI section we own. The ownership ledger has an explicit known/unreadable
   signal and both destructive actions fail closed until it is known. If a
@@ -151,7 +162,10 @@ The first thing anyone sees.
   controller could not route to this network”; the latter names the affected
   CIDR and tells the operator to check the controller host's routes/interfaces.
 - Telemetry loops (live/standard/slow) + TSDB rollup ladder.
-- **Screens:** Dashboard (WAN throughput, fixed-target ICMP latency/loss/reachability, device counts),
+- **Screens:** Dashboard (WAN throughput from the uniquely proved installed
+  main-table route/netifd runtime device only when its exact RX/TX series key
+  exists, fixed-target ICMP
+  latency/loss/reachability, device counts),
   Devices list + device slide-over, Client Devices grid with the full column set.
 - The shared table component: virtualization, column customization, filter rail
   with live counts.

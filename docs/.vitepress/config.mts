@@ -51,7 +51,7 @@ export default defineConfig({
   lang: 'en-US',
   title: 'oonfeeWRT',
   titleTemplate: ':title | oonfeeWRT Docs',
-  description: 'Install, configure, operate, and understand the oonfeeWRT OpenWrt controller.',
+  description: 'Documentation for oonfeeWRT v0.1.3: install, configure, operate, and understand the OpenWrt controller.',
   base: '/oonfeeWRT/',
   cleanUrls: true,
   lastUpdated: true,
@@ -61,8 +61,8 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#f5f6f8', media: '(prefers-color-scheme: light)' }],
     ['meta', { name: 'theme-color', content: '#0f1114', media: '(prefers-color-scheme: dark)' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'oonfeeWRT Documentation' }],
-    ['meta', { property: 'og:description', content: 'Self-hosted, UniFi-inspired management for stock OpenWrt.' }],
+    ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.3 Documentation' }],
+    ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with safe configuration, compatibility reporting, and evidence-backed WAN telemetry.' }],
     ['meta', { property: 'og:image', content: 'https://aiden0rchad.github.io/oonfeeWRT/social-card.svg' }],
   ],
   markdown: {
@@ -81,10 +81,10 @@ export default defineConfig({
       { text: 'Operations', link: '/operations/accounts' },
       { text: 'Reference', link: '/reference/requirements' },
       {
-        text: 'v0.1.1',
+        text: 'v0.1.3',
         items: [
           { text: 'Release notes', link: '/reference/releases' },
-          { text: 'Download', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.1' },
+          { text: 'Download v0.1.3', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.3' },
         ],
       },
     ],

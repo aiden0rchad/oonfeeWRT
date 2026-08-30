@@ -83,6 +83,12 @@ Review:
 
 The WAN probe runs only through the managed Gateway, sends exactly three ICMP packets to `1.1.1.1`, and runs at most once per minute. It is a fixed reachability observation, not DNS/HTTP validation or a claim of ISP uptime.
 
+The displayed Gateway path is a separate, slower observation. v0.1.3 pairs the
+installed main-table IPv4 route with OpenWrt logical-interface evidence about
+every 15 minutes. It supports ordinary DHCP, static, and PPPoE defaults, but is
+not a rapid failover monitor and does not model policy routing, `mwan3`,
+manual WAN selection, per-uplink health, or bond members.
+
 ### Devices
 
 For each device, review:
@@ -113,6 +119,12 @@ Shipped defaults:
 | Load threshold | 5.0 | High one-minute load widens polling. |
 
 Polls are staggered across devices, batched where supported, and completely quiesced during that device's Apply/confirm cycle.
+
+Network and topology discovery, including the effective WAN route, uses a
+15-minute cadence even while the device detail view is focused. Missing,
+malformed, ambiguous, or inconsistent route/interface evidence leaves the
+current source unavailable and preserves the last proved network cache; it
+does not guess a new uplink.
 
 The per-device poll-interval control can make baseline polling slower, not faster than the controller default. Use it for constrained or remote hardware. After saving, the daemon re-registers the device so the new interval takes effect without restart.
 
@@ -222,8 +234,10 @@ Periodically:
 2. Keep its export passphrase separately and run a disposable restore preview.
 3. Review owner accounts and active sessions.
 4. Review device firmware/capability freshness and explicit ACL-refresh notices.
-5. Check host disk/RAM and the controller data-volume backup.
-6. Read release notes before changing the daemon or image.
+5. On PPPoE or multi-uplink sites, compare the Dashboard and topology uplink
+   with the installed main-table route after planned routing changes.
+6. Check host disk/RAM and the controller data-volume backup.
+7. Read release notes before changing the daemon or image.
 
 ## Troubleshooting and recovery
 
@@ -242,6 +256,13 @@ Verify management routing and the device's uhttpd/rpcd service. Review certifica
 ### Data is missing or stale
 
 Read the displayed source gap. Do not interpret `Unavailable` as zero. A stored capability may need explicit reprobe after firmware changes; ACL widening is an explicit reviewed refresh, never a polling side effect.
+
+For missing WAN path or traffic data, distinguish the one-minute ICMP probe
+from the 15-minute route/interface observation. Equal-metric distinct
+defaults, ECMP/multipath, policy routing, or a kernel device that cannot map to
+one active logical interface are intentional evidence gaps. After correcting
+a normal DHCP/static/PPPoE route, wait for the next network/topology cycle.
+Upgrading from v0.1.2 does not itself require ACL refresh or re-adoption.
 
 ### Apply status is unknown after reload
 

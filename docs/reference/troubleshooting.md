@@ -123,13 +123,23 @@ state rather than repeatedly attempting credentials.
 
 ## Discovery finds no routers
 
-The default container bridge does not carry LAN ARP or mDNS. This is expected,
-not a router failure.
+oonfeeWRT discovery does not use ARP tables or mDNS. It plans eligible,
+directly attached IPv4 networks, makes bounded TCP/HTTP probes, and identifies
+stock rpcd from an unauthenticated `/ubus` object list. A default bridged
+container usually exposes only its container interfaces to that planner, so an
+empty or skipped LAN scan is expected rather than proof that no router exists.
 
 - Use **Adopt a device → add by address**.
-- Ensure the container host can route to the management IP.
-- On Linux only, opt into host networking if layer-2 discovery is required and
-  you accept the listener/firewall implications.
+- Ensure the controller process or container network namespace can route to the
+  management IP.
+- Read the scan plan, skipped networks, and route-failure details; a `/31`,
+  `/32`, IPv6, point-to-point/tunnel, link-local, or broader-than-`/22`
+  interface is deliberately not swept automatically.
+- On Linux only, host networking can expose eligible host LAN interfaces to the
+  same TCP scanner if you accept the listener/firewall implications.
+- A firewall, nonstandard `uhttpd` port, HTTPS-only endpoint without the HTTPS
+  scan option, or inaccessible `/ubus` endpoint can prevent a fingerprint even
+  when the host answers.
 - On Docker Desktop, use add-by-address.
 
 Discovery is not required for adoption, polling, or Apply.
@@ -156,6 +166,28 @@ Verify the current key/fingerprint through an independent trusted path such as
 local LuCI, physical access, or a known console. Re-adopt only after establishing
 why it changed (for example, a deliberate reflash). Never accept the change
 blindly.
+
+## Inspect succeeds but compatibility export is unavailable
+
+This can be intentional fail-closed behavior. The compatibility document is a
+separate, server-built allowlist. Text is normalized, redacted, and bounded;
+the controller omits the report if interface names, function/switch values,
+radio/port counts, or encoded output still fall outside strict safety bounds.
+Inspect can still display the ordinary result and adds a note explaining that
+the sanitized report was unavailable.
+
+1. Confirm both daemon and UI are the same v0.1.2-or-newer release; for this
+   guide, both should be v0.1.3.
+2. Repeat read-only Inspect once after confirming the target address and
+   credentials. It makes a fresh probe, but do not loop it aggressively.
+3. Record the controller version, router model/OpenWrt version, the displayed
+   inspection limits, and the exact availability note.
+4. Report the omission as a sanitizer/compatibility issue. Do not work around
+   it by publishing the full Inspect API response, router logs, ubus dumps, or
+   SSH command output; those are not the share-safe format.
+
+No stored report can be recovered later because compatibility export is not a
+controller job and is not persisted.
 
 ## A feature says unavailable, unsupported, partial, or stale
 
@@ -213,6 +245,49 @@ Check source coverage and last-observed times. If durable physical adjacency is
 worth a router package/service, review the optional LLDP plan. Do not install
 `lldpd` outside the controller and then expect its rollback ledger to be
 accurate.
+
+## WAN route or WAN throughput is unavailable
+
+Online state does not prove an effective Internet route, and a route does not
+prove that a matching durable counter series exists. v0.1.3 requires one
+composite observation: the installed main-table IPv4 route and netifd's logical
+interfaces must both answer in the same slow topology poll.
+
+Start read-only:
+
+1. Confirm the controller is v0.1.3 and the device is adopted as a Gateway.
+2. Allow one topology cycle (normally up to 15 minutes) after startup, adoption,
+   or a route change, then read the device's source/degradation reason.
+3. From an independently trusted router shell, if appropriate, inspect the two
+   sources without changing them:
+
+   ```sh
+   /sbin/ip -4 route show table all
+   ubus call network.interface dump
+   ```
+
+   These outputs contain addresses and network configuration. Do not post them
+   publicly without careful redaction.
+4. Verify there is one usable lowest-metric IPv4 default in table `main`/`254`
+   and that its kernel `dev` maps to exactly one *up* netifd interface with a
+   default route. PPPoE commonly maps logical `wan` to `l3_device` `pppoe-wan`.
+5. If the route is shown but throughput is not, wait for completed five-minute
+   rollups and check whether the exact kernel route interface appears in both
+   the device's interface series and route evidence.
+
+Distinct equal-metric main-table defaults, ECMP/multipath (`nexthop`), an
+unmappable kernel device, malformed command output, a refused ACL call, or
+either half of the batch failing leave the selection unavailable. Source-bound
+and non-main policy-table routes are ignored by this selector; a coexisting
+unique usable main-table default can still be observed, but it may differ from
+the route chosen for policy traffic. `mwan3` and custom policy routing are not
+modeled. The collector preserves the last proved network scope on failure, but
+stale evidence does not become a current Dashboard WAN path.
+
+Do not change route metrics, PPPoE, firewall, or failover configuration merely
+to populate a chart. If the route layout is intentional but outside the modeled
+scope, treat WAN selection as unavailable in v0.1.3. Re-probing capabilities
+does not force or repair this topology observation.
 
 ## Charts are initially empty after startup or adoption
 
@@ -314,6 +389,9 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 v0.1.3 and v0.1.2 both use schema 19. A clean binary/image rollback from
 v0.1.3 to v0.1.2 is schema-compatible, but keep the v0.1.3 data pair first.
+The v0.1.2 → v0.1.3 upgrade performs no migration or startup deletion, and the
+route observation needs no ACL refresh or re-adoption because its exact
+read-only command was already in the scoped ACL.
 
 Rollback to historical `v0.1.0-rc.1` is different: that daemon uses schema 17
 and must not open schema-19 state. Stop the controller and restore the untouched

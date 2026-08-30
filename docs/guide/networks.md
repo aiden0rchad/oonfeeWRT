@@ -16,8 +16,8 @@ Have all of these ready:
 - the intended firewall zone and forwarding behavior;
 - a DHCP pool that fits inside the subnet and does not include infrastructure
   addresses you plan to configure statically;
-- capability evidence for DSA versus legacy swconfig and for the relevant
-  network/firewall rpcd modules;
+- capability evidence for DSA, legacy swconfig, or a direct-interface LAN, and
+  for the relevant network/firewall rpcd modules;
 - physical switch and trunk configuration outside oonfeeWRT, if traffic must
   traverse unmanaged infrastructure.
 
@@ -42,6 +42,15 @@ A VLAN ID labels traffic; it does not configure every switch between the
 controller and the client. oonfeeWRT will not silently convert a bridge that is
 not already VLAN-aware. Legacy swconfig port writes remain observe-only in
 v0.1.3 because port topology and safe mutation are hardware-specific.
+
+A board may instead present LAN as one direct interface, such as `eth1`, with
+no independent switch ports. That is not automatically `swconfig` and does not
+mean inspection missed hardware. v0.1.3 does not create tagged VLAN
+attachments on this layout: Preview omits the unsupported attachment and
+leaves existing LAN/VLAN configuration unchanged. Untagged or manually
+prepared behavior still requires a fresh Preview; do not generalize from the
+read-only Cudy M3000 v2 inspection, where tagged VLAN management was not
+validated.
 
 ### DHCP
 
@@ -166,6 +175,7 @@ network in both LuCI and oonfeeWRT.
 |---|---|---|
 | Bridge is not VLAN-aware | The live bridge cannot accept the requested safe rendering | Convert it manually with a tested OpenWrt-specific plan, or use an untagged design; oonfeeWRT will not convert it silently |
 | Legacy swconfig device | Per-port VLAN writes are not safely generalized | Keep port configuration outside oonfeeWRT and use supported observation/site features |
+| Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.3 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
 | Foreign firewall conflict | A human-owned rule/zone affects the requested traffic path | Inspect the exact UCI/nft behavior, then remove or redesign one owner intentionally |
 | Missing `firewall4` capability | The controller cannot establish the required firewall backend | Install/enable the supported OpenWrt component outside adoption, then reprobe |
 | DHCP range invalid | Pool is incomplete, outside the subnet, or conflicts with the interface plan | Correct the CIDR/pool before preview |

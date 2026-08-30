@@ -84,6 +84,29 @@ restore execution, public-provider speed-test run or router restore. The
 completed `v0.1.0` tag workflow and GitHub Release are the
 publication authority and own the final isolated release evidence.
 
+**Current v0.1.2/v0.1.3 UI patch boundary:** after a successful authenticated
+read-only Inspect, the adoption review can download the server-built,
+privacy-bounded compatibility DTO as
+`oonfeewrt-compatibility-report.json`. The action appears only when that bounded
+DTO is present; omission does not turn a successful inspection into a failure.
+The disclosure states that the report makes no extra router request, router
+change, persistence or upload and excludes credentials, addresses, MACs,
+clients, network configuration, raw probe notes and live telemetry.
+
+Dashboard and Device Detail now consume the server-proved effective WAN result.
+They show the installed default-route interface separately from the observed
+gateway and fixed-target probe—for example, logical `wan` over PPPoE can resolve
+to `pppoe-wan`. Dashboard uses that runtime device for WAN throughput only when
+the exact key also exists in the RX/TX series catalog. Device Detail receives
+the current route-device candidate directly, so its chart can stay empty until
+samples for that key exist. There is no manual WAN picker. With a v0.1.3 server,
+an explicit `wan_interface:null` renders unavailable and the client does not
+infer from interface names. During a rolling upgrade only, an older server that
+omits the additive `wan_interface` field retains the compatibility fallback
+(`wan`, then the first `eth*`, then the first series). Missing, incomplete,
+unsupported or ambiguous v0.1.3 route/netifd evidence never invokes that
+fallback or becomes a guessed uplink.
+
 ---
 
 ## 1. Frame

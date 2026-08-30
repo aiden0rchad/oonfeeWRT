@@ -191,6 +191,8 @@ What each screen actually costs on class C. Use this to decide what ships.
 | Client list, names, IPs, vendors | 1 | `luci-rpc.getHostHints` | negligible, one call | **on** |
 | Per-client RSSI / rate / retries | 0 | native `iwinfo.assoclist`; cheap `hostapd.get_clients` enrichment | low; focused-rate only; no station-dump spawn/grant | **on (focused)** |
 | Interface throughput | 0 | `network.device` counters | negligible | **on** |
+| Effective WAN identity | 0 | `/sbin/ip -4 route show table all` + `network.interface.dump` | one bounded process spawn plus one native call on the 15-minute network/topology cycle; no extra fast poll | **on** |
+| Compatibility report export | 0 | server projection of an already successful Inspect result | **zero additional router requests**; no controller persistence or upload | manual only |
 | WiFi config read/write | 0 | `uci` | negligible | **on** |
 | Firewall / VLAN / DHCP config | 0 | `uci` | negligible | **on** |
 | Channel survey / utilization | 0 | `iwinfo.survey` (native ubus) | ~29 ms per radio, no spawn — focused loop is fine | **on** |
@@ -217,6 +219,7 @@ These are memory/query/retention limits, not managed-router work to spend:
 | controller/audit events | newest 100,000 rows, independently of router-log caps; all event text plus encoded detail is capped at 64 KiB/row |
 | General event coverage | producer poll once/minute; stale after 3m; missing, observed-empty and retained gaps are distinct |
 | topology | source cadence 15m; current source stale after 31m; closed history/range 31d; 10,000 intervals/response |
+| effective WAN identity | route table and netifd interface evidence collected together on the 15m network/topology cadence; incomplete or ambiguous evidence does not replace the last proved result |
 | client incident response | 31d range; 2,000 exact events; 64 paths and 2,048 path visits |
 | radio state/scan | 32 radios, 128 interfaces/radio, 512 frequencies and 4,096 BSS rows; newest terminal scan/radio retained, active scans preserved; suggestion ≤24h and channel plan ≤15m |
 | live WebSocket | `device.stats` only; 32 queued frames/connection, drop-on-full, 10s write, 30s ping |

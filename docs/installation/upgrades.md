@@ -22,6 +22,9 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
   v0.1.3 adds no startup data deletion.
 - A clean v0.1.3 → v0.1.2 rollback is schema-compatible, though you should
   still retain the v0.1.3 recovery pair.
+- v0.1.3's effective-WAN observation runs `/sbin/ip -4 route show table all`,
+  a read-only command already present in the scoped ACL since v0.1.0. Existing
+  adopted routers need neither ACL refresh nor re-adoption for this upgrade.
 - Historical v0.1.0-rc.1 uses schema 17. Moving from that RC to a stable schema-19 daemon migrates forward; returning to the RC requires restoring the untouched schema-17 backup, not merely replacing the executable or image.
 
 ## 1. Create a verified pre-upgrade backup
@@ -111,14 +114,24 @@ In the browser:
 1. Sign in again; sessions are process-local and do not survive restart.
 2. Confirm the expected devices, site settings, accounts, and event history.
 3. Confirm devices resume read-only polling.
-4. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
-5. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
+4. On a PPPoE or multi-default-candidate Gateway, allow one network/topology
+   cycle (up to approximately 15 minutes), then verify the Dashboard path and
+   device WAN chart use the installed main-table route's kernel device.
+5. Confirm an unavailable route explains its source gap instead of selecting
+   an equal-metric, multipath, or unmappable candidate.
+6. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
+7. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
 
 ## Roll back v0.1.3 to v0.1.2
 
 v0.1.2 and v0.1.3 both use schema 19. Retain the current v0.1.3 data pair
 first, stop v0.1.3 cleanly, replace the binary or image with v0.1.2, and start
 it against the schema-19 data.
+
+Rollback also removes v0.1.3's installed-main-route selection and explicit WAN
+series proof. On PPPoE or multi-candidate gateways, Dashboard, topology, client
+scope, and device traffic views can again follow older netifd-order/heuristic
+behavior. Treat that as a functional rollback, not a data migration issue.
 
 The v0.1.1 startup pruning of older speed-test rows cannot be reversed unless
 those rows exist in a pre-v0.1.1 backup.

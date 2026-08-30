@@ -99,6 +99,13 @@ The UI renders *from* capabilities: unsupported features are **absent**, not
 greyed out. Greying out teaches users the product is broken; absence teaches them
 their hardware is limited.
 
+The v0.1.2 compatibility report makes new hardware evidence shareable without
+turning the full probe result into a support artifact. It is a strict,
+server-built allowlist with fixed bounds, no credentials/addresses/MACs/clients,
+no raw notes or configuration, no persistence and no upload. Hardware claims
+must still stay narrower than the evidence: the Cudy M3000 v2 report confirms
+only read-only Inspect on that exact variant, not adoption or Apply safety.
+
 ---
 
 ## 5. Upstream drift
@@ -116,6 +123,13 @@ a clear "untested, proceed at your own risk" override.
 
 Accept that you will be chasing upstream forever. That's the rent for not
 maintaining a fork, and it's much cheaper rent.
+
+Interface names are another drift surface. The v0.1.3 WAN path therefore joins
+the installed main-table IPv4 default route to active netifd evidence and uses
+the proved runtime device for counters. It refuses equal-best defaults,
+multipath, policy-routing ambiguity and incomplete composite reads rather than
+silently selecting a plausible name. This is an observability safeguard, not a
+failover, `mwan3`, ECMP or route-management feature.
 
 ---
 

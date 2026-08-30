@@ -66,7 +66,11 @@ After a successful inspection, select **Export sanitized compatibility
 report** to download `oonfeewrt-compatibility-report.json`. The versioned JSON
 contains bounded board, firmware, radio, port, known feature-state, and
 supported-function evidence. It is useful when reporting whether a new OpenWrt
-target is recognized correctly.
+target is recognized correctly. Radio count means physical radios, not the
+number of SSIDs/BSS interfaces. The current format version is `1`, and the
+server's compact JSON representation is capped at 64 KiB. The browser formats
+that bounded object for readability, so the downloaded file can be somewhat
+larger.
 
 The export is a server-built allowlist, not a copy of the inspection response.
 It excludes the management address, MAC, credentials, user-assigned device and
@@ -76,9 +80,10 @@ Board-declared LAN/WAN labels remain because they are compatibility evidence.
 Export makes no additional router call, writes no controller state, and
 uploads nothing.
 
-If the button is absent, the server is older or the measured evidence exceeded
-the report's strict safety bounds. Do not substitute a screenshot or raw API
-response when it would expose identifiers.
+If the button is absent, read the inspection notes. An older server may not
+offer the export, and a current server omits it when measured evidence exceeds
+strict safety bounds. Inspection still succeeds in the latter case. Do not
+substitute a screenshot or raw API response when it would expose identifiers.
 
 ::: danger Identity pins begin at adoption
 Read-only inspection uses ubus and does not open SSH. Adoption records the SSH
@@ -151,6 +156,24 @@ The detail view can include:
 - controller requests, bytes, polls, and router CPU attributed to management;
 - controller-installed package accounting;
 - ownership state and reviewed change or un-adoption actions.
+
+### Read the effective WAN series
+
+For a Gateway, v0.1.3 uses the kernel device proved by the installed
+main-table IPv4 default route as the WAN traffic-series key. OpenWrt's logical
+interface and runtime counter device can differ: logical `wan` commonly maps
+to `pppoe-wan` on PPPoE. The device traffic chart uses `pppoe-wan` in that
+case, rather than selecting the first interface or a modem-management network.
+Device Detail receives this proved route-device candidate directly; its chart
+can remain empty until that exact interface has collected samples. Dashboard
+adds a stricter series-catalog check before labeling data as WAN throughput.
+
+If the route cannot be mapped to exactly one active logical interface, the
+current v0.1.3 API explicitly reports no proved WAN interface and the UI leaves
+the WAN series unavailable. It does not guess from the metric catalog. Route
+evidence is refreshed on the slower network/topology cycle, approximately
+every 15 minutes; opening a focused device view does not make it a rapid
+failover monitor.
 
 ### Focused collection
 
@@ -233,6 +256,7 @@ from the controller.
 | Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.3 |
 | Host key or certificate changed | Factory reset, firmware reinstall, address reuse, interception | Verify identity out of band before force-un-adopting and adopting the device again |
 | Metrics say unavailable | Source not readable, driver lacks metric, ACL gap, or no completed poll | Read the source explanation; reprobe or refresh ACL only when it names a repairable cause |
+| WAN chart is unavailable | No current main-table IPv4 default, equal-metric/ECMP ambiguity, failed route/interface read, or no unique logical-interface mapping | Read the default-route source gap and wait for the next network/topology cycle after correcting the route; do not rename interfaces or refresh the ACL speculatively |
 | Device flips offline/online | Slow polls, unstable transport, adaptive backoff, overloaded router | Review poll duration, overhead, controller logs, and network path before shortening intervals |
 | Un-adoption is blocked | Active LLDP ledger or another conflicting operation | Roll back LLDP and allow active operations to finish |
 

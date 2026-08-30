@@ -82,8 +82,10 @@ per-device changes; Apply is a separate reviewed action.
 
 oonfeeWRT stages UCI with OpenWrt rollback enabled. It confirms only after
 reconnecting and verifying expected runtime state. If connectivity or health
-verification fails, the router's rollback timer is left to restore the previous
-state.
+verification fails, the router's rollback timer is left active. A subsequent
+read can prove that OpenWrt reverted; until it does, the outcome is `unknown`
+and the changed state may still be live. Do not retry until the first operation
+is understood.
 
 Keep independent LuCI/SSH access and start with one non-critical device. See the
 [Safety model](../concepts/safety.md).
@@ -100,11 +102,42 @@ read-only inspection evidence for one Cudy M3000 v2/Filogic variant; it does not
 claim adoption, Apply, VLAN, or broader Filogic validation. Other devices may
 work with different gaps.
 
+## What can I share from Inspect?
+
+Use **Export sanitized compatibility report**, not the full Inspect response or
+raw router output. The format-version-1 JSON contains a bounded allowlist of
+board/firmware, physical-radio, LAN/WAN label, switch-mode, feature-state, and
+supported-function evidence. It excludes the target address and MAC, site and
+router identity, credentials, network configuration, clients, live telemetry,
+timestamps, runtime radio/PHY and bridge-member identifiers, and free-text
+notes.
+
+The server omits the report when it cannot satisfy strict safety and size
+bounds. The browser download makes no extra router call, is not stored or
+uploaded by the controller, and becomes an ordinary local file after download.
+It helps maintainers compare compatibility evidence; it is not proof that
+adoption, Apply, VLANs, RF, telemetry, or resource budgets work on that device.
+
 ## Why are some values “Unavailable” instead of zero?
 
 Zero is a measurement. Unavailable means the controller could not obtain or
 trust the measurement. Treating a missing driver counter or failed RPC as zero
 would produce confident but false charts and health claims.
+
+## How does v0.1.3 choose the WAN interface?
+
+It reads the installed IPv4 route table and netifd logical interfaces in one
+topology poll. The controller selects the unique usable lowest-metric default
+in the kernel main table, then maps its kernel device to exactly one active
+logical interface that also reports a default. This is why logical `wan` over
+runtime `pppoe-wan` can use `pppoe-wan` traffic counters while a modem
+management interface no longer wins by list order.
+
+It does not choose between distinct equal-metric defaults, ECMP/multipath,
+policy-routing tables, `mwan3`, unmappable devices, or bond members. Missing,
+malformed, ambiguous, or inconsistent evidence stays unavailable, and an exact
+matching RX/TX series must exist before WAN throughput is shown. Collection is
+on a baseline 15-minute topology cycle, not a rapid failover monitor.
 
 ## Why is an online device “Unplaced” in Topology?
 
@@ -195,6 +228,10 @@ complete [retention table](../concepts/data-retention.md).
 
 v0.1.3 and v0.1.2 both use schema 19, so a clean binary/image rollback is
 schema-compatible; preserve the v0.1.3 data pair first.
+
+v0.1.1 also uses schema 19, but rolling back skips later fixes and features.
+Preserve the current database/keyring pair and use the exact release notes when
+choosing a target; schema compatibility alone is not an operational guarantee.
 
 Historical `v0.1.0-rc.1` uses schema 17. Rolling back that far requires the
 untouched pre-upgrade schema-17 database, matching keyring, prior passphrase,

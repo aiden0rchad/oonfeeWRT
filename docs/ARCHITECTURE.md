@@ -37,6 +37,26 @@ restore. The completed `v0.1.0` tag workflow and
 GitHub Release, not this historical checkpoint, are the publication authority
 and own the isolated restore/container evidence.
 
+**Current v0.1.3 patch boundary:** v0.1.2 added a versioned, server-built
+compatibility report to a successful read-only Inspect result. That document is
+a bounded allowlist rather than a copy of the probe or form state: it carries
+hardware, firmware, radio, port, feature-state and supported-function evidence,
+while excluding credentials, router/site identity, addresses, network
+configuration, clients, telemetry, timestamps and free-text notes. Downloading
+it performs no second router request, persistence or upload. External evidence
+currently proves this corrected Inspect path on a Cudy M3000 v2; it does not
+prove adoption, Apply, polling or broader Filogic support.
+
+v0.1.3 also makes effective WAN identity a composite observation. The installed
+kernel main IPv4 table supplies one usable, lowest-metric default-route device;
+netifd supplies the active logical interface, `l3_device` mapping and subnets.
+Both sources must decode before the cached result is replaced. This maps a
+logical PPPoE `wan` to a runtime device such as `pppoe-wan`, which is also the
+traffic-series key. Equal-metric distinct defaults, multipath, incomplete or
+inconsistent mappings, policy-routing rules and unsupported route shapes remain
+explicitly unavailable. Collection is read-only and uses the controller ACL
+already shipped in v0.1.0; existing devices need no re-adoption or ACL refresh.
+
 ---
 
 ## 0. The constraint that shapes everything
@@ -169,13 +189,16 @@ layer 2*. Consequences, same as Omada's documented ones:
 
 | Mode | Discovery | Recommendation |
 |---|---|---|
-| `network_mode: host` (Linux) | Full: subnet TCP probe + ARP + mDNS all work | Explicit opt-in; the listener is exposed directly on host interfaces, so supply firewall/TLS policy. |
-| Bridge network with loopback port mapping | Subnet TCP probe works (it's L3); ARP-table and mDNS discovery do not cross the bridge | **Default.** The UI offers **add-device-by-IP** as a first-class path. |
+| `network_mode: host` (Linux) | On-demand subnet TCP discovery can enumerate eligible host LAN interfaces | Explicit opt-in; the listener is exposed according to its configured bind and host firewall/TLS policy. |
+| Bridge network with loopback port mapping | The ordinary container interface does not represent the host LAN; a deliberately routed eligible subnet can still be probed over TCP | **Default.** The UI offers **add-device-by-IP** as a first-class path. |
 | Docker Desktop (macOS/Windows) | No true host networking | Add-by-IP only; document it plainly |
 
 Everything after discovery — adoption, polling, apply — is ordinary outbound
 L3 HTTP and works identically in every mode. Design rule: **discovery is a
 convenience layer; adoption must never depend on it.**
+
+The shipped discovery implementation is the bounded TCP `/ubus` sweep described
+in §6. It does not read the controller host's ARP table or implement mDNS.
 
 ---
 
@@ -826,6 +849,13 @@ repaired host route without creating a re-login storm.
    Inspect uses ubus only: no SSH, ACL/login bootstrap, UCI write, package
    operation or inventory row. It measures model, radios and ports, and keeps
    denied/unknown evidence distinct from a measured negative.
+   A successful result may include the v1 sanitized compatibility report
+   described above. The browser downloads that nested allowlist locally; it
+   never serializes the raw Inspect result, re-contacts the router, persists the
+   report or uploads it. Individual text is normalized and truncated to its
+   256-byte field bound. Structurally unsafe/out-of-range evidence or a compact
+   encoded document over 64 KiB omits the report while the Inspect result
+   remains usable.
 3. Operator selects a non-empty set of device functions: **Gateway**, **AP**
    and/or **Switch**. An active WAN default route or enabled LAN DHCP can
    recommend Gateway; an ordinary AP management route over LAN cannot. DSA
