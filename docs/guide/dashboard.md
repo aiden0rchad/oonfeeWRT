@@ -39,10 +39,25 @@ not from a cloud service.
 
 ### Observed Gateway path
 
-The path identifies the default-route device and uplink only when fresh route
-evidence supports that conclusion. If the controller cannot read the route,
-the Dashboard reports the source gap rather than borrowing an older or guessed
-uplink.
+v0.1.3 identifies one effective IPv4 uplink from the installed kernel routing
+table. It selects the unique usable, lowest-metric default in the main table,
+then maps that kernel device to exactly one active OpenWrt logical interface
+that also reports a default-route candidate. This prevents a modem-management
+interface from winning merely because netifd listed it first and maps logical
+`wan` to the runtime `pppoe-wan` device when appropriate.
+
+The route table and `network.interface` dump form one observation. If either
+read fails, the route is malformed, equal lowest metrics point to different
+devices, a multipath route is present, or the kernel device cannot be mapped
+uniquely, the current path is unavailable. The controller preserves its last
+proved network cache but does not turn that cache into a new route claim or
+guess a counter series.
+
+This scope is deliberately narrow: custom policy routing, `mwan3`, per-uplink
+health, manual WAN selection, and bond-member monitoring are not modeled. A
+policy-selected path can differ from the observed main-table route. Route
+evidence runs on the approximately 15-minute network/topology cycle, so use a
+dedicated failover monitor when sub-minute detection matters.
 
 ### ICMP reachability
 
@@ -144,13 +159,14 @@ When the Dashboard looks unhealthy:
 
 | Symptom | Likely explanation | What to do |
 |---|---|---|
-| Internet health is unavailable | No managed Gateway, stale/incomplete kernel-route and interface evidence, failed poll, or insufficient ACL/source coverage | Open the Gateway device, review functions and source gaps, then reprobe or refresh the ACL if the UI identifies a missing permission |
+| Internet health is unavailable | No managed Gateway, stale/incomplete kernel-route and interface evidence, failed poll, or unsupported route shape | Open the Gateway device and review the default-route source gap. Correct the route or transport/permission problem, then allow the next network/topology cycle; refresh the ACL only when the UI names a missing permission |
 | Wireless count is incomplete | One or more AP-function devices lack fresh station evidence | Open **Devices**, find the named coverage gaps, and wait for or troubleshoot their focused poll |
 | Charts show gaps | The bucket had no valid samples; the controller restarted, device was unreachable, or a source failed | Use the accessible table and Logs; do not interpret the gap as zero |
 | Speed test is much slower than expected | Container/VPN path, concurrent traffic, controller-host limits, or shared WAN saturation | Verify the host path and repeat during a controlled quiet window only if another 15 MiB test is acceptable |
 | Speed test fails immediately | Controller cannot reach the Cloudflare endpoints or the job was refused by current state | Check controller logs, DNS/HTTPS egress, and whether another test is active |
 | A device is online but WAN health is missing | Device management reachability and Gateway Internet evidence are separate | Verify the Gateway function, default route source, and probe result on that device |
-| A PPPoE or modem-management interface is selected incorrectly | Netifd may advertise more than one default-route candidate, while counters use the PPPoE L3 device | Upgrade to a controller with kernel-route/L3 mapping support; do not rename interfaces as a workaround. Custom policy routing remains an explicit evidence gap |
+| PPPoE WAN traffic is unavailable | The kernel L3 route device has no matching counter series, cannot map to exactly one active logical interface, or the composite source failed | Compare the main-table route with OpenWrt interface state, correct the inconsistency, and wait for the next network/topology cycle; do not rename interfaces as a workaround |
+| Main-table route is healthy but a policy-routed path differs | v0.1.3 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
 
 ## Related guides
 

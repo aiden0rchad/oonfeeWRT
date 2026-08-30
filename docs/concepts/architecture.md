@@ -17,6 +17,7 @@ oonfeeWRT is a self-hosted controller for stock OpenWrt. One Go process:
 - serves an embedded React interface;
 - stores controller state in SQLite;
 - polls routers through OpenWrt's existing `rpcd`/ubus interface;
+- turns read-only inspection into a bounded, shareable compatibility report;
 - turns a site-level network model into per-device UCI changes; and
 - previews, applies, verifies, and confirms those changes.
 
@@ -129,6 +130,23 @@ This prevents an unsupported driver counter from looking like a real `0`, or a
 failed topology read from looking like an empty network. The exact v0.1.3
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
+### Shareable compatibility evidence
+
+The ordinary Inspect result contains deployment-specific data and free-text
+notes, so it is not safe to serialize wholesale. Since v0.1.2, the server also
+builds a separate compatibility document from an explicit allowlist. Format
+version 1 contains bounded controller-version, board, firmware, radio, port,
+feature-state, and supported-function evidence. It excludes the management
+address, MAC address, site/router identity, credentials, network configuration,
+clients, live telemetry, timestamps, runtime radio/PHY identifiers, bridge
+members, and free-text notes.
+
+Sanitization and size checks happen on the server. Evidence outside the strict
+bounds makes the report unavailable while the underlying read-only inspection
+can still succeed. The browser only pretty-prints that already-sanitized object
+and downloads it; it does not make another router call, persist the report in
+the controller, or upload it anywhere.
+
 ## Site model and ownership
 
 Configuration is authored as site intent—WLANs, groups, networks, zones,
@@ -176,12 +194,41 @@ The WebSocket carries bounded live `device.stats` frames; durable history still
 comes from SQLite. See [Data retention](./data-retention.md) for the exact
 limits.
 
+### Effective WAN route evidence
+
+On the slower network/topology cycle, v0.1.3 observes the installed IPv4 route
+table and netifd's logical-interface dump in the same batch. It selects the one
+usable, lowest-metric default in the kernel main table, then requires that
+kernel device to map to exactly one active logical interface that also reports
+a default route. This maps layouts such as logical `wan` over runtime
+`pppoe-wan` without letting another netifd default candidate win by list order.
+
+The two reads are one proof. A missing command result, malformed route,
+equal-metric route on a different device, ECMP/multipath route, or ambiguous or
+absent netifd mapping makes the observation unavailable. Partial evidence does
+not overwrite the last proved network scope or become an invented Internet
+edge.
+
+The measured topology edge retains the kernel interface used by the route and,
+when different, the logical interface used for address scoping. Device Detail
+receives that proved kernel interface as its current chart candidate; the chart
+can remain empty until samples for the key exist. Dashboard promotes the route
+interface to WAN throughput only when that exact key is present in the durable
+RX/TX series catalog. Otherwise Dashboard throughput remains unavailable
+instead of falling back to a name such as `wan` or the first Ethernet
+interface. The baseline 15-minute topology cadence is not a failover monitor
+and does not model policy-routing-table selection, `mwan3`, ECMP, per-uplink
+health, or bond members.
+
 ## Deployment boundary
 
 The default container mapping publishes `127.0.0.1:8080`. Bridge networking
 supports normal L3 management and add-by-address adoption, but does not carry
-LAN ARP or mDNS discovery. Linux host networking can enable full local
-discovery, but exposes the listener according to the host's network and
+host LAN interfaces into the container's automatic discovery plan. Discovery
+is a bounded IPv4 TCP/HTTP scan with an unauthenticated `/ubus` object-list
+fingerprint; it implements neither ARP-table discovery nor mDNS. Linux host
+networking can expose eligible directly attached host LAN interfaces to that
+same scanner, but also exposes the listener according to the host's network and
 firewall configuration.
 
 The v0.1.3 HTTP listener has no native TLS. Keep it on loopback or a trusted,

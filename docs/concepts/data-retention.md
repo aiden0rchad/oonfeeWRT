@@ -28,6 +28,22 @@ Important contents include:
 All controller data is sensitive. Keep the data directory private and do not
 serve it as static content.
 
+## Compatibility reports are not retained
+
+The v0.1.2+ compatibility report is returned only as an optional field of a
+successful read-only Inspect response. It is not written to SQLite, a job
+directory, diagnostics, or portable backup. Clicking **Export sanitized
+compatibility report** serializes that already-sanitized object in the browser;
+there is no second router call, controller-side file, or upload.
+
+Once downloaded, `oonfeewrt-compatibility-report.json` is outside oonfeeWRT's
+retention and deletion controls. Protect or delete it using the workstation's
+normal file policy. It intentionally excludes timestamps, live telemetry,
+network configuration, deployment identity, addresses, clients, credentials,
+and secrets, but it still describes the router model, firmware, radios, ports,
+and capability states. Do not substitute the full Inspect response when a
+report is unavailable: that response is not the share-safe format.
+
 ## Metric retention
 
 Raw samples are not inserted into SQLite one at a time. They stay in an
@@ -66,6 +82,23 @@ look complete. The ordinary 24-hour age prune does not add that marker.
 Repeated exact OpenWrt IPv6 router-advertisement/no-default-route warnings may
 be condensed per producer epoch while retaining counts and source boundaries.
 
+### What v0.1.3 retains about the effective WAN
+
+The collector does not store the raw `ip` route-table output or raw netifd dump
+as WAN history. A successful composite observation produces the scoped logical
+network state plus a measured Internet topology edge whose port is the kernel
+route interface. Current Dashboard and Device Detail use that edge only while
+the device is online and both its route source and edge are at most 31 minutes
+old.
+
+If either half of the composite read fails, the collector records a source gap
+and preserves the last proved network scope instead of replacing it with a
+partial guess. Preserved is not the same as current: stale proof does not power
+the current WAN selection. Closed route-derived topology intervals follow the
+31-day topology policy above. Interface throughput still follows the ordinary
+five-minute/hourly metric retention; no distinct per-uplink or failover history
+is created.
+
 ## Bounded operational history
 
 | Surface | Retention |
@@ -79,6 +112,10 @@ be condensed per producer epoch while retaining counts and source boundaries.
 On the first v0.1.1 start, older completed/failed speed-test rows beyond the
 newest three are permanently pruned. Back up v0.1.0 data before upgrading if
 that history matters.
+
+v0.1.2 and v0.1.3 both use schema 19. The v0.1.2 → v0.1.3 upgrade adds no
+migration and no startup deletion; its WAN behavior changes how new read-only
+observations are interpreted.
 
 ## Diagnostics content and limits
 

@@ -81,6 +81,17 @@ Open **Topology** to view nodes and active link intervals. Sources can include:
 Each edge includes a confidence and medium. Confidence describes the evidence,
 not the importance of the device.
 
+For the Internet edge, v0.1.3 selects the unique usable lowest-metric IPv4
+default in the installed main table and maps it to one active OpenWrt logical
+interface. The edge's port is the runtime kernel device, such as
+`pppoe-wan`; expanded evidence can also show the different logical interface,
+such as `wan`. These are two names for one proved uplink, not duplicate edges.
+
+The same mapping decides whether a neighbour address is **Upstream**. If route
+or logical-interface evidence is unavailable or ambiguous, oonfeeWRT preserves
+the last proved network cache but reports the current source failure instead
+of reclassifying from interface names.
+
 ### Filter and inspect
 
 Use the controls to filter by:
@@ -146,6 +157,8 @@ Each source answers a different question.
 | Historical device is unplaced | Device existed but no edge interval supports placement at that time | Use last-known placement as context, not as a historical fact |
 | History ends early | 31-day retention bound or missing collection interval | Read the truncation/gap notice and preserve future incidents earlier |
 | Duplicate node names | Devices share display names or defaults | Rename controller display identities and use stable IDs during review |
+| Internet edge is missing | No current main-table IPv4 default, equal-metric distinct defaults, multipath/ECMP, failed composite source, or no unique logical-interface mapping | Expand source coverage, correct the route or interface evidence, and wait for the next network/topology cycle; do not infer an edge from a `wan` name |
+| Uplink port says `pppoe-wan` while the network says `wan` | Topology displays the proved kernel counter device and evidence retains the logical OpenWrt interface | Treat them as one mapped uplink and use `pppoe-wan` when checking runtime counters |
 
 ## Related guides
 

@@ -135,7 +135,9 @@ chmod 600 "$HOME/.config/oonfeewrt/passphrase"
 ```
 
 Bridge mode works on Linux and Docker Desktop. It intentionally publishes only
-to host loopback. Layer-2 discovery does not cross the bridge; adopt by address.
+to host loopback. The shipped discovery path is a bounded TCP `/ubus` scan, not
+ARP or mDNS; a bridge usually does not expose the router's LAN subnet, so adopt
+by address.
 
 ```sh
 cosign verify \
@@ -172,9 +174,13 @@ Set the exact image version when using that file:
 OONFEE_VERSION=v0.1.3 docker compose up -d
 ```
 
-On Linux, full ARP/mDNS discovery requires host networking. Replace the `-p`
-line with `--network host` and set
-`-e OONFEE_LISTEN=127.0.0.1:8080`. Add-by-address works in either mode.
+On Linux, host networking lets the on-demand subnet scanner enumerate eligible
+host LAN interfaces. Replace the `-p` line with `--network host` and set
+`-e OONFEE_LISTEN=127.0.0.1:8080`. The scanner performs a bounded TCP probe for
+an unauthenticated OpenWrt `/ubus` endpoint; it does not implement ARP or mDNS.
+An ordinary bridged container may not see a host-LAN subnet to scan, so use
+add-by-address there. Adoption, polling, Preview and Apply work over routed L3
+in either mode.
 
 ## Put TLS in front
 
@@ -240,6 +246,13 @@ v0.1.2 and v0.1.3 both use schema 19. The upgrade needs no database migration
 and makes no router change. Before upgrading, preserve the matching database,
 keyring, and passphrase recovery set. A clean rollback to v0.1.2 is
 schema-compatible; retain the v0.1.3 data pair first.
+
+v0.1.3 adds one read-only installed-route observation to the existing slower
+network/topology collection cycle. Its exact
+`/sbin/ip -4 route show table all` command pattern was already present in the
+scoped controller ACL shipped before this release, so adopted devices do not
+need re-adoption or an ACL refresh. The controller does not change route metrics,
+PPPoE, firewall, failover or policy routing during this upgrade.
 
 ### Upgrade from v0.1.0-rc.1 and roll back
 

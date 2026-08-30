@@ -21,8 +21,10 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | D4 | **Raw telemetry ring lives in RAM; only 5m/1h rollups reach SQLite**, one transaction per 5-minute flush. Retention default: 5m→14d, 1h→13mo. | the 30s-raw-persisted ladder |
 | ~~D5~~ | ~~Self-management over loopback~~ | **superseded by D7** — there is no self to manage |
 | D6 | Target UX reference originated with **UniFi Network 10.4** screenshots and tracks the current stable release; the active baseline is **Network 10.5.67** as of 2026-08-18. Copy interaction contracts and information architecture, never Ubiquiti branding or assets. | earlier fixed 10.4 target |
-| D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer (host networking gets full discovery; bridge/Desktop gets add-by-IP, which must be first-class UI). A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
+| D7 | **The controller is a self-hosted container (Omada-style)** — Docker/Podman image, amd64+arm64, one persistent volume, compose file provided. Managed devices remain agentless stock OpenWrt; the WRT3200ACM is a *managed device*, never the host. Discovery is a convenience layer: the shipped implementation performs bounded TCP probes of `/ubus` on eligible interface subnets. Host networking exposes ordinary LAN interfaces to that scan; bridge/Desktop deployments usually need first-class add-by-address. It does not implement ARP-table or mDNS discovery. A sweep whose every dial reports `EHOSTUNREACH`/`ENETUNREACH` is an explicit per-network failure, never an empty result. | D1, D5 |
 | D8 | **Optional router packages are two-stage, per-feature root actions.** Resolve and display the package manager's exact plan, bind it, then require a second unchecked acknowledgement. Persist the before-state and actual package diff; rollback removes that exact added set while preserving pre-existing packages, and un-adoption stays blocked until rollback succeeds. Adoption never selects a package. The first capability is official-feed `lldpd`. | previously documented future tier-2 flow |
+| D9 | **Compatibility exports are server-built, read-only allowlists.** A successful Inspect result may include a bounded `oonfeewrt-compatibility-report` v1 DTO for local browser download. Never serialize the probe request, credentials, raw probe result, free-text notes, addresses, MACs, clients, live telemetry, timestamps or network configuration. Report generation makes no extra router request, persists nothing and uploads nothing; unsafe or oversized evidence omits only the report. | raw or client-assembled support exports |
+| D10 | **Effective WAN identity requires composite route and netifd evidence.** Select one usable, installed, lowest-metric, unicast IPv4 default in the main table, then map its kernel device to exactly one active logical netifd default interface, preferring `l3_device`. This maps logical PPPoE `wan` to runtime counter key `pppoe-wan`. Equal-best ambiguity, multipath, policy routing, incomplete evidence and decode failures produce unavailable/last-proved state; the controller never guesses or writes route state. | interface-name heuristics and first-default selection |
 
 ### Published and historical hardware validation checkpoint (2026-08-22)
 
@@ -149,6 +151,44 @@ upload/preview/confirmation, a public-provider speed test or router restore.
 The completed `v0.1.0` tag workflow and GitHub Release are the authority for
 final publication; the workflow must pass the isolated release matrix before it
 publishes artifacts.
+
+### v0.1.2 and v0.1.3 patch boundary
+
+Release `v0.1.2` adds a privacy-bounded compatibility report to successful,
+authenticated read-only Inspect. The server constructs the report from a strict
+allowlist, caps it at 64 KiB, bounds text and collection sizes, and marks the
+evidence `read-only-inspection`, `router_changes:false`, and `persisted:false`.
+The browser downloads the nested DTO as
+`oonfeewrt-compatibility-report.json`; the controller makes no additional router
+request, stores no report, and sends it nowhere. If the report cannot be
+generated safely, Inspect still succeeds and the report is omitted.
+
+The same release corrects Cudy M3000 v2 read-only inspection: it counts physical
+radios instead of BSS interfaces and retains direct Ethernet LAN/WAN evidence.
+Issue #19 supplies external confirmation for that narrow Inspect path only. It
+does not prove adoption, configuration Apply/rollback, WLAN behavior, VLANs,
+polling budgets, topology, optional packages or another Filogic device.
+
+Release `v0.1.3` replaces WAN interface-name heuristics with composite evidence
+from the installed IPv4 route table and `network.interface.dump`. The parser
+accepts only one usable lowest-metric unicast default from the main table and
+then resolves its installed kernel device to exactly one up logical default
+interface, preferring netifd's `l3_device`. A PPPoE logical interface such as
+`wan` therefore resolves to the runtime device `pppoe-wan`, the key used for
+traffic counters. Route and netifd payloads must both decode before they replace
+the last proved result; malformed, incomplete, equal-best or otherwise
+ambiguous evidence is unavailable rather than guessed.
+
+This is read-only observation on the existing network/topology poll cadence.
+The existing adoption ACL already permits the exact
+`/sbin/ip -4 route show table all` command pattern, so an adopted device does not
+need re-adoption or ACL refresh. The patch does not change routes, PPPoE,
+firewall policy, failover or interface configuration. ECMP, `mwan3`, custom
+policy-routing tables/rules, per-uplink health, manual WAN selection and
+bond-member attribution remain outside the proved contract. Issue #20 captures
+the pre-fix `draytek_mgmt`/`pppoe-wan` reproduction; source and release tests
+cover the correction, but the reporter has not yet supplied post-upgrade
+hardware confirmation.
 
 ---
 
@@ -1186,7 +1226,7 @@ Runtime contract (what `deploy/docker-compose.yml` encodes):
 | Aspect | Value |
 |---|---|
 | Data | single volume mounted at `/data` (`oonfeewrt.db`, paired `keyring.json`, and retained `.oonfeewrt-recovery` safety artifacts; all remain sensitive) |
-| Network | bridge default with add-by-IP adoption; Linux host networking is an explicit full-discovery opt-in |
+| Network | bridge default with add-by-address adoption; Linux host networking is an explicit opt-in that exposes eligible LAN interfaces to the bounded TCP `/ubus` scan (the shipped discovery path does not use ARP or mDNS) |
 | Ports | loopback `127.0.0.1:8080:8080` mapping by default; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
 | Config | env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value) |
 | Health | `GET /healthz` (no auth, no body beyond `ok`) wired as the compose healthcheck |

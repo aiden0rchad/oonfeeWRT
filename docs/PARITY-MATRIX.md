@@ -31,11 +31,29 @@ that would need tier 3 is cut, per the no-device-code rule (ARCHITECTURE §0).
 | **3** | ~~Code we wrote running on the device~~ | **Ruled out. Cut the feature instead.** |
 
 Controller adoption, polling, validation and ACL refresh install no tier-1 or
-tier-2 package, binary, daemon or service. A future package flow, where a
-feature requires one, remains disabled-by-default and explicit per feature.
-No before/after package-inventory hashes were captured around the current live
-ACL refreshes, so the live checkpoint makes no package-inventory-unchanged
-claim.
+tier-2 package, binary, daemon or service. The shipped optional `lldpd` flow is
+disabled by default and requires an exact package plan, a separate unchecked
+acknowledgement, a durable before-state and a drift-checked rollback. It never
+runs as part of adoption. No before/after package-inventory hashes were captured
+around the historical live ACL refreshes, so that checkpoint makes no
+package-inventory-unchanged claim.
+
+### Current patch-release boundary
+
+`v0.1.2` adds a browser-local, server-built compatibility export after a
+successful authenticated read-only Inspect. Its strict allowlist and 64 KiB
+bound exclude credentials, addresses, MACs, clients, network configuration,
+raw probe notes and live telemetry; it makes no extra router request, controller
+persistence or upload. External Cudy M3000 v2 evidence proves only the corrected
+physical-radio and direct-Ethernet Inspect path, not adoption or configuration.
+
+`v0.1.3` proves the effective WAN by joining one unique usable lowest-metric
+installed main-table IPv4 default route to one active netifd logical interface,
+preferring `l3_device`. That maps logical PPPoE `wan` to runtime counter device
+`pppoe-wan` without guessing from names. Equal-best defaults, ECMP/multipath,
+custom policy routing, `mwan3`, manual selection and bond-member attribution are
+explicitly unavailable. Collection is read-only on the slow network/topology
+cadence and needs neither re-adoption nor an ACL refresh.
 
 ---
 
@@ -86,9 +104,9 @@ read-only authenticated inspection.
 
 | Controller element | OpenWrt/controller source | Verdict |
 |---|---|---|
-| Inspect before Adopt: model, firmware, radios, LAN/WAN ports and current gateway evidence | administrator ubus login + capability probe + runtime interface/DHCP reads; no SSH/bootstrap/store write | 🟢 implemented. Unknown remains distinct from a measured negative |
+| Inspect before Adopt: model, firmware, radios, LAN/WAN ports and current gateway evidence | administrator ubus login + capability probe + runtime interface/DHCP reads; no SSH/bootstrap/store write. A successful result can carry the bounded v1 compatibility DTO for browser-local download | 🟢 implemented. Unknown remains distinct from a measured negative; export failure omits only the report and never turns Inspect into a router write |
 | Independently select Gateway, AP and Switch on one router | schema-11 `functions_json`; legacy `role` retained only as the primary compatibility label | 🟢 implemented. Gateway-only does not broadcast; AP-only does not gain DHCP/routing |
-| Gateway recommendation and single managed gateway | active default route on active WAN and/or enabled LAN DHCP; adoption serialized before device contact | 🟢 implemented. A LAN management default route is not evidence; AP-only may be adopted first when routing is external |
+| Gateway recommendation and single managed gateway | read-only inspection evidence and/or enabled LAN DHCP; adoption serialized before device contact. Post-adoption WAN telemetry uses the installed main-table route + netifd mapping described above | 🟢 implemented. A LAN management default route is not enough by itself; AP-only may be adopted first when routing is external |
 | Gateway availability badge | WAN-capable hardware means available; only strong runtime evidence means observed/recommended | 🟢 corrected live on the C6—the badge no longer claims gateway operation merely because a WAN port exists |
 | Switch responsibility | DSA port map or legacy swconfig stats/FDB | 🟠 `dsa-conditional` when the existing bridge is VLAN-aware; `observe-only` on measured C6 swconfig. Selection promises participation/visibility, not universal VLAN writes |
 
@@ -100,7 +118,7 @@ read-only authenticated inspection.
 |---|---|---|
 | Console card: device counts, gateway IP, uptime | `system.info`, `network.interface` status, controller inventory | 🟢 |
 | "Network / UniFi OS / Devices — Up to date" | our own version + `owut` check | 🟢 |
-| ISP card: name, IPv4, uptime %, throughput sparkline | WAN interface counters + PPPoE/DHCP info; ISP name from ASN lookup of the WAN IP | 🟢 |
+| ISP card: name, IPv4, uptime %, throughput sparkline | server-proved installed default-route device mapped through netifd to the runtime counter key, including PPPoE; ISP name from ASN lookup of the WAN IP | 🟢 for one unique usable main-table IPv4 default whose exact runtime-device key exists in RX/TX history. Missing/ambiguous composite evidence or a missing series key remains unavailable rather than choosing another interface |
 | Monthly data usage (4.44 TB) | `vnstat` on the WAN interface | 🟢 |
 | Latency/loss indicator | adopted Gateway runs exactly three ICMP packets to fixed `1.1.1.1` at most once/minute | 🟢 **source-built and live-observed after explicit ACL refresh**. It is not HTTP/DNS validation, ISP uptime or a configurable multi-target pill set |
 | Main chart: download/upload/latency/packet loss over 1h–1M | our TSDB + probe series, dual-axis | 🟢 |

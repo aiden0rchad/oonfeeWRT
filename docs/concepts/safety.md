@@ -15,11 +15,13 @@ mutation. A device appearing in the UI is never permission to change it.
 | Start the controller | Yes, read-only polling after startup | No | Opens controller data, starts HTTP service, and resumes collection for adopted devices |
 | Discovery scan or add by address | Network probe only | No | Discovery coverage depends on container networking |
 | Pre-adoption Inspect | Read-only authenticated calls | No | Uses the supplied device credential only for the inspection |
+| Export sanitized compatibility report | No additional router call | No | Downloads the server-produced, bounded Inspect projection in the browser; no controller persistence or upload |
 | Save site settings | No | No | Changes desired state in the controller database |
 | Preview | Read-only calls | No | Computes exact per-device differences and gates |
 | Diagnostics bundle | No live router calls | No | Packages bounded, redacted stored controller evidence |
 | Portable backup/restore preview | No | No | Reads, authenticates, and stages controller data |
 | Controller-host speed test | No router API/SSH call | No | Sends about 15 MiB through the normal WAN path; may saturate it for up to 30 seconds |
+| Effective-WAN/topology collection | Read-only ubus and bounded `file.exec` calls | No | Observes the route table and logical interfaces; does not change routes, metrics, PPPoE, firewall, or failover |
 | Adoption with access payload accepted | Yes, over SSH | Yes | Creates/replaces the scoped login and ACL only |
 | Apply | Yes, over ubus | Yes | Changes only reviewed, controller-owned UCI sections |
 | RF scan | Yes | No intended persistent change | Serving radio leaves channel temporarily; clients may be disrupted |
@@ -41,6 +43,26 @@ Treat these as different decisions:
 
 Accepting the adoption payload does not authorize a later WLAN, network,
 firewall, DHCP, or package change.
+
+## Compatibility reports are a separate safe projection
+
+Do not share the full Inspect response. It can contain the target MAC,
+deployment-specific facts, and free-text notes. **Export sanitized compatibility
+report** is a server-built format-version-1 document with only allowlisted
+hardware, firmware, radio, port, feature-state, and supported-function fields.
+
+The builder rejects unknown functions or switch modes, unsafe interface names,
+excessive radio/port evidence, and encoded output over 64 KiB. It normalizes and
+caps individual text fields at 256 bytes, strips address- and secret-shaped
+text, and replaces the exact sensitive values used for Inspect. If those checks
+cannot prove the output safe, Inspect can succeed but the report is omitted
+with an explanatory note. Do not reconstruct a report by copying raw API
+responses or router command output.
+
+Downloading the report is browser-local. It makes no second router request,
+creates no controller job or stored artifact, and performs no automatic upload.
+The downloaded file is then governed by the operator's browser, workstation,
+and chosen sharing channel rather than controller retention or RBAC.
 
 ## The access payload
 
@@ -170,8 +192,9 @@ automatic 802.11k neighbour maintenance, so review roaming intent first.
 - The controller has no native TLS listener in v0.1.3. Use loopback or a
   trusted management LAN and a trusted reverse proxy.
 - No independent security audit or penetration test has been completed.
-- Hardware support is capability-driven; validation on two devices is not a
-  guarantee for every OpenWrt target.
+- Hardware support is capability-driven. The two-device end-to-end record and
+  the separate Cudy read-only inspection report do not guarantee another
+  OpenWrt target or validate Cudy adoption/Apply.
 - Rollback protects UCI changes, not unrelated physical, firmware, upstream,
   or power failures.
 - A portable backup contains sensitive controller state and saved credentials.

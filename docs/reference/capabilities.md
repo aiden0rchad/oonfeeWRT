@@ -41,9 +41,9 @@ unsupported, stale, partial, and observed-empty evidence.
 | Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Add router by management address | **Shipped, hardware-verified** | Works without layer-2 discovery |
-| On-demand discovery | **Shipped** | ARP/mDNS coverage depends on host/container networking |
+| On-demand discovery | **Shipped** | Bounded IPv4 TCP scan of eligible directly attached networks, fingerprinted by unauthenticated `/ubus` object listing; it implements neither ARP-table discovery nor mDNS, and a bridged container normally sees only its container networks |
 | Read-only pre-adoption inspection | **Shipped, hardware-verified** | Authenticates to the router but creates no router/controller inventory state |
-| Sanitized compatibility-report export | **Shipped** | Versioned hardware/capability allowlist from Inspect; no identity, secrets, network configuration, extra router call, persistence, or upload |
+| Sanitized compatibility-report export | **Shipped** | Server-built format v1 allowlist from Inspect; bounded to 64 KiB and omitted if strict sanitization cannot prove it safe. Board-declared LAN/WAN labels remain; deployment identity, addresses, secrets, network configuration, clients, live telemetry, timestamps, extra router calls, persistence, and upload do not |
 | Explicit Gateway/AP/Switch function selection | **Shipped, hardware-verified** | A device may have multiple functions; function choice controls rendered intent |
 | Scoped controller login and ACL | **Shipped, hardware-verified** | Separate default-off consent; one login and one ACL file, no package/executable |
 | Capability probe and re-probe | **Shipped, hardware-verified** | Stores measured support/gaps; firmware changes do not have to leave stale capability truth forever |
@@ -67,17 +67,27 @@ unsupported, stale, partial, and observed-empty evidence.
 | Capability | v0.1.3 status | Important boundary |
 |---|---|---|
 | Fleet status and warning/error summary | **Shipped** | Partial data is disclosed rather than flattened |
+| Effective main-table IPv4 WAN selection | **Shipped, source-tested only** | Selects one usable lowest-metric installed route and maps its kernel device to exactly one active netifd default-route interface; the issue supplied real route evidence, but the v0.1.3 fix is proved by regression fixtures rather than a new published physical-controller run |
 | WAN reachability charts/table | **Shipped, hardware-verified** | Gateway sends three ICMP probes to fixed `1.1.1.1` at most once per minute; this is not full ISP uptime, HTTP, or DNS validation |
-| WAN/interface throughput | **Shipped** | Source and missing-sample provenance are shown |
+| Dashboard WAN throughput | **Shipped** | Uses the proved kernel route interface only when the exact RX/TX series key exists; otherwise it stays unavailable instead of guessing `wan`, an Ethernet interface, or the first series |
+| Device Detail interface chart | **Shipped** | Uses the current proved route-device candidate directly and can remain empty until that series has samples; explicit `null` from a v0.1.3 server prevents guessing, while omission from an older server retains the rolling-version fallback |
 | Controller-host speed test | **Shipped** | Cloudflare endpoint, about 15 MiB, one active job, 30-second hard bound, three terminal results retained |
 | Gateway-run speed test | **Unavailable in v0.1.3** | Would need a separately approved router capability |
 | Loaded latency and loaded jitter | **Unavailable** | The controller-host method reports idle latency/jitter only |
+
+The WAN proof is a composite of the installed kernel route table and netifd's
+logical-interface dump collected in one slow topology cycle. It supports the
+ordinary case of one DHCP, static, or PPPoE uplink. Distinct equal-metric
+defaults, ECMP/multipath, an unmappable kernel device, malformed or missing
+evidence, policy-routing-table selection, `mwan3`, manual WAN selection,
+per-uplink health, and bond-member monitoring are not selected or inferred.
+The baseline 15-minute collection cadence is not rapid failover detection.
 
 ## Topology
 
 | Capability | v0.1.3 status | Important boundary |
 |---|---|---|
-| Internet → gateway → infrastructure → client graph | **Shipped, hardware-verified** | Inferred from route, FDB/neighbor, association, and optional LLDP evidence |
+| Internet → gateway → infrastructure → client graph | **Shipped, hardware-verified baseline; v0.1.3 route fix source-tested** | Internet edge uses the proved kernel default-route interface; the remaining graph is inferred from FDB/neighbor, association, and optional LLDP evidence |
 | Current measured/inferred source labels | **Shipped** | Ambiguous links stay ambiguous; expired evidence can leave an online device unplaced |
 | Topology history | **Shipped** | Closed intervals retained for 31 days |
 | Baseline topology without extra package | **Shipped** | BusyBox FDB sources may lack VLAN identity |
@@ -164,6 +174,12 @@ evidence for one Cudy M3000 v2/MT7981 Filogic variant. It proves physical-radio
 counting and its direct LAN/WAN layout only; it does not prove adoption, Apply,
 tagged VLAN management, operational telemetry, resource budgets, or other
 Filogic boards.
+
+Issue [#20](https://github.com/aiden0rchad/oonfeeWRT/issues/20) supplied real
+DrayTek-management-plus-PPPoE route output used to reproduce the v0.1.3 defect.
+The published release proves the resulting selection, ambiguity, composite
+failure, and rolling API/UI behavior with automated tests. That is
+**source-tested evidence**, not a new end-to-end hardware-validation record.
 
 That evidence is deliberately specific. It does not prove all ath79, mwlwifi,
 MT7621, broader Filogic, DSA, swconfig, mesh, or multi-AP combinations. Review the

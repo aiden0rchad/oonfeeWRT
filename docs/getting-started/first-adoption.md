@@ -45,9 +45,12 @@ Sign in and select **Adopt a device** in the left navigation.
 
 The page always provides add-by-address. Its discovery scan is only a convenience:
 
-- bridge-mode Docker can use routed TCP probing but cannot see LAN ARP or mDNS;
+- bridge-mode Docker's automatic plan normally sees only the container's own
+  interface subnets, not the host LAN;
 - Docker Desktop users should normally add by address;
-- discovery is IPv4-only, on demand, and refuses networks wider than `/22`.
+- discovery is IPv4-only, on demand, and refuses networks wider than `/22`;
+- the shipped scan probes TCP `/ubus`; it does not use ARP tables or mDNS in
+  bridge or host-network mode.
 
 If a scan lists the correct router, select **Adopt this**. Otherwise enter its management address directly.
 
@@ -83,11 +86,27 @@ Inspection uses authenticated, read-only ubus calls. It creates no inventory row
 
 An **Unknown** result means the credential, ACL, rpcd module, or driver did not supply enough evidence. It does not mean the feature is absent.
 
+The radio count is a physical-radio inventory, not a count of SSIDs or BSS
+interfaces. A radio that exposes both AP and station interfaces is counted
+once. Likewise, **Single interface: `eth1` (no separate switch)** means the
+board reported a LAN interface without independent switch ports; it is not
+evidence that inspection missed a known switch.
+
 To share hardware support evidence, select **Export sanitized compatibility
-report**. The local JSON download contains only allowlisted hardware, firmware,
-port/radio, feature-state, and supported-function facts. It excludes the router
-address, MAC, credentials, network configuration, clients, timestamps, and
-free-text notes, makes no extra router call, and is not uploaded automatically.
+report**. The browser downloads `oonfeewrt-compatibility-report.json`. Its
+format version is `1`, and it contains only bounded, allowlisted hardware,
+firmware, physical-radio, port, feature-state, and supported-function facts.
+It excludes router and site identity, MAC and network addresses, credentials,
+network configuration, clients, live telemetry, timestamps, runtime
+radio/PHY and bridge-member identifiers, and free-text notes. Board-declared
+LAN/WAN labels remain because they are hardware compatibility evidence.
+
+The report is built from the inspection already completed: exporting it makes
+no extra router call, writes no controller state, and uploads nothing. If the
+button is absent, read the inspection notes. Evidence outside the strict
+safety bounds causes report generation to fail closed while leaving the
+inspection result usable; do not replace the report with a raw response or
+screenshot that may expose identifiers.
 
 ## 4. Select device functions
 
@@ -107,6 +126,11 @@ Switch behavior is capability-dependent:
 - `observe-only` exposes legacy switch telemetry/topology without promising writes;
 - `unknown` retains the uncertainty;
 - `none` means no switch capability was observed.
+
+A generic single-interface LAN is separate from legacy `swconfig`. v0.1.3
+does not create tagged VLAN attachments on that layout and leaves its existing
+LAN/VLAN configuration unchanged. See [Networks, VLANs, and DHCP](../guide/networks.md)
+before planning a tagged network.
 
 ## 5. Review the controller access payload
 
@@ -178,7 +202,10 @@ Do not install packages blindly. First verify the existing OpenWrt service and c
 
 ### Discovery is empty
 
-Enter the IP address directly. Docker bridge mode and Docker Desktop do not provide the layer-2 view needed for full discovery.
+Enter the IP address directly. The shipped scanner needs an eligible, reachable
+IPv4 interface subnet; it does not implement ARP-table or mDNS discovery. A
+Docker bridge or Docker Desktop VM commonly exposes only its internal subnet,
+not the router's management subnet.
 
 ### The login fails
 

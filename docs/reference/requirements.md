@@ -67,6 +67,27 @@ not silently install them. The only shipped optional-package workflow is LLDP,
 which separately plans and may install official-feed `lldpd` packages after
 explicit approval. See [Capabilities](./capabilities.md).
 
+### Effective-WAN observation prerequisites
+
+v0.1.3's WAN selection needs two read-only facts from a gateway in the same
+slow topology poll:
+
+- successful `network.interface dump` through ubus; and
+- successful scoped `file.exec` of `/sbin/ip -4 route show table all`.
+
+The shipped ACL has allowed that exact route command since v0.1.0, so upgrading
+an already adopted v0.1.2 device requires no ACL refresh, re-adoption, package,
+or device-administrator credential. The router must provide the stock `ip`
+command and expose an ordinary installed main-table IPv4 default whose kernel
+device maps to exactly one active netifd interface that also reports a default
+route.
+
+Ordinary single DHCP, static, and PPPoE uplinks satisfy the modeled shape.
+Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
+`mwan3`, unmappable runtime devices, and bond-member selection remain
+unavailable rather than guessed. Those layouts can still be managed outside
+oonfeeWRT, but v0.1.3 does not claim their Dashboard WAN path is authoritative.
+
 ## Network reachability
 
 The controller host must be able to reach every router's management address.
@@ -101,13 +122,18 @@ The supplied Compose setup uses bridge networking and publishes
 `127.0.0.1:8080:8080`. In bridge mode:
 
 - add-by-address, adoption, polling, and Apply work over normal routed L3;
-- subnet TCP discovery can work where routing permits; and
-- ARP-table and mDNS discovery do not cross the container bridge.
+- an explicitly requested, bounded IPv4 subnet scan can work where routing
+  permits; and
+- automatic discovery planning sees the container namespace's eligible
+  directly attached IPv4 networks, not the host's LAN interfaces.
 
-Linux host networking is an explicit opt-in for full local layer-2 discovery.
-Docker Desktop does not provide equivalent true host networking for this use;
-add routers by address. Discovery is a convenience, never an adoption
-requirement.
+Discovery is not ARP- or mDNS-based in any mode. It opens bounded TCP/HTTP
+probes and fingerprints stock rpcd with an unauthenticated `/ubus` object-list
+request. Linux host networking is an explicit opt-in that lets the planner see
+eligible host LAN interfaces; it does not turn discovery into a layer-2
+protocol. Docker Desktop does not provide the equivalent interface view for
+this use. Add routers by address when the planned networks omit the router's
+subnet. Discovery is a convenience, never an adoption requirement.
 
 ## Browser-to-controller security
 
@@ -191,6 +217,12 @@ client operation, tagged VLAN management, polling/resource budgets, topology,
 RF scans, speed tests, un-adoption, or other Filogic boards. Three-or-more-AP
 fan-out, real mesh backhaul, wireless uplink, and MT7621 also remain unverified.
 
+v0.1.3's PPPoE/default-route correction has separate evidence: issue #20
+provided real route output, and automated regression tests cover the
+DrayTek-management-plus-PPPoE shape, lower metrics, equal-metric ambiguity,
+direct-interface fallback, composite failure, and rolling API/UI compatibility.
+That does not add a third end-to-end hardware-validation target.
+
 This is evidence, not an allow-list. Another OpenWrt device may work, partially
 work, or expose driver-specific gaps. Adopt one non-critical device first and
 read its capability report.
@@ -203,6 +235,8 @@ read its capability report.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.
 - [ ] Controller host reaches router SSH and `/ubus` endpoints.
 - [ ] Router runs supported OpenWrt with `rpcd` and the `uhttpd` ubus handler.
+- [ ] A gateway provides the stock `/sbin/ip`; the standard adoption payload
+      will grant its exact read-only route command to the scoped login.
 - [ ] Router administrator password is set.
 - [ ] OpenWrt configuration backup exists.
 - [ ] Independent LuCI/SSH recovery path is available.

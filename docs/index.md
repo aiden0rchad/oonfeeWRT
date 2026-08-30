@@ -29,7 +29,7 @@ features:
   - title: Preview, rollback, confirm
     details: Configuration is reviewed first, staged through UCI, protected by OpenWrt's rollback timer, and confirmed only after the controller reads the expected state.
   - title: Useful fleet visibility
-    details: See Internet health, clients, device telemetry, topology history, radios, events, management overhead, and controller-host speed tests.
+    details: See Internet health and throughput when one usable main-table WAN is proved and its exact runtime device has RX/TX history, including PPPoE, plus clients, device telemetry, topology history, radios, events, management overhead, and controller-host speed tests.
   - title: Local security boundaries
     details: Local accounts and roles, scoped router access, encrypted stored secrets, redacted diagnostics, and no cloud broker or controller-authored router package.
   - title: Recovery designed in
@@ -85,11 +85,11 @@ optional package workflow in v0.1.3 is LLDP, with a separate plan and rollback.
 <div class="capability-grid">
   <div class="capability-card">
     <h3>Fleet and Internet health</h3>
-    <p>Online state, WAN route evidence, ICMP reachability, six-hour trends, recent warnings, topology summary, and bounded Cloudflare speed tests from the controller host.</p>
+    <p>A uniquely proved, usable lowest-metric main-table IPv4 default route, exact-match runtime counters (including PPPoE), ICMP reachability, six-hour trends, recent warnings, topology summary, and bounded Cloudflare speed tests from the controller host.</p>
   </div>
   <div class="capability-card">
     <h3>Discovery and adoption</h3>
-    <p>On-demand IPv4 discovery, add-by-address, read-only pre-adoption inspection, independently selected Gateway/AP/Switch functions, and pinned device identity.</p>
+    <p>On-demand IPv4 discovery, add-by-address, read-only pre-adoption inspection, independently selected Gateway/AP/Switch functions, pinned device identity, and a local sanitized compatibility-report download.</p>
   </div>
   <div class="capability-card">
     <h3>Devices and clients</h3>
@@ -170,9 +170,15 @@ oonfeeWRT v0.1.3 deliberately does not claim capabilities it cannot prove.
 - IPv4 on-demand discovery probes eligible local subnets no wider than `/22`
   for an unauthenticated `/ubus` endpoint. A bridged container may not see the
   LAN subnets to scan, so add devices by address.
-- Hardware and driver support varies. Live evidence currently covers a Linksys
-  WRT3200ACM and TP-Link Archer C6 v2 on OpenWrt 25.12.5; several mesh,
-  wireless-uplink, and newer-platform scenarios remain unverified.
+- WAN observation covers one usable, uniquely lowest-metric main-table IPv4
+  default route. Equal-metric distinct defaults and ECMP are unavailable;
+  custom policy routing, `mwan3`, and manual WAN selection are not modeled.
+- Hardware and driver support varies. End-to-end evidence covers a Linksys
+  WRT3200ACM and TP-Link Archer C6 v2 on OpenWrt 25.12.5. Read-only inspection
+  is additionally reporter-confirmed on one Cudy M3000 v2/MT7981 Filogic
+  variant; adoption, Apply, VLANs, polling budgets, and other Filogic boards
+  remain unverified. Several mesh and wireless-uplink scenarios also remain
+  unverified.
 - The project has not received an independent security audit or penetration
   test. Begin with non-critical hardware and keep tested recovery material.
 

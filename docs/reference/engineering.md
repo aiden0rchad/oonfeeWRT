@@ -30,6 +30,7 @@ Use Go **1.26.6** and Node.js **22** to match release and CI.
 ```text
 cmd/oonfeewrtd/          flags, environment, logging, signals, healthcheck
 internal/api/            REST, WebSocket, auth/RBAC, jobs and operation admission
+internal/daemon/         process wiring, Inspect and the compatibility-report projection
 internal/ubus/           OpenWrt JSON-RPC transport and typed decoding
 internal/adoption/       bounded SSH bootstrap/cleanup transport
 internal/capability/     per-device probing, defects and capability diffing
@@ -153,6 +154,35 @@ Unknown, unavailable, stale, partial, observed-empty, and observed data are not
 interchangeable. Decoders retain field presence; UI/API changes must not turn a
 failed or absent source into a real zero/false/empty collection.
 
+### Compatibility export is an allowlist, not serialization
+
+`internal/daemon/compatibility_report.go` constructs a versioned DTO explicitly;
+never marshal `InspectResult`, the capability registry, or raw probe output as a
+shareable report. Keep bounds, sensitive-input matching, address/secret
+redaction, interface-name validation, known function/switch enums, and the
+64-KiB final limit fail-closed. A report-generation failure may omit the report
+without turning a successful read-only Inspect into a router mutation or a
+partially sanitized download. The UI may format the DTO but must not add fields
+from the ordinary Inspect result or send it back to the server.
+
+### Effective WAN is one composite proof
+
+The installed main-table IPv4 route and `network.interface dump` are sampled in
+one topology batch. `internal/topology.ParseIPv4MainDefaultRoute` must select a
+unique usable lowest-metric kernel device; `Snapshot.finalizeNetworks` must map
+it to exactly one active netifd default-route candidate. Neither half may
+publish network scope or an Internet edge alone. Failure retains the last proved
+cache and records a gap; it must not make a partial observation look empty.
+
+The topology edge's `ParentPort` is the kernel device, while evidence can also
+carry the different logical interface. Dashboard may promote that kernel name
+to its WAN metric key only after exact RX/TX series-catalog proof. Device Detail
+receives the current route-device candidate directly and may therefore render
+an empty chart until samples for that key exist. In the additive Device Detail
+contract, omitted `wan_interface` means an older server and retains the rolling
+compatibility fallback; JSON `null` from v0.1.3 means no current proof and must
+not trigger a client-side guess.
+
 ### Foreign UCI is read-only
 
 Render/apply/cleanup operates only on controller-owned sections. A conflicting
@@ -191,6 +221,8 @@ before replacement and activates a durable router-write fence.
 |---|---|
 | Models/rendering | Table/golden/property tests for validation, deterministic output, and ownership |
 | ubus/capability | Mock JSON-RPC, bounded decoders, denial/session behavior, hardware defect fixtures |
+| Compatibility report | Explicit DTO shape, sanitizer/redaction, bounds/fail-closed behavior, Cudy inspection preservation, and browser-only download tests |
+| Route/topology | Main-table parser, metric/ambiguity/malformed cases, PPPoE logical-to-kernel mapping, composite failure, Internet-edge evidence, WAN-series selection, and rolling API/UI tests |
 | Apply engine | State-machine and integration tests for preflight, rollback, confirmation, cancellation, restart receipts |
 | Store | Schema attestation, migration, retention, recovery, WAL snapshot, concurrency/integrity tests |
 | API/auth | `httptest`, complete route-role matrix, CSRF/session/step-up/race tests |
@@ -218,6 +250,12 @@ must run on an otherwise idle, explicitly selected lab router.
 Published physical behavior and accepted gaps live in
 [`FRESH-START-VALIDATION.md`](../FRESH-START-VALIDATION.md). Do not promote a
 source-only pass to “hardware verified.”
+
+The Cudy M3000 v2 record is reporter-confirmed read-only Inspect evidence, not
+an end-to-end adoption record. Issue #20's real PPPoE/management-network route
+output is a reproduction input for v0.1.3 regression tests, not a new physical
+controller-validation run. Keep those labels distinct in code comments,
+release notes, and user documentation.
 
 ## UI constraints
 

@@ -32,8 +32,11 @@ does not need a dedicated machine and is not installed on the managed routers.
 
 ## What it provides
 
-- A fleet dashboard with WAN reachability, throughput, topology, clients,
-  radios, events, and controller-host speed tests.
+- A fleet dashboard with WAN reachability and throughput when the controller
+  can prove one unique, usable lowest-metric main-table IPv4 default
+  route—including PPPoE runtime devices—and the exact runtime device exists in
+  RX/TX history, plus topology, clients, radios, events, and controller-host
+  speed tests.
 - Reviewed site configuration for networks, VLANs, DHCP, firewall zones, and
   WLANs, with OpenWrt's rollback timer protecting every Apply.
 - Device adoption, health monitoring, telemetry, logs, RF tools, and explicit
@@ -139,9 +142,11 @@ The `passphrase` file unlocks the controller keyring and is not your owner
 account password. Back it up with the controller state and keep both private.
 `docker compose down -v` deletes the named data volume.
 
-Bridge networking works on Linux and Docker Desktop. Layer-2 discovery does not
-cross the bridge, so add routers by address. Linux host networking is an
-explicit opt-in described in the Compose file.
+Bridge networking works on Linux and Docker Desktop. The shipped discovery path
+is a bounded TCP `/ubus` scan of eligible interface subnets; it does not use ARP
+or mDNS. A container bridge usually does not expose the router's LAN subnet, so
+add routers by address. Linux host networking can expose the host's LAN
+interfaces and is an explicit opt-in described in the Compose file.
 
 For checksummed binaries, signature verification, reverse-proxy TLS,
 persistence, upgrades, and rollback, follow the

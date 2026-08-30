@@ -32,7 +32,7 @@ general event stream is readable by lower roles.
 | Run controller-host speed test or cancel one | No | Yes | Yes | Yes |
 | Run an acknowledged RF scan or on-air verification | No | Yes | Yes | Yes |
 | Discover, inspect, adopt, re-probe, rename, or un-adopt a device | No | No | Yes | Yes |
-| Export a sanitized compatibility report after Inspect | No | No | Yes | Yes |
+| Download the sanitized compatibility report returned by Inspect | No | No | Yes | Yes |
 | Edit WLANs, networks, zones, policies, groups, meshes, uplinks, or overrides | No | No | Yes | Yes |
 | Preview and Apply configuration | No | No | Yes | Yes |
 | Generate/download diagnostics | No | No | Yes | Yes |
@@ -43,6 +43,11 @@ general event stream is readable by lower roles.
 
 The server enforces this matrix; hiding a control in the UI is not the security
 boundary.
+
+Inspect and its compatibility report use the same Administrator-or-Owner,
+authenticated, CSRF-protected request. Export is not a second server endpoint:
+the browser downloads the allowlisted report already returned in that response.
+After download, controller roles no longer govern copies of the JSON file.
 
 ## First account and owner protection
 
@@ -132,6 +137,12 @@ That credential:
 After adoption, the controller stores its scoped `oonfeewrt` credential sealed
 in SQLite. The matching keyring and runtime passphrase are required to open it.
 See [Architecture](./architecture.md) and [Safety model](./safety.md).
+
+v0.1.3's effective-WAN observation is background collection, not an interactive
+account action. The scoped router credential calls `network.interface dump` and
+the pre-existing ACL grant for `/sbin/ip -4 route show table all`. The command
+is read-only, and upgrading a router already adopted by v0.1.2 requires neither
+an ACL refresh nor a device-administrator credential.
 
 ## Deployment implications
 

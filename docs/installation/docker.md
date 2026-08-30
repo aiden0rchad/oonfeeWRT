@@ -92,10 +92,12 @@ The default bridge mode is the safe portable choice. Polling, adoption, and Appl
 What bridge mode does not provide is the controller host's LAN layer-2 view:
 
 - add-by-address works;
-- routed TCP subnet probing may work;
-- ARP and mDNS discovery do not cross the bridge.
+- the automatic scan normally sees only the container's interface subnets;
+- the shipped discovery scan does not use ARP or mDNS in any network mode.
 
-On Linux, full layer-2 discovery is an explicit host-network opt-in. In `docker-compose.yml`, remove `ports:`, add:
+On Linux, host networking can expose the host's eligible LAN interfaces to the
+bounded TCP `/ubus` scan. It does not enable a separate layer-2 discovery
+engine. In `docker-compose.yml`, remove `ports:`, add:
 
 ```yaml
 network_mode: host
@@ -189,7 +191,10 @@ Common causes are a missing/unreadable passphrase, the wrong passphrase for the 
 
 ### Discovery finds no router
 
-Use **Adopt a device** and enter the router IP. Empty layer-2 discovery is expected in bridge mode and on Docker Desktop.
+Use **Adopt a device** and enter the router IP. The bounded TCP `/ubus` scan
+sees only eligible, reachable interface subnets; a container bridge or Docker
+Desktop VM commonly exposes only its internal subnet. The scanner does not use
+ARP or mDNS.
 
 ### The controller appears empty after recreating the service
 
