@@ -128,11 +128,18 @@ Choose another loopback port for a standalone process, for example:
 ./oonfeewrtd -data-dir "$PWD/data" -listen 127.0.0.1:8081
 ```
 
-Then open `http://127.0.0.1:8081`. If using Compose, change the host side of `127.0.0.1:8080:8080` and keep the container side at `8080`.
+Then open `http://127.0.0.1:8081`. If using the v0.1.4 Compose file, change
+`published: "8080"` to the desired host port and keep `target: 8080`.
 
 ### The browser is on another computer
 
-`127.0.0.1` is reachable only on the controller host. Do not expose raw port 8080 to the Internet. Configure [reverse-proxy TLS](../installation/reverse-proxy.md), or use a deliberate isolated management network.
+`127.0.0.1` is reachable only on the controller host. The unreleased v0.1.4
+Compose file accepts `OONFEE_HTTP_BIND=<controller-LAN-IP>` for a deliberate
+isolated management-network bind. Prefer one concrete IP; `0.0.0.0` exposes
+the port on every host IPv4 interface and is never the browser URL. Do not
+expose raw port 8080 to the Internet. Configure
+[reverse-proxy TLS](../installation/reverse-proxy.md) for access beyond the
+trusted management network.
 
 ## Next steps
 

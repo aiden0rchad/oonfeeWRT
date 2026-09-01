@@ -85,6 +85,42 @@ ok
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) on the controller host and create the first owner.
 
+## v0.1.4: choose where Docker publishes HTTP
+
+The Compose file in the unreleased v0.1.4 source keeps loopback as the safe
+default and adds `OONFEE_HTTP_BIND`, a Compose-only host publish IP. It does
+not replace `OONFEE_LISTEN`; the container must continue listening on `:8080`
+internally. Set `RELEASE_OR_TEST_TAG` to an actually published v0.1.4 release
+or compatible test-image tag before running these commands.
+
+To reach the controller from a trusted management LAN, bind the host port to
+the controller host's specific LAN address:
+
+```sh
+RELEASE_OR_TEST_TAG=v0.1.4 # use the exact candidate tag before release
+OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION="$RELEASE_OR_TEST_TAG" docker compose up -d
+curl --fail http://192.168.1.20:8080/healthz
+```
+
+Repeat `OONFEE_HTTP_BIND` on every Compose lifecycle command or store
+`OONFEE_HTTP_BIND=192.168.1.20` in the `.env` file beside
+`docker-compose.yml`. Without either, a later recreate uses the loopback
+default again.
+
+Use the controller's real address in the browser. `0.0.0.0` is a bind target,
+not a browser URL. To deliberately publish on every host IPv4 interface:
+
+```sh
+OONFEE_HTTP_BIND=0.0.0.0 OONFEE_VERSION="$RELEASE_OR_TEST_TAG" docker compose up -d
+```
+
+The controller has no native TLS listener. Prefer one management IP over
+`0.0.0.0`, enforce host/network firewall policy, and never expose port 8080
+directly to the Internet. During first-owner setup, browse to a literal IP;
+DNS names are deliberately rejected at that one-time boundary to prevent DNS
+rebinding. Existing deployments keep their current mapping until their local
+Compose file is replaced or edited; pulling an image alone does not rewrite it.
+
 ## Container networking and discovery
 
 The default bridge mode is the safe portable choice. Polling, adoption, and Apply are normal outbound layer-3 connections and work when the container can route to the router.
@@ -202,7 +238,10 @@ Check that the same `oonfee-data` volume is mounted at `/data`. A new volume cre
 
 ### The browser cannot connect from another computer
 
-The default mapping is intentionally loopback-only. Add [trusted reverse-proxy TLS](reverse-proxy.md) or deliberately bind on an isolated management LAN. Do not publish raw port 8080 to the Internet.
+The default mapping is intentionally loopback-only. With the v0.1.4 Compose
+file, set `OONFEE_HTTP_BIND` to the controller's isolated management-LAN IP;
+otherwise add [trusted reverse-proxy TLS](reverse-proxy.md). Do not publish raw
+port 8080 to the Internet.
 
 ### Avoid accidental deletion
 

@@ -1334,8 +1334,8 @@ Runtime contract (what `deploy/docker-compose.yml` encodes):
 |---|---|
 | Data | single volume mounted at `/data` (`oonfeewrt.db`, paired `keyring.json`, and retained `.oonfeewrt-recovery` safety artifacts; all remain sensitive) |
 | Network | bridge default with add-by-address adoption; Linux host networking is an explicit opt-in that exposes eligible LAN interfaces to the bounded TCP `/ubus` scan (the shipped discovery path does not use ARP or mDNS) |
-| Ports | loopback `127.0.0.1:8080:8080` mapping by default; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
-| Config | env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value) |
+| Ports | host loopback port 8080 by default; Compose-only `OONFEE_HTTP_BIND` may select one management IP or explicitly use `0.0.0.0`; use a trusted reverse proxy for TLS (no native TLS listener in this release) |
+| Config | container env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value); `OONFEE_HTTP_BIND` is host-side Compose interpolation and is not passed into the container |
 | Health | `GET /healthz` (no auth, no body beyond `ok`) wired as the compose healthcheck |
 | Upgrade | pull new image, restart; schema migrates forward on boot; downgrade = restore volume backup |
 | Backup | schema-19 source exports a native authenticated-encryption `.oowrtbak` containing a consistent database/key pair, and restores only through bounded preview plus plan-bound confirmation. Keep `/data` and the same `OONFEE_PASSPHRASE_FILE` across ordinary container restarts; the current runtime passphrase is verified before a prepared keyring is created. Successful restore writes `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`; after audit acknowledgement, fixed-shape retention targets three newest-first while always preserving active restore references. |

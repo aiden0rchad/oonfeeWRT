@@ -3,6 +3,16 @@
 #   OONFEE_VERSION=vX.Y.Z docker compose up -d
 #   open http://127.0.0.1:8080 on the controller host
 #
+# To publish on one trusted management-LAN address instead:
+#
+#   OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION=vX.Y.Z docker compose up -d
+#
+# Repeat OONFEE_HTTP_BIND on every Compose command or store it in the `.env`
+# file beside this file so a later recreate cannot silently return to loopback.
+#
+# OONFEE_HTTP_BIND=0.0.0.0 publishes on every host IPv4 interface. Use that
+# only with a host/network firewall on a trusted LAN; this listener has no TLS.
+#
 # NETWORKING — the safe, portable bridge mode is the default:
 #
 #   Bridge mode works everywhere, including Docker Desktop. HTTP is exposed
@@ -11,7 +21,9 @@
 #
 # Linux-only host networking is an explicit discovery opt-in. Remove `ports:`,
 # add `network_mode: host`, and put TLS/firewall policy in front of port 8080.
-# Host mode exposes the daemon's `:8080` listener directly on host interfaces.
+# OONFEE_HTTP_BIND applies only to `ports:` and does nothing in host mode. Set
+# OONFEE_LISTEN to loopback or one exact trusted host IP before using host mode;
+# its default `:8080` exposes the daemon on every host interface.
 
 services:
   oonfeewrt:
@@ -20,7 +32,10 @@ services:
     restart: unless-stopped
 
     ports:
-      - "127.0.0.1:8080:8080"
+      - target: 8080
+        published: "8080"
+        host_ip: "${OONFEE_HTTP_BIND:-127.0.0.1}"
+        protocol: tcp
 
     volumes:
       - oonfee-data:/data           # SQLite DB, keyring and backups

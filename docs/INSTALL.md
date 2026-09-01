@@ -168,11 +168,20 @@ image, a named data volume, a mode-0600 passphrase file owned by UID 65532, and
 the loopback-only bridge mapping above. Host networking is documented in the
 file but remains an explicit Linux-only opt-in.
 
-Set the exact image version when using that file:
+Set the exact published image version when using the current v0.1.3 file:
 
 ```sh
 OONFEE_VERSION=v0.1.3 docker compose up -d
 ```
+
+The Compose file in the unreleased v0.1.4 source keeps the loopback default but
+accepts `OONFEE_HTTP_BIND=<controller-LAN-IP>` when browsers must connect
+directly from a trusted management LAN. This changes host-side publishing and
+may be used with an exact compatible candidate or release image tag.
+`OONFEE_HTTP_BIND=0.0.0.0` explicitly publishes on every host IPv4 interface;
+it is not a browser URL. Prefer one concrete host IP, use a literal IP during
+first-owner setup, enforce firewall policy, and do not expose the controller's
+unencrypted port 8080 to the Internet.
 
 On Linux, host networking lets the on-demand subnet scanner enumerate eligible
 host LAN interfaces. Replace the `-p` line with `--network host` and set

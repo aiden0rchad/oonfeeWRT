@@ -1,7 +1,9 @@
 package deploy
 
 import (
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -165,7 +167,8 @@ func TestReleaseBuildContract(t *testing.T) {
 		"read_only: true", "/tmp:rw,noexec,nosuid,nodev", "cap_drop:",
 		"- ALL", "no-new-privileges:true", "create_host_path: false",
 		`image: "ghcr.io/aiden0rchad/oonfeewrt:${OONFEE_VERSION:?set OONFEE_VERSION to a release tag}"`,
-		`- "127.0.0.1:8080:8080"`,
+		`host_ip: "${OONFEE_HTTP_BIND:-127.0.0.1}"`,
+		`OONFEE_LISTEN: ":8080"`,
 	} {
 		if !strings.Contains(string(compose), hardening) {
 			t.Errorf("compose lost runtime hardening %q", hardening)
@@ -176,6 +179,86 @@ func TestReleaseBuildContract(t *testing.T) {
 			t.Error("compose must keep host networking as a documented opt-in")
 		}
 	}
+}
+
+func TestComposeHTTPBindProfiles(t *testing.T) {
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("Docker CLI is unavailable")
+	}
+	if err := exec.Command(docker, "compose", "version").Run(); err != nil {
+		t.Skipf("Docker Compose is unavailable: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		bind string
+		want string
+	}{
+		{name: "safe default", want: "127.0.0.1"},
+		{name: "management LAN", bind: "192.0.2.44", want: "192.0.2.44"},
+		{name: "explicit all interfaces", bind: "0.0.0.0", want: "0.0.0.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := renderComposeConfig(t, docker, tc.bind)
+			service := config.Services["oonfeewrt"]
+			if len(service.Ports) != 1 {
+				t.Fatalf("ports = %+v, want one published HTTP port", service.Ports)
+			}
+			port := service.Ports[0]
+			if port.HostIP != tc.want || port.Target != 8080 || port.Published != "8080" || port.Protocol != "tcp" {
+				t.Fatalf("port = %+v, want host_ip=%q target=8080 published=8080 protocol=tcp", port, tc.want)
+			}
+			if service.Environment["OONFEE_LISTEN"] != ":8080" {
+				t.Fatalf("OONFEE_LISTEN = %q, want :8080", service.Environment["OONFEE_LISTEN"])
+			}
+			if _, passed := service.Environment["OONFEE_HTTP_BIND"]; passed {
+				t.Fatal("OONFEE_HTTP_BIND must remain host-side Compose interpolation")
+			}
+		})
+	}
+
+}
+
+type composeConfig struct {
+	Services map[string]struct {
+		Environment map[string]string `json:"environment"`
+		Ports       []struct {
+			HostIP    string `json:"host_ip"`
+			Target    int    `json:"target"`
+			Published string `json:"published"`
+			Protocol  string `json:"protocol"`
+		} `json:"ports"`
+	} `json:"services"`
+}
+
+func renderComposeConfig(t *testing.T, docker, bind string) composeConfig {
+	t.Helper()
+	output, err := composeConfigCommand(docker, bind).Output()
+	if err != nil {
+		t.Fatalf("render Compose config: %v", err)
+	}
+	var config composeConfig
+	if err := json.Unmarshal(output, &config); err != nil {
+		t.Fatalf("decode Compose config: %v", err)
+	}
+	return config
+}
+
+func composeConfigCommand(docker, bind string) *exec.Cmd {
+	cmd := exec.Command(docker, "compose", "-f", "docker-compose.yml", "config", "--format", "json")
+	cmd.Env = make([]string, 0, len(os.Environ())+2)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, "OONFEE_VERSION=") || strings.HasPrefix(value, "OONFEE_HTTP_BIND=") {
+			continue
+		}
+		cmd.Env = append(cmd.Env, value)
+	}
+	cmd.Env = append(cmd.Env, "OONFEE_VERSION=v0.0.0-test")
+	if bind != "" {
+		cmd.Env = append(cmd.Env, "OONFEE_HTTP_BIND="+bind)
+	}
+	return cmd
 }
 
 func TestReleaseTreeHasNoKnownLabFixtureIdentifiers(t *testing.T) {

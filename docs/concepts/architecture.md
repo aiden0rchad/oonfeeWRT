@@ -222,16 +222,19 @@ health, or bond members.
 
 ## Deployment boundary
 
-The default container mapping publishes `127.0.0.1:8080`. Bridge networking
-supports normal L3 management and add-by-address adoption, but does not carry
-host LAN interfaces into the container's automatic discovery plan. Discovery
-is a bounded IPv4 TCP/HTTP scan with an unauthenticated `/ubus` object-list
+The default container mapping publishes port 8080 on host loopback.
+`OONFEE_HTTP_BIND` can deliberately select one host management IP or every
+IPv4 interface without changing the container's internal `:8080` listener.
+Bridge networking supports normal L3 management and add-by-address adoption,
+but does not carry host LAN interfaces into the container's automatic
+discovery plan. Discovery is a bounded IPv4 TCP/HTTP scan with an
+unauthenticated `/ubus` object-list
 fingerprint; it implements neither ARP-table discovery nor mDNS. Linux host
 networking can expose eligible directly attached host LAN interfaces to that
 same scanner, but also exposes the listener according to the host's network and
 firewall configuration.
 
-The v0.1.3 HTTP listener has no native TLS. Keep it on loopback or a trusted,
+The HTTP listener has no native TLS. Keep it on loopback or a trusted,
 isolated management network and use a trusted reverse proxy for remote browser
 access. Review [Requirements](../reference/requirements.md) before deployment.
 

@@ -138,6 +138,24 @@ loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
 `ghcr.io/aiden0rchad/oonfeewrt:v0.1.3` for `linux/amd64` or `linux/arm64`.
 
+The Compose file in the unreleased v0.1.4 source also accepts a Compose-only
+host bind IP. After v0.1.4 or a compatible test image is published, prefer the
+controller's specific management-LAN address:
+
+```sh
+RELEASE_OR_TEST_TAG=v0.1.4 # use the exact candidate tag before release
+OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION="$RELEASE_OR_TEST_TAG" docker compose up -d
+```
+
+Repeat `OONFEE_HTTP_BIND` on every Compose lifecycle command or put
+`OONFEE_HTTP_BIND=192.168.1.20` in the `.env` file beside `docker-compose.yml`.
+That keeps a later recreate from silently returning to the loopback default.
+
+`OONFEE_HTTP_BIND=0.0.0.0` publishes on every host IPv4 interface. This is an
+explicit opt-in, not a browser address: open `http://<controller-LAN-IP>:8080`.
+There is no native TLS listener, so restrict direct HTTP to a trusted,
+firewalled management network and never expose port 8080 to the Internet.
+
 The `passphrase` file unlocks the controller keyring and is not your owner
 account password. Back it up with the controller state and keep both private.
 `docker compose down -v` deletes the named data volume.

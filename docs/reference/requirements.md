@@ -107,7 +107,7 @@ Common ports are:
 
 | Direction | Port/service | Purpose |
 |---|---|---|
-| Browser → controller | TCP 8080 by default | Bare daemon defaults to `:8080` on all interfaces; supplied Compose publishes host loopback only |
+| Browser → controller | TCP 8080 by default | Bare daemon defaults to `:8080` on all interfaces; supplied Compose publishes host loopback unless `OONFEE_HTTP_BIND` explicitly selects a management IP or wildcard |
 | Controller → router | TCP 22 by default | Explicitly approved SSH bootstrap, cleanup, ACL refresh, or optional capability work |
 | Controller → router | Router `uhttpd` HTTP/HTTPS port | `/ubus` polling and configuration |
 | Controller host → Internet | HTTPS, when used | Operator release/image downloads and the explicitly run Cloudflare speed test |
@@ -118,8 +118,10 @@ address. Firewall rules must permit the actual configured endpoint.
 
 ## Container networking
 
-The supplied Compose setup uses bridge networking and publishes
-`127.0.0.1:8080:8080`. In bridge mode:
+The supplied Compose setup uses bridge networking and publishes port 8080 on
+host loopback by default. `OONFEE_HTTP_BIND` can explicitly select one host
+management IP or `0.0.0.0`; it does not change the container's internal
+`OONFEE_LISTEN=:8080`. In bridge mode:
 
 - add-by-address, adoption, polling, and Apply work over normal routed L3;
 - an explicitly requested, bounded IPv4 subnet scan can work where routing
@@ -137,7 +139,7 @@ subnet. Discovery is a convenience, never an adoption requirement.
 
 ## Browser-to-controller security
 
-v0.1.3 has no native TLS listener. Choose one of these deployments:
+The controller has no native TLS listener. Choose one of these deployments:
 
 1. bind to `127.0.0.1:8080` and use it only from the host;
 2. keep the controller on loopback and publish it through a trusted TLS reverse
