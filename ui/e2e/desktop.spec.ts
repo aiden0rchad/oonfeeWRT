@@ -540,7 +540,7 @@ for (const viewport of [
     }
     await expect(ipv6.getByText('Warning', { exact: true })).toBeVisible()
     await expect(ipv6.getByText(
-      /IPv6 advertisements on a LAN without a usable upstream IPv6 default route.*IPv4 is unaffected/,
+      /LAN IPv6 advertisements have no usable upstream route.*IPv4 is unaffected/,
     )).toBeVisible()
     const sourceDisclosure = sources.getByRole('button', {
       name: 'More information about event sources',

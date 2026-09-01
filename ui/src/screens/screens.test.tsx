@@ -4809,7 +4809,7 @@ describe('Logs', () => {
 	const notice = screen.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
 	expect(notice.getAttribute('data-compact')).toBe('true')
 	expect(within(notice).getByRole('status').textContent ?? '').toMatch(
-	  /Affected: Linksys gateway, Office gateway.*without a usable upstream IPv6 default route.*IPv4 is unaffected/i,
+	  /Affected: Linksys gateway, Office gateway.*LAN IPv6 advertisements have no usable upstream route.*IPv4 is unaffected/i,
 	)
 	fireEvent.click(within(notice).getByRole('button', { name: 'Review IPv6 and Apply' }))
 	expect(onConfigureIPv6).toHaveBeenCalledTimes(1)

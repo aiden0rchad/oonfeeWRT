@@ -408,8 +408,7 @@ export function Logs({ onConfigureIPv6 }: { onConfigureIPv6?: () => void }) {
                 summary={(
                   <div role="status">
                     <strong>Affected: {ipv6RARouters.join(', ')}</strong>.{' '}
-                    IPv6 advertisements on a LAN without a usable upstream IPv6 default route.
-                    {' '}IPv4 is unaffected.
+                    LAN IPv6 advertisements have no usable upstream route. IPv4 is unaffected.
                   </div>
                 )}
                 details={(
