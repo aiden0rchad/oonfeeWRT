@@ -57,6 +57,12 @@ inconsistent mappings, policy-routing rules and unsupported route shapes remain
 explicitly unavailable. Collection is read-only and uses the controller ACL
 already shipped in v0.1.0; existing devices need no re-adoption or ACL refresh.
 
+**Current post-v0.1.3 source boundary (2026-09-01):** networks carry an explicit
+IPv6 policy with `preserve`, `prefix_delegation` and `disabled` modes. This is a
+source-built desired-state and safety contract, not a claim that delegated IPv6
+has been live-proved with every ISP or OpenWrt layout. Legacy rows resolve to
+`preserve` with a `/60` assignment default and cause no IPv6 device change.
+
 ---
 
 ## 0. The constraint that shapes everything
@@ -342,11 +348,74 @@ config wifi-iface 'oowrt_wlan_guest_ap1'
     ...
 ```
 
-The reconciler operates only on sections where `oonfeewrt=1` **or** whose name
-matches the `oowrt_` prefix. Foreign sections are read (for display) but never
-written or deleted. If a foreign section conflicts with desired state (e.g. a
-hand-made SSID with the same name), surface it in the UI as a **conflict** and
-stop — do not silently win.
+The reconciler ordinarily operates only on sections where `oonfeewrt=1` **or**
+whose name matches the `oowrt_` prefix. Foreign sections are read for display
+and conflict detection, not adopted or pruned. The one deliberately narrow
+write exception is an operator-selected management-LAN IPv6 policy: it may
+patch an allowlisted set of IPv6 options on exact existing sections, as defined
+below. It never adds, claims, renames or deletes one of those sections. Any
+other foreign conflict (for example a hand-made SSID with the same name) is
+surfaced as a **conflict** and stops the plan; the controller never silently
+wins.
+
+### IPv6 network policy and the management-LAN exception
+
+IPv6 policy belongs to a network and has three modes:
+
+| Mode | Meaning |
+|---|---|
+| `preserve` (UI: **Router managed**) | Leave every current router IPv6 option untouched. This is the upgrade-safe default. Choosing it after a prior controller Apply does **not** restore the older values. On a controller-owned VLAN, already-owned DHCP/firewall support remains in the desired document so preserving the option values cannot prune a working service. |
+| `prefix_delegation` | Assign a `/48`–`/64` prefix to the LAN with OpenWrt `ip6assign`, serve router advertisements and DHCPv6, and disable NDP proxy/relay. `/60` is the default assignment length. The assignment is the LAN prefix length, not the prefix requested from the ISP. |
+| `disabled` | Stop RA, DHCPv6 and NDP on that LAN and remove controller-managed IPv6 assignment state. IPv4 addressing and DHCP remain independent. |
+
+On a controller-owned VLAN above 1, the Gateway renders the interface,
+odhcpd settings and, for prefix delegation, router-local IPv6 DHCP, DNS and
+ICMPv6 input rules. An AP never requests a delegated prefix or serves RA/DHCPv6.
+On the Gateway management LAN (VLAN 0/1), replacing the existing LAN would
+violate the ownership and traversal rules, so an explicit non-preserve mode is
+implemented as option-only patches:
+
+- the exact existing `network.<management-name>` interface receives or loses
+  `ip6assign` (and Disabled also clears `ip6hint` and `ip6class`);
+- exactly one existing `dhcp` section whose `interface` matches that management
+  name receives RA, DHCPv6 and NDP values;
+- an existing conventional `network.wan6` interface receives `auto=1` for
+  Prefix delegation and `auto=0` for Disabled;
+- Disabled sets `ipv6=0` on an existing conventional `network.wan` interface.
+  Prefix delegation changes that parent only when its protocol is PPP-family:
+  `ipv6=1` when an explicit `wan6` already exists, avoiding a duplicate dynamic
+  `wan_6` client, or `ipv6=auto` when no explicit `wan6` exists. A non-PPP
+  parent is left unchanged rather than guessed.
+
+A missing/wrong-type management interface, zero or multiple matching DHCP
+sections, or a wrong-type conventional WAN section is a blocking conflict.
+An absent `wan` or `wan6` is valid for PPPoE, multi-WAN and vendor layouts and is
+left absent; the controller never invents a conventional WAN section. Patches
+cannot carry the ownership marker or section metadata and cannot create or
+delete sections. They are excluded from ownership, prune and drift bookkeeping.
+
+Disabled is deliberately limited to delegated/service state. If the management
+interface contains any nonblank `ip6addr`, `ip6prefix` or `ip6gw`, Preview is
+blocked. Those values are operator-assigned static addresses, prefixes or a
+gateway; silently deleting them would exceed the selected automation's
+ownership. The operator must remove them deliberately in OpenWrt and Preview
+again. A list-valued option is still nonblank after UCI flattening, so its shape
+cannot bypass this guard.
+
+Both explicit modes delete `ra_default`; the controller never forces router
+advertisements to claim default-router status without a usable upstream route.
+Prefix delegation can enable an explicit `wan6` or a conventional PPP parent,
+but remains conditional on the ISP/upstream actually providing a usable IPv6
+route and delegated prefix. The controller neither fabricates a prefix nor
+treats an absent one as an IPv4 outage.
+
+Saving the mode changes desired state only. Preview reports the exact option
+updates/deletes and a management-LAN change remains traversal-sensitive. Apply
+stages those operations with the rest of the device plan, includes every
+touched UCI config in the pre-apply evidence, and uses the normal
+`uci.apply {rollback:true}` health/confirm cycle. Thus the foreign sections stay
+foreign while their explicitly selected IPv6 options receive the same Preview,
+acknowledgement and rollback boundary as controller-owned sections.
 
 ### Storage
 
@@ -710,6 +779,17 @@ never raw samples:
 | Controller/audit events | newest 100,000 rows; every event has a 64 KiB aggregate stored-text/detail limit | Audit and controller history |
 | Closed topology intervals | 31d; active intervals do not expire | current graph and replay |
 | RF scan runs/BSS rows | newest terminal run per `(device_id,radio_key)`; pending/running preserved; BSS cascade | newest explicit scan per radio |
+
+The IPv6 condition compactor recognizes only the exact odhcpd
+RA/no-default-route warning. It retains warning severity and one condition row
+per router-log producer epoch, incrementing an occurrence count and retaining
+the first/latest source evidence; near matches and unrelated warnings remain
+ordinary event rows. The Logs notice names every affected router, explains that
+IPv4 is unaffected, and offers the two source-level remedies: configure Prefix
+delegation or disable IPv6 on the affected LAN, then Preview and Apply. This
+bounds controller event-row growth but does not suppress the router's own log
+emission. Only correcting the OpenWrt IPv6 configuration stops that source
+noise.
 
 Five-minute rows are flushed in one transaction only after the bucket closes;
 shutdown discards the in-progress RAM bucket rather than writing a partial row

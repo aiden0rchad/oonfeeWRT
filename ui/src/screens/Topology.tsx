@@ -270,6 +270,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const [selectedDeviceID, setSelectedDeviceID] = useState<number | null>(null)
   const [panning, setPanning] = useState(false)
   const generation = useRef(0)
+  const activeRequest = useRef<AbortController | null>(null)
   const pan = useRef<{ pointerID: number; x: number; y: number; left: number; top: number; moved: boolean } | null>(null)
   const rangeKey = historyRange.kind === 'preset'
     ? `preset:${historyRange.hours}`
@@ -277,6 +278,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const query = mode === 'current' ? 'current' : `history:${rangeKey}`
 
   const load = useCallback(async () => {
+    if (activeRequest.current) return
+    const controller = new AbortController()
+    activeRequest.current = controller
     const request = ++generation.current
     setLoadingQuery(query)
     try {
@@ -288,7 +292,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
           ? historyRange.from
           : to - historyRange.hours * hourMillis
         : to
-      const next = mode === 'current' ? await api.topology() : await api.topologyHistory(from, to)
+      const next = mode === 'current'
+        ? await api.topology(undefined, controller.signal)
+        : await api.topologyHistory(from, to, controller.signal)
       if (request !== generation.current) return
       const loadedFrom = mode === 'current' ? next.at : from
       setLoaded({ query, data: next, from: loadedFrom, to })
@@ -298,13 +304,18 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
       if (request !== generation.current) return
       setFailure({ query, message: e instanceof Error ? e.message : String(e) })
     } finally {
+      if (activeRequest.current === controller) activeRequest.current = null
       if (request === generation.current) setLoadingQuery(null)
     }
   }, [historyRange, mode, query])
 
   useEffect(() => {
     void load()
-    return () => { generation.current++ }
+    return () => {
+      generation.current++
+      activeRequest.current?.abort()
+      activeRequest.current = null
+    }
   }, [load])
 
   const data = loaded?.query === query ? loaded.data : null

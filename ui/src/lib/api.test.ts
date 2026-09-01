@@ -560,18 +560,36 @@ describe('topology API contract', () => {
     vi.mocked(fetch).mockImplementation(async () => ok({
       at: 1787140800000, complete: true, nodes: [], edges: [], gaps: [],
     }))
+    const currentRequest = new AbortController()
+    const historyRequest = new AbortController()
 
-    await api.topology(1787140800123.9)
-    await api.topologyHistory(1787054400000.8, 1787140800000.9)
+    await api.topology(1787140800123.9, currentRequest.signal)
+    await api.topologyHistory(1787054400000.8, 1787140800000.9, historyRequest.signal)
 
     expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/topology?at=1787140800123')
     expect(vi.mocked(fetch).mock.calls[1][0]).toBe(
       '/api/v1/topology/history?from=1787054400000&to=1787140800000',
     )
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBe(currentRequest.signal)
+    expect(vi.mocked(fetch).mock.calls[1][1]?.signal).toBe(historyRequest.signal)
     for (const [, init] of vi.mocked(fetch).mock.calls) {
       expect(init?.method ?? 'GET').toBe('GET')
       expect(new Headers(init?.headers).has('X-Oonfee-CSRF')).toBe(false)
     }
+  })
+})
+
+describe('global refresh API contract', () => {
+  it('forwards cancellation to dashboard and device reads', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({ devices: [] }))
+    const dashboardRequest = new AbortController()
+    const devicesRequest = new AbortController()
+
+    await api.dashboard(dashboardRequest.signal)
+    await api.devices(devicesRequest.signal)
+
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBe(dashboardRequest.signal)
+    expect(vi.mocked(fetch).mock.calls[1][1]?.signal).toBe(devicesRequest.signal)
   })
 })
 

@@ -209,7 +209,8 @@ func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 
 func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, name, vlan, cidr, zone, dhcp_json, enabled FROM networks ORDER BY id`)
+		`SELECT id, name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled
+		   FROM networks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list networks: %w", err)
 	}
@@ -220,9 +221,9 @@ func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, er
 			return nil, err
 		}
 		var n model.Network
-		var rawDHCP string
+		var rawDHCP, rawIPv6 string
 		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone,
-			&rawDHCP, &n.Enabled); err != nil {
+			&rawDHCP, &rawIPv6, &n.Enabled); err != nil {
 			return nil, err
 		}
 		dhcp := model.DefaultDHCPConfig()
@@ -231,6 +232,11 @@ func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, er
 		}
 		n.DHCP = &dhcp
 		n.LegacyDHCPDefaults = isLegacyDHCPJSON(rawDHCP)
+		ipv6, err := decodeIPv6JSON(rawIPv6)
+		if err != nil {
+			return nil, fmt.Errorf("store: decode IPv6 for network %d: %w", n.ID, err)
+		}
+		n.IPv6 = &ipv6
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -413,6 +419,11 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 	if n.Zone == "" {
 		n.Zone = n.Name
 	}
+	if n.IPv6 != nil {
+		if err := n.IPv6.Validate(); err != nil {
+			return fmt.Errorf("store: invalid IPv6 policy for network %q: %w", n.Name, err)
+		}
+	}
 	if err := db.ensureNetworkChangeSafe(ctx, n, 0); err != nil {
 		return err
 	}
@@ -422,40 +433,50 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 		if err != nil {
 			return fmt.Errorf("store: encode DHCP for network %q: %w", n.Name, err)
 		}
+		ipv6 := n.EffectiveIPv6()
+		rawIPv6, err := json.Marshal(ipv6)
+		if err != nil {
+			return fmt.Errorf("store: encode IPv6 for network %q: %w", n.Name, err)
+		}
 		res, err := db.sql.ExecContext(ctx,
-			`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, enabled)
-			 VALUES (?,?,?,?,?,?)`,
-			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), n.Enabled)
+			`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled)
+			 VALUES (?,?,?,?,?,?,?)`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), string(rawIPv6), n.Enabled)
 		if err != nil {
 			return fmt.Errorf("store: create network: %w", err)
 		}
 		id, _ := res.LastInsertId()
 		n.ID = int(id)
 		n.DHCP = &dhcp
+		n.IPv6 = &ipv6
 		n.LegacyDHCPDefaults = false
 		return nil
 	}
-	var (
-		res sql.Result
-		err error
-	)
-	if n.DHCP == nil {
-		// An older client does not know about the DHCP object. Preserve the
-		// stored policy on an unrelated rename/zone edit instead of silently
-		// resetting it to defaults.
-		res, err = db.sql.ExecContext(ctx,
-			`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, enabled=? WHERE id=?`,
-			n.Name, n.VLAN, n.CIDR, n.Zone, n.Enabled, n.ID)
-	} else {
-		rawDHCP, encErr := json.Marshal(n.DHCP)
-		if encErr != nil {
-			return fmt.Errorf("store: encode DHCP for network %q: %w", n.Name, encErr)
+	// A nil policy is an older or partial client's omission, not a request to
+	// reset it. COALESCE keeps both policy columns unchanged atomically while
+	// allowing either object to be updated independently.
+	var rawDHCP, rawIPv6 any
+	if n.DHCP != nil {
+		encoded, err := json.Marshal(n.DHCP)
+		if err != nil {
+			return fmt.Errorf("store: encode DHCP for network %q: %w", n.Name, err)
 		}
-		res, err = db.sql.ExecContext(ctx,
-			`UPDATE networks SET name=?, vlan=?, cidr=?, zone=?, dhcp_json=?, enabled=?
-			 WHERE id=?`,
-			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), n.Enabled, n.ID)
+		rawDHCP = string(encoded)
 	}
+	if n.IPv6 != nil {
+		encoded, err := json.Marshal(n.IPv6)
+		if err != nil {
+			return fmt.Errorf("store: encode IPv6 for network %q: %w", n.Name, err)
+		}
+		rawIPv6 = string(encoded)
+	}
+	res, err := db.sql.ExecContext(ctx,
+		`UPDATE networks
+		    SET name=?, vlan=?, cidr=?, zone=?,
+		        dhcp_json=COALESCE(?, dhcp_json),
+		        ipv6_json=COALESCE(?, ipv6_json), enabled=?
+		  WHERE id=?`,
+		n.Name, n.VLAN, n.CIDR, n.Zone, rawDHCP, rawIPv6, n.Enabled, n.ID)
 	if err != nil {
 		return err
 	}
@@ -464,27 +485,73 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 	} else if changed == 0 {
 		return ErrNotFound
 	}
-	if n.DHCP == nil {
-		var rawDHCP string
-		if err := db.sql.QueryRowContext(ctx,
-			`SELECT dhcp_json FROM networks WHERE id=?`, n.ID).Scan(&rawDHCP); err != nil {
-			return err
-		}
-		dhcp := model.DefaultDHCPConfig()
-		if err := json.Unmarshal([]byte(rawDHCP), &dhcp); err != nil {
-			return fmt.Errorf("store: decode DHCP for network %d: %w", n.ID, err)
-		}
-		n.DHCP = &dhcp
-		n.LegacyDHCPDefaults = isLegacyDHCPJSON(rawDHCP)
-	} else {
-		n.LegacyDHCPDefaults = false
+	var storedDHCP, storedIPv6 string
+	if err := db.sql.QueryRowContext(ctx,
+		`SELECT dhcp_json, ipv6_json FROM networks WHERE id=?`, n.ID).
+		Scan(&storedDHCP, &storedIPv6); err != nil {
+		return err
 	}
+	dhcp := model.DefaultDHCPConfig()
+	if err := json.Unmarshal([]byte(storedDHCP), &dhcp); err != nil {
+		return fmt.Errorf("store: decode DHCP for network %d: %w", n.ID, err)
+	}
+	ipv6, err := decodeIPv6JSON(storedIPv6)
+	if err != nil {
+		return fmt.Errorf("store: decode IPv6 for network %d: %w", n.ID, err)
+	}
+	n.DHCP = &dhcp
+	n.LegacyDHCPDefaults = isLegacyDHCPJSON(storedDHCP)
+	n.IPv6 = &ipv6
 	return nil
 }
 
 func isLegacyDHCPJSON(raw string) bool {
+	return isEmptyJSONObject(raw)
+}
+
+func isEmptyJSONObject(raw string) bool {
 	var fields map[string]json.RawMessage
 	return json.Unmarshal([]byte(raw), &fields) == nil && fields != nil && len(fields) == 0
+}
+
+func decodeIPv6JSON(raw string) (model.IPv6Config, error) {
+	if strings.TrimSpace(raw) == "null" {
+		return model.IPv6Config{}, errors.New("IPv6 policy must be a JSON object")
+	}
+	var stored struct {
+		Mode             *model.IPv6Mode `json:"mode"`
+		AssignmentLength *int            `json:"assignment_length"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&stored); err != nil {
+		return model.IPv6Config{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return model.IPv6Config{}, errors.New("trailing JSON")
+	}
+	// The column existed before IPv6 policy was implemented and therefore has
+	// historical {} rows. That exact empty object means preserve. Once either
+	// policy field is present, require the complete policy rather than guessing
+	// a missing value.
+	if stored.Mode == nil && stored.AssignmentLength == nil {
+		return model.DefaultIPv6Config(), nil
+	}
+	var missing []string
+	if stored.Mode == nil {
+		missing = append(missing, "mode")
+	}
+	if stored.AssignmentLength == nil {
+		missing = append(missing, "assignment_length")
+	}
+	if len(missing) > 0 {
+		return model.IPv6Config{}, fmt.Errorf("IPv6 policy is missing %s", strings.Join(missing, ", "))
+	}
+	config := model.IPv6Config{Mode: *stored.Mode, AssignmentLength: *stored.AssignmentLength}
+	if err := config.Validate(); err != nil {
+		return model.IPv6Config{}, err
+	}
+	return config, nil
 }
 
 // DeleteNetwork removes a network, refusing while a WLAN still points at it.

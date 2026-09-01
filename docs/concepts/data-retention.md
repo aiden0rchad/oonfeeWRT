@@ -79,8 +79,13 @@ exist.
 When per-device or global row-count caps truncate router-log evidence, the
 controller records a continuity gap rather than making the remaining history
 look complete. The ordinary 24-hour age prune does not add that marker.
-Repeated exact OpenWrt IPv6 router-advertisement/no-default-route warnings may
-be condensed per producer epoch while retaining counts and source boundaries.
+The exact OpenWrt odhcpd IPv6 router-advertisement/no-default-route warning is
+condensed into one warning condition per router-log producer epoch. Repeats
+increment its occurrence count while preserving warning severity and
+first/latest source evidence; similar or unrelated warnings remain individual
+rows. This bounds controller SQLite rows, not the router's own `logd` output.
+Correct the upstream IPv6/prefix-delegation configuration or disable IPv6
+service on the affected LAN to stop the message at its source.
 
 ### What v0.1.3 retains about the effective WAN
 

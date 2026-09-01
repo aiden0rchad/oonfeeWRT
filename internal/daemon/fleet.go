@@ -71,13 +71,15 @@ func (d *Daemon) target(dev *store.Device) collector.Target {
 		baselineSeconds = int((15 * time.Minute) / time.Second)
 	}
 	baseline := time.Duration(baselineSeconds) * time.Second
+	functions := deviceFunctions(dev)
 	airtimeSplit := false
 	if caps, err := deviceCaps(dev); err == nil {
 		airtimeSplit = caps.State(capability.FeatAirtimeSplit).Buildable()
 	}
 	return collector.Target{
 		DeviceID: id, MAC: mac, Name: name, Class: dev.Class,
-		Gateway:       deviceFunctions(dev).Routes(),
+		Gateway:       functions.Routes(),
+		WiredOnly:     !functions.Wireless(),
 		AirtimeSplit:  airtimeSplit,
 		ConnectionKey: deviceConnectionKey(dev),
 		Baseline:      baseline,

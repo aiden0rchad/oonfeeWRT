@@ -89,7 +89,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "release container smoke:", err)
 		os.Exit(1)
 	}
-	fmt.Println("release container smoke: clean schema-19 export/restore passed with zero devices")
+	fmt.Println("release container smoke: clean schema-20 export/restore passed with zero devices")
 }
 
 func loadConfig(path string) (*config, error) {
@@ -502,8 +502,8 @@ func runSmoke(ctx context.Context, cfg *config) error {
 	if err != nil {
 		return err
 	}
-	if !validRestorePlanID(preview.PlanID) || preview.SourceSchema != 19 || preview.TargetSchema != 19 || preview.Counts.Devices != 0 {
-		return errors.New("restore preview did not bind the expected zero-device schema-19 plan")
+	if !validRestorePlanID(preview.PlanID) || preview.SourceSchema != 20 || preview.TargetSchema != 20 || preview.Counts.Devices != 0 {
+		return errors.New("restore preview did not bind the expected zero-device schema-20 plan")
 	}
 	if err := reauthenticate(ctx, api, cfg.OwnerPassword); err != nil {
 		return err

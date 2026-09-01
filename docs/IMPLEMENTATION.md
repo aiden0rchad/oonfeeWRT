@@ -25,6 +25,7 @@ screen. `BUILD-PROMPT.md` explains how to drive a build session.
 | D8 | **Optional router packages are two-stage, per-feature root actions.** Resolve and display the package manager's exact plan, bind it, then require a second unchecked acknowledgement. Persist the before-state and actual package diff; rollback removes that exact added set while preserving pre-existing packages, and un-adoption stays blocked until rollback succeeds. Adoption never selects a package. The first capability is official-feed `lldpd`. | previously documented future tier-2 flow |
 | D9 | **Compatibility exports are server-built, read-only allowlists.** A successful Inspect result may include a bounded `oonfeewrt-compatibility-report` v1 DTO for local browser download. Never serialize the probe request, credentials, raw probe result, free-text notes, addresses, MACs, clients, live telemetry, timestamps or network configuration. Report generation makes no extra router request, persists nothing and uploads nothing; unsafe or oversized evidence omits only the report. | raw or client-assembled support exports |
 | D10 | **Effective WAN identity requires composite route and netifd evidence.** Select one usable, installed, lowest-metric, unicast IPv4 default in the main table, then map its kernel device to exactly one active logical netifd default interface, preferring `l3_device`. This maps logical PPPoE `wan` to runtime counter key `pppoe-wan`. Equal-best ambiguity, multipath, policy routing, incomplete evidence and decode failures produce unavailable/last-proved state; the controller never guesses or writes route state. | interface-name heuristics and first-default selection |
+| D11 | **IPv6 is an explicit per-network policy, not an inferred takeover.** Legacy/omitted state resolves to `preserve`; `prefix_delegation` and `disabled` are complete explicit writes. Controller-owned VLANs render exact owned state. The management LAN uses allowlisted option patches on exact existing sections, never section ownership, creation or deletion. Every change remains Preview/Apply/rollback protected. | the generic “IPv6 via odhcpd” parity claim and the absolute no-foreign-option-write wording |
 
 ### Published and historical hardware validation checkpoint (2026-08-22)
 
@@ -190,6 +191,25 @@ the pre-fix `draytek_mgmt`/`pppoe-wan` reproduction; source and release tests
 cover the correction, but the reporter has not yet supplied post-upgrade
 hardware confirmation.
 
+Current post-`v0.1.3` source adds the D11 IPv6 policy. Schema 20 adds a
+closed-topology lookup index and migrates the two historical `luci.get*Devices`
+topology-source keys to their actual `luci-rpc.get*Devices` names; the existing
+`networks.ipv6_json` column now stores
+`{"mode":"preserve|prefix_delegation|disabled","assignment_length":48..64}`.
+Historical `{}` values decode as `preserve` with `/60`; an omitted object on a
+partial update preserves the stored policy, while a present object must contain
+both fields. A schema-19 release cannot reopen a database migrated by this
+source: test builds must use a verified portable backup restored into a separate
+test volume, never the only live `v0.1.3` volume. Source and UI tests cover
+model/API/store/render behavior. A live ISP-delegated prefix and end-to-end IPv6
+client path have not yet been proved.
+
+Current source also reads router UTC time through `luci.getUnixtime`, with the
+older `luci.getLocaltime` compatibility fallback. Already-adopted routers keep
+their installed ACL until the operator explicitly refreshes the controller
+access payload; clock status remains unavailable until that acknowledged
+refresh grants these methods. No router setting is changed by the clock read.
+
 ---
 
 ## 1. Pinned stack
@@ -308,7 +328,7 @@ CREATE TABLE networks (
   vlan INTEGER NOT NULL UNIQUE, cidr TEXT NOT NULL,
   zone TEXT NOT NULL DEFAULT 'lan',
   dhcp_json TEXT NOT NULL DEFAULT '{}',  -- {enabled,start,limit,leasetime,options[]}
-  ipv6_json TEXT NOT NULL DEFAULT '{}',
+  ipv6_json TEXT NOT NULL DEFAULT '{}',  -- legacy {} => preserve,/60; explicit {mode,assignment_length}
   enabled INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE ap_groups (
@@ -592,6 +612,13 @@ unbounded scan history. Every event is limited to 64 KiB across its stored text
 and encoded detail. Exact repeated odhcpd IPv6-RA/no-default-route warnings are
 kept as one warning condition per router-log epoch with an occurrence count and
 first/latest source evidence; unrelated router warnings remain individual rows.
+The classifier accepts only the exact known odhcpd message and retains warning
+severity. The Logs UI aggregates those condition rows, names the affected
+routers, explains that IPv4 is unaffected, and links to the management-network
+IPv6 editor with two remedies: Prefix delegation or Disabled, followed by
+Preview and Apply. Compaction bounds SQLite row growth; it does not stop odhcpd
+from emitting the warning into the router's own bounded `logd` ring. Correcting
+the router configuration is the only source-level suppression.
 
 ---
 
@@ -733,13 +760,93 @@ An explicit empty or corrupt function set aborts before any desired section is
 produced. Legacy rows alone expand `role` through the schema-11 compatibility
 map.
 
+### IPv6 policy rendering
+
+`Network.IPv6` is optional in the in-memory model only so legacy rows and
+partial clients can be distinguished from explicit writes. Its effective value
+is `{mode:"preserve", assignment_length:60}`. The API always returns that
+effective object. A request that includes `ipv6` must include both `mode` and
+`assignment_length`; unknown modes, non-integers and lengths outside `/48`–`/64`
+are rejected before persistence or rendering.
+
+The three modes have exact operation semantics:
+
+- `preserve` does not set or delete IPv6 option values. It is the safe upgrade
+  behavior and an intact transition from another mode must be a no-op. On an
+  owned VLAN, the renderer carries an existing owned DHCP section forward and,
+  when its retained RA/DHCPv6 values are both `server`, keeps the three owned
+  IPv6 input rules in the desired document so prune cannot break the preserved
+  service. It never tries to reconstruct pre-controller values.
+- `prefix_delegation` writes the requested `ip6assign`, enables RA and DHCPv6,
+  disables NDP proxy/relay and removes `ra_default`. On a managed VLAN it also
+  renders owned IPv6 input accepts for DHCPv6 (UDP 546→547), DNS (TCP/UDP 53)
+  and ICMPv6 so the zone's default input rejection does not break the services.
+- `disabled` removes `ip6assign`, `ip6hint` and `ip6class`, disables RA, DHCPv6
+  and NDP, removes `ra_default`, and prunes the owned IPv6 input rules. None of
+  these operations changes the network's independent IPv4 DHCP selection. On
+  the foreign management LAN or conventional `wan`/`wan6` sections, any
+  nonblank static `ip6addr`, `ip6prefix` or `ip6gw` blocks the render;
+  Disabled never deletes those operator-authored values.
+
+Only a Gateway renders L3 IPv6 service. APs do not request a delegated prefix,
+run odhcpd service or receive management-LAN WAN patches.
+
+VLAN 0/1 is the existing management LAN and remains foreign. For an explicit
+non-preserve mode, `renderManagementIPv6` resolves the exact existing
+`network.<network-name>` interface and exactly one existing `dhcp` section with
+`interface=<network-name>`. Failure or ambiguity is a render conflict. It then
+emits `Doc.Patches`, not owned `Section`s:
+
+| Target | `prefix_delegation` | `disabled` |
+|---|---|---|
+| `network.<management-name>` | set `ip6assign=<48..64>` | delete `ip6assign`, `ip6hint`, `ip6class` |
+| matching `dhcp` section | set `ra=server`, `dhcpv6=server`, `ndp=disabled`; delete `ra_default` | set `ra=disabled`, `dhcpv6=disabled`, `ndp=disabled`; delete `ra_default` |
+| existing PPP-family `network.wan` interface, with explicit `wan6` | set `ipv6=1` so the parent carries IPv6 without spawning a duplicate dynamic `wan_6` client | set `ipv6=0` |
+| existing PPP-family `network.wan` interface, without explicit `wan6` | set `ipv6=auto` so netifd creates the dynamic IPv6 child | set `ipv6=0` |
+| existing non-PPP `network.wan` interface | no parent change; its IPv6 behavior is not inferred | set `ipv6=0` |
+| existing `network.wan6` interface | set `auto=1` | set `auto=0` |
+| nonblank `ip6addr`, `ip6prefix` or `ip6gw` on the management interface | retained; Prefix delegation adds only delegated assignment/service state | blocking conflict; remove the static value deliberately in OpenWrt, then Preview again |
+| nonblank `ip6addr`, `ip6prefix` or `ip6gw` on conventional `wan`/`wan6` | retained | blocking conflict; remove the static value deliberately in OpenWrt, then Preview again |
+
+`wan` and `wan6` are optional targets: their absence is valid and no replacement
+is created, which avoids inventing sections on multi-WAN or vendor layouts. A
+PPP-family parent (`ppp`, `pppoe`, `pppoa`, `pptp` or `l2tp`) is the only parent
+on which Prefix delegation writes `ipv6`; an existing `wan6` is enabled
+independently. Disabled can safely turn both conventional controls off when
+they exist. If either target is present with a type other than `interface`, it
+conflicts. A patch cannot write `.type`, `.name` or `oonfeewrt`, cannot add or
+delete a section, and is excluded from ownership, pruning and drift. Two
+desired networks targeting the same foreign section conflict rather than
+depending on render order.
+
+Static management-LAN and conventional-WAN detection tests the flattened
+existing values for `ip6addr`, `ip6prefix` and `ip6gw`; any non-whitespace
+value conflicts. This also catches UCI list options after reconciliation has
+flattened their elements, so representation shape cannot weaken the refusal to
+delete static IPv6 state.
+
+Never set `ra_default=1` or `ra_default=2` to hide the odhcpd warning. Both
+explicit modes delete the override so OpenWrt advertises default-router status
+only when it has a usable upstream route. Prefix delegation can configure
+negotiation and LAN service, but success still depends on the ISP/upstream
+providing a route and delegated prefix; Apply health must not claim that an ISP
+has delegated what was not observed.
+
+`Doc.Configs()` includes configs reached only through patches, so Preview shows
+the exact option-level operations and the apply engine snapshots/verifies them
+with the rest of the plan. Network changes retain the traversal acknowledgement
+and are staged before one `uci.apply {rollback:true}` transaction. Patches do
+not create a back door around preflight, health, confirm or rollback.
+
 ### Diffing
 
 `Diff(rendered Doc, actual UciState) []ChangeItem` — actual state read via
-`uci get` per config. Compare only sections we own (marker or `oowrt_` prefix)
-plus detect foreign conflicts. Output is the human-readable diff the UI shows
-before apply and the exact staged-call list the apply engine executes. The
-`rendered_hash` in `owned_sections` short-circuits no-op reconciles.
+`uci get` per config. Compare controller-owned sections plus the explicit,
+allowlisted IPv6 patch options described above, and detect all other foreign
+conflicts. Output is the human-readable diff the UI shows before apply and the
+exact staged-call list the apply engine executes. The `rendered_hash` in
+`owned_sections` short-circuits no-op reconciles; option patches deliberately
+have no ownership-ledger row.
 
 ---
 

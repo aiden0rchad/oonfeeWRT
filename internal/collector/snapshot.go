@@ -26,6 +26,15 @@ const (
 	Focused Tier = "focused"
 )
 
+// RouterClock is a recent comparison between a router's UTC clock and the
+// controller clock. ObservedAt is controller Unix milliseconds; OffsetSeconds
+// is router minus controller. The collector exposes only live observations.
+type RouterClock struct {
+	DeviceID      int64 `json:"device_id"`
+	ObservedAt    int64 `json:"observed_at"`
+	OffsetSeconds int64 `json:"offset_seconds"`
+}
+
 // Snapshot is one completed poll of one device.
 //
 // Every field that could be absent says so explicitly rather than defaulting to
@@ -40,6 +49,19 @@ type Snapshot struct {
 	Tier     Tier
 	At       time.Time
 	Duration time.Duration
+
+	// RouterUnixTime is the optional UTC epoch returned by luci.getUnixtime (or
+	// luci.getLocaltime on older OpenWrt). RouterClockAt is the controller-side
+	// midpoint of the batched request, avoiding timezone-adjusted
+	// system.info.localtime and bounding network-delay error.
+	RouterUnixTime *int64
+	RouterClockAt  time.Time
+
+	clockMethod        string
+	clockMethodMissing string
+	clockUnavailable   bool
+	clockAttempted     bool
+	clockAttemptOK     bool
 
 	// busyDuration excludes deliberate call pacing only for adaptive backoff.
 	// Duration above remains the complete externally visible diagnostic.

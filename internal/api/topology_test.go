@@ -155,6 +155,33 @@ func TestTopologyReturnsLatestClosedPlacementForUnplacedDevice(t *testing.T) {
 	}
 }
 
+func TestTopologyRejectsConcurrentReadsWithoutJoiningTheDatabaseQueue(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	h.srv.topologyMu.Lock()
+	defer h.srv.topologyMu.Unlock()
+
+	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC).UnixMilli()
+	paths := []string{
+		"/api/v1/topology",
+		"/api/v1/topology/history?from=" + strconv.FormatInt(base, 10) +
+			"&to=" + strconv.FormatInt(base+time.Hour.Milliseconds(), 10),
+	}
+	for _, path := range paths {
+		w := h.do(http.MethodGet, path, nil)
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" {
+			t.Fatalf("%s: status/retry-after = %d/%q, body=%s",
+				path, w.Code, w.Header().Get("Retry-After"), w.Body.String())
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Code != "topology_busy" {
+			t.Fatalf("%s: body=%s err=%v", path, w.Body.String(), err)
+		}
+	}
+}
+
 func TestTopologyReturnsOnlyGraphReferencedClients(t *testing.T) {
 	h := newHarness(t)
 	h.setup()

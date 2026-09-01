@@ -6,10 +6,10 @@
 //
 // Two rules run through everything here:
 //
-//   - We only ever write sections we own, named oowrt_* and carrying
-//     option oonfeewrt '1'. A foreign section with a colliding name or a
-//     conflicting function aborts the render for that device rather than being
-//     overwritten. You are a guest on someone else's router.
+//   - Sections we create are named oowrt_* and carry option oonfeewrt '1'. A
+//     foreign section with a colliding name or function aborts the render. The
+//     sole narrow exception is an explicit option-level IPv6 Patch to existing
+//     LAN/WAN sections; it cannot create, claim, or delete those sections.
 //   - Capability gates are absences, not errors. A WLAN asking for 6 GHz on a
 //     device with no 6 GHz radio renders nothing for that band and says so in
 //     the report; it does not fail the device.
@@ -113,6 +113,22 @@ type Section struct {
 	Manages []string
 }
 
+// Patch is an option-level update to a section the controller deliberately
+// does not own.
+//
+// The management LAN is created by OpenWrt and is the path used to reach the
+// device. IPv6 policy sometimes has to change a few options on that existing
+// interface and its matching DHCP section, but adopting either whole section
+// would make pruning or un-adopt capable of deleting the operator's LAN.
+// Patches therefore cannot create or delete a section, never carry the
+// ownership marker, and are excluded from ownership and drift bookkeeping.
+type Patch struct {
+	Config  string
+	Section string
+	Values  map[string]string
+	Deletes []string
+}
+
 // SectionRef identifies one UCI section: a config and a section name.
 type SectionRef struct{ Config, Name string }
 
@@ -120,6 +136,7 @@ type SectionRef struct{ Config, Name string }
 type Doc struct {
 	DeviceID int64
 	Sections []Section
+	Patches  []Patch
 
 	// Retain and Blind are how this document says "I did not decide about
 	// that", and they exist because Prune cannot tell the difference on its
@@ -178,6 +195,12 @@ func (d Doc) Configs() []string {
 		if !seen[s.Config] {
 			seen[s.Config] = true
 			out = append(out, s.Config)
+		}
+	}
+	for _, p := range d.Patches {
+		if !seen[p.Config] {
+			seen[p.Config] = true
+			out = append(out, p.Config)
 		}
 	}
 	sort.Strings(out)
@@ -395,6 +418,13 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// human would write it.
 	var members []zoneMember
 	for _, n := range site.Networks {
+		if n.Enabled && n.VLAN <= 1 && dev.EffectiveFunctions().Routes() {
+			patches, conflicts := renderManagementIPv6(n, existing)
+			rep.Conflicts = append(rep.Conflicts, conflicts...)
+			for _, patch := range patches {
+				addPatch(&doc, &rep, patch)
+			}
+		}
 		secs, oms, m := renderNetwork(n, dev, caps, existing)
 		for _, sec := range secs {
 			if sec.Config == "network" && sec.Type == "bridge-vlan" {
@@ -404,7 +434,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			addOwned(&doc, &rep, existing, sec)
 			if sec.Config == "network" && sec.Type == "interface" {
 				rep.Conflicts = append(rep.Conflicts,
-					foreignDHCPConflicts(n, sec.Name, m.iface != "" && m.dhcp, existing)...)
+					foreignDHCPConflicts(n, sec.Name, m.iface != "" && m.dhcpSection, existing)...)
 			}
 		}
 		rep.Omissions = append(rep.Omissions, oms...)
@@ -776,6 +806,25 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		})
 	}
 	return doc, rep, nil
+}
+
+// addPatch rejects two desired networks trying to update the same foreign
+// section. Silently merging them would make the winner depend on render order.
+func addPatch(doc *Doc, rep *Report, patch Patch) {
+	for _, wanted := range doc.Patches {
+		if wanted.Config != patch.Config || wanted.Section != patch.Section {
+			continue
+		}
+		rep.Conflicts = append(rep.Conflicts, Conflict{
+			Config: patch.Config, Section: patch.Section,
+			Reason: "more than one desired network targets the existing " +
+				patch.Config + "." + patch.Section + " section for IPv6 policy. " +
+				"oonfeeWRT will not choose which policy overwrites the other; give " +
+				"the management networks distinct interface targets",
+		})
+		return
+	}
+	doc.Patches = append(doc.Patches, patch)
 }
 
 func networkAttachmentAvailable(doc Doc, n model.Network) bool {

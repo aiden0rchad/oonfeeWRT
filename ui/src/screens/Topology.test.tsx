@@ -301,6 +301,29 @@ describe('Topology', () => {
 		expect(screen.queryByText(/Infrastructure history/)).toBeNull()
   })
 
+  it('aborts topology requests abandoned by mode, range, or unmount changes', async () => {
+    api.topology.mockReturnValue(new Promise(() => {}))
+    api.topologyHistory.mockReturnValue(new Promise(() => {}))
+    const view = render(<Topology />)
+
+    await waitFor(() => expect(api.topology).toHaveBeenCalledTimes(1))
+    const currentSignal = api.topology.mock.calls[0][1] as AbortSignal
+    expect(currentSignal.aborted).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(1))
+    expect(currentSignal.aborted).toBe(true)
+    const firstHistorySignal = api.topologyHistory.mock.calls[0][2] as AbortSignal
+
+    fireEvent.change(screen.getByLabelText('Topology history range'), { target: { value: '168' } })
+    await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(2))
+    expect(firstHistorySignal.aborted).toBe(true)
+    const secondHistorySignal = api.topologyHistory.mock.calls[1][2] as AbortSignal
+
+    view.unmount()
+    expect(secondHistorySignal.aborted).toBe(true)
+  })
+
 	it('hides a prior graph when the newly selected mode fails', async () => {
 		api.topologyHistory.mockRejectedValueOnce(new Error('history unavailable'))
 		render(<Topology />)
@@ -357,7 +380,7 @@ describe('Topology', () => {
       fireEvent.change(toInput, { target: { value: '2026-08-20T08:00' } })
       fireEvent.click(screen.getByRole('button', { name: 'Apply custom range' }))
       await waitFor(() => expect(api.topologyHistory).toHaveBeenCalledTimes(3))
-      expect(api.topologyHistory.mock.calls[2]).toEqual([
+      expect(api.topologyHistory.mock.calls[2].slice(0, 2)).toEqual([
         new Date('2026-08-01T08:00').getTime(),
         new Date('2026-08-20T08:00').getTime(),
       ])

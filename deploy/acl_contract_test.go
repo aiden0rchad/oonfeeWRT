@@ -39,3 +39,25 @@ func TestProductionACLHasOnlyUsedWriteScope(t *testing.T) {
 		t.Errorf("unused write file commands remain granted: %v", w.File)
 	}
 }
+
+func TestProductionACLGrantsReadOnlyUTCClockSources(t *testing.T) {
+	var acl map[string]struct {
+		Read struct {
+			UBus map[string][]string `json:"ubus"`
+		} `json:"read"`
+		Write struct {
+			UBus map[string][]string `json:"ubus"`
+		} `json:"write"`
+	}
+	if err := json.Unmarshal(ACL, &acl); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"getLocaltime", "getUnixtime"} {
+		if !slices.Contains(acl["oonfeewrt"].Read.UBus["luci"], method) {
+			t.Errorf("read-only clock source luci.%s is not granted", method)
+		}
+		if slices.Contains(acl["oonfeewrt"].Write.UBus["luci"], method) {
+			t.Errorf("clock source luci.%s was granted write access", method)
+		}
+	}
+}

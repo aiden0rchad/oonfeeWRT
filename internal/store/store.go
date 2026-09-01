@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 19
+const schemaVersion = 20
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -390,6 +390,57 @@ var migrations = map[int][]string{
 		`ALTER TABLE admins ADD COLUMN deleted_at INTEGER`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS admins_username_nocase
 		   ON admins (username COLLATE NOCASE)`,
+	},
+	20: {
+		// Closed-edge history is filtered by end time before ranking one row per
+		// child. Keeping active rows out of this index avoids paying for them in
+		// a presentation-only history query.
+		`CREATE INDEX IF NOT EXISTS topology_edges_closed_latest
+		   ON topology_edges(valid_to, child_node)
+		   WHERE valid_to IS NOT NULL`,
+		// Early topology builds stored these LuCI calls under the nonexistent
+		// `luci` object. Keep the newest observation if a development database
+		// already contains both spellings, then move the surviving legacy key to
+		// the actual `luci-rpc` object name. Current source rows are replaceable;
+		// this migration is only about preserving their most recent truth.
+		`DELETE FROM topology_source_states
+		   WHERE source='luci.getNetworkDevices'
+		     AND EXISTS (
+		       SELECT 1 FROM topology_source_states AS current
+		        WHERE current.device_id=topology_source_states.device_id
+		          AND current.source='luci-rpc.getNetworkDevices'
+		          AND current.observed_at>=topology_source_states.observed_at
+		     )`,
+		`DELETE FROM topology_source_states
+		   WHERE source='luci-rpc.getNetworkDevices'
+		     AND EXISTS (
+		       SELECT 1 FROM topology_source_states AS legacy
+		        WHERE legacy.device_id=topology_source_states.device_id
+		          AND legacy.source='luci.getNetworkDevices'
+		          AND legacy.observed_at>topology_source_states.observed_at
+		     )`,
+		`UPDATE topology_source_states
+		    SET source='luci-rpc.getNetworkDevices'
+		  WHERE source='luci.getNetworkDevices'`,
+		`DELETE FROM topology_source_states
+		   WHERE source='luci.getWirelessDevices'
+		     AND EXISTS (
+		       SELECT 1 FROM topology_source_states AS current
+		        WHERE current.device_id=topology_source_states.device_id
+		          AND current.source='luci-rpc.getWirelessDevices'
+		          AND current.observed_at>=topology_source_states.observed_at
+		     )`,
+		`DELETE FROM topology_source_states
+		   WHERE source='luci-rpc.getWirelessDevices'
+		     AND EXISTS (
+		       SELECT 1 FROM topology_source_states AS legacy
+		        WHERE legacy.device_id=topology_source_states.device_id
+		          AND legacy.source='luci.getWirelessDevices'
+		          AND legacy.observed_at>topology_source_states.observed_at
+		     )`,
+		`UPDATE topology_source_states
+		    SET source='luci-rpc.getWirelessDevices'
+		  WHERE source='luci.getWirelessDevices'`,
 	},
 }
 

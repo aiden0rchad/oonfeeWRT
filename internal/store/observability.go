@@ -378,17 +378,21 @@ func (db *DB) LatestClosedTopologyEdgesSince(ctx context.Context, since int64) (
 		return nil, errors.New("store: latest closed topology cutoff must be positive")
 	}
 	rows, err := db.sql.QueryContext(ctx, `
-SELECT e.id, e.child_node, e.child_mac, e.parent_node, e.parent_device_id,
- e.parent_port, e.medium, e.confidence, e.valid_from, e.valid_to, e.last_seen,
- e.evidence_json, e.ambiguity_json
-FROM topology_edges e
-WHERE e.valid_to IS NOT NULL AND e.valid_to >= ?
-  AND NOT EXISTS (
-    SELECT 1 FROM topology_edges newer
-    WHERE newer.child_node=e.child_node AND newer.valid_to IS NOT NULL
-      AND (newer.valid_to > e.valid_to OR (newer.valid_to=e.valid_to AND newer.id > e.id))
-  )
-ORDER BY e.child_node, e.id`, since)
+WITH ranked AS (
+ SELECT id, child_node, child_mac, parent_node, parent_device_id,
+  parent_port, medium, confidence, valid_from, valid_to, last_seen,
+  evidence_json, ambiguity_json,
+  ROW_NUMBER() OVER (
+   PARTITION BY child_node ORDER BY valid_to DESC, id DESC
+  ) AS row_num
+ FROM topology_edges
+ WHERE valid_to IS NOT NULL AND valid_to >= ?
+)
+SELECT id, child_node, child_mac, parent_node, parent_device_id,
+ parent_port, medium, confidence, valid_from, valid_to, last_seen,
+ evidence_json, ambiguity_json
+FROM ranked WHERE row_num=1
+ORDER BY child_node, id`, since)
 	if err != nil {
 		return nil, err
 	}

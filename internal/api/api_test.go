@@ -2049,6 +2049,105 @@ func TestNetworkPartialUpdateMergesButIncompleteDHCPIsRejected(t *testing.T) {
 	}
 }
 
+func TestNetworkIPv6CanBeConfiguredAndAnOlderClientDoesNotResetIt(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	created := h.do(http.MethodPost, "/api/v1/site/networks", map[string]any{
+		"name": "iot", "vlan": 20, "cidr": "10.0.20.1/24", "zone": "iot",
+		"enabled": true,
+		"ipv6":    map[string]any{"mode": "prefix_delegation", "assignment_length": 56},
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	body := h.json(created)
+	id := int(body["id"].(float64))
+	ipv6 := body["ipv6"].(map[string]any)
+	if ipv6["mode"] != "prefix_delegation" || ipv6["assignment_length"] != float64(56) {
+		t.Fatalf("create response IPv6 = %v", ipv6)
+	}
+
+	updated := h.do(http.MethodPost, fmt.Sprintf("/api/v1/site/networks/%d", id), map[string]any{
+		"name": "things",
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update status %d: %s", updated.Code, updated.Body.String())
+	}
+	ipv6 = h.json(updated)["ipv6"].(map[string]any)
+	if ipv6["mode"] != "prefix_delegation" || ipv6["assignment_length"] != float64(56) {
+		t.Fatalf("older-client update reset IPv6: %v", ipv6)
+	}
+
+	site := h.json(h.do(http.MethodGet, "/api/v1/site", nil))
+	got := site["networks"].([]any)[0].(map[string]any)["ipv6"].(map[string]any)
+	if got["mode"] != "prefix_delegation" || got["assignment_length"] != float64(56) {
+		t.Fatalf("site response IPv6 = %v", got)
+	}
+}
+
+func TestNetworkIPv6PartialUpdateAndValidation(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	created := h.do(http.MethodPost, "/api/v1/site/networks", map[string]any{
+		"name": "iot", "vlan": 20, "cidr": "10.0.20.1/24", "zone": "iot",
+		"enabled": true,
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	body := h.json(created)
+	id := int(body["id"].(float64))
+	legacy := body["ipv6"].(map[string]any)
+	if legacy["mode"] != "preserve" || legacy["assignment_length"] != float64(60) {
+		t.Fatalf("default IPv6 response = %v", legacy)
+	}
+
+	path := fmt.Sprintf("/api/v1/site/networks/%d", id)
+	updated := h.do(http.MethodPost, path, map[string]any{
+		"ipv6": map[string]any{"mode": "disabled", "assignment_length": 60},
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("partial update status %d: %s", updated.Code, updated.Body.String())
+	}
+	body = h.json(updated)
+	if body["name"] != "iot" || body["vlan"] != float64(20) || body["enabled"] != true {
+		t.Fatalf("partial IPv6 update reset network fields: %v", body)
+	}
+	if body["ipv6"].(map[string]any)["mode"] != "disabled" {
+		t.Fatalf("partial update IPv6 = %v", body["ipv6"])
+	}
+
+	for _, tc := range []struct {
+		name string
+		ipv6 map[string]any
+		want string
+	}{
+		{"empty", map[string]any{}, "must include"},
+		{"missing assignment", map[string]any{"mode": "disabled"}, "missing assignment_length"},
+		{"unknown mode", map[string]any{"mode": "automatic", "assignment_length": 60}, "mode"},
+		{"unsafe assignment", map[string]any{"mode": "prefix_delegation", "assignment_length": 65}, "between 48 and 64"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := h.do(http.MethodPost, path, map[string]any{"ipv6": tc.ipv6})
+			if bad.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", bad.Code, bad.Body.String())
+			}
+			if msg, _ := h.json(bad)["error"].(string); !strings.Contains(msg, tc.want) {
+				t.Fatalf("error = %q, want text %q", msg, tc.want)
+			}
+		})
+	}
+
+	site := h.json(h.do(http.MethodGet, "/api/v1/site", nil))
+	got := site["networks"].([]any)[0].(map[string]any)
+	if got["name"] != "iot" || got["enabled"] != true ||
+		got["ipv6"].(map[string]any)["mode"] != "disabled" {
+		t.Fatalf("rejected request mutated network: %v", got)
+	}
+}
+
 func TestApplyParsesAChunkedRequestBody(t *testing.T) {
 	h := newHarness(t)
 	h.setup()

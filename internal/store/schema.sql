@@ -279,6 +279,9 @@ CREATE INDEX IF NOT EXISTS topology_edges_active
   ON topology_edges(child_node, valid_to, last_seen);
 CREATE INDEX IF NOT EXISTS topology_edges_replay
   ON topology_edges(valid_from, valid_to);
+CREATE INDEX IF NOT EXISTS topology_edges_closed_latest
+  ON topology_edges(valid_to, child_node)
+  WHERE valid_to IS NOT NULL;
 
 -- A successful empty observation is distinct from a source nobody could read.
 CREATE TABLE IF NOT EXISTS topology_source_states (

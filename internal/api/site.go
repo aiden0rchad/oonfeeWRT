@@ -339,6 +339,40 @@ type dhcpRequest struct {
 	LeaseTime *string `json:"leasetime"`
 }
 
+type ipv6View struct {
+	Mode             string `json:"mode"`
+	AssignmentLength int    `json:"assignment_length"`
+}
+
+// ipv6Request preserves field presence for the same reason as dhcpRequest:
+// omitting ipv6 preserves the stored policy, while a present object is an
+// explicit write and must be complete.
+type ipv6Request struct {
+	Mode             *string `json:"mode"`
+	AssignmentLength *int    `json:"assignment_length"`
+}
+
+func (v *ipv6Request) toModel() (*model.IPv6Config, error) {
+	var missing []string
+	if v.Mode == nil {
+		missing = append(missing, "mode")
+	}
+	if v.AssignmentLength == nil {
+		missing = append(missing, "assignment_length")
+	}
+	if len(missing) > 0 {
+		return nil, errors.New("ipv6 must include mode and assignment_length; missing " +
+			strings.Join(missing, ", "))
+	}
+	config := &model.IPv6Config{
+		Mode: model.IPv6Mode(*v.Mode), AssignmentLength: *v.AssignmentLength,
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 func (v *dhcpRequest) toModel() (*model.DHCPConfig, error) {
 	var missing []string
 	if v.Enabled == nil {
@@ -374,6 +408,7 @@ type networkRequest struct {
 	CIDR    *string      `json:"cidr"`
 	Zone    *string      `json:"zone"`
 	DHCP    *dhcpRequest `json:"dhcp"`
+	IPv6    *ipv6Request `json:"ipv6"`
 	Enabled *bool        `json:"enabled"`
 }
 
@@ -400,6 +435,13 @@ func (v networkRequest) apply(n *model.Network) error {
 		}
 		n.DHCP = dhcp
 	}
+	if v.IPv6 != nil {
+		ipv6, err := v.IPv6.toModel()
+		if err != nil {
+			return err
+		}
+		n.IPv6 = ipv6
+	}
 	return nil
 }
 
@@ -410,6 +452,7 @@ type networkView struct {
 	CIDR    string    `json:"cidr"`
 	Zone    string    `json:"zone"`
 	DHCP    *dhcpView `json:"dhcp,omitempty"`
+	IPv6    *ipv6View `json:"ipv6,omitempty"`
 	Enabled bool      `json:"enabled"`
 }
 
@@ -431,10 +474,12 @@ func viewZonePolicy(p model.ZonePolicy) zonePolicyView {
 
 func viewNetwork(n model.Network) networkView {
 	d := n.EffectiveDHCP()
+	ipv6 := n.EffectiveIPv6()
 	v := networkView{ID: n.ID, Name: n.Name, VLAN: n.VLAN, CIDR: n.CIDR,
 		Zone: n.Zone, Enabled: n.Enabled}
 	v.DHCP = &dhcpView{Enabled: d.Enabled, Start: d.Start, Limit: d.Limit,
 		LeaseTime: d.LeaseTime, LegacyDefault: n.LegacyDHCPDefaults}
+	v.IPv6 = &ipv6View{Mode: string(ipv6.Mode), AssignmentLength: ipv6.AssignmentLength}
 	return v
 }
 
@@ -749,6 +794,11 @@ func (s *Server) handleSaveNetwork(w http.ResponseWriter, r *http.Request) {
 		// above would turn an omitted DHCP object into a stale full-object write
 		// if another request changed it between the read and update.
 		n.DHCP = nil
+	}
+	if v.IPv6 == nil {
+		// Store.SaveNetwork preserves this independently of DHCP, so concurrent
+		// partial edits cannot overwrite a newly changed IPv6 policy.
+		n.IPv6 = nil
 	}
 	if err := s.Store.SaveNetwork(r.Context(), &n); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

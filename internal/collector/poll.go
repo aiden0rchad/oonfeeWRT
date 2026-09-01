@@ -21,6 +21,12 @@ import (
 // loadScale is the fixed-point divisor system.info uses for load averages.
 const loadScale = 65536.0
 
+const (
+	clockMethodUnix      = "getUnixtime"
+	clockMethodLocal     = "getLocaltime"
+	maxExactClockInteger = int64(1<<53 - 1)
+)
+
 // call is one invocation plus what to do with its result. Keeping the two
 // together is what lets the whole poll be assembled, sent as a single batch,
 // and decoded positionally without an index-to-meaning table to get wrong.
@@ -44,6 +50,9 @@ type call struct {
 	// are tracked separately so a partial multi-BSS radio never becomes a
 	// whole-radio aggregate.
 	assocIface string
+	// clockMethod marks the version-dependent LuCI UTC clock source. It is kept
+	// separate from system.info.localtime, which is timezone-adjusted wall time.
+	clockMethod string
 
 	// optional marks a call whose failure degrades the snapshot rather than
 	// meaning the device is unreachable.
@@ -144,7 +153,11 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 
 	start := p.c.now()
 	results, err := c.Batch(ctx, invs)
-	snap.Duration = p.c.now().Sub(start)
+	end := p.c.now()
+	snap.Duration = end.Sub(start)
+	if !end.Before(start) {
+		snap.RouterClockAt = start.Add(end.Sub(start) / 2)
+	}
 	if err != nil {
 		snap.Err = err
 		return snap
@@ -161,7 +174,22 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 
 	for i, res := range results {
 		spec := calls[i]
+		if spec.clockMethod != "" {
+			snap.clockAttempted = true
+		}
 		if res.Err != nil {
+			// getUnixtime replaced getLocaltime on newer LuCI. A missing new
+			// method is compatibility negotiation, not a standing degradation;
+			// the next full poll tries the legacy method. No other failure,
+			// especially an ACL denial, is allowed to trigger the fallback.
+			if shouldFallbackClock(spec.clockMethod, res.Status) {
+				snap.clockMethodMissing = spec.clockMethod
+				continue
+			}
+			if clockSourceUnavailable(spec.clockMethod, res.Status) {
+				snap.clockUnavailable = true
+				continue
+			}
 			cause := degradationCause(res.Err, res.Status)
 			snap.topologyFailed(spec.topologySource, cause)
 			d := Degradation{
@@ -201,6 +229,10 @@ func (p *poller) poll(ctx context.Context, c *ubus.Client, target Target, tier T
 				return snap
 			}
 		} else {
+			if spec.clockMethod != "" {
+				snap.clockMethod = spec.clockMethod
+				snap.clockAttemptOK = snap.RouterUnixTime != nil && !snap.RouterClockAt.IsZero()
+			}
 			completedWait += spec.adaptiveWait
 			snap.topologyAnswered(spec.topologySource)
 			if spec.assocIface != "" {
@@ -303,16 +335,29 @@ func (p *poller) pollAux(ctx context.Context, c *ubus.Client, target Target,
 // is actually looking. Measured: iwinfo is ~92% of a focused poll (194 ms vs
 // 15.8 ms without it), and hostapd answers the per-AP questions ~30× faster.
 func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string) []call {
-	needIfaces := p.needIfaces()
 	needTopology := p.needTopology()
+	// Interface inventory is a topology prerequisite, not merely a radio-cache
+	// refresh. A successful empty iwinfo list on the same cycle is the positive
+	// runtime evidence that lets a wired-only device distinguish "no radios"
+	// from an unavailable getWirelessDevices method.
+	needIfaces := p.needIfaces() || needTopology
+	clockMethod := p.clockSourceMethod()
 	calls := []call{
 		{inv: ubus.Invocation{Object: "system", Method: "info"}, decode: decodeInfo},
-		{
-			inv:      ubus.Invocation{Object: "network.device", Method: "status"},
-			decode:   decodeNetDevices,
-			optional: true,
-		},
 	}
+	if clockMethod != "" {
+		calls = append(calls, call{
+			inv:         ubus.Invocation{Object: "luci", Method: clockMethod},
+			decode:      decodeRouterUnixTime,
+			optional:    true,
+			clockMethod: clockMethod,
+		})
+	}
+	calls = append(calls, call{
+		inv:      ubus.Invocation{Object: "network.device", Method: "status"},
+		decode:   decodeNetDevices,
+		optional: true,
+	})
 	// The client inventory. Cheap enough for every poll (5.1 ms + 2.9 ms
 	// measured) and the only way the Client Devices screen has data when nobody
 	// is looking at a particular device.
@@ -560,6 +605,31 @@ func (p *poller) buildCalls(tier Tier, ifaces []string, modes map[string]string)
 	return calls
 }
 
+func shouldFallbackClock(method string, status ubus.Status) bool {
+	return method == clockMethodUnix && status == ubus.StatusMethodNotFound
+}
+
+func clockSourceUnavailable(method string, status ubus.Status) bool {
+	return method == clockMethodUnix && status == ubus.StatusNotFound ||
+		method == clockMethodLocal &&
+			(status == ubus.StatusMethodNotFound || status == ubus.StatusNotFound)
+}
+
+func (p *poller) clockSourceMethod() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.clockUnavailable {
+		return ""
+	}
+	if p.clockMethod != "" {
+		return p.clockMethod
+	}
+	if p.clockFallback {
+		return clockMethodLocal
+	}
+	return clockMethodUnix
+}
+
 type radioFrequencyTarget struct {
 	key   string
 	iface string
@@ -628,6 +698,23 @@ func decodeInfo(raw json.RawMessage, s *Snapshot) error {
 	for i := 0; i < len(v.Load) && i < 3; i++ {
 		s.Load[i] = float64(v.Load[i]) / loadScale
 	}
+	return nil
+}
+
+func decodeRouterUnixTime(raw json.RawMessage, s *Snapshot) error {
+	var v struct {
+		Result *int64 `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	if v.Result == nil {
+		return errors.New("luci clock response carried no Unix time")
+	}
+	if *v.Result < 0 || *v.Result > maxExactClockInteger {
+		return fmt.Errorf("luci clock response Unix time %d is outside the supported range", *v.Result)
+	}
+	s.RouterUnixTime = v.Result
 	return nil
 }
 
@@ -1368,6 +1455,8 @@ func IfaceModes(ctx context.Context, c *ubus.Client) (map[string]string, error) 
 
 // needIfaces reports whether this poll should re-read the radio list.
 func (p *poller) needIfaces() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.ifaceAt.IsZero() || p.c.now().Sub(p.ifaceAt) >= rediscoverInterval {
 		return true
 	}

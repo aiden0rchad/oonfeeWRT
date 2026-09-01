@@ -182,6 +182,7 @@ type Server struct {
 	// writes; two such requests could otherwise each merge against stale state
 	// and silently discard the other's field.
 	siteMu                     siteMutex
+	topologyMu                 siteMutex
 	requests                   *requestGate
 	operations                 *operationGate
 	instanceID                 string

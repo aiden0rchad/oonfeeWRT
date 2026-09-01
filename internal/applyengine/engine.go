@@ -359,15 +359,30 @@ func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
 		args := map[string]any{"config": op.Config}
 		switch op.Kind {
 		case OpAdd:
+			if op.Patch {
+				return errors.New("patch operation cannot add a section")
+			}
 			args["type"] = op.Type
 			if op.Name != "" {
 				args["name"] = op.Name
 			}
 			args["values"] = withLists(withOwnership(op.Values), op.Lists)
 		case OpSet:
+			_, patchOwns := op.Values[OwnershipTag]
+			if op.Patch && (op.Section == "" || op.Type != "" || op.Name != "" ||
+				len(op.Values) == 0 || len(op.Lists) != 0 || patchOwns) {
+				return errors.New("patch operation must be an option-only set without an ownership marker")
+			}
 			args["section"] = op.Section
-			args["values"] = withLists(withOwnership(op.Values), op.Lists)
+			values := op.Values
+			if !op.Patch {
+				values = withOwnership(values)
+			}
+			args["values"] = withLists(values, op.Lists)
 		case OpDelete:
+			if op.Patch {
+				return errors.New("patch marker is valid only on set operations")
+			}
 			args["section"] = op.Section
 			if op.Option != "" {
 				args["option"] = op.Option
@@ -390,8 +405,9 @@ func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
 	return nil
 }
 
-// withOwnership stamps every section we write. Sections without this tag are
-// somebody else's and must never be rewritten.
+// withOwnership stamps every section we create or wholly manage. The only Set
+// that bypasses it carries Op.Patch: a validated option-level update to an
+// existing section that deliberately remains operator-owned.
 func withOwnership(v map[string]string) map[string]string {
 	out := make(map[string]string, len(v)+1)
 	for k, val := range v {

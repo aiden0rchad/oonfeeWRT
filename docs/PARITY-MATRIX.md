@@ -55,6 +55,14 @@ custom policy routing, `mwan3`, manual selection and bond-member attribution are
 explicitly unavailable. Collection is read-only on the slow network/topology
 cadence and needs neither re-adoption nor an ACL refresh.
 
+Current post-`v0.1.3` source adds an explicit per-network IPv6 policy rather
+than claiming generic IPv6 parity. Existing rows upgrade to **Router managed**
+(`preserve`, effective assignment length `/60`) and produce no IPv6 write.
+**Prefix delegation** and **Disabled** are explicit desired-state choices with
+an assignment-length input bounded to `/48`–`/64`; they still require Preview
+and Apply. The source and UI tests cover the policy, but ISP prefix delegation
+and the resulting client path have not been proved on release hardware.
+
 ---
 
 ## Network 10.5 current baseline — Observability, Safe Ops and policy
@@ -211,7 +219,7 @@ to 32 radios, 128 interfaces/radio and 512 frequencies.
 | UniFi element | OpenWrt source | Verdict |
 |---|---|---|
 | WiFi table: Name, Network, Broadcasting APs, Radio Band chips, Clients, Security | our WLAN model | 🟢 |
-| Networks table: Name, VLAN ID, Router, Subnet, IPv6 Subnet, DHCP, IP Leases (16/180), Available | our network model + odhcpd/dnsmasq lease counts | 🟢 |
+| Networks table: Name, VLAN ID, Router, Subnet, IPv6 Subnet/policy, DHCP, IP Leases (16/180), Available | our network model + odhcpd/dnsmasq lease counts | 🟡 IPv4 desired state is implemented; the current IPv6 column reports controller policy (`Router managed`, delegated assignment length or `Disabled`), not an observed delegated subnet, and lease-count parity remains incomplete |
 | Internet table: Interface, ISP, IPv4/IPv6, Port, Uptime, Peak Util, Latency | WAN state + probes | 🟢 |
 | VPN Server table: WireGuard, subnet, server address, port, active clients | OpenWrt WireGuard + `wg show` | 🟢 |
 | **One-Click VPN** (auto cloud-brokered) | 🔴 the "one-click" is cloud brokering. WireGuard itself is 🟢 — you supply the endpoint |
@@ -251,7 +259,7 @@ to 32 radios, 128 interfaces/radio and 512 frequencies.
 | Feature | OpenWrt mapping | Verdict |
 |---|---|---|
 | VLAN networks with subnet/DHCP/DNS | `network` + `dhcp` UCI + bridge VLAN filtering | 🟢 |
-| IPv6 (prefix delegation, RA, DHCPv6) | odhcpd | 🟢 |
+| IPv6 (prefix delegation, RA, DHCPv6) | per-network desired policy → netifd/odhcpd | 🟡 source-built for `preserve`, `prefix_delegation` and `disabled`, including `/48`–`/64` LAN assignment, RA/DHCPv6/NDP state and managed-VLAN IPv6 input rules. It is not full WAN/multi-WAN IPv6 management, and ISP delegation remains an external prerequisite |
 | DHCP options, reservations, lease time | dnsmasq/odhcpd | 🟢 |
 | mDNS repeater across VLANs | `umdns` / `avahi` reflector | 🟢 |
 | IGMP proxy | `igmpproxy` | 🟢 |
@@ -288,6 +296,40 @@ block/restore and custom/off DHCP states; full no-LAN/client-isolation remains
 open. §5bg and §5bj completed the temporary-state cleanup and final zero-change
 Preview.
 
+**Current IPv6 boundary (2026-09-01).** Each network now stores one of three
+policies. `preserve` leaves all current router IPv6 values untouched and is the
+upgrade-safe default; selecting it later does not restore values from an earlier
+Apply. On a controller-owned VLAN, already-owned DHCP/firewall support is
+retained so preserving the option values does not prune a working service.
+`prefix_delegation` assigns `/48`–`/64`
+to the LAN, serves RA and DHCPv6, disables NDP proxy/relay, and adds the necessary
+IPv6 DHCP/DNS/ICMP input rules on controller-owned VLANs. `disabled` removes the
+owned assignment and IPv6 input rules and disables RA, DHCPv6 and NDP while
+leaving IPv4 DHCP independent.
+
+For the gateway management LAN (VLAN 0/1), the controller does not adopt or
+replace the foreign LAN. An explicit non-preserve policy produces narrow,
+option-only patches against the exact existing LAN interface, its single
+matching DHCP section, plus narrowly gated conventional WAN options. Prefix
+delegation enables an existing `wan6`; it changes the parent `wan.ipv6` only for
+PPP-family protocols, using `1` beside an explicit `wan6` and `auto` only when
+no explicit `wan6` exists. A non-PPP parent is left unchanged. Disabled sets
+`ipv6=0` on an existing parent and `auto=0` on an existing `wan6`. The patches
+never add, claim, prune or delete a foreign section. Missing or ambiguous
+LAN/DHCP targets and wrong section types block Preview rather than invite a
+guess; absent conventional WAN sections are valid and are not invented.
+Disabled also blocks when the management interface has a nonblank `ip6addr`,
+`ip6prefix` or `ip6gw`: it will not erase an operator's static IPv6 address,
+prefix or gateway. Remove that static intent deliberately in OpenWrt before
+previewing the disable again. Both enabled and disabled modes remove
+`ra_default` rather than forcing advertisements without a usable route.
+
+Saving changes desired state only. Preview names the option-level network/DHCP
+changes and Apply keeps the normal traversal acknowledgement, staged
+`uci.apply {rollback:true}`, health and confirmation path. Prefix delegation
+still depends on the ISP and upstream router supplying a usable IPv6 route and
+delegated prefix; the controller does not fabricate either one.
+
 ---
 
 ## Logs / Events
@@ -300,6 +342,7 @@ Preview.
 | Destination country flags | MaxMind GeoLite2 lookup in the controller | 🟢 |
 | WiFi Client Connected/Disconnected/roam | redacted hostapd log events + durable per-device producer cursor | 🟢 source-built for association transitions; duration/data-used enrichment is not implied |
 | General vs **Audit** log split | separate scoped REST queries; controller/audit events have their own 100k cap | 🟢 source-built; Logs are not a WebSocket topic |
+| Repeated `odhcpd` “No default route present” warnings | exact warning classifier + per-router-log-epoch condition row | 🟢 source-built: warning severity is retained, repeats increment an occurrence count with first/latest source evidence, and the Logs notice names affected routers and links to the two explicit remedies. Compaction bounds controller event rows; it does not silence the router, so selecting Prefix delegation or Disabled and completing Preview/Apply is the source-level fix |
 | Push Notification Settings | webhook / ntfy / Gotify / email | 🟢 |
 | **Export to SIEM Server** | syslog/CEF forwarder | 🟢 |
 | Threat Detected and Blocked | Suricata + ET Open | 🟡 |

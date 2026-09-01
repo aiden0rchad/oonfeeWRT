@@ -58,6 +58,49 @@ func TestTopologyCallsUseExactStockCommandsAndSlowCadence(t *testing.T) {
 	assert(p.buildCalls(Baseline, nil, nil), 9)
 }
 
+func TestTopologyLuCISourceNamesMatchInvokedRPCObject(t *testing.T) {
+	if TopologySourceNetworkDevices != "luci-rpc.getNetworkDevices" ||
+		TopologySourceWirelessDevices != "luci-rpc.getWirelessDevices" {
+		t.Fatalf("topology LuCI sources do not match luci-rpc calls: network=%q wireless=%q",
+			TopologySourceNetworkDevices, TopologySourceWirelessDevices)
+	}
+}
+
+func TestTopologyCycleRefreshesWirelessRuntimeInventory(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	p := &poller{
+		c:                    New(newRecorder(), Options{Now: func() time.Time { return now }}),
+		target:               Target{DeviceID: 7, WiredOnly: true},
+		ifaceAt:              now,
+		topologyBridges:      []string{"br-lan"},
+		topologyBridgesKnown: true,
+	}
+	calls := p.buildCalls(Focused, []string{"phy0-ap0"}, map[string]string{"phy0-ap0": "ap"})
+	wirelessCalls := map[string]bool{}
+	var wirelessTopology bool
+	for _, spec := range calls {
+		if spec.inv.Object == "iwinfo" || strings.HasPrefix(spec.inv.Object, "hostapd.") {
+			wirelessCalls[spec.inv.Object+"."+spec.inv.Method] = true
+		}
+		if spec.inv.Object == "luci-rpc" && spec.inv.Method == "getWirelessDevices" {
+			wirelessCalls[spec.inv.Object+"."+spec.inv.Method] = true
+			wirelessTopology = spec.topologySource == TopologySourceWirelessDevices
+		}
+	}
+	for _, want := range []string{
+		"iwinfo.devices", "luci-rpc.getWirelessDevices",
+		"hostapd.phy0-ap0.get_status", "hostapd.phy0-ap0.get_clients",
+		"iwinfo.assoclist", "iwinfo.survey",
+	} {
+		if !wirelessCalls[want] {
+			t.Errorf("WiredOnly topology poll omitted conservative wireless call %s", want)
+		}
+	}
+	if !wirelessTopology {
+		t.Fatal("topology cycle omitted getWirelessDevices source coverage")
+	}
+}
+
 func TestTopologySelectiveDecodersMapStableRadiosAndPortMediaWithoutSecrets(t *testing.T) {
 	snap := Snapshot{DeviceID: 4, At: time.Unix(1_800_000_000, 0)}
 	calls := []call{

@@ -35,6 +35,14 @@ vi.mock('./screens/Radios', () => ({ Radios: () => {
   if (mocks.radioCrash) throw new Error('radio fixture failed')
   return <h1>Radios &amp; Channel Plan</h1>
 } }))
+vi.mock('./screens/Logs', () => ({
+  Logs: ({ onConfigureIPv6 }: { onConfigureIPv6?: () => void }) => (
+    <div>
+      <h1>Logs</h1>
+      <button onClick={onConfigureIPv6}>Configure network IPv6</button>
+    </div>
+  ),
+}))
 
 function signedIn(username = 'admin') {
   mocks.api.setupState.mockResolvedValue({ needs_setup: false })
@@ -113,6 +121,18 @@ describe('App session boundaries', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open topology' }))
     expect(await screen.findByRole('heading', { name: 'Topology' })).toBeTruthy()
     expect(window.location.pathname).toBe('/topology')
+  })
+
+  it('opens Network Settings from an actionable IPv6 log warning', async () => {
+    signedIn()
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Logs' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure network IPv6' }))
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
+    expect(window.location.pathname).toBe('/settings')
+    expect(screen.getByRole('tab', { name: 'Network' }).getAttribute('aria-selected')).toBe('true')
   })
 
   it('keeps the authenticated UI when logout fails', async () => {
@@ -194,6 +214,45 @@ describe('App session boundaries', () => {
     expect(screen.getByText(/Device inventory is unavailable\. Retry/)).toBeTruthy()
     expect(screen.queryByText('Managed devices (0)')).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(heading))
+  })
+
+  it('does not overlap global refreshes or let a stalled device request block the dashboard', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      signedIn()
+      let resolveDashboard!: (value: { devices: object; recent_events: never[]; recent_alert_events: never[] }) => void
+      const pendingDashboard = new Promise<{ devices: object; recent_events: never[]; recent_alert_events: never[] }>((resolve) => {
+        resolveDashboard = resolve
+      })
+      mocks.api.dashboard
+        .mockReturnValueOnce(pendingDashboard)
+        .mockResolvedValue({ devices: {}, recent_events: [], recent_alert_events: [] })
+      mocks.api.devices.mockReturnValue(new Promise(() => {}))
+      const view = render(<App />)
+
+      await waitFor(() => {
+        expect(mocks.api.dashboard).toHaveBeenCalledTimes(1)
+        expect(mocks.api.devices).toHaveBeenCalledTimes(1)
+      })
+      act(() => vi.advanceTimersByTime(90_000))
+      expect(mocks.api.dashboard).toHaveBeenCalledTimes(1)
+      expect(mocks.api.devices).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        resolveDashboard({ devices: {}, recent_events: [], recent_alert_events: [] })
+      })
+      expect(await screen.findByText('dashboard data')).toBeTruthy()
+
+      act(() => vi.advanceTimersByTime(30_000))
+      await waitFor(() => expect(mocks.api.dashboard).toHaveBeenCalledTimes(2))
+      expect(mocks.api.devices).toHaveBeenCalledTimes(1)
+
+      const deviceSignal = mocks.api.devices.mock.calls[0][0] as AbortSignal
+      view.unmount()
+      expect(deviceSignal.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('renders accessible SVG navigation and persists its expanded state per controller account', async () => {

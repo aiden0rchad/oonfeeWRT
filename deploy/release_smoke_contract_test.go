@@ -63,7 +63,7 @@ func TestReleaseContainerSmokeContract(t *testing.T) {
 		"acknowledge_session_revocation", "acknowledge_router_writes_suppressed",
 		"acknowledge_no_automatic_router_apply", "destination_runtime_passphrase",
 		"backup download checksum mismatch", "account rollback invariant failed",
-		"restore preview did not bind the expected zero-device schema-19 plan",
+		"restore preview did not bind the expected zero-device schema-20 plan",
 		`X-OonfeeWRT-Instance`,
 		"restored router-write suppression does not match the accepted intent",
 	} {

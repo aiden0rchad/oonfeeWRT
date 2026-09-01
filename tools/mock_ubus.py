@@ -553,6 +553,7 @@ OBJECTS = {
     "network.interface": {"dump": {}},
     "network.device": {"status": {}},
     "network.wireless": {"status": {}},
+    "luci": {m: {} for m in ("getFeatures", "getLocaltime", "getUnixtime")},
     # hostapd is the cheap source the architecture now prefers over iwinfo for
     # per-AP status and client lists (1 ms vs ~30 ms measured on class A).
     #
@@ -1408,6 +1409,13 @@ def handle_one(req):
                                    "interfaces": []}})
     if obj == "network":
         return ok(rid, {})
+
+    if obj == "luci":
+        if meth in ("getLocaltime", "getUnixtime"):
+            return ok(rid, {"result": int(time.time())})
+        if meth == "getFeatures":
+            return ok(rid, {})
+        return err(rid, 3)
 
     if obj == "luci-rpc":
         if meth == "getBoardJSON":

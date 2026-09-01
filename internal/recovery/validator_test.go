@@ -118,7 +118,7 @@ func TestValidateReturnsCountsAndUsesVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := recovery.Counts{Schema: 19, Devices: 1, Credentials: 1}
+	want := recovery.Counts{Schema: 20, Devices: 1, Credentials: 1}
 	if counts != want {
 		t.Fatalf("counts=%+v, want %+v", counts, want)
 	}
@@ -147,7 +147,7 @@ func TestValidateAcceptsSecuredWLANWithoutRetainingItsKey(t *testing.T) {
 	}
 }
 
-func TestValidateRequiresAnEnabledOwnerForSchema19(t *testing.T) {
+func TestValidateRequiresAnEnabledOwnerForCurrentSchema(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate string
@@ -341,7 +341,7 @@ func TestValidatePreservesCancellation(t *testing.T) {
 }
 
 func TestValidateRequiresExactSchema(t *testing.T) {
-	for _, version := range []int{18, 20} {
+	for _, version := range []int{18, 21} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			db, keeper := newValidatorDB(t, true)
 			if _, err := db.SQL().Exec(`UPDATE schema_version SET version=?

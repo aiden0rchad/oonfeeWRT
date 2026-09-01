@@ -897,18 +897,27 @@ function InternetHealth({ data }: { data: DashboardData }) {
 function TopologySummary({ onOpenTopology }: { onOpenTopology?: () => void }) {
   const [snapshot, setSnapshot] = useState<TopologySnapshot | null>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
   const generation = useRef(0)
+  const activeRequest = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
+    if (activeRequest.current) return
+    const controller = new AbortController()
+    activeRequest.current = controller
     const request = ++generation.current
+    setLoading(true)
     try {
-      const next = await api.topology()
+      const next = await api.topology(undefined, controller.signal)
       if (request === generation.current) {
         setSnapshot(next)
         setError('')
       }
     } catch (cause) {
       if (request === generation.current) setError(errorText(cause))
+    } finally {
+      if (activeRequest.current === controller) activeRequest.current = null
+      if (request === generation.current) setLoading(false)
     }
   }, [])
 
@@ -917,6 +926,8 @@ function TopologySummary({ onOpenTopology }: { onOpenTopology?: () => void }) {
     const timer = window.setInterval(load, 30_000)
     return () => {
       generation.current++
+      activeRequest.current?.abort()
+      activeRequest.current = null
       window.clearInterval(timer)
     }
   }, [load])
@@ -950,6 +961,7 @@ function TopologySummary({ onOpenTopology }: { onOpenTopology?: () => void }) {
         className="dashboard-topology-summary"
         role="region"
         aria-labelledby="dashboard-topology-heading"
+        aria-busy={loading}
       >
         {!snapshot && !error && <div role="status">Loading topology summary…</div>}
         {error && (
@@ -964,7 +976,7 @@ function TopologySummary({ onOpenTopology }: { onOpenTopology?: () => void }) {
               </div>
             )}
             details={error}
-            actions={<Button onClick={() => void load()}>Retry</Button>}
+            actions={<Button disabled={loading} onClick={() => void load()}>Retry</Button>}
           />
         )}
         {snapshot && (

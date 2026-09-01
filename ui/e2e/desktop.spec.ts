@@ -332,6 +332,13 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
         scope: 'general',
         next_before: null,
         facets: { category: [], severity: [] },
+        conditions: [{
+          event_id: 1,
+          device_id: 1,
+          state: 'recent',
+          occurrences: 37,
+          last_observed_at: 1_788_000_000_000,
+        }],
         coverage: { complete: true, expected_devices: 0, observed_devices: 0, gaps: [] },
       },
       '/api/v1/speedtests': speedTests,
@@ -532,7 +539,9 @@ for (const viewport of [
       await expectWithinMain(page, notice)
     }
     await expect(ipv6.getByText('Warning', { exact: true })).toBeVisible()
-    await expect(ipv6.getByText(/IPv6-only.*does not indicate an IPv4 outage/)).toBeVisible()
+    await expect(ipv6.getByText(
+      /IPv6 advertisements on a LAN without a usable upstream IPv6 default route.*IPv4 is unaffected/,
+    )).toBeVisible()
     const sourceDisclosure = sources.getByRole('button', {
       name: 'More information about event sources',
     })
@@ -545,8 +554,23 @@ for (const viewport of [
     await page.keyboard.press('Escape')
     await expect(sourceDialog).toBeHidden()
     await expect(sourceDisclosure).toBeFocused()
-    await expect(ipv6.locator('details')).toHaveCount(1)
-    await expect(ipv6.locator('.details-popover')).toHaveCount(0)
+    await expect(ipv6.locator('details')).toHaveCount(0)
+    await expect(ipv6.locator('.details-popover')).toHaveCount(1)
+    const ipv6Disclosure = ipv6.getByRole('button', {
+      name: 'More information about this IPv6 warning',
+    })
+    await expect(ipv6Disclosure).toHaveAttribute('aria-expanded', 'false')
+    await ipv6Disclosure.focus()
+    await ipv6Disclosure.press('Enter')
+    const ipv6Dialog = page.getByRole('dialog', { name: 'Warning: IPv6 router advertisements' })
+    await expect(ipv6Dialog).toBeVisible()
+    await expectWithinMain(page, ipv6Dialog)
+    await expect(ipv6Dialog).toContainText(/37 reported occurrences.*1 current condition record/)
+    await expect(ipv6Dialog.getByText('Keep IPv6')).toBeVisible()
+    await expect(ipv6Dialog.getByText('Do not use IPv6 on this LAN')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(ipv6Dialog).toBeHidden()
+    await expect(ipv6Disclosure).toBeFocused()
     if (viewport.width >= 1000) {
       expect((await sources.boundingBox())!.height).toBeLessThanOrEqual(64)
       expect((await ipv6.boundingBox())!.height).toBeLessThanOrEqual(72)

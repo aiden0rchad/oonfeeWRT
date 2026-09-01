@@ -69,6 +69,10 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if !s.beginTopologyRead(w) {
+		return
+	}
+	defer s.topologyMu.Unlock()
 	edges, err := s.Store.TopologyEdgesAt(r.Context(), at)
 	if handleStoreErr(w, err, "topology") {
 		return
@@ -115,6 +119,10 @@ func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "topology history range cannot exceed 31 days")
 		return
 	}
+	if !s.beginTopologyRead(w) {
+		return
+	}
+	defer s.topologyMu.Unlock()
 	edges, queryTruncated, err := s.Store.TopologyEdgesBetween(
 		r.Context(), from, to, maxTopologyHistoryEdges)
 	if handleStoreErr(w, err, "topology history") {
@@ -122,6 +130,16 @@ func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	retentionTruncated := from < s.now().Add(-maxTopologyHistory).UnixMilli()
 	s.writeTopology(w, r, to, from, false, queryTruncated || retentionTruncated, edges, nil)
+}
+
+func (s *Server) beginTopologyRead(w http.ResponseWriter) bool {
+	if s.topologyMu.TryLock() {
+		return true
+	}
+	w.Header().Set("Retry-After", "1")
+	writeCodedErr(w, http.StatusServiceUnavailable, "topology_busy",
+		"another topology request is still running; retry shortly")
+	return false
 }
 
 func topologyTimeParam(r *http.Request, name string) (int64, bool) {

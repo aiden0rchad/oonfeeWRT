@@ -14,6 +14,66 @@ func TestLegacyNetworkGetsHistoricalDHCPDefaults(t *testing.T) {
 	}
 }
 
+func TestLegacyNetworkPreservesIPv6(t *testing.T) {
+	got := (Network{}).EffectiveIPv6()
+	want := IPv6Config{Mode: IPv6Preserve, AssignmentLength: 60}
+	if got != want {
+		t.Fatalf("legacy IPv6 = %+v, want %+v", got, want)
+	}
+}
+
+func TestIPv6PolicyValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ipv6 IPv6Config
+		want string
+	}{
+		{"preserve", IPv6Config{IPv6Preserve, 60}, ""},
+		{"prefix delegation lower bound", IPv6Config{IPv6PrefixDelegation, 48}, ""},
+		{"prefix delegation upper bound", IPv6Config{IPv6PrefixDelegation, 64}, ""},
+		{"disabled", IPv6Config{IPv6Disabled, 60}, ""},
+		{"unknown mode", IPv6Config{"automatic", 60}, "mode"},
+		{"assignment too short", IPv6Config{IPv6PrefixDelegation, 47}, "between 48 and 64"},
+		{"assignment too long", IPv6Config{IPv6PrefixDelegation, 65}, "between 48 and 64"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.ipv6.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want text %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidIPv6PolicyBlocksEveryNetwork(t *testing.T) {
+	bad := IPv6Config{Mode: IPv6PrefixDelegation, AssignmentLength: 47}
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{"enabled", true},
+		{"disabled network", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dhcp := DHCPConfig{Enabled: false}
+			s := Site{UUID: "site", Networks: []Network{{
+				Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24", IPv6: &bad,
+				DHCP: &dhcp, Enabled: tc.enabled,
+			}}}
+			errs := s.Validate()
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), "assignment length") {
+				t.Fatalf("validation = %v, want IPv6 assignment error", errs)
+			}
+		})
+	}
+}
+
 func TestDHCPPoolMustFitTheSubnetAndExcludeTheGateway(t *testing.T) {
 	for _, tc := range []struct {
 		name string

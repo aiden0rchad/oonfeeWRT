@@ -754,15 +754,13 @@ func ReconcileIntervals(active, observed []model.TopologyEdge, at int64, complet
 }
 
 // ReconcileIntervalsBySource closes a disappeared edge only when every source
-// that originally established that edge answered this cycle. Presentation
-// gaps such as brctl's missing VLAN do not freeze valid FDB interval changes,
-// while an unavailable LLDP/hostapd/FDB source cannot manufacture a link-down.
+// that originally established that edge answered this cycle. It also retains
+// the prior semantic payload when a same-geometry observation has only partial
+// source coverage. Presentation gaps such as brctl's missing VLAN do not freeze
+// valid FDB interval changes, while an unavailable source cannot manufacture a
+// link-down or a new historical version.
 func ReconcileIntervalsBySource(active, observed []model.TopologyEdge, at int64,
 	sources []model.TopologySourceObservation) (IntervalChanges, error) {
-	changes, err := ReconcileIntervals(active, observed, at, false)
-	if err != nil {
-		return IntervalChanges{}, err
-	}
 	states := map[string]model.TopologySourceObservation{}
 	for _, source := range sources {
 		if source.DeviceID <= 0 || strings.TrimSpace(source.Source) != source.Source || source.Source == "" ||
@@ -780,6 +778,21 @@ func ReconcileIntervalsBySource(active, observed []model.TopologyEdge, at int64,
 			return IntervalChanges{}, fmt.Errorf("topology: duplicate source state for device %d/%s", source.DeviceID, source.Source)
 		}
 		states[key] = source
+	}
+	activeByKey := make(map[string]model.TopologyEdge, len(active))
+	for _, edge := range active {
+		activeByKey[edgeSortKey(edge)] = edge
+	}
+	observed = append([]model.TopologyEdge(nil), observed...)
+	for i, edge := range observed {
+		prior, ok := activeByKey[edgeSortKey(edge)]
+		if ok && !edgeSemanticSourcesAnswered(prior, states) {
+			observed[i] = withTopologySemantics(edge, prior)
+		}
+	}
+	changes, err := ReconcileIntervals(active, observed, at, false)
+	if err != nil {
+		return IntervalChanges{}, err
 	}
 	seen := map[string]bool{}
 	for _, edge := range observed {
@@ -1069,6 +1082,15 @@ func sameTopologySemantics(left, right model.TopologyEdge) (bool, error) {
 	return string(a) == string(b), nil
 }
 
+func withTopologySemantics(edge, prior model.TopologyEdge) model.TopologyEdge {
+	edge.ChildMAC = prior.ChildMAC
+	edge.ParentDeviceID = prior.ParentDeviceID
+	edge.Confidence = prior.Confidence
+	edge.Evidence = append([]model.TopologyEvidence(nil), prior.Evidence...)
+	edge.Ambiguities = append([]string(nil), prior.Ambiguities...)
+	return edge
+}
+
 func sameStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
@@ -1091,6 +1113,28 @@ func edgeSourcesAnswered(edge model.TopologyEdge, states map[string]model.Topolo
 			}
 			required[sourceStateKey(*evidence.DeviceID, evidence.Source)] = true
 		}
+	}
+	if len(required) == 0 {
+		return false
+	}
+	for key := range required {
+		state := states[key]
+		if state.ObservedAt <= edge.LastSeen ||
+			(state.State != model.TopologySourceObserved && state.State != model.TopologySourceEmpty) {
+			return false
+		}
+	}
+	return true
+}
+
+func edgeSemanticSourcesAnswered(edge model.TopologyEdge,
+	states map[string]model.TopologySourceObservation) bool {
+	required := map[string]bool{}
+	for _, evidence := range edge.Evidence {
+		if evidence.Source == "" || evidence.DeviceID == nil {
+			return false
+		}
+		required[sourceStateKey(*evidence.DeviceID, evidence.Source)] = true
 	}
 	if len(required) == 0 {
 		return false

@@ -1121,3 +1121,152 @@ func TestSourceAwareReconcileDoesNotUseStaleCoverage(t *testing.T) {
 		t.Fatalf("stale source state manufactured a link-down: %#v err=%v", changes, err)
 	}
 }
+
+func TestSourceAwareReconcileWaitsForCompleteSemanticCoverage(t *testing.T) {
+	deviceID := int64(1)
+	association := model.TopologyEvidence{
+		Kind: "association", Source: SourceAssociations, DeviceID: &deviceID,
+		Detail: map[string]any{"interface": "phy0-ap0"},
+	}
+	active := model.TopologyEdge{
+		ID: 13, ChildNode: "client:02:00:00:00:00:55", ChildMAC: "02:00:00:00:00:55",
+		ParentNode: "device:" + wrtMAC, ParentDeviceID: &deviceID,
+		ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "measured",
+		ValidFrom: 1000, LastSeen: 1900,
+		Evidence: []model.TopologyEvidence{
+			association,
+			{Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &deviceID, Detail: map[string]any{}},
+			{Kind: "neighbor", Source: SourceNeighbors(4), DeviceID: &deviceID, Detail: map[string]any{}},
+			{Kind: "neighbor", Source: SourceNeighbors(6), DeviceID: &deviceID, Detail: map[string]any{}},
+		},
+		Ambiguities: []string{"BusyBox brctl showmacs does not identify VLAN"},
+	}
+	observed := active
+	observed.ID, observed.ValidFrom, observed.LastSeen = 0, 2000, 2000
+	observed.Evidence = []model.TopologyEvidence{association}
+	observed.Ambiguities = []string{}
+
+	source := func(name string, state model.TopologySourceState, observedAt int64) model.TopologySourceObservation {
+		return model.TopologySourceObservation{
+			DeviceID: deviceID, Source: name, State: state, ObservedAt: observedAt,
+		}
+	}
+	for name, sources := range map[string][]model.TopologySourceObservation{
+		"missing enrichment cycle": {
+			source(SourceAssociations, model.TopologySourceObserved, 2000),
+		},
+		"failed enrichment source": {
+			source(SourceAssociations, model.TopologySourceObserved, 2000),
+			source(SourceBridgeFDB, model.TopologySourceObserved, 2000),
+			source(SourceNeighbors(4), model.TopologySourceEmpty, 2000),
+			source(SourceNeighbors(6), model.TopologySourceError, 2000),
+		},
+		"stale enrichment source": {
+			source(SourceAssociations, model.TopologySourceObserved, 2000),
+			source(SourceBridgeFDB, model.TopologySourceObserved, 2000),
+			source(SourceNeighbors(4), model.TopologySourceEmpty, 2000),
+			source(SourceNeighbors(6), model.TopologySourceEmpty, 1800),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changes, err := ReconcileIntervalsBySource(
+				[]model.TopologyEdge{active}, []model.TopologyEdge{observed}, 2000, sources)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(changes.Close) != 0 || len(changes.Upsert) != 1 ||
+				changes.Upsert[0].ID != active.ID || changes.Upsert[0].ValidFrom != active.ValidFrom ||
+				changes.Upsert[0].LastSeen != 2000 {
+				t.Fatalf("partial coverage versioned interval: %+v", changes)
+			}
+			same, err := sameTopologySemantics(active, changes.Upsert[0])
+			if err != nil || !same {
+				t.Fatalf("partial coverage replaced prior semantics: %+v err=%v", changes.Upsert[0], err)
+			}
+		})
+	}
+
+	complete := []model.TopologySourceObservation{
+		source(SourceAssociations, model.TopologySourceObserved, 2000),
+		source(SourceBridgeFDB, model.TopologySourceEmpty, 2000),
+		source(SourceNeighbors(4), model.TopologySourceEmpty, 2000),
+		source(SourceNeighbors(6), model.TopologySourceEmpty, 2000),
+	}
+	changes, err := ReconcileIntervalsBySource(
+		[]model.TopologyEdge{active}, []model.TopologyEdge{observed}, 2000, complete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Close) != 1 || changes.Close[0].ID != active.ID ||
+		len(changes.Upsert) != 1 || changes.Upsert[0].ID != 0 || changes.Upsert[0].ValidFrom != 2000 {
+		t.Fatalf("complete coverage did not version changed semantics: %+v", changes)
+	}
+	same, err := sameTopologySemantics(observed, changes.Upsert[0])
+	if err != nil || !same {
+		t.Fatalf("complete coverage did not accept current semantics: %+v err=%v", changes.Upsert[0], err)
+	}
+
+	t.Run("alternating partial and rich cycles", func(t *testing.T) {
+		current := active
+		for cycle := 1; cycle <= 15; cycle++ {
+			at := int64(2000 + cycle)
+			next := observed
+			next.ValidFrom, next.LastSeen = at, at
+			sources := []model.TopologySourceObservation{
+				source(SourceAssociations, model.TopologySourceObserved, at),
+			}
+			if cycle%2 == 0 {
+				next = withTopologySemantics(next, active)
+				sources = []model.TopologySourceObservation{
+					source(SourceAssociations, model.TopologySourceObserved, at),
+					source(SourceBridgeFDB, model.TopologySourceObserved, at),
+					source(SourceNeighbors(4), model.TopologySourceObserved, at),
+					source(SourceNeighbors(6), model.TopologySourceObserved, at),
+				}
+			}
+			changes, err := ReconcileIntervalsBySource(
+				[]model.TopologyEdge{current}, []model.TopologyEdge{next}, at, sources)
+			if err != nil {
+				t.Fatalf("cycle %d: %v", cycle, err)
+			}
+			if len(changes.Close) != 0 || len(changes.Upsert) != 1 ||
+				changes.Upsert[0].ID != active.ID || changes.Upsert[0].ValidFrom != active.ValidFrom ||
+				changes.Upsert[0].LastSeen != at {
+				t.Fatalf("cycle %d churned interval: %+v", cycle, changes)
+			}
+			current = changes.Upsert[0]
+		}
+	})
+}
+
+func TestSourceAwareReconcileAllowsAnsweredGeometryChange(t *testing.T) {
+	deviceID := int64(1)
+	association := func(id int64, port string, at int64) model.TopologyEdge {
+		return model.TopologyEdge{
+			ID: id, ChildNode: "client:02:00:00:00:00:55", ChildMAC: "02:00:00:00:00:55",
+			ParentNode: "device:" + wrtMAC, ParentDeviceID: &deviceID,
+			ParentPort: port, Medium: "wireless", Confidence: "measured",
+			ValidFrom: at, LastSeen: at,
+			Evidence: []model.TopologyEvidence{{
+				Kind: "association", Source: SourceAssociations, DeviceID: &deviceID,
+				Detail: map[string]any{"interface": port},
+			}}, Ambiguities: []string{},
+		}
+	}
+	active := association(14, "phy0-ap0", 1900)
+	observed := association(0, "phy1-ap0", 2000)
+	changes, err := ReconcileIntervalsBySource(
+		[]model.TopologyEdge{active}, []model.TopologyEdge{observed}, 2000,
+		[]model.TopologySourceObservation{{
+			DeviceID: deviceID, Source: SourceAssociations,
+			State: model.TopologySourceObserved, ObservedAt: 2000,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes.Close) != 1 || changes.Close[0].ID != active.ID ||
+		len(changes.Upsert) != 1 || changes.Upsert[0].ParentPort != "phy1-ap0" {
+		t.Fatalf("answered geometry change was not applied: %+v", changes)
+	}
+}
