@@ -545,6 +545,12 @@ a {
     justify-self: end;
   }
 
+  .notice[data-compact='true'][data-actions='true'] .details-popover.notice-disclosure {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
+  }
+
   .notice[data-compact='true'][data-actions='true'] details.notice-disclosure[open] ~ .notice-actions {
     grid-column: 1 / -1;
     grid-row: 3;
@@ -658,6 +664,115 @@ a {
 
 .settings-compact-notice {
   margin-bottom: 6px;
+}
+
+.ipv6-mode-picker {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ipv6-mode-picker > legend {
+  margin-bottom: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ipv6-mode-choice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-0);
+  cursor: pointer;
+}
+
+.ipv6-mode-choice:hover {
+  border-color: var(--border-strong);
+}
+
+.ipv6-mode-choice[data-selected='true'] {
+  border-color: var(--selection-border);
+  background: var(--accent-soft);
+}
+
+.ipv6-mode-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--control-accent);
+}
+
+.ipv6-mode-choice > span,
+.ipv6-mode-choice > span > span {
+  display: block;
+  min-width: 0;
+}
+
+.ipv6-mode-choice > span > span {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ipv6-assignment-field {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.ipv6-assignment-field > span {
+  padding-bottom: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.ipv6-impact-summary {
+  padding: 8px 9px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.ipv6-warning-details > p:first-child {
+  margin-top: 0;
+}
+
+.ipv6-warning-details > p:last-child {
+  margin-bottom: 0;
+}
+
+.ipv6-warning-solutions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ipv6-warning-solutions > section {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-0);
+}
+
+.ipv6-warning-solutions span {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .radio-stat-grid,
@@ -1242,6 +1357,11 @@ a {
 
   .settings-tabs button {
     min-height: 44px;
+  }
+
+  .ipv6-assignment-field,
+  .ipv6-warning-solutions {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .account-facts {

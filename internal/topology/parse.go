@@ -343,7 +343,8 @@ func ParseNeighbors(family int, out []byte) ([]Neighbor, error) {
 }
 
 // FDBEntry is one row from `brctl showmacs BRIDGE`. BusyBox does not expose a
-// VLAN in this format; consumers must retain that ambiguity.
+// VLAN in this format; consumers retain that as unavailable evidence metadata,
+// not as a repeated parent-placement ambiguity.
 type FDBEntry struct {
 	Port       int     `json:"port"`
 	MAC        string  `json:"mac"`
@@ -504,6 +505,7 @@ func ParseShowSTP(out []byte) (STPState, error) {
 type NetworkDevice struct {
 	Name     string   `json:"name"`
 	DevType  string   `json:"devtype,omitempty"`
+	Wireless bool     `json:"wireless,omitempty"`
 	Parent   string   `json:"parent,omitempty"`
 	MAC      string   `json:"mac,omitempty"`
 	Up       *bool    `json:"up,omitempty"`
@@ -515,6 +517,7 @@ type NetworkDevice struct {
 func DecodeNetworkDevices(raw []byte) ([]NetworkDevice, error) {
 	var payload map[string]struct {
 		DevType  string   `json:"devtype"`
+		Wireless bool     `json:"wireless"`
 		Parent   string   `json:"parent"`
 		MACAddr  string   `json:"macaddr"`
 		MAC      string   `json:"mac"`
@@ -529,7 +532,7 @@ func DecodeNetworkDevices(raw []byte) ([]NetworkDevice, error) {
 		if !validInterfaceName(name) {
 			return nil, fmt.Errorf("topology: getNetworkDevices: invalid device name %q", name)
 		}
-		row := NetworkDevice{Name: name, DevType: v.DevType, Parent: v.Parent, Up: v.Up}
+		row := NetworkDevice{Name: name, DevType: v.DevType, Wireless: v.Wireless, Parent: v.Parent, Up: v.Up}
 		if row.Parent != "" && !validInterfaceName(row.Parent) {
 			return nil, fmt.Errorf("topology: getNetworkDevices: invalid parent %q", row.Parent)
 		}

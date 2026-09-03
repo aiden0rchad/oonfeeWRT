@@ -36,7 +36,7 @@ features:
     details: Export encrypted portable backups, validate them in staging, restore through a controlled restart, and keep router writes suppressed until an owner reviews the result.
 ---
 
-<p class="doc-kicker">Documentation for v0.1.3</p>
+<p class="doc-kicker">Documentation for v0.1.4</p>
 
 ## One control plane, explicit boundaries
 
@@ -48,7 +48,7 @@ changes you review and approve.
 It is **not firmware**. Nothing is installed on a router when you start the
 controller, discover a device, or add an address. Adoption can create one
 scoped `oonfeewrt` login and one reviewable rpcd ACL after consent. The only
-optional package workflow in v0.1.3 is LLDP, with a separate plan and rollback.
+optional package workflow in v0.1.4 is LLDP, with a separate plan and rollback.
 
 <div class="status-strip">
   <span class="status-pill">OpenWrt 21.02+</span>
@@ -162,7 +162,7 @@ router-hosted agent. Remote sites need an existing management route or VPN.
 
 ## Current boundaries
 
-oonfeeWRT v0.1.3 deliberately does not claim capabilities it cannot prove.
+oonfeeWRT v0.1.4 deliberately does not claim capabilities it cannot prove.
 
 - One managed Gateway; no controller high availability.
 - No native TLS, SSO, cloud broker, mobile app, DPI, application identity,

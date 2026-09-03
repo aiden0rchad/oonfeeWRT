@@ -9,8 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
+
+type eventClockFleet struct {
+	Fleet
+	clocks []collector.RouterClock
+}
+
+func (f eventClockFleet) RouterClocks() []collector.RouterClock { return f.clocks }
 
 func TestEventsKeysetScopesAndDetail(t *testing.T) {
 	h := newHarness(t)
@@ -69,6 +77,63 @@ func TestEventsKeysetScopesAndDetail(t *testing.T) {
 	w = h.do(http.MethodGet, "/api/v1/events?scope=general&before_ts=1", nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("partial cursor status=%d", w.Code)
+	}
+}
+
+func TestGeneralEventsExposeLiveConditionsAndMeasuredRouterClocksIndependentlyOfFilters(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	device := observabilityDevice(t, h, 1, "aa:bb:cc:00:20:09", "Gateway",
+		[]string{"gateway"}, now.Unix())
+	boot := "boot:1:0"
+	sourceAt := now.Add(-time.Minute).UnixMilli()
+	if err := h.db.LogEvent(ctx, store.Event{
+		TS: sourceAt / 1000, DeviceID: &device.ID, Category: "system", Severity: "warning",
+		Event: store.EventOpenWRTIPv6RANoDefaultRoute, Source: "openwrt-logd",
+		SourceBoot: boot, SourceID: store.EventOpenWRTIPv6RANoDefaultRouteSourceID,
+		IngestedAt: sourceAt,
+		Detail: map[string]any{
+			"message":  "odhcpd[1]: No default route present, setting ra_lifetime to 0!",
+			"facility": 3, "priority": 28, "condition": "ipv6_ra_no_default_route",
+			"occurrences": 1, "first_source_time_ms": sourceAt,
+			"last_source_time_ms": sourceAt, "source_time_ms": sourceAt,
+			"first_source_id": "1", "last_source_id": "1",
+			"address_family": "ipv6", "router_advertisement_lifetime": 0,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.SaveIngestCursor(ctx, store.IngestCursor{
+		DeviceID: device.ID, Source: "openwrt-logd", BootID: boot,
+		Cursor: "1:1", UpdatedAt: now.UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.Fleet = eventClockFleet{Fleet: h.srv.Fleet, clocks: []collector.RouterClock{{
+		DeviceID: device.ID, ObservedAt: now.UnixMilli(), OffsetSeconds: 601,
+	}}}
+
+	w := h.do(http.MethodGet, "/api/v1/events?scope=general&severity=info&limit=1", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var page struct {
+		Events       []store.Event                 `json:"events"`
+		Conditions   []store.IPv6RAConditionStatus `json:"conditions"`
+		RouterClocks []collector.RouterClock       `json:"router_clocks"`
+		GeneratedAt  int64                         `json:"generated_at"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 0 || len(page.Conditions) != 1 ||
+		page.Conditions[0].State != store.IPv6RAConditionRecent ||
+		page.Conditions[0].DeviceID != device.ID || len(page.RouterClocks) != 1 ||
+		page.RouterClocks[0].OffsetSeconds != 601 || page.GeneratedAt != now.UnixMilli() {
+		t.Fatalf("page=%+v", page)
 	}
 }
 

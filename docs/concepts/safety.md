@@ -5,7 +5,7 @@ description: Which oonfeeWRT actions can affect routers, how Apply rollback work
 
 # Safety model
 
-oonfeeWRT v0.1.3 separates observation, controller desired state, and router
+oonfeeWRT v0.1.4 separates observation, controller desired state, and router
 mutation. A device appearing in the UI is never permission to change it.
 
 ## Know what an action can change
@@ -189,7 +189,7 @@ automatic 802.11k neighbour maintenance, so review roaming intent first.
 
 ## Security limits to keep visible
 
-- The controller has no native TLS listener in v0.1.3. Use loopback or a
+- The controller has no native TLS listener in v0.1.4. Use loopback or a
   trusted management LAN and a trusted reverse proxy.
 - No independent security audit or penetration test has been completed.
 - Hardware support is capability-driven. The two-device end-to-end record and

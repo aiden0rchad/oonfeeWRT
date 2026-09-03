@@ -270,6 +270,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const [selectedDeviceID, setSelectedDeviceID] = useState<number | null>(null)
   const [panning, setPanning] = useState(false)
   const generation = useRef(0)
+  const activeRequest = useRef<AbortController | null>(null)
   const pan = useRef<{ pointerID: number; x: number; y: number; left: number; top: number; moved: boolean } | null>(null)
   const rangeKey = historyRange.kind === 'preset'
     ? `preset:${historyRange.hours}`
@@ -277,6 +278,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const query = mode === 'current' ? 'current' : `history:${rangeKey}`
 
   const load = useCallback(async () => {
+    if (activeRequest.current) return
+    const controller = new AbortController()
+    activeRequest.current = controller
     const request = ++generation.current
     setLoadingQuery(query)
     try {
@@ -288,7 +292,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
           ? historyRange.from
           : to - historyRange.hours * hourMillis
         : to
-      const next = mode === 'current' ? await api.topology() : await api.topologyHistory(from, to)
+      const next = mode === 'current'
+        ? await api.topology(undefined, controller.signal)
+        : await api.topologyHistory(from, to, controller.signal)
       if (request !== generation.current) return
       const loadedFrom = mode === 'current' ? next.at : from
       setLoaded({ query, data: next, from: loadedFrom, to })
@@ -298,13 +304,18 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
       if (request !== generation.current) return
       setFailure({ query, message: e instanceof Error ? e.message : String(e) })
     } finally {
+      if (activeRequest.current === controller) activeRequest.current = null
       if (request === generation.current) setLoadingQuery(null)
     }
   }, [historyRange, mode, query])
 
   useEffect(() => {
     void load()
-    return () => { generation.current++ }
+    return () => {
+      generation.current++
+      activeRequest.current?.abort()
+      activeRequest.current = null
+    }
   }, [load])
 
   const data = loaded?.query === query ? loaded.data : null
@@ -384,10 +395,14 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     [data, historyAt, mode],
   )
   const vlanOptions = useMemo(
-    () => [...new Set((data?.edges ?? []).map(edgeVLAN))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-    [data],
+    () => [...new Set(intervalEdges.map(edgeVLAN))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [intervalEdges],
   )
+  useEffect(() => {
+    if (data && vlan !== 'all' && !vlanOptions.includes(vlan)) setVLAN('all')
+  }, [data, vlan, vlanOptions])
   const knownVLANs = vlanOptions.filter((value) => value !== 'unknown')
+  const unknownVLANCount = intervalEdges.filter((edge) => edgeVLAN(edge) === 'unknown').length
   const visibleEdges = useMemo(() => intervalEdges.filter((edge) =>
     (confidence === 'all' || edge.confidence === confidence)
       && (medium === 'all' || edge.medium === medium)
@@ -639,7 +654,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
               </select>
             </label>
             {knownVLANs.length > 0 ? (
-              <div aria-label="VLAN filter" style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div aria-label="VLAN filter" role="group" style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>VLAN</span>
                 <Button aria-pressed={vlan === 'all'} kind={vlan === 'all' ? 'primary' : 'default'} onClick={() => setVLAN('all')}>All</Button>
                 {vlanOptions.map((value) => (
@@ -647,6 +662,11 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                     {value === 'unknown' ? 'Unknown' : value}
                   </Button>
                 ))}
+                {unknownVLANCount > 0 && (
+                  <div role="note" style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                    {unknownVLANCount} of {intervalEdges.length} links {unknownVLANCount === 1 ? 'has' : 'have'} no VLAN metadata. Use the Unknown filter to isolate {unknownVLANCount === 1 ? 'it' : 'them'}.
+                  </div>
+                )}
               </div>
             ) : (
               <div role="note" style={{ color: 'var(--text-muted)', fontSize: 11 }}>

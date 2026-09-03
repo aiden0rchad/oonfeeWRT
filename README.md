@@ -38,7 +38,8 @@ does not need a dedicated machine and is not installed on the managed routers.
   RX/TX history, plus topology, clients, radios, events, and controller-host
   speed tests.
 - Reviewed site configuration for networks, VLANs, DHCP, firewall zones, and
-  WLANs, with OpenWrt's rollback timer protecting every Apply.
+  WLANs, plus explicit per-network IPv6 preserve, prefix-delegation, or disable
+  policy, with OpenWrt's rollback timer protecting every Apply.
 - Device adoption, health monitoring, telemetry, logs, RF tools, and explicit
   source-coverage gaps instead of guessed data.
 - A sanitized, versioned compatibility-report download after read-only Inspect,
@@ -122,21 +123,38 @@ cd oonfeewrt
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.3/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
 
 umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
-OONFEE_VERSION=v0.1.3 docker compose up -d
+OONFEE_VERSION=v0.1.4 docker compose up -d
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.3` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.4` for `linux/amd64` or `linux/arm64`.
+
+The v0.1.4 Compose file also accepts a Compose-only host bind IP. When browsers
+must connect from another machine, prefer the controller's specific
+management-LAN address:
+
+```sh
+OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION=v0.1.4 docker compose up -d
+```
+
+Repeat `OONFEE_HTTP_BIND` on every Compose lifecycle command or put
+`OONFEE_HTTP_BIND=192.168.1.20` in the `.env` file beside `docker-compose.yml`.
+That keeps a later recreate from silently returning to the loopback default.
+
+`OONFEE_HTTP_BIND=0.0.0.0` publishes on every host IPv4 interface. This is an
+explicit opt-in, not a browser address: open `http://<controller-LAN-IP>:8080`.
+There is no native TLS listener, so restrict direct HTTP to a trusted,
+firewalled management network and never expose port 8080 to the Internet.
 
 The `passphrase` file unlocks the controller keyring and is not your owner
 account password. Back it up with the controller state and keep both private.
@@ -247,8 +265,8 @@ passphrases.
   not from a router. It uses approximately 15 MiB, is bounded to 30 seconds,
   and can temporarily saturate the WAN. Loaded latency and jitter are not
   measured.
-- Native controller TLS, cloud remote access, and gateway-run speed tests are
-  not included in v0.1.3.
+- Native controller TLS, cloud remote access, multi-WAN management, manual WAN
+  selection, and gateway-run speed tests are not included in v0.1.4.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
 
@@ -273,6 +291,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.4 release notes](RELEASE-NOTES-v0.1.4.md)
 - [v0.1.3 release notes](RELEASE-NOTES-v0.1.3.md)
 - [v0.1.2 release notes](RELEASE-NOTES-v0.1.2.md)
 - [v0.1.1 release notes](RELEASE-NOTES-v0.1.1.md)

@@ -116,7 +116,7 @@ async function request<T>(
   return body as T
 }
 
-const get = <T>(path: string) => request<T>(path)
+const get = <T>(path: string, init?: RequestInit) => request<T>(path, init)
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 const postRaw = <T>(path: string, body: BodyInit, contentType: string) =>
@@ -366,6 +366,20 @@ export interface EventCursor {
   id: number
 }
 
+export interface EventConditionStatus {
+  event_id: number
+  device_id: number
+  state: 'recent' | 'historical' | 'unknown'
+  occurrences: number
+  last_observed_at: number
+}
+
+export interface RouterClockStatus {
+  device_id: number
+  observed_at: number
+  offset_seconds: number
+}
+
 /** One filter option and how many rows would match it. */
 export interface Facet {
   value: string
@@ -386,6 +400,11 @@ export interface EventPage {
   scope?: 'general' | 'audit'
   next_before?: EventCursor | null
   facets: { category: Facet[]; severity: Facet[] }
+  /** Live condition state is independent of the current event page and filters. */
+  conditions?: EventConditionStatus[]
+  /** Fresh live UTC measurements; absent on controllers/devices without the read grant. */
+  router_clocks?: RouterClockStatus[]
+  generated_at?: number
   coverage: {
     complete: boolean
     expected_devices: number
@@ -1084,6 +1103,12 @@ export interface SiteNetwork {
     leasetime: string
     /** True only for an upgraded dhcp_json={} row. An explicit save clears it. */
     legacy_default?: boolean
+  }
+  /** Desired LAN-side IPv6 policy. `preserve` is the upgrade-safe default:
+   *  oonfeeWRT leaves the router's existing IPv6 configuration untouched. */
+  ipv6: {
+    mode: 'preserve' | 'prefix_delegation' | 'disabled'
+    assignment_length: number
   }
   enabled: boolean
 }
@@ -1871,7 +1896,7 @@ export const api = {
       typed_confirmation: typedConfirmation,
     }),
 
-  dashboard: () => get<Dashboard>('/dashboard'),
+  dashboard: (signal?: AbortSignal) => get<Dashboard>('/dashboard', { signal }),
   speedTests: (limit = 3) =>
     get<SpeedTestCollection>(`/speedtests?limit=${encodeURIComponent(limit)}`),
   speedTest: (id: string) => get<SpeedTestJob>(`/speedtests/${encodeURIComponent(id)}`),
@@ -1882,7 +1907,7 @@ export const api = {
     }),
   cancelSpeedTest: (id: string) =>
     post<SpeedTestJob>(`/speedtests/${encodeURIComponent(id)}/cancel`, {}),
-  devices: () => get<{ devices: Device[] }>('/devices'),
+  devices: (signal?: AbortSignal) => get<{ devices: Device[] }>('/devices', { signal }),
   /** Records a decision ABOUT a foreign section. Writes nothing to any device.
    *  An empty note clears it. */
   noteForeign: (deviceID: number, section: string, ssid: string, note: string) =>
@@ -2053,14 +2078,14 @@ export const api = {
   applyOperation: (operationID: string) =>
     get<ApplyOperation>(`/site/apply/${encodeURIComponent(operationID)}`),
 
-  topology: (at?: number) =>
-    get<TopologySnapshot>(`/topology${at == null ? '' : `?at=${Math.trunc(at)}`}`),
-  topologyHistory: (from: number, to: number) => {
+  topology: (at?: number, signal?: AbortSignal) =>
+    get<TopologySnapshot>(`/topology${at == null ? '' : `?at=${Math.trunc(at)}`}`, { signal }),
+  topologyHistory: (from: number, to: number, signal?: AbortSignal) => {
     const q = new URLSearchParams({
       from: String(Math.trunc(from)),
       to: String(Math.trunc(to)),
     })
-    return get<TopologySnapshot>(`/topology/history?${q}`)
+    return get<TopologySnapshot>(`/topology/history?${q}`, { signal })
   },
 
   radios: () => get<RadiosResponse>('/radios'),

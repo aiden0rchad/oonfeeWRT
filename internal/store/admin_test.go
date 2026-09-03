@@ -55,8 +55,8 @@ UPDATE schema_version SET version=18 WHERE version=(SELECT MAX(version) FROM sch
 WHERE type='table' AND name='speed_tests'`).Scan(&speedTables); err != nil {
 		t.Fatal(err)
 	}
-	if version != 19 || speedTables != 1 {
-		t.Fatalf("version=%d speed_tests=%d, want 19 and 1", version, speedTables)
+	if version != schemaVersion || speedTables != 1 {
+		t.Fatalf("version=%d speed_tests=%d, want %d and 1", version, speedTables, schemaVersion)
 	}
 }
 

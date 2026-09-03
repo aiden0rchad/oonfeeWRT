@@ -124,9 +124,11 @@ func singleInterfaceVLANLimitation(caps *capability.Registry, device string) str
 // no zone at all, which in fw4 means every packet on it is dropped, with
 // nothing said anywhere.
 type zoneMember struct {
-	zone  string // as the operator typed it
-	iface string // our interface section name
-	dhcp  bool   // this interface needs router-local DHCP and DNS access
+	zone        string // as the operator typed it
+	iface       string // our interface section name
+	dhcp4       bool   // this interface needs router-local IPv4 DHCP and DNS access
+	ipv6        bool   // this interface needs DHCPv6, IPv6 DNS, and ICMPv6 access
+	dhcpSection bool   // the desired document contains an owned DHCP section
 }
 
 // renderNetwork produces the sections for one network on one device.
@@ -270,38 +272,71 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		})
 		return out, omissions, none
 	}
+	ifaceValues := map[string]string{
+		"proto":      "static",
+		"device":     fmt.Sprintf("%s.%d", ports.Bridge, n.VLAN),
+		"ipaddr":     ipaddr,
+		"netmask":    netmask,
+		OwnershipTag: "1",
+	}
+	ifaceManages := []string{"ipaddr", "netmask"}
+	ipv6 := n.EffectiveIPv6()
+	switch ipv6.Mode {
+	case model.IPv6PrefixDelegation:
+		ifaceValues["ip6assign"] = itoa(ipv6.AssignmentLength)
+		ifaceManages = append(ifaceManages, "ip6assign")
+	case model.IPv6Disabled:
+		ifaceManages = append(ifaceManages, "ip6assign", "ip6hint", "ip6class")
+	}
 	out = append(out, Section{
 		Config: "network", Type: "interface", Name: ifaceName,
-		Values: map[string]string{
-			"proto":      "static",
-			"device":     fmt.Sprintf("%s.%d", ports.Bridge, n.VLAN),
-			"ipaddr":     ipaddr,
-			"netmask":    netmask,
-			OwnershipTag: "1",
-		},
-		Manages: []string{"ipaddr", "netmask"},
+		Values: ifaceValues, Manages: ifaceManages,
 	})
 
 	// DHCP is part of the site model rather than a renderer constant. Legacy
 	// rows still resolve to the historical 100/150/12h defaults through
 	// EffectiveDHCP, so merely upgrading does not create a device diff.
 	dhcp := n.EffectiveDHCP()
-	if dhcp.Enabled {
+	preservedState, preservedServer := managedIPv6State(n, existing)
+	preservedState = ipv6.Mode == model.IPv6Preserve && preservedState
+	preservedServer = ipv6.Mode == model.IPv6Preserve && preservedServer
+	if dhcp.Enabled || ipv6.Mode != model.IPv6Preserve || preservedState {
+		values := map[string]string{
+			"interface":  ifaceName,
+			"networkid":  ifaceName,
+			OwnershipTag: "1",
+		}
+		if dhcp.Enabled {
+			values["start"] = itoa(dhcp.Start)
+			values["limit"] = itoa(dhcp.Limit)
+			values["leasetime"] = strings.TrimSpace(dhcp.LeaseTime)
+			values["dhcpv4"] = "server"
+		} else {
+			// Keep dnsmasq from serving IPv4 merely because an odhcpd policy
+			// needs a DHCP section of its own.
+			values["ignore"] = "1"
+			values["dhcpv4"] = "disabled"
+		}
+		manages := []string{"instance", "ignore", "networkid", "netmask", "force", "options", "dhcp_option", "dhcp_option_force",
+			"dynamicdhcp", "dynamicdhcpv4", "dhcpv4", "tag"}
+		switch ipv6.Mode {
+		case model.IPv6PrefixDelegation:
+			values["dhcpv6"] = "server"
+			values["ra"] = "server"
+			values["ndp"] = "disabled"
+			manages = append(manages, "dynamicdhcpv6", "dhcpv6", "ra", "ra_management", "ndp", "ra_default")
+		case model.IPv6Disabled:
+			values["dhcpv6"] = "disabled"
+			values["ra"] = "disabled"
+			values["ndp"] = "disabled"
+			manages = append(manages, "dynamicdhcpv6", "dhcpv6", "ra", "ra_management", "ndp", "ra_default")
+		}
 		out = append(out, Section{
 			Config: "dhcp", Type: "dhcp", Name: fmt.Sprintf("%s_dhcp_%s", NamePrefix, safe(n.Name)),
-			Values: map[string]string{
-				"interface":  ifaceName,
-				"start":      itoa(dhcp.Start),
-				"limit":      itoa(dhcp.Limit),
-				"leasetime":  strings.TrimSpace(dhcp.LeaseTime),
-				"dhcpv4":     "server",
-				"networkid":  ifaceName,
-				OwnershipTag: "1",
-			},
+			Values: values,
 			// These optional inputs can disable, re-scope, or change the generated
 			// IPv4 range and must not survive on an exact-owned pool.
-			Manages: []string{"instance", "ignore", "networkid", "netmask", "force", "options", "dhcp_option", "dhcp_option_force",
-				"dynamicdhcp", "dynamicdhcpv4", "dynamicdhcpv6", "dhcpv4", "dhcpv6", "ra", "ra_management", "tag"},
+			Manages: manages,
 		})
 	}
 
@@ -309,7 +344,195 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 	if zone == "" {
 		zone = n.Name
 	}
-	return out, omissions, zoneMember{zone: zone, iface: ifaceName, dhcp: dhcp.Enabled}
+	return out, omissions, zoneMember{
+		zone: zone, iface: ifaceName, dhcp4: dhcp.Enabled,
+		ipv6:        ipv6.Mode == model.IPv6PrefixDelegation || preservedServer,
+		dhcpSection: dhcp.Enabled || ipv6.Mode != model.IPv6Preserve || preservedState,
+	}
+}
+
+// managedIPv6State finds IPv6 configuration in an already-owned DHCP section.
+// Preserve carries that state forward without rewriting its IPv6 options; the
+// second result recognizes the exact server state whose owned firewall rules
+// must also remain present.
+func managedIPv6State(n model.Network, existing Existing) (configured, server bool) {
+	name := fmt.Sprintf("%s_dhcp_%s", NamePrefix, safe(n.Name))
+	values, present := existing.In("dhcp")[name]
+	if !present || values[OwnershipTag] != "1" {
+		return false, false
+	}
+	for _, option := range []string{"dynamicdhcpv6", "dhcpv6", "ra", "ra_management", "ndp", "ra_default"} {
+		if _, present := values[option]; present {
+			configured = true
+			break
+		}
+	}
+	return configured, values["ra"] == "server" && values["dhcpv6"] == "server"
+}
+
+// renderManagementIPv6 builds option-only patches for OpenWrt's existing LAN
+// and conventional WAN sections. These sections remain operator-owned: a
+// missing or ambiguous LAN target is a conflict, never permission to create or
+// claim a replacement.
+func renderManagementIPv6(n model.Network, existing Existing) ([]Patch, []Conflict) {
+	policy := n.EffectiveIPv6()
+	if policy.Mode == model.IPv6Preserve {
+		return nil, nil
+	}
+
+	var (
+		patches   []Patch
+		conflicts []Conflict
+	)
+	lan, found := existing.In("network")[n.Name]
+	if !found || lan[".type"] != "interface" {
+		reason := fmt.Sprintf("IPv6 policy targets the existing management interface network.%s, "+
+			"but that exact interface section was not found. oonfeeWRT will not guess, "+
+			"create a replacement, or claim a foreign section", n.Name)
+		if found {
+			reason = fmt.Sprintf("IPv6 policy targets network.%s, but it is a %q section rather "+
+				"than an interface. oonfeeWRT will not rewrite or replace it", n.Name, lan[".type"])
+		}
+		conflicts = append(conflicts, Conflict{Config: "network", Section: n.Name, Reason: reason})
+	} else {
+		if policy.Mode == model.IPv6Disabled {
+			static := staticIPv6Options(lan)
+			if len(static) > 0 {
+				conflicts = append(conflicts, Conflict{
+					Config: "network", Section: n.Name,
+					Reason: fmt.Sprintf("network.%s contains explicit static IPv6 option(s) %s. "+
+						"Automatic disable only turns off delegated prefix assignment and "+
+						"RA/DHCPv6/NDP; oonfeeWRT will not silently delete operator-assigned "+
+						"IPv6 addresses, prefixes, or gateways. Remove those values deliberately "+
+						"in OpenWrt, then preview again", n.Name, strings.Join(static, ", "))})
+			}
+		}
+		patch := Patch{Config: "network", Section: n.Name}
+		switch policy.Mode {
+		case model.IPv6PrefixDelegation:
+			patch.Values = map[string]string{"ip6assign": itoa(policy.AssignmentLength)}
+		case model.IPv6Disabled:
+			patch.Deletes = []string{"ip6assign", "ip6hint", "ip6class"}
+		}
+		patches = append(patches, patch)
+	}
+
+	var dhcpSections []string
+	for name, values := range existing.In("dhcp") {
+		if values[".type"] == "dhcp" && values["interface"] == n.Name {
+			dhcpSections = append(dhcpSections, name)
+		}
+	}
+	sort.Strings(dhcpSections)
+	if len(dhcpSections) != 1 {
+		reason := fmt.Sprintf("IPv6 policy needs exactly one existing DHCP section for management "+
+			"interface %s, but found %d. oonfeeWRT will not guess, create, claim, or "+
+			"rewrite a whole foreign section", n.Name, len(dhcpSections))
+		conflicts = append(conflicts, Conflict{Config: "dhcp", Section: n.Name, Reason: reason})
+	} else {
+		values := map[string]string{"ndp": "disabled"}
+		switch policy.Mode {
+		case model.IPv6PrefixDelegation:
+			values["ra"] = "server"
+			values["dhcpv6"] = "server"
+		case model.IPv6Disabled:
+			values["ra"] = "disabled"
+			values["dhcpv6"] = "disabled"
+		}
+		patches = append(patches, Patch{
+			Config: "dhcp", Section: dhcpSections[0], Values: values,
+			Deletes: []string{"ra_default"},
+		})
+	}
+
+	// The conventional WAN knobs are safe to update only when those exact
+	// existing interface sections are present. Their absence is valid on
+	// PPPoE, multi-WAN and vendor layouts, so absence is not a conflict and no
+	// replacement is created.
+	wan6, hasWAN6 := existing.In("network")["wan6"]
+	if hasWAN6 && wan6[".type"] != "interface" {
+		conflicts = append(conflicts, Conflict{
+			Config: "network", Section: "wan6",
+			Reason: fmt.Sprintf("the conventional network.wan6 IPv6 control exists as a %q "+
+				"section rather than an interface, so oonfeeWRT will not modify it", wan6[".type"]),
+		})
+		hasWAN6 = false
+	}
+	// A conventional wan6 is a DHCPv6 client. The section name alone is not
+	// enough evidence: operators and vendor firmware also use `wan6` for static,
+	// relay, tunnel, or custom protocol sections. Those remain router-managed,
+	// exactly as the settings UI promises.
+	conventionalWAN6 := hasWAN6 &&
+		strings.EqualFold(strings.TrimSpace(wan6["proto"]), "dhcpv6")
+	if conventionalWAN6 {
+		if policy.Mode == model.IPv6Disabled {
+			if static := staticIPv6Options(wan6); len(static) > 0 {
+				conflicts = append(conflicts, Conflict{
+					Config: "network", Section: "wan6",
+					Reason: fmt.Sprintf("network.wan6 contains explicit static IPv6 option(s) %s. "+
+						"Automatic disable will not silently delete operator-assigned IPv6 "+
+						"addresses, prefixes, or gateways. Remove those values deliberately "+
+						"in OpenWrt, then preview again", strings.Join(static, ", "))})
+			}
+		}
+		auto := "1"
+		if policy.Mode == model.IPv6Disabled {
+			auto = "0"
+		}
+		patches = append(patches, Patch{Config: "network", Section: "wan6",
+			Values: map[string]string{"auto": auto}})
+	}
+	if wan, present := existing.In("network")["wan"]; present {
+		switch {
+		case wan[".type"] != "interface":
+			conflicts = append(conflicts, Conflict{
+				Config: "network", Section: "wan",
+				Reason: fmt.Sprintf("the conventional network.wan IPv6 control exists as a %q "+
+					"section rather than an interface, so oonfeeWRT will not modify it", wan[".type"]),
+			})
+		case policy.Mode == model.IPv6Disabled:
+			if static := staticIPv6Options(wan); len(static) > 0 {
+				conflicts = append(conflicts, Conflict{
+					Config: "network", Section: "wan",
+					Reason: fmt.Sprintf("network.wan contains explicit static IPv6 option(s) %s. "+
+						"Automatic disable will not silently delete operator-assigned IPv6 "+
+						"addresses, prefixes, or gateways. Remove those values deliberately "+
+						"in OpenWrt, then preview again", strings.Join(static, ", "))})
+			}
+			patches = append(patches, Patch{Config: "network", Section: "wan",
+				Values: map[string]string{"ipv6": "0"}})
+		case pppProtocol(wan["proto"]):
+			value := "auto"
+			if hasWAN6 {
+				// `auto` would spawn a dynamic wan_6 client in addition to the
+				// explicit wan6 client. Enable IPv6 on the PPP parent without
+				// asking it to create that second client.
+				value = "1"
+			}
+			patches = append(patches, Patch{Config: "network", Section: "wan",
+				Values: map[string]string{"ipv6": value}})
+		}
+	}
+	return patches, conflicts
+}
+
+func staticIPv6Options(values map[string]string) []string {
+	var options []string
+	for _, option := range []string{"ip6addr", "ip6prefix", "ip6gw"} {
+		if strings.TrimSpace(values[option]) != "" {
+			options = append(options, option)
+		}
+	}
+	return options
+}
+
+func pppProtocol(protocol string) bool {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "ppp", "pppoe", "pppoa", "pptp", "l2tp":
+		return true
+	default:
+		return false
+	}
 }
 
 // foreignBridgeVLANConflicts catches two differently named UCI sections that
@@ -435,9 +658,10 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 			continue
 		}
 		source := distinct[0]
-		needsDHCP := false
+		needsDHCP, needsIPv6 := false, false
 		for _, member := range group {
-			needsDHCP = needsDHCP || member.dhcp
+			needsDHCP = needsDHCP || member.dhcp4
+			needsIPv6 = needsIPv6 || member.ipv6
 		}
 		forwardTo, ok := policyBySource[source]
 		if !ok {
@@ -450,6 +674,10 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 		if needsDHCP {
 			conflicts = append(conflicts,
 				foreignRouterServiceConflicts(existing, source)...)
+		}
+		if needsIPv6 {
+			conflicts = append(conflicts,
+				foreignIPv6RouterServiceConflicts(existing, source)...)
 		}
 
 		// A zone the device already has and we did not write. Same ownership
@@ -539,6 +767,48 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 				},
 			)
 		}
+		if needsIPv6 {
+			// The zone itself rejects router-local input. IPv6 cannot function
+			// through that default without DHCPv6, DNS and the ICMPv6 control
+			// traffic used for router and neighbour discovery.
+			out = append(out,
+				Section{
+					Config: "firewall", Type: "rule",
+					Name: fmt.Sprintf("%s_in_%s_dhcpv6", NamePrefix, section),
+					Values: map[string]string{
+						"name": fmt.Sprintf("oonfeeWRT %s DHCPv6", source), "src": fw,
+						"proto": "udp", "src_port": "546", "dest_port": "547",
+						"target": "ACCEPT", "family": "ipv6", OwnershipTag: "1",
+					},
+					Manages: []string{"enabled"},
+				},
+				Section{
+					Config: "firewall", Type: "rule",
+					Name: fmt.Sprintf("%s_in_%s_dnsv6", NamePrefix, section),
+					Values: map[string]string{
+						"name": fmt.Sprintf("oonfeeWRT %s IPv6 DNS", source), "src": fw,
+						"dest_port": "53", "target": "ACCEPT", "family": "ipv6",
+						OwnershipTag: "1",
+					},
+					Lists: map[string][]string{"proto": {"tcp", "udp"}}, Manages: []string{"enabled"},
+				},
+				Section{
+					Config: "firewall", Type: "rule",
+					Name: fmt.Sprintf("%s_in_%s_icmpv6", NamePrefix, section),
+					Values: map[string]string{
+						"name": fmt.Sprintf("oonfeeWRT %s ICMPv6", source), "src": fw,
+						"proto": "icmp", "target": "ACCEPT", "family": "ipv6", "limit": "1000/sec",
+						OwnershipTag: "1",
+					},
+					Lists: map[string][]string{"icmp_type": {
+						"echo-request", "echo-reply", "destination-unreachable", "packet-too-big",
+						"time-exceeded", "bad-header", "unknown-header-type", "router-solicitation",
+						"neighbour-solicitation", "router-advertisement", "neighbour-advertisement",
+					}},
+					Manages: []string{"enabled"},
+				},
+			)
+		}
 		for _, dest := range forwardTo {
 			out = append(out, Section{
 				Config: "firewall", Type: "forwarding",
@@ -604,6 +874,58 @@ func foreignRouterServiceConflicts(existing Existing, source string) []Conflict 
 	return out
 }
 
+// foreignIPv6RouterServiceConflicts is the IPv6 counterpart to
+// foreignRouterServiceConflicts. An earlier terminating foreign rule would
+// make the owned allow rules below decorative while the preview claimed a
+// working delegated network.
+func foreignIPv6RouterServiceConflicts(existing Existing, source string) []Conflict {
+	src := fwZoneName(source)
+	sections := existing.In("firewall")
+	names := make([]string, 0, len(sections))
+	for name := range sections {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []Conflict
+	for _, name := range names {
+		vals := sections[name]
+		if vals[".type"] != "rule" || vals[OwnershipTag] == "1" ||
+			uciOptionFalse(vals["enabled"]) || vals["dest"] != "" ||
+			!foreignSourceCouldMatch(vals["src"], src) ||
+			!familyCouldMatchIPv6(vals["family"]) {
+			continue
+		}
+		target := strings.ToUpper(strings.TrimSpace(vals["target"]))
+		if target != "DROP" && target != "REJECT" {
+			continue
+		}
+		var services []string
+		if protocolCouldMatch(vals["proto"], "udp") &&
+			portCouldMatch(vals["src_port"], 546) && portCouldMatch(vals["dest_port"], 547) {
+			services = append(services, "DHCPv6")
+		}
+		if (protocolCouldMatch(vals["proto"], "tcp") ||
+			protocolCouldMatch(vals["proto"], "udp")) && portCouldMatch(vals["dest_port"], 53) {
+			services = append(services, "DNS")
+		}
+		if protocolCouldMatch(vals["proto"], "icmpv6") || protocolCouldMatch(vals["proto"], "icmp") {
+			services = append(services, "ICMPv6")
+		}
+		if len(services) == 0 {
+			continue
+		}
+		out = append(out, Conflict{
+			Config: "firewall", Section: name,
+			Reason: fmt.Sprintf("foreign firewall rule %s can %s %s client traffic from "+
+				"zone %q before oonfeeWRT's IPv6 router-service allow rules, so delegated "+
+				"IPv6 cannot be guaranteed. oonfeeWRT will not reorder or delete a "+
+				"human-owned rule; disable, remove, or narrow it before applying",
+				name, strings.ToLower(target), strings.Join(services, " and "), src),
+		})
+	}
+	return out
+}
+
 func familyCouldMatchIPv4(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" || value == "any" || value == "all" || value == "*" || value == "inet" {
@@ -616,6 +938,20 @@ func familyCouldMatchIPv4(value string) bool {
 		return false
 	}
 	return true // unknown syntax is not evidence that the rule is disjoint
+}
+
+func familyCouldMatchIPv6(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "any" || value == "all" || value == "*" || value == "inet" {
+		return true
+	}
+	if strings.Contains(value, "6") {
+		return true
+	}
+	if strings.Contains(value, "4") {
+		return false
+	}
+	return true
 }
 
 func protocolCouldMatch(value, want string) bool {

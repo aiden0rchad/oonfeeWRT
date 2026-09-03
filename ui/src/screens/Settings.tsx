@@ -117,6 +117,8 @@ export function Settings({
   session,
   onSessionChange,
   onCurrentSessionRevoked,
+  initialNetworkSection = null,
+  onInitialNetworkSectionHandled,
 }: {
   devices: Device[]
   devicesLoaded?: boolean
@@ -124,6 +126,8 @@ export function Settings({
   session?: SessionInfo
   onSessionChange?: (session: SessionInfo) => void
   onCurrentSessionRevoked?: () => void
+  initialNetworkSection?: 'ipv6' | null
+  onInitialNetworkSectionHandled?: () => void
 }) {
   const [tab, setTab] = useState<SettingsTab>('network')
   const accountTabs = Boolean(session)
@@ -190,7 +194,11 @@ export function Settings({
       className="settings-panel"
     >
       {tab === 'network' && (devicesLoaded
-        ? <NetworkSettings devices={devices} />
+        ? <NetworkSettings
+            devices={devices}
+            initialNetworkSection={initialNetworkSection}
+            onInitialNetworkSectionHandled={onInitialNetworkSectionHandled}
+          />
         : devicesError
           ? <div role="alert"><Banner tone="critical">
               Device inventory is unavailable: {devicesError}. My account remains available above.
@@ -225,7 +233,15 @@ export function Settings({
  * across every AP in a group and across every band, and you read the whole
  * consequence before any of it happens.
  */
-function NetworkSettings({ devices }: { devices: Device[] }) {
+function NetworkSettings({
+  devices,
+  initialNetworkSection,
+  onInitialNetworkSectionHandled,
+}: {
+  devices: Device[]
+  initialNetworkSection?: 'ipv6' | null
+  onInitialNetworkSectionHandled?: () => void
+}) {
   const [site, setSite] = useState<Site | null>(null)
   const [editing, setEditing] = useState<Partial<WLAN> | null>(null)
   const [editingMesh, setEditingMesh] = useState<Partial<Mesh> | null>(null)
@@ -635,7 +651,12 @@ function NetworkSettings({ devices }: { devices: Device[] }) {
       <Groups site={site} devices={devices} onChanged={modelChanged} />
       <Neighbours site={site} />
       <Deviations site={site} devices={devices} onChanged={modelChanged} />
-      <Networks site={site} onChanged={modelChanged} />
+      <Networks
+        site={site}
+        onChanged={modelChanged}
+        openPrimaryIPv6={initialNetworkSection === 'ipv6'}
+        onPrimaryIPv6Opened={onInitialNetworkSectionHandled}
+      />
 
       {/* The pending-changes flow. Preview is a read; apply is the only thing
           that writes, and it is deliberately unreachable without previewing
@@ -1684,6 +1705,7 @@ function NetworkZone({
 }
 
 type DHCPSettings = NonNullable<SiteNetwork['dhcp']>
+type IPv6Settings = SiteNetwork['ipv6']
 
 const DEFAULT_DHCP: DHCPSettings = {
   enabled: true,
@@ -1692,8 +1714,41 @@ const DEFAULT_DHCP: DHCPSettings = {
   leasetime: '12h',
 }
 
+const DEFAULT_IPV6: IPv6Settings = {
+  mode: 'preserve',
+  assignment_length: 60,
+}
+
 function dhcpFor(n: SiteNetwork): DHCPSettings {
   return n.dhcp ?? DEFAULT_DHCP
+}
+
+function ipv6For(n: SiteNetwork): IPv6Settings {
+  const value = n.ipv6
+  if (!value || !['preserve', 'prefix_delegation', 'disabled'].includes(value.mode)) {
+    return DEFAULT_IPV6
+  }
+  return {
+    mode: value.mode,
+    assignment_length: Number.isInteger(value.assignment_length)
+      ? value.assignment_length
+      : DEFAULT_IPV6.assignment_length,
+  }
+}
+
+function ipv6AssignmentProblem(ipv6: IPv6Settings): string | null {
+  if (!Number.isInteger(ipv6.assignment_length) || ipv6.assignment_length < 48 ||
+      ipv6.assignment_length > 64) {
+    return 'Assignment length must be a whole prefix from /48 through /64.'
+  }
+  return null
+}
+
+function ipv6Status(n: SiteNetwork): string {
+  const ipv6 = ipv6For(n)
+  if (ipv6.mode === 'disabled') return 'Disabled'
+  if (ipv6.mode === 'prefix_delegation') return `Prefix delegation · /${ipv6.assignment_length}`
+  return 'Router managed'
 }
 
 // What a /nn actually gives you, derived rather than stored. DHCP uses the
@@ -1797,20 +1852,23 @@ function networkCIDRProblem(cidr: string): string | null {
 // a typo in a VLAN or an address meant deleting the row and starting again —
 // and the zone, once it defaulted to "lan", could not be corrected at all.
 function NetworkEditor({
-  n, zones, onClose, onChanged,
+  n, zones, focusIPv6 = false, onClose, onChanged,
 }: {
   n: SiteNetwork
   zones: Site['zones']
+  focusIPv6?: boolean
   onClose: () => void
   onChanged: () => void
 }) {
   const [draft, setDraft] = useState({
     name: n.name, vlan: n.vlan, cidr: n.cidr ?? '', zone: n.zone,
-    dhcp: { ...dhcpFor(n) }, enabled: n.enabled,
+    dhcp: { ...dhcpFor(n) }, ipv6: { ...ipv6For(n) }, enabled: n.enabled,
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const ipv6Section = useRef<HTMLDivElement>(null)
   const managesDHCP = draft.vlan > 1
+  const managesGatewayIPv6 = draft.vlan <= 1
   const addressWarning = draft.enabled && managesDHCP
     ? networkCIDRProblem(draft.cidr)
     : null
@@ -1820,6 +1878,7 @@ function NetworkEditor({
   const dhcpWarning = draft.enabled && managesDHCP
     ? dhcpProblem(draft.cidr, draft.dhcp)
     : null
+  const ipv6Warning = ipv6AssignmentProblem(draft.ipv6)
   const legacyDHCPWarning = n.dhcp?.legacy_default && dhcpWarning
     ? `This upgraded network still inherits the legacy DHCP pool. ${dhcpWarning} ` +
       'Choose one: customize Pool start and Pool limit, or turn DHCP server off, then Save. ' +
@@ -1833,7 +1892,14 @@ function NetworkEditor({
     draft.name !== n.name || draft.vlan !== n.vlan ||
     (draft.cidr || '') !== (n.cidr ?? '') || draft.zone !== n.zone ||
     draft.enabled !== n.enabled ||
-    JSON.stringify(draft.dhcp) !== JSON.stringify(dhcpFor(n))
+    JSON.stringify(draft.dhcp) !== JSON.stringify(dhcpFor(n)) ||
+    JSON.stringify(draft.ipv6) !== JSON.stringify(ipv6For(n))
+
+  useEffect(() => {
+    if (!focusIPv6) return
+    ipv6Section.current?.scrollIntoView?.({ block: 'start' })
+    ipv6Section.current?.focus()
+  }, [focusIPv6])
 
   const save = async () => {
     setBusy(true)
@@ -1846,7 +1912,7 @@ function NetworkEditor({
           start: draft.dhcp.start,
           limit: draft.dhcp.limit,
           leasetime: draft.dhcp.leasetime.trim(),
-        }, enabled: draft.enabled,
+        }, ipv6: { ...draft.ipv6 }, enabled: draft.enabled,
       })
       onChanged()
       onClose()
@@ -1938,6 +2004,110 @@ function NetworkEditor({
           </div>
         </Card>
 
+        <div ref={ipv6Section} tabIndex={-1} aria-label="IPv6 settings">
+          <Card title="IPv6">
+            <div style={{ display: 'grid', gap: 10 }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+              {managesGatewayIPv6
+                ? 'This is the gateway management LAN. Prefix delegation and Disabled also update conventional upstream wan/wan6 IPv6 sections; custom and multi-WAN policy remains router-managed.'
+                : 'This controls IPv6 on this LAN only and reuses the gateway’s existing upstream IPv6 connection.'}
+              {' '}Saving updates desired state; nothing changes on a router
+              until you Preview and Apply.
+            </div>
+            <fieldset className="ipv6-mode-picker">
+              <legend>IPv6 mode</legend>
+              {([
+                {
+                  value: 'preserve' as const,
+                  label: 'Router managed',
+                  description: 'Leave current IPv6 option values and supporting rules already owned by oonfeeWRT in place. It stops changing those values; it does not restore values from before an earlier Apply or clear a warning by itself.',
+                },
+                {
+                  value: 'prefix_delegation' as const,
+                  label: 'Prefix delegation',
+                  description: managesGatewayIPv6
+                    ? 'Enable IPv6 negotiation on conventional upstream sections and serve the delegated prefix on this LAN. Custom and multi-WAN policy is not changed.'
+                    : 'Serve IPv6 on this LAN from the gateway’s existing upstream delegated prefix.',
+                },
+                {
+                  value: 'disabled' as const,
+                  label: 'Disabled',
+                  description: managesGatewayIPv6
+                    ? 'Disable IPv6 on conventional upstream sections plus router advertisements, DHCPv6 and NDP on this LAN. Custom and multi-WAN policy is not changed; IPv4 stays active.'
+                    : 'Turn off router advertisements, DHCPv6 and NDP on this LAN without changing upstream WAN IPv6. IPv4 stays active.',
+                },
+              ]).map((choice) => (
+                <label
+                  key={choice.value}
+                  className="ipv6-mode-choice"
+                  data-selected={draft.ipv6.mode === choice.value ? 'true' : undefined}
+                >
+                  <input
+                    type="radio"
+                    name={`ipv6-mode-${n.id}`}
+                    value={choice.value}
+                    checked={draft.ipv6.mode === choice.value}
+                    onChange={() => setDraft({
+                      ...draft,
+                      ipv6: {
+                        mode: choice.value,
+                        assignment_length: ipv6AssignmentProblem(draft.ipv6)
+                          ? DEFAULT_IPV6.assignment_length
+                          : draft.ipv6.assignment_length,
+                      },
+                    })}
+                  />
+                  <span>
+                    <strong>{choice.label}</strong>
+                    <span>{choice.description}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            {draft.ipv6.mode === 'prefix_delegation' && (
+              <div className="ipv6-assignment-field">
+                <Field
+                  label="LAN assignment length"
+                  type="number"
+                  min={48}
+                  max={64}
+                  value={draft.ipv6.assignment_length}
+                  onChange={(event) => setDraft({
+                    ...draft,
+                    ipv6: {
+                      ...draft.ipv6,
+                      assignment_length: Number(event.target.value),
+                    },
+                  })}
+                />
+                <span>
+                  OpenWrt commonly uses /60. This is the prefix assigned to
+                  this network, not the prefix requested from your ISP.
+                </span>
+              </div>
+            )}
+            {ipv6Warning && (
+              <div role="alert" style={{ color: 'var(--warning)', fontSize: 11 }}>
+                {ipv6Warning} Saving is blocked until this is fixed.
+              </div>
+            )}
+            {draft.ipv6.mode !== ipv6For(n).mode && (
+              <div role="status" className="ipv6-impact-summary">
+                {draft.ipv6.mode === 'disabled'
+                  ? managesGatewayIPv6
+                    ? 'Pending impact: upstream WAN IPv6 and IPv6 service on this LAN will stop after Apply. IPv4 is unchanged.'
+                    : 'Pending impact: IPv6 service will stop on this LAN after Apply. Upstream WAN IPv6 and IPv4 are unchanged.'
+                  : draft.ipv6.mode === 'prefix_delegation'
+                    ? managesGatewayIPv6
+                      ? 'Pending impact: the gateway will negotiate upstream IPv6 and this LAN will advertise and serve its delegated prefix after Apply.'
+                      : 'Pending impact: this LAN will advertise and serve delegated IPv6 after Apply, provided the gateway already has a usable upstream IPv6 route and prefix.'
+                    : 'Pending impact: current IPv6 option values and supporting rules already owned by oonfeeWRT stay in place. oonfeeWRT stops changing those values; it does not restore earlier values.'}
+              </div>
+            )}
+            </div>
+          </Card>
+        </div>
+
         {managesDHCP ? (
           <Card title="DHCP">
             <div style={{ display: 'grid', gap: 8 }}>
@@ -1999,7 +2169,8 @@ function NetworkEditor({
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Button disabled={
-            !dirty || busy || !draft.name.trim() || !!addressWarning || !!dhcpWarning
+            !dirty || busy || !draft.name.trim() || !!addressWarning || !!dhcpWarning ||
+            !!ipv6Warning
           } onClick={save}>
             {busy ? 'Saving…' : 'Save'}
           </Button>
@@ -2010,9 +2181,27 @@ function NetworkEditor({
   )
 }
 
-function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
+function Networks({
+  site, onChanged, openPrimaryIPv6 = false, onPrimaryIPv6Opened,
+}: {
+  site: Site
+  onChanged: () => void
+  openPrimaryIPv6?: boolean
+  onPrimaryIPv6Opened?: () => void
+}) {
   const [editing, setEditing] = useState<SiteNetwork | null>(null)
+  const [focusIPv6Editor, setFocusIPv6Editor] = useState(false)
   const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '', zone: '' })
+  const openedIPv6Intent = useRef(false)
+  const primaryNetwork = site.networks.find((network) => network.vlan <= 1) ?? site.networks[0]
+
+  useEffect(() => {
+    if (!openPrimaryIPv6 || openedIPv6Intent.current || !primaryNetwork) return
+    openedIPv6Intent.current = true
+    setFocusIPv6Editor(true)
+    setEditing(primaryNetwork)
+    onPrimaryIPv6Opened?.()
+  }, [onPrimaryIPv6Opened, openPrimaryIPv6, primaryNetwork])
   const draftWarning = zoneWarning(draft.zone, draft.name, draft.vlan)
   // Spelled out under the card, not only inside a tooltip. A hover on a glyph
   // is not where the only copy of an instruction belongs.
@@ -2025,7 +2214,11 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
         <NetworkEditor
           n={editing}
           zones={site.zones ?? []}
-          onClose={() => setEditing(null)}
+          focusIPv6={focusIPv6Editor}
+          onClose={() => {
+            setEditing(null)
+            setFocusIPv6Editor(false)
+          }}
           onChanged={onChanged}
         />
       )}
@@ -2038,7 +2231,10 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
         <DataGrid
           rows={site.networks}
           rowKey={(n) => String(n.id)}
-          onRowClick={(n) => setEditing(n)}
+          onRowClick={(n) => {
+            setFocusIPv6Editor(false)
+            setEditing(n)
+          }}
           empty="No networks yet. Add one below."
           columns={[
             {
@@ -2074,6 +2270,13 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
               render: (n) =>
                 n.cidr || <Unknown why="no address is set, so this network gets a VLAN and no addressing" />,
               sortBy: (n) => n.cidr ?? '',
+            },
+            {
+              key: 'ipv6',
+              header: 'IPv6',
+              width: 180,
+              render: ipv6Status,
+              sortBy: ipv6Status,
             },
             {
               key: 'zone',
@@ -2144,7 +2347,8 @@ function Networks({ site, onChanged }: { site: Site; onChanged: () => void }) {
             onClick={async () => {
               await api.saveNetwork({
                 ...draft, name: draft.name.trim(),
-                zone: draft.zone.trim(), dhcp: { ...DEFAULT_DHCP }, enabled: true,
+                zone: draft.zone.trim(), dhcp: { ...DEFAULT_DHCP },
+                ipv6: { ...DEFAULT_IPV6 }, enabled: true,
               })
               setDraft({ name: '', vlan: 1, cidr: '', zone: '' })
               onChanged()

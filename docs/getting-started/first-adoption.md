@@ -127,7 +127,7 @@ Switch behavior is capability-dependent:
 - `unknown` retains the uncertainty;
 - `none` means no switch capability was observed.
 
-A generic single-interface LAN is separate from legacy `swconfig`. v0.1.3
+A generic single-interface LAN is separate from legacy `swconfig`. v0.1.4
 does not create tagged VLAN attachments on that layout and leaves its existing
 LAN/VLAN configuration unchanged. See [Networks, VLANs, and DHCP](../guide/networks.md)
 before planning a tagged network.

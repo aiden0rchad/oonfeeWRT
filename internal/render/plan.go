@@ -22,7 +22,7 @@ import (
 // snapshot; a commit beforehand would leave nothing staged and silently disarm
 // the protection.
 func (d Doc) Plan(existing Existing) applyengine.Plan {
-	ops := make([]applyengine.Op, 0, len(d.Sections))
+	ops := make([]applyengine.Op, 0, len(d.Sections)+len(d.Patches))
 	for _, s := range sortedSections(d.Sections) {
 		current, present := existing.In(s.Config)[s.Name]
 		if !present {
@@ -91,7 +91,57 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 			Name: s.Name, Section: s.Name, Values: s.Values, Lists: s.Lists,
 		})
 	}
+	for _, p := range sortedPatches(d.Patches) {
+		current, present := existing.In(p.Config)[p.Section]
+		if !present {
+			// A patch never creates a foreign section. Render normally turns this
+			// into a conflict; this guard keeps a manually constructed Doc safe.
+			continue
+		}
+		deletes := append([]string(nil), p.Deletes...)
+		sort.Strings(deletes)
+		for _, option := range deletes {
+			if forbiddenPatchOption(option) {
+				continue
+			}
+			if _, present := current[option]; !present {
+				continue
+			}
+			ops = append(ops, applyengine.Op{
+				Kind: applyengine.OpDelete, Config: p.Config,
+				Section: p.Section, Option: option,
+			})
+		}
+		changed := map[string]string{}
+		for option, value := range p.Values {
+			if forbiddenPatchOption(option) || current[option] == value {
+				continue
+			}
+			changed[option] = value
+		}
+		if len(changed) > 0 {
+			ops = append(ops, applyengine.Op{
+				Kind: applyengine.OpSet, Config: p.Config,
+				Section: p.Section, Values: changed, Patch: true,
+			})
+		}
+	}
 	return applyengine.Plan{Ops: ops}
+}
+
+func forbiddenPatchOption(option string) bool {
+	return option == OwnershipTag || option == ".type" || option == ".name"
+}
+
+func sortedPatches(in []Patch) []Patch {
+	out := append([]Patch(nil), in...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Config != out[j].Config {
+			return out[i].Config < out[j].Config
+		}
+		return out[i].Section < out[j].Section
+	})
+	return out
 }
 
 // matches reports whether the device already holds every value this section

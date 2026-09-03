@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	TopologySourceNetworkDevices  = "luci.getNetworkDevices"
-	TopologySourceWirelessDevices = "luci.getWirelessDevices"
+	TopologySourceNetworkDevices  = "luci-rpc.getNetworkDevices"
+	TopologySourceWirelessDevices = "luci-rpc.getWirelessDevices"
 	TopologySourceBridgeSTP       = "brctl.showstp"
 )
 

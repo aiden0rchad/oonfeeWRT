@@ -48,6 +48,12 @@ type Op struct {
 	// ignores it — a failure with no error anywhere in the chain.
 	Lists  map[string][]string
 	Option string // Delete of a single option
+
+	// Patch marks an option-only Set on a pre-existing section that remains
+	// operator-owned. Ordinary Add/Set operations are stamped with OwnershipTag;
+	// a Patch is deliberately not. It is invalid on Add, whole-section Delete,
+	// or a Set containing the ownership marker.
+	Patch bool
 }
 
 type OpKind string

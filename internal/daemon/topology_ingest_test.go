@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +94,11 @@ func TestTopologyIngestWaitsForFleetAliasesAndClosesOnlyOnAnsweredSource(t *test
 	if len(db.active) != 0 || sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceUnknown {
 		t.Fatalf("incomplete alias inventory created an edge: active=%+v sources=%+v", db.active, db.sources)
 	}
+	if reason := sourceReason(db.sources, topology.SourceBridgeFDB); !strings.Contains(reason,
+		"device:2/"+collector.TopologySourceNetworkDevices) || !strings.Contains(reason,
+		"device:2/"+collector.TopologySourceWirelessDevices) {
+		t.Fatalf("alias gap does not identify missing device sources: %q", reason)
+	}
 
 	at += 1_000
 	c6 := collector.Snapshot{DeviceID: 2, At: time.UnixMilli(at)}
@@ -138,6 +144,12 @@ func TestTopologyIngestWaitsForFleetAliasesAndClosesOnlyOnAnsweredSource(t *test
 	if len(db.active) != 1 || db.active[0].ParentPort != "lan1" || db.active[0].Medium != "wired" ||
 		sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceUnknown {
 		t.Fatalf("mapping loss mutated link: active=%+v sources=%+v", db.active, db.sources)
+	}
+	if reason := sourceReason(db.sources, topology.SourceBridgeFDB); !strings.Contains(reason,
+		collector.TopologySourceBridgeSTP) || !strings.Contains(reason, "unavailable") ||
+		strings.Contains(reason, collector.TopologySourceNetworkDevices) ||
+		strings.Contains(reason, collector.TopologySourceWirelessDevices) {
+		t.Fatalf("FDB downgrade does not identify the failed STP source: %q", reason)
 	}
 
 	// A failed whole-device poll also keeps the interval but makes current
@@ -186,10 +198,418 @@ func TestTopologyIngestWaitsForFleetAliasesAndClosesOnlyOnAnsweredSource(t *test
 	}
 }
 
+func TestTopologyIngestAcceptsWiredOnlyAliasesWithoutWirelessRPC(t *testing.T) {
+	adopted := time.Now().Unix()
+	const (
+		apMAC     = "02:00:00:00:00:01"
+		switchMAC = "02:00:00:00:00:02"
+	)
+	db := &fakeTopologyStore{devices: []*store.Device{
+		{ID: 1, MAC: apMAC, Name: "access point", Role: "ap",
+			Functions: []string{"ap", "switch"}, AdoptedAt: &adopted},
+		{ID: 2, MAC: switchMAC, Name: "wired switch", Role: "switch",
+			Functions: []string{"switch"}, AdoptedAt: &adopted},
+	}}
+	ingest := newTopologyIngestor(db)
+	at := int64(1_800_000_000_000)
+	observed := func(deviceID int64, source string) model.TopologySourceObservation {
+		return model.TopologySourceObservation{
+			DeviceID: deviceID, Source: source, State: model.TopologySourceObserved, ObservedAt: at,
+		}
+	}
+
+	ap := collector.Snapshot{DeviceID: 1, At: time.UnixMilli(at)}
+	ap.Topology = collector.TopologySnapshot{
+		Cycle:          true,
+		NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: apMAC}},
+		Wireless: []topology.WirelessRadio{{Key: "radio0", Interfaces: []topology.WirelessInterface{{
+			IfName: "phy0-ap0", Mode: "ap", BSSID: "02:00:00:00:10:01",
+		}}}},
+		Sources: []model.TopologySourceObservation{
+			observed(1, collector.TopologySourceNetworkDevices),
+			observed(1, collector.TopologySourceWirelessDevices),
+		},
+	}
+	if err := ingest.record(context.Background(), ap); err != nil {
+		t.Fatal(err)
+	}
+
+	at += 1_000
+	wired := collector.Snapshot{DeviceID: 2, At: time.UnixMilli(at)}
+	wired.Topology = collector.TopologySnapshot{
+		Cycle:          true,
+		NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: switchMAC, BridgeOf: []string{"eth1"}}},
+		Bridges: []topology.BridgeObservation{{
+			DeviceID: 2, Bridge: "br-lan",
+			Entries: []topology.FDBEntry{{Port: 1, MAC: apMAC}},
+			STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{{
+				Name: "eth1", Port: 1, State: "forwarding",
+			}}},
+			PortMedia: map[int]string{1: "wired"},
+		}},
+		Sources: []model.TopologySourceObservation{
+			{DeviceID: 2, Source: collector.TopologySourceNetworkDevices,
+				State: model.TopologySourceObserved, ObservedAt: at},
+			{DeviceID: 2, Source: collector.TopologySourceWirelessDevices,
+				State: model.TopologySourceError, Reason: "source call failure: unsupported operation", ObservedAt: at},
+			{DeviceID: 2, Source: topology.SourceBridgeFDB,
+				State: model.TopologySourceObserved, ObservedAt: at},
+			{DeviceID: 2, Source: collector.TopologySourceBridgeSTP,
+				State: model.TopologySourceObserved, ObservedAt: at},
+		},
+	}
+	if err := ingest.record(context.Background(), wired); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.active) != 1 || db.active[0].ChildNode != "device:"+apMAC ||
+		db.active[0].ParentNode != "device:"+switchMAC {
+		t.Fatalf("wired-only bridge evidence was discarded: active=%+v sources=%+v", db.active, db.sources)
+	}
+	if sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceEmpty ||
+		sourceReason(db.sources, collector.TopologySourceWirelessDevices) != "fresh luci-rpc.getNetworkDevices inventory contains no active wireless interfaces" ||
+		sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceObserved {
+		t.Fatalf("wired-only coverage was not normalized: %+v", db.sources)
+	}
+	if cached := ingest.aliases[2]; !cached.wirelessKnown || len(cached.wireless) != 0 {
+		t.Fatalf("wired-only aliases=%+v", cached)
+	}
+}
+
+func TestTopologyIngestRequiresFreshEmptyRuntimeWirelessInventory(t *testing.T) {
+	tests := []struct {
+		name        string
+		functions   []string
+		role        string
+		ifacesFresh bool
+		ifaces      []string
+	}{
+		{name: "non-AP without fresh interface inventory", functions: []string{"switch"}, role: "switch"},
+		{name: "non-AP with an active wireless interface", functions: []string{"switch"}, role: "switch",
+			ifacesFresh: true, ifaces: []string{"wlan0"}},
+		{name: "AP with a proven empty runtime interface list", functions: []string{"ap", "switch"}, role: "ap",
+			ifacesFresh: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			adopted := time.Now().Unix()
+			device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: tc.role,
+				Functions: tc.functions, AdoptedAt: &adopted}
+			db := &fakeTopologyStore{devices: []*store.Device{device}}
+			at := int64(1_800_000_000_000)
+			snapshot := collector.Snapshot{
+				DeviceID: 1, At: time.UnixMilli(at), IfacesFresh: tc.ifacesFresh, Ifaces: tc.ifaces,
+			}
+			snapshot.Topology = collector.TopologySnapshot{
+				Cycle:          true,
+				NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: device.MAC, BridgeOf: []string{"eth1"}}},
+				Bridges: []topology.BridgeObservation{{
+					DeviceID: 1, Bridge: "br-lan", Entries: []topology.FDBEntry{{Port: 1, MAC: "02:00:00:00:00:44"}},
+					STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{{
+						Name: "eth1", Port: 1, State: "forwarding",
+					}}}, PortMedia: map[int]string{1: "wired"},
+				}},
+				Sources: []model.TopologySourceObservation{
+					{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+						State: model.TopologySourceError, Reason: "source call failure: transport error", ObservedAt: at},
+					{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+						State: model.TopologySourceError, Reason: "source call failure: unsupported operation", ObservedAt: at},
+					{DeviceID: 1, Source: topology.SourceBridgeFDB,
+						State: model.TopologySourceObserved, ObservedAt: at},
+					{DeviceID: 1, Source: collector.TopologySourceBridgeSTP,
+						State: model.TopologySourceObserved, ObservedAt: at},
+				},
+			}
+			if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if len(db.active) != 0 ||
+				sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceError ||
+				sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceUnknown {
+				t.Fatalf("unproven wireless inventory was treated as empty: active=%+v sources=%+v", db.active, db.sources)
+			}
+			reason := sourceReason(db.sources, topology.SourceBridgeFDB)
+			if !strings.Contains(reason, collector.TopologySourceWirelessDevices) ||
+				!strings.Contains(reason, "unsupported operation") {
+				t.Fatalf("wireless prerequisite failure was obscured: %q", reason)
+			}
+		})
+	}
+}
+
+func TestTopologyIngestDoesNotTreatNetworkInventoryWithActiveWirelessAsEmpty(t *testing.T) {
+	adopted := time.Now().Unix()
+	device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: "switch",
+		Functions: []string{"switch"}, AdoptedAt: &adopted}
+	db := &fakeTopologyStore{devices: []*store.Device{device}}
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{DeviceID: 1, At: time.UnixMilli(at), IfacesFresh: true}
+	snapshot.Topology = collector.TopologySnapshot{
+		Cycle: true,
+		NetworkDevices: []topology.NetworkDevice{
+			{Name: "br-lan", MAC: device.MAC, BridgeOf: []string{"phy0-ap0"}},
+			{Name: "phy0-ap0", MAC: "02:00:00:00:10:01", Wireless: true},
+		},
+		Sources: []model.TopologySourceObservation{
+			{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+				State: model.TopologySourceObserved, ObservedAt: at},
+			{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+				State: model.TopologySourceError, Reason: "source call failure: unsupported operation", ObservedAt: at},
+		},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceError {
+		t.Fatalf("active wireless interface was treated as empty: %+v", db.sources)
+	}
+}
+
+func TestTopologyIngestDoesNotLetEmptyInventoryOverrideFreshWirelessEvidence(t *testing.T) {
+	adopted := time.Now().Unix()
+	const clientMAC = "02:00:00:00:00:44"
+	device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: "switch",
+		Functions: []string{"switch"}, AdoptedAt: &adopted}
+	db := &fakeTopologyStore{devices: []*store.Device{device}, clients: []store.Client{{MAC: clientMAC}}}
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{
+		DeviceID: 1, At: time.UnixMilli(at), IfacesFresh: true, APsFresh: true,
+		APs: []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+			clientMAC: {Iface: "phy0-ap0"},
+		}}},
+		Topology: collector.TopologySnapshot{
+			Cycle:          true,
+			NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: device.MAC}},
+			Wireless: []topology.WirelessRadio{{Key: "radio0", Interfaces: []topology.WirelessInterface{{
+				IfName: "phy0-ap0", BSSID: "02:00:00:00:10:01", Mode: "ap",
+			}}}},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 1, Source: topology.SourceAssociations,
+					State: model.TopologySourceObserved, ObservedAt: at},
+			},
+		},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceObserved ||
+		sourceState(db.sources, topology.SourceAssociations) != model.TopologySourceObserved || len(db.active) != 1 {
+		t.Fatalf("empty interface inventory overrode positive wireless evidence: active=%+v sources=%+v",
+			db.active, db.sources)
+	}
+}
+
+func TestTopologyIngestDoesNotTreatEmptyNetworkResponseAsRuntimeProof(t *testing.T) {
+	adopted := time.Now().Unix()
+	device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: "switch",
+		Functions: []string{"switch"}, AdoptedAt: &adopted}
+	db := &fakeTopologyStore{devices: []*store.Device{device}}
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{DeviceID: 1, At: time.UnixMilli(at)}
+	snapshot.Topology = collector.TopologySnapshot{
+		Cycle: true,
+		Sources: []model.TopologySourceObservation{
+			{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+				State: model.TopologySourceEmpty, ObservedAt: at},
+			{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+				State: model.TopologySourceError, Reason: "source call failure: unsupported operation", ObservedAt: at},
+		},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceError {
+		t.Fatalf("empty network response was treated as wireless runtime proof: %+v", db.sources)
+	}
+}
+
+func TestTopologyIngestClearsWirelessAliasesOnlyAfterFreshEmptyRuntimeProof(t *testing.T) {
+	adopted := time.Now().Unix()
+	device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: "switch",
+		Functions: []string{"switch"}, AdoptedAt: &adopted}
+	db := &fakeTopologyStore{devices: []*store.Device{device}}
+	ingest := newTopologyIngestor(db)
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{DeviceID: 1, At: time.UnixMilli(at)}
+	snapshot.Topology = collector.TopologySnapshot{
+		Cycle: true,
+		Wireless: []topology.WirelessRadio{{Key: "radio0", Interfaces: []topology.WirelessInterface{{
+			IfName: "wlan0", Mode: "ap", BSSID: "02:00:00:00:10:01",
+		}}}},
+		Sources: []model.TopologySourceObservation{{
+			DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+			State: model.TopologySourceObserved, ObservedAt: at,
+		}},
+	}
+	if err := ingest.record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if cached := ingest.aliases[1]; !cached.wirelessKnown || len(cached.wireless) != 1 {
+		t.Fatalf("unmanaged wireless alias was not retained: %+v", cached)
+	}
+
+	snapshot.Topology.Wireless = nil
+	snapshot.Topology.Sources[0].State = model.TopologySourceError
+	snapshot.Topology.Sources[0].Reason = "source call failure: unsupported operation"
+	for _, runtime := range []struct {
+		fresh  bool
+		ifaces []string
+	}{{fresh: false}, {fresh: true, ifaces: []string{"wlan0"}}} {
+		at += 1_000
+		snapshot.At = time.UnixMilli(at)
+		snapshot.IfacesFresh, snapshot.Ifaces = runtime.fresh, runtime.ifaces
+		snapshot.Topology.Sources[0].ObservedAt = at
+		if err := ingest.record(context.Background(), snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if cached := ingest.aliases[1]; !cached.wirelessKnown || len(cached.wireless) != 1 {
+			t.Fatalf("unproven runtime state cleared unmanaged alias: fresh=%v ifaces=%v aliases=%+v",
+				runtime.fresh, runtime.ifaces, cached)
+		}
+	}
+
+	at += 1_000
+	snapshot.At = time.UnixMilli(at)
+	snapshot.IfacesFresh, snapshot.Ifaces = true, nil
+	snapshot.Topology.Sources[0].ObservedAt = at
+	if err := ingest.record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if cached := ingest.aliases[1]; !cached.wirelessKnown || len(cached.wireless) != 0 {
+		t.Fatalf("fresh empty runtime proof did not clear wireless aliases: %+v", cached)
+	}
+	if sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceEmpty {
+		t.Fatalf("fresh empty runtime proof did not normalize coverage: %+v", db.sources)
+	}
+}
+
+func TestTopologyIngestPreservesRemoteAliasFailureDetailsAndLastSuccess(t *testing.T) {
+	const (
+		parentMAC = "02:00:00:00:00:01"
+		remoteMAC = "02:00:00:00:00:02"
+		aliasMAC  = "02:00:00:00:00:12"
+	)
+	devices := func() []*store.Device {
+		adopted := time.Now().Unix()
+		return []*store.Device{
+			{ID: 1, MAC: parentMAC, Role: "ap", Functions: []string{"ap", "switch"}, AdoptedAt: &adopted},
+			{ID: 2, MAC: remoteMAC, Role: "ap", Functions: []string{"ap", "switch"}, AdoptedAt: &adopted},
+		}
+	}
+	bridgeSnapshot := func(at int64) collector.Snapshot {
+		snapshot := collector.Snapshot{DeviceID: 1, At: time.UnixMilli(at)}
+		snapshot.Topology = collector.TopologySnapshot{
+			Cycle:          true,
+			NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: parentMAC, BridgeOf: []string{"eth1"}}},
+			Bridges: []topology.BridgeObservation{{
+				DeviceID: 1, Bridge: "br-lan", Entries: []topology.FDBEntry{{Port: 1, MAC: aliasMAC}},
+				STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{{
+					Name: "eth1", Port: 1, State: "forwarding",
+				}}}, PortMedia: map[int]string{1: "wired"},
+			}},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceEmpty, ObservedAt: at},
+				{DeviceID: 1, Source: topology.SourceBridgeFDB,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 1, Source: collector.TopologySourceBridgeSTP,
+					State: model.TopologySourceObserved, ObservedAt: at},
+			},
+		}
+		return snapshot
+	}
+
+	t.Run("failure before inventory is reported by device source and cause", func(t *testing.T) {
+		db := &fakeTopologyStore{devices: devices()}
+		ingest := newTopologyIngestor(db)
+		at := int64(1_800_000_000_000)
+		remote := collector.Snapshot{DeviceID: 2, At: time.UnixMilli(at)}
+		remote.Topology = collector.TopologySnapshot{Cycle: true, Sources: []model.TopologySourceObservation{
+			{DeviceID: 2, Source: collector.TopologySourceNetworkDevices,
+				State: model.TopologySourceError, Reason: "source call failure: decode/invalid data", ObservedAt: at},
+			{DeviceID: 2, Source: collector.TopologySourceWirelessDevices,
+				State: model.TopologySourceEmpty, ObservedAt: at},
+		}}
+		if err := ingest.record(context.Background(), remote); err != nil {
+			t.Fatal(err)
+		}
+		if err := ingest.record(context.Background(), bridgeSnapshot(at+1_000)); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.active) != 0 || sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceUnknown {
+			t.Fatalf("remote alias failure did not block FDB evidence: active=%+v sources=%+v", db.active, db.sources)
+		}
+		reason := sourceReason(db.sources, topology.SourceBridgeFDB)
+		want := "device:2/" + collector.TopologySourceNetworkDevices + " (source call failure: decode/invalid data)"
+		if !strings.Contains(reason, want) || strings.Contains(reason, "device:2/"+
+			collector.TopologySourceNetworkDevices+" (not observed)") {
+			t.Fatalf("remote alias failure lost its cause: %q", reason)
+		}
+	})
+
+	t.Run("transient failure retains successful aliases", func(t *testing.T) {
+		db := &fakeTopologyStore{devices: devices()}
+		ingest := newTopologyIngestor(db)
+		at := int64(1_800_000_000_000)
+		remote := collector.Snapshot{DeviceID: 2, At: time.UnixMilli(at)}
+		remote.Topology = collector.TopologySnapshot{
+			Cycle:          true,
+			NetworkDevices: []topology.NetworkDevice{{Name: "br-lan", MAC: aliasMAC}},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: 2, Source: collector.TopologySourceNetworkDevices,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 2, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceEmpty, ObservedAt: at},
+			},
+		}
+		if err := ingest.record(context.Background(), remote); err != nil {
+			t.Fatal(err)
+		}
+		at += 1_000
+		remote.At = time.UnixMilli(at)
+		remote.Topology.NetworkDevices = nil
+		remote.Topology.Sources = []model.TopologySourceObservation{{
+			DeviceID: 2, Source: collector.TopologySourceNetworkDevices,
+			State: model.TopologySourceError, Reason: "source call failure: access/permission denied", ObservedAt: at,
+		}}
+		if err := ingest.record(context.Background(), remote); err != nil {
+			t.Fatal(err)
+		}
+		cached := ingest.aliases[2]
+		if !cached.networkKnown || len(cached.network) != 1 || cached.network[0] != aliasMAC ||
+			cached.networkState != model.TopologySourceError || cached.networkReason != "source call failure: access/permission denied" {
+			t.Fatalf("transient failure erased alias or provenance: %+v", cached)
+		}
+		if err := ingest.record(context.Background(), bridgeSnapshot(at+1_000)); err != nil {
+			t.Fatal(err)
+		}
+		if len(db.active) != 1 || db.active[0].ChildNode != "device:"+remoteMAC ||
+			db.active[0].ParentNode != "device:"+parentMAC ||
+			sourceState(db.sources, topology.SourceBridgeFDB) != model.TopologySourceObserved {
+			t.Fatalf("last successful alias was not usable after transient failure: active=%+v sources=%+v",
+				db.active, db.sources)
+		}
+	})
+}
+
 func sourceState(sources []model.TopologySourceObservation, name string) model.TopologySourceState {
 	for _, source := range sources {
 		if source.Source == name {
 			return source.State
+		}
+	}
+	return ""
+}
+
+func sourceReason(sources []model.TopologySourceObservation, name string) string {
+	for _, source := range sources {
+		if source.Source == name {
+			return source.Reason
 		}
 	}
 	return ""
@@ -230,7 +650,7 @@ func TestTopologyIngestOnlyTreatsGatewayDefaultRouteAsInternetRoot(t *testing.T)
 	}
 }
 
-func TestTopologyIngestClosesAssociationWhenDeviceLosesAPFunction(t *testing.T) {
+func TestTopologyIngestClosesAssociationAfterFreshEmptyRuntimeProof(t *testing.T) {
 	adopted := time.Now().Unix()
 	deviceID := int64(1)
 	device := &store.Device{ID: deviceID, MAC: "02:00:00:00:00:01", Role: "switch",
@@ -247,7 +667,7 @@ func TestTopologyIngestClosesAssociationWhenDeviceLosesAPFunction(t *testing.T) 
 	db := &fakeTopologyStore{devices: []*store.Device{device}, active: []model.TopologyEdge{active}}
 	ingest := newTopologyIngestor(db)
 	at := int64(1_800_000_000_000)
-	snapshot := collector.Snapshot{DeviceID: deviceID, At: time.UnixMilli(at)}
+	snapshot := collector.Snapshot{DeviceID: deviceID, At: time.UnixMilli(at), IfacesFresh: true}
 	snapshot.Topology = collector.TopologySnapshot{Cycle: true, Sources: []model.TopologySourceObservation{
 		{DeviceID: deviceID, Source: collector.TopologySourceNetworkDevices,
 			State: model.TopologySourceObserved, ObservedAt: at},
@@ -259,6 +679,47 @@ func TestTopologyIngestClosesAssociationWhenDeviceLosesAPFunction(t *testing.T) 
 		sourceState(db.sources, topology.SourceAssociations) != model.TopologySourceEmpty {
 		t.Fatalf("role transition left association active: active=%+v changes=%+v sources=%+v",
 			db.active, db.last, db.sources)
+	}
+}
+
+func TestTopologyIngestRetainsUnmanagedAssociationWithoutAPFunction(t *testing.T) {
+	adopted := time.Now().Unix()
+	const clientMAC = "02:00:00:00:00:44"
+	device := &store.Device{ID: 1, MAC: "02:00:00:00:00:01", Role: "switch",
+		Functions: []string{"switch"}, AdoptedAt: &adopted}
+	db := &fakeTopologyStore{devices: []*store.Device{device}, clients: []store.Client{{MAC: clientMAC}}}
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{
+		DeviceID: 1, At: time.UnixMilli(at), IfacesFresh: true, Ifaces: []string{"phy0-ap0"}, APsFresh: true,
+		APs: []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+			clientMAC: {Iface: "phy0-ap0"},
+		}}},
+		Topology: collector.TopologySnapshot{
+			Cycle: true,
+			NetworkDevices: []topology.NetworkDevice{
+				{Name: "br-lan", MAC: device.MAC, BridgeOf: []string{"phy0-ap0"}},
+				{Name: "phy0-ap0", Wireless: true},
+			},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: 1, Source: collector.TopologySourceNetworkDevices,
+					State: model.TopologySourceObserved, ObservedAt: at},
+				{DeviceID: 1, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceError, Reason: "source call failure: unsupported operation", ObservedAt: at},
+				{DeviceID: 1, Source: topology.SourceAssociations,
+					State: model.TopologySourceObserved, ObservedAt: at},
+			},
+		},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.active) != 1 || db.active[0].ChildMAC != clientMAC ||
+		db.active[0].ParentPort != "phy0-ap0" || db.active[0].Medium != "wireless" {
+		t.Fatalf("unmanaged association was hidden by desired functions: active=%+v sources=%+v",
+			db.active, db.sources)
+	}
+	if sourceState(db.sources, topology.SourceAssociations) != model.TopologySourceObserved {
+		t.Fatalf("measured association coverage was rewritten: %+v", db.sources)
 	}
 }
 
@@ -314,10 +775,20 @@ func TestTopologyUnavailableRecordsFirstFailedPoll(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(db.sources) != 1 || db.sources[0].DeviceID != 1 ||
-		db.sources[0].Source != topology.SourceDefaultRoute ||
-		db.sources[0].State != model.TopologySourceError {
+	if len(db.sources) != 3 ||
+		sourceState(db.sources, topology.SourceDefaultRoute) != model.TopologySourceError ||
+		sourceState(db.sources, collector.TopologySourceNetworkDevices) != model.TopologySourceError ||
+		sourceState(db.sources, collector.TopologySourceWirelessDevices) != model.TopologySourceError {
 		t.Fatalf("first failed poll source=%+v", db.sources)
+	}
+	gaps := strings.Join(ingest.unknownAliasSources(db.devices), "; ")
+	for _, source := range []string{
+		collector.TopologySourceNetworkDevices,
+		collector.TopologySourceWirelessDevices,
+	} {
+		if !strings.Contains(gaps, source+" (device poll failed)") {
+			t.Fatalf("%s failure was not retained in alias cache: %q", source, gaps)
+		}
 	}
 }
 
@@ -365,6 +836,56 @@ func TestTopologyIngestPreservesCompetingBSSAssociations(t *testing.T) {
 	}
 	if !ports["phy0-ap0"] || !ports["phy1-ap0"] {
 		t.Fatalf("competing BSS ports missing: %+v", db.active)
+	}
+}
+
+func TestTopologyIngestDoesNotVersionRichEdgeOnAssociationOnlyPoll(t *testing.T) {
+	adopted := time.Now().Unix()
+	deviceID := int64(1)
+	const clientMAC = "02:00:00:00:00:44"
+	active := model.TopologyEdge{
+		ID: 61, ChildNode: "client:" + clientMAC, ChildMAC: clientMAC,
+		ParentNode: "device:02:00:00:00:00:01", ParentDeviceID: &deviceID,
+		ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "measured",
+		ValidFrom: 1_799_999_000_000, LastSeen: 1_799_999_999_000,
+		Evidence: []model.TopologyEvidence{
+			{Kind: "association", Source: topology.SourceAssociations, DeviceID: &deviceID,
+				Detail: map[string]any{"interface": "phy0-ap0", "observed_mac": clientMAC}},
+			{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB, DeviceID: &deviceID,
+				Detail: map[string]any{"interface": "phy0-ap0", "observed_mac": clientMAC}},
+			{Kind: "neighbor", Source: topology.SourceNeighbors(4), DeviceID: &deviceID,
+				Detail: map[string]any{"address": "192.0.2.44", "interface": "br-lan"}},
+			{Kind: "neighbor", Source: topology.SourceNeighbors(6), DeviceID: &deviceID,
+				Detail: map[string]any{"address": "2001:db8::44", "interface": "br-lan"}},
+		},
+		Ambiguities: []string{"BusyBox brctl showmacs does not identify VLAN"},
+	}
+	db := &fakeTopologyStore{
+		devices: []*store.Device{{
+			ID: deviceID, MAC: "02:00:00:00:00:01", Role: "ap",
+			Functions: []string{"ap", "switch"}, AdoptedAt: &adopted,
+		}},
+		clients: []store.Client{{MAC: clientMAC}}, active: []model.TopologyEdge{active}, nextID: active.ID,
+	}
+	at := int64(1_800_000_000_000)
+	snapshot := collector.Snapshot{
+		DeviceID: deviceID, At: time.UnixMilli(at), APsFresh: true,
+		APs: []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+			clientMAC: {Iface: "phy0-ap0"},
+		}}},
+		Topology: collector.TopologySnapshot{Sources: []model.TopologySourceObservation{{
+			DeviceID: deviceID, Source: topology.SourceAssociations,
+			State: model.TopologySourceObserved, ObservedAt: at,
+		}}},
+	}
+	if err := newTopologyIngestor(db).record(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(db.last.Close) != 0 || len(db.last.Open) != 0 || len(db.last.Update) != 1 ||
+		db.last.Update[0].ID != active.ID || len(db.active) != 1 || db.active[0].ID != active.ID ||
+		db.active[0].ValidFrom != active.ValidFrom || db.active[0].LastSeen != at ||
+		len(db.active[0].Evidence) != len(active.Evidence) {
+		t.Fatalf("association-only poll versioned rich edge: changes=%+v active=%+v", db.last, db.active)
 	}
 }
 
@@ -497,6 +1018,221 @@ func TestTopologyIngestConcurrentStartupSuppressesReciprocalLLDP(t *testing.T) {
 			!found["client:"+c6Client+"\x00device:"+c6MAC] {
 			t.Fatalf("iteration %d hierarchy=%v active=%+v", iteration, found, db.active)
 		}
+	}
+}
+
+func TestTopologyIngestProjectsManagedLinkFDBTransitInEitherPollOrder(t *testing.T) {
+	const (
+		gatewayMAC  = "02:00:00:00:00:01"
+		switchMAC   = "02:00:00:00:00:02"
+		wifiClient  = "02:00:00:00:00:44"
+		wiredClient = "02:00:00:00:00:55"
+	)
+	adopted := time.Now().Unix()
+	devices := []*store.Device{
+		{ID: 1, MAC: gatewayMAC, Role: "gateway",
+			Functions: []string{"gateway", "ap", "switch"}, AdoptedAt: &adopted},
+		{ID: 2, MAC: switchMAC, Role: "switch",
+			Functions: []string{"switch"}, AdoptedAt: &adopted},
+	}
+	snapshot := func(deviceID, at int64) collector.Snapshot {
+		source := func(name string) model.TopologySourceObservation {
+			return model.TopologySourceObservation{
+				DeviceID: deviceID, Source: name, State: model.TopologySourceObserved, ObservedAt: at,
+			}
+		}
+		out := collector.Snapshot{DeviceID: deviceID, At: time.UnixMilli(at)}
+		if deviceID == 1 {
+			out.APsFresh = true
+			out.APs = []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+				wifiClient: {Iface: "phy0-ap0"},
+			}}}
+			out.Topology = collector.TopologySnapshot{
+				Cycle: true,
+				NetworkDevices: []topology.NetworkDevice{{
+					Name: "br-lan", MAC: gatewayMAC, BridgeOf: []string{"eth1"},
+				}},
+				Wireless: []topology.WirelessRadio{{Key: "radio0", Interfaces: []topology.WirelessInterface{{
+					IfName: "phy0-ap0", Mode: "ap", BSSID: "02:00:00:00:10:01",
+				}}}},
+				Bridges: []topology.BridgeObservation{{
+					DeviceID: 1, Bridge: "br-lan",
+					Entries: []topology.FDBEntry{
+						{Port: 1, MAC: switchMAC}, {Port: 1, MAC: wiredClient},
+					},
+					STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{{
+						Name: "eth1", Port: 1, State: "forwarding",
+					}}},
+					PortMedia:      map[int]string{1: "wired"},
+					PortAttachment: map[int]string{1: topology.PortAttachmentPhysical},
+				}},
+				LLDP:    []topology.LLDPLink{{DeviceID: 1, Port: "eth1", RemoteMAC: switchMAC}},
+				Uplinks: []topology.Uplink{{DeviceID: 1, Interface: "wan", Active: true}},
+				Sources: []model.TopologySourceObservation{
+					source(topology.SourceBridgeFDB), source(topology.SourceLLDP),
+					source(topology.SourceAssociations), source(topology.SourceDefaultRoute),
+					source(collector.TopologySourceNetworkDevices),
+					source(collector.TopologySourceWirelessDevices),
+					source(collector.TopologySourceBridgeSTP),
+				},
+			}
+			return out
+		}
+		out.Topology = collector.TopologySnapshot{
+			Cycle: true,
+			NetworkDevices: []topology.NetworkDevice{{
+				Name: "br-lan", MAC: switchMAC, BridgeOf: []string{"eth0", "eth1"},
+			}},
+			Bridges: []topology.BridgeObservation{{
+				DeviceID: 2, Bridge: "br-lan",
+				Entries: []topology.FDBEntry{
+					{Port: 1, MAC: gatewayMAC}, {Port: 1, MAC: wifiClient},
+					{Port: 2, MAC: wiredClient},
+				},
+				STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{
+					{Name: "eth0", Port: 1, State: "forwarding"},
+					{Name: "eth1", Port: 2, State: "forwarding"},
+				}},
+				PortMedia: map[int]string{1: "wired", 2: "wired"},
+				PortAttachment: map[int]string{
+					1: topology.PortAttachmentPhysical, 2: topology.PortAttachmentPhysical,
+				},
+			}},
+			LLDP: []topology.LLDPLink{{DeviceID: 2, Port: "eth0", RemoteMAC: gatewayMAC}},
+			Sources: []model.TopologySourceObservation{
+				source(topology.SourceBridgeFDB), source(topology.SourceLLDP),
+				source(collector.TopologySourceNetworkDevices),
+				{DeviceID: 2, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceEmpty, ObservedAt: at},
+				source(collector.TopologySourceBridgeSTP),
+			},
+		}
+		return out
+	}
+	seedEdges := func(at int64) []model.TopologyEdge {
+		gatewayID, switchID := int64(1), int64(2)
+		return []model.TopologyEdge{
+			{
+				ID: 1, ChildNode: "client:" + wifiClient, ChildMAC: wifiClient,
+				ParentNode: "device:" + gatewayMAC, ParentDeviceID: &gatewayID,
+				ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "association", Source: topology.SourceAssociations,
+					DeviceID: &gatewayID, Detail: map[string]any{"interface": "phy0-ap0", "observed_mac": wifiClient}}},
+				Ambiguities: []string{"concurrent evidence yields multiple candidate parents or ports"},
+			},
+			{
+				ID: 2, ChildNode: "client:" + wiredClient, ChildMAC: wiredClient,
+				ParentNode: "device:" + switchMAC, ParentDeviceID: &switchID,
+				ParentPort: "eth1", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &switchID, Detail: map[string]any{"attachment": topology.PortAttachmentPhysical}}},
+				Ambiguities: []string{"concurrent evidence yields multiple candidate parents or ports"},
+			},
+			{
+				ID: 3, ChildNode: "client:" + wifiClient, ChildMAC: wifiClient,
+				ParentNode: "device:" + switchMAC, ParentDeviceID: &switchID,
+				ParentPort: "eth0", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &switchID, Detail: map[string]any{
+						"attachment": topology.PortAttachmentPhysical, "stp_state": "forwarding",
+						"managed_link_transit_possible": true, "managed_link_peer": "device:" + gatewayMAC,
+					}}},
+				Ambiguities: []string{
+					"bridge FDB may be transit evidence through a managed-device link",
+					"concurrent evidence yields multiple candidate parents or ports",
+				},
+			},
+			{
+				ID: 4, ChildNode: "client:" + wiredClient, ChildMAC: wiredClient,
+				ParentNode: "device:" + gatewayMAC, ParentDeviceID: &gatewayID,
+				ParentPort: "eth1", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &gatewayID, Detail: map[string]any{
+						"attachment": topology.PortAttachmentPhysical, "stp_state": "forwarding",
+						"managed_link_transit_possible": true, "managed_link_peer": "device:" + switchMAC,
+					}}},
+				Ambiguities: []string{
+					"bridge FDB may be transit evidence through a managed-device link",
+					"concurrent evidence yields multiple candidate parents or ports",
+				},
+			},
+		}
+	}
+	hasPlacement := func(edges []model.TopologyEdge, child, parent, port string) bool {
+		for _, edge := range edges {
+			if edge.ChildNode == child && edge.ParentNode == parent && edge.ParentPort == port {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, order := range [][]int64{{1, 2}, {2, 1}} {
+		name := "gateway then switch"
+		if order[0] == 2 {
+			name = "switch then gateway"
+		}
+		t.Run(name, func(t *testing.T) {
+			at := int64(1_800_000_000_000)
+			db := &fakeTopologyStore{
+				devices: devices,
+				clients: []store.Client{{MAC: wifiClient}, {MAC: wiredClient}},
+				active:  seedEdges(at), nextID: 4,
+			}
+			ingest := newTopologyIngestor(db)
+			for _, deviceID := range []int64{1, 2} {
+				ingest.aliases[deviceID] = topologyAliasCache{
+					networkKnown: true, wirelessKnown: true,
+					networkState:  model.TopologySourceObserved,
+					wirelessState: model.TopologySourceEmpty,
+				}
+			}
+			var fleetSources []model.TopologySourceObservation
+			for _, deviceID := range order {
+				snap := snapshot(deviceID, at)
+				fleetSources = append(fleetSources, snap.Topology.Sources...)
+				if err := ingest.record(context.Background(), snap); err != nil {
+					t.Fatal(err)
+				}
+				if !hasPlacement(db.active, "client:"+wifiClient, "device:"+switchMAC, "eth0") ||
+					!hasPlacement(db.active, "client:"+wiredClient, "device:"+gatewayMAC, "eth1") {
+					t.Fatalf("raw possible-transit evidence was destroyed: active=%+v", db.active)
+				}
+				at += 1_000
+			}
+			if len(db.active) != 6 {
+				t.Fatalf("raw links=%d, want 6: %+v", len(db.active), db.active)
+			}
+
+			visible := topology.CurrentPresentationEdges(db.active, fleetSources, at, (31 * time.Minute).Milliseconds())
+			placements := map[string]string{}
+			for _, edge := range visible {
+				placements[edge.ChildNode] = edge.ParentNode + "\x00" + edge.ParentPort
+			}
+			want := map[string]string{
+				"device:" + gatewayMAC:  topology.InternetNode + "\x00wan",
+				"device:" + switchMAC:   "device:" + gatewayMAC + "\x00eth1",
+				"client:" + wifiClient:  "device:" + gatewayMAC + "\x00phy0-ap0",
+				"client:" + wiredClient: "device:" + switchMAC + "\x00eth1",
+			}
+			if len(visible) != len(want) {
+				t.Fatalf("visible links=%d, want %d: %+v; raw=%+v", len(visible), len(want), visible, db.active)
+			}
+			for child, placement := range want {
+				if placements[child] != placement {
+					t.Fatalf("%s placement=%q, want %q; all=%+v", child, placements[child], placement, db.active)
+				}
+			}
+			for _, edge := range visible {
+				if strings.Contains(strings.Join(edge.Ambiguities, " "), "multiple candidate parents") {
+					t.Fatalf("transitive FDB left a competing parent: %+v", edge)
+				}
+			}
+		})
 	}
 }
 

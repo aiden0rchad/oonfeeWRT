@@ -31,6 +31,31 @@ func TestCollectorTargetSelectsOnlyTheManagedGatewayForWANProbes(t *testing.T) {
 	}
 }
 
+func TestCollectorTargetSkipsWirelessOnlyForStoredNonAPFunctions(t *testing.T) {
+	d := &Daemon{}
+	for _, tc := range []struct {
+		name      string
+		role      string
+		functions []string
+		want      bool
+	}{
+		{name: "explicit switch", role: "switch", functions: []string{"switch"}, want: true},
+		{name: "gateway without AP", role: "gateway", functions: []string{"gateway", "switch"}, want: true},
+		{name: "explicit AP", role: "ap", functions: []string{"ap", "switch"}},
+		{name: "legacy switch", role: "switch", functions: nil, want: true},
+		{name: "legacy gateway retains AP", role: "gateway", functions: nil},
+		{name: "zero-value legacy role retains AP", functions: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := d.target(&store.Device{ID: 1, MAC: "02:00:00:00:00:01",
+				Role: tc.role, Functions: tc.functions})
+			if got.WiredOnly != tc.want {
+				t.Fatalf("WiredOnly = %v, want %v", got.WiredOnly, tc.want)
+			}
+		})
+	}
+}
+
 func TestCollectorTargetAirtimeSplitRequiresStoredCapabilityProof(t *testing.T) {
 	d := &Daemon{}
 	for _, state := range []capability.State{

@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/radio"
 	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
@@ -860,6 +862,76 @@ func TestAddWithoutConnectionKeyFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWirelessFunctionRetrackRefreshesCadenceWithoutDiscardingCaches(t *testing.T) {
+	c := New(newRecorder(), fastOptions())
+	target := Target{DeviceID: 1, MAC: "aa", Name: "router", ConnectionKey: "same"}
+	c.Add(target)
+	p := c.pollers[1]
+	stamp := time.Unix(100, 0)
+	p.mu.Lock()
+	p.ifaces, p.ifaceAt = []string{"phy0-ap0"}, stamp
+	p.ifaceModes = map[string]string{"phy0-ap0": "ap"}
+	p.ifaceSections = map[string]string{"phy0-ap0": "wlan"}
+	p.ifaceRadios = map[string]string{"phy0-ap0": "radio0"}
+	p.aps, p.apsKnown = []AP{{Iface: "phy0-ap0"}}, true
+	p.radios, p.radiosKnown = []radio.LiveState{{
+		InventoryRadio: radio.InventoryRadio{Key: "radio0"},
+	}}, true
+	p.radioAt, p.radioObservedAt, p.radioAttemptAt = stamp, stamp, stamp
+	p.radioAttemptOK = true
+	p.meshAt, p.topologyAt = stamp, stamp
+	p.degraded, p.degradedKnown = []Degradation{{Object: "iwinfo", Method: "devices"}}, true
+	p.mu.Unlock()
+	c.started = true // exercise the existing-poller wake without launching a goroutine
+
+	target.WiredOnly = true
+	c.Add(target)
+	p.mu.Lock()
+	if !p.target.WiredOnly || !p.ifaceAt.IsZero() || !p.ifaceRefetchAt.IsZero() ||
+		!p.topologyAt.IsZero() {
+		p.mu.Unlock()
+		t.Fatalf("AP-to-wired retrack did not refresh interface/topology cadence: %+v", p)
+	}
+	if !reflect.DeepEqual(p.ifaces, []string{"phy0-ap0"}) ||
+		!reflect.DeepEqual(p.ifaceModes, map[string]string{"phy0-ap0": "ap"}) ||
+		!reflect.DeepEqual(p.ifaceSections, map[string]string{"phy0-ap0": "wlan"}) ||
+		!reflect.DeepEqual(p.ifaceRadios, map[string]string{"phy0-ap0": "radio0"}) ||
+		!reflect.DeepEqual(p.aps, []AP{{Iface: "phy0-ap0"}}) || !p.apsKnown ||
+		len(p.radios) != 1 || !p.radiosKnown || p.radioAt != stamp ||
+		p.radioObservedAt != stamp || p.radioAttemptAt != stamp || !p.radioAttemptOK ||
+		p.meshAt != stamp || !p.degradedKnown || len(p.degraded) != 1 {
+		p.mu.Unlock()
+		t.Fatalf("AP-to-wired retrack discarded last observed wireless state: %+v", p)
+	}
+	p.mu.Unlock()
+	select {
+	case <-p.wake:
+	default:
+		t.Fatal("AP-to-wired retrack did not request an immediate full poll")
+	}
+
+	// Returning to AP service also refreshes cadence while retaining the last
+	// observation until the fresh poll replaces it.
+	p.mu.Lock()
+	p.ifaceAt = stamp
+	p.topologyAt = stamp
+	p.mu.Unlock()
+	target.WiredOnly = false
+	c.Add(target)
+	p.mu.Lock()
+	if p.target.WiredOnly || !p.ifaceAt.IsZero() || !p.topologyAt.IsZero() ||
+		!p.apsKnown || !p.radiosKnown || len(p.ifaces) != 1 || len(p.ifaceModes) != 1 {
+		p.mu.Unlock()
+		t.Fatalf("wired-to-AP retrack did not preserve caches and refresh cadence: %+v", p)
+	}
+	p.mu.Unlock()
+	select {
+	case <-p.wake:
+	default:
+		t.Fatal("wired-to-AP retrack did not request an immediate full poll")
+	}
+}
+
 func TestFirstHardPollFailureForcesFreshConnectionWithoutRelogin(t *testing.T) {
 	host, connections, logins := pollRPCServer(t,
 		func(w http.ResponseWriter, batch int32) bool {
@@ -1055,6 +1127,144 @@ func TestUnreadableRequiredCallFailsThePoll(t *testing.T) {
 	if calls[0].optional {
 		t.Fatal("system.info is marked optional; an unreadable one would degrade " +
 			"rather than fail, and the zeroes would be recorded as data")
+	}
+}
+
+func TestRouterClocksRequireFreshSuccessfulClockAndFullPoll(t *testing.T) {
+	now := time.Unix(1788253200, 500*int64(time.Millisecond))
+	c := New(newRecorder(), Options{Now: func() time.Time { return now }})
+	record := func(deviceID int64, offset int64) *poller {
+		t.Helper()
+		p := newPoller(c, Target{DeviceID: deviceID})
+		c.pollers[deviceID] = p
+		observed := now.Add(-30 * time.Second)
+		routerTime := observed.Unix() + offset
+		p.succeed(Snapshot{
+			DeviceID: deviceID, RouterUnixTime: &routerTime, RouterClockAt: observed,
+			clockMethod: clockMethodUnix, clockAttempted: true, clockAttemptOK: true,
+		})
+		return p
+	}
+	p2 := record(2, 600)
+	record(1, -45)
+	got := c.RouterClocks()
+	if len(got) != 2 || got[0].DeviceID != 1 || got[0].OffsetSeconds != -45 ||
+		got[1].DeviceID != 2 || got[1].OffsetSeconds != 600 {
+		t.Fatalf("router clocks=%+v", got)
+	}
+
+	// A successful health poll with an unavailable clock makes the current
+	// clock state unknown immediately; it does not keep warning from old data.
+	p2.succeed(Snapshot{DeviceID: 2, clockAttempted: true})
+	got = c.RouterClocks()
+	if len(got) != 1 || got[0].DeviceID != 1 {
+		t.Fatalf("failed clock attempt remained live: %+v", got)
+	}
+
+	// A failed full poll has the same effect even while its clock observation is
+	// younger than the recency limit.
+	c.pollers[1].mu.Lock()
+	c.pollers[1].fails = 1
+	c.pollers[1].mu.Unlock()
+	if got = c.RouterClocks(); len(got) != 0 {
+		t.Fatalf("offline poller clocks=%+v", got)
+	}
+
+	// Freshness independently bounds a healthy poller's retained observation.
+	p3 := record(3, 0)
+	now = now.Add(routerClockFreshAfter + time.Second)
+	p3.mu.Lock()
+	p3.lastPoll = now
+	p3.mu.Unlock()
+	if got = c.RouterClocks(); len(got) != 0 {
+		t.Fatalf("stale router clocks=%+v", got)
+	}
+}
+
+func TestRouterClockFreshnessCoversHealthyFullPollCadence(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		target   Target
+		widen    int
+		interval time.Duration
+	}{
+		{name: "operator fifteen minute baseline", target: Target{DeviceID: 1,
+			Baseline: 15 * time.Minute}, interval: 15 * time.Minute},
+		{name: "adaptive eight minute interval", target: Target{DeviceID: 1},
+			widen: maxWiden, interval: 8 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(1788253200, 0)
+			c := New(newRecorder(), Options{Now: func() time.Time { return now }})
+			p := newPoller(c, tc.target)
+			c.pollers[tc.target.DeviceID] = p
+			routerTime := now.Unix()
+			p.succeed(Snapshot{
+				DeviceID: tc.target.DeviceID, RouterUnixTime: &routerTime, RouterClockAt: now,
+				clockMethod: clockMethodUnix, clockAttempted: true, clockAttemptOK: true,
+			})
+			p.mu.Lock()
+			p.widen = tc.widen
+			p.mu.Unlock()
+
+			now = now.Add(tc.interval)
+			if got := c.RouterClocks(); len(got) != 1 {
+				t.Fatalf("clock expired at its healthy poll interval: %+v", got)
+			}
+			now = now.Add(31 * time.Second)
+			if got := c.RouterClocks(); len(got) != 0 {
+				t.Fatalf("clock survived its interval and bounded poll grace: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRouterClockOffsetRejectsOverflowAndInexactAPIValues(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		router, controller, want int64
+		ok                       bool
+	}{
+		{name: "epoch zero remains evidence", router: 0, controller: 1788253200,
+			want: -1788253200, ok: true},
+		{name: "ordinary future skew", router: 1788253800, controller: 1788253200,
+			want: 600, ok: true},
+		{name: "largest exact offset", router: maxExactClockInteger, controller: 0,
+			want: maxExactClockInteger, ok: true},
+		{name: "offset exceeds exact JSON range", router: maxExactClockInteger, controller: -1},
+		{name: "subtraction overflows int64", router: 0, controller: -1 << 63},
+		{name: "negative router epoch", router: -1, controller: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := routerClockOffsetSeconds(tc.router, tc.controller)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("offset=(%d,%v), want (%d,%v)", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestRetrackOrACLRefreshRetriesUnavailableRouterClockSource(t *testing.T) {
+	c := New(newRecorder(), fastOptions())
+	target := Target{DeviceID: 1, ConnectionKey: "same"}
+	c.Add(target)
+	p := c.pollers[1]
+	p.mu.Lock()
+	p.clockUnavailable = true
+	p.mu.Unlock()
+
+	c.Add(target)
+	if got := p.clockSourceMethod(); got != clockMethodUnix {
+		t.Fatalf("retrack clock source=%q", got)
+	}
+	p.mu.Lock()
+	p.clockUnavailable = true
+	p.mu.Unlock()
+	if !c.RefreshAccess(1) {
+		t.Fatal("RefreshAccess did not find poller")
+	}
+	if got := p.clockSourceMethod(); got != clockMethodUnix {
+		t.Fatalf("ACL refresh clock source=%q", got)
 	}
 }
 
@@ -1775,8 +1985,11 @@ func TestAPsFreshComesFromTheAnswerNotTheIntent(t *testing.T) {
 	modes := map[string]string{"wlan0": "ap", "wlan1": "ap"}
 
 	// 1. Nothing has been asked yet: no interface list, and none ever read.
-	if snap := p.poll(ctx, client, p.target, Baseline, nil, nil); snap.APsFresh {
-		t.Error("a poll with no interface list reported that it had asked")
+	// Stored non-AP intent must not turn that unknown into observed empty.
+	wired := p.target
+	wired.WiredOnly = true
+	if snap := p.poll(ctx, client, wired, Baseline, nil, nil); snap.APsFresh {
+		t.Error("stored non-AP intent synthesized fresh empty AP coverage")
 	}
 
 	// 2. A real list, and the hostapd calls answer.

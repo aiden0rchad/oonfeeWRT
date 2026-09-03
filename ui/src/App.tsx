@@ -18,6 +18,7 @@ import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
 
 type Screen = 'dashboard' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'settings' | 'adopt' | 'logs'
+type SettingsIntent = 'ipv6' | null
 
 const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -89,6 +90,7 @@ export function App() {
   const [session, setSession] = useState<SessionInfo | null>(null)
   const username = session?.username ?? null
   const [screen, setScreen] = useState<Screen>(() => screenFromPath(window.location.pathname))
+  const [settingsIntent, setSettingsIntent] = useState<SettingsIntent>(null)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [navigationExpanded, setNavigationExpanded] = useState(false)
 
@@ -100,20 +102,28 @@ export function App() {
   const [signingOut, setSigningOut] = useState(false)
   const sessionGeneration = useRef(0)
   const refreshGeneration = useRef(0)
+  const dashboardRefresh = useRef<AbortController | null>(null)
+  const devicesRefresh = useRef<AbortController | null>(null)
   const mainRef = useRef<HTMLElement>(null)
 
   const clearProtectedState = useCallback(() => {
     refreshGeneration.current++
+    dashboardRefresh.current?.abort()
+    devicesRefresh.current?.abort()
+    dashboardRefresh.current = null
+    devicesRefresh.current = null
     setDash(null)
     setDevices([])
     setDevicesLoaded(false)
     setRefreshErrors({})
     setAccountErr('')
+    setSettingsIntent(null)
   }, [])
 
-  const navigate = useCallback((next: Screen) => {
+  const navigate = useCallback((next: Screen, intent: SettingsIntent = null) => {
     const path = screenPath(next)
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setSettingsIntent(next === 'settings' ? intent : null)
     setScreen(next)
   }, [])
 
@@ -136,7 +146,10 @@ export function App() {
   }, [theme])
 
   useEffect(() => {
-    const followHistory = () => setScreen(screenFromPath(window.location.pathname))
+    const followHistory = () => {
+      setSettingsIntent(null)
+      setScreen(screenFromPath(window.location.pathname))
+    }
     window.addEventListener('popstate', followHistory)
     return () => window.removeEventListener('popstate', followHistory)
   }, [])
@@ -185,26 +198,50 @@ export function App() {
     }
   }, [beginSession, bootstrapAttempt])
 
-  const refresh = useCallback(async () => {
-    if (!username) return
-    const generation = ++refreshGeneration.current
+  const refresh = useCallback(() => {
+    if (!username) return Promise.resolve()
+    const generation = refreshGeneration.current
     const session = sessionGeneration.current
-    const [dashboardResult, devicesResult] = await Promise.allSettled([
-      api.dashboard(),
-      api.devices(),
-    ])
-    if (generation !== refreshGeneration.current || session !== sessionGeneration.current) return
-
-    if (dashboardResult.status === 'fulfilled') setDash(dashboardResult.value)
-    if (devicesResult.status === 'fulfilled') {
-      setDevices(devicesResult.value.devices)
-      setDevicesLoaded(true)
-    }
+    const current = () => generation === refreshGeneration.current && session === sessionGeneration.current
     const reason = (value: unknown) => value instanceof Error ? value.message : String(value)
-    setRefreshErrors({
-      dashboard: dashboardResult.status === 'rejected' ? reason(dashboardResult.reason) : undefined,
-      devices: devicesResult.status === 'rejected' ? reason(devicesResult.reason) : undefined,
-    })
+    const requests: Promise<void>[] = []
+
+    if (!dashboardRefresh.current) {
+      const controller = new AbortController()
+      dashboardRefresh.current = controller
+      requests.push((async () => {
+        try {
+          const next = await api.dashboard(controller.signal)
+          if (!current()) return
+          setDash(next)
+          setRefreshErrors((errors) => ({ ...errors, dashboard: undefined }))
+        } catch (error) {
+          if (current()) setRefreshErrors((errors) => ({ ...errors, dashboard: reason(error) }))
+        } finally {
+          if (dashboardRefresh.current === controller) dashboardRefresh.current = null
+        }
+      })())
+    }
+
+    if (!devicesRefresh.current) {
+      const controller = new AbortController()
+      devicesRefresh.current = controller
+      requests.push((async () => {
+        try {
+          const next = await api.devices(controller.signal)
+          if (!current()) return
+          setDevices(next.devices)
+          setDevicesLoaded(true)
+          setRefreshErrors((errors) => ({ ...errors, devices: undefined }))
+        } catch (error) {
+          if (current()) setRefreshErrors((errors) => ({ ...errors, devices: reason(error) }))
+        } finally {
+          if (devicesRefresh.current === controller) devicesRefresh.current = null
+        }
+      })())
+    }
+
+    return Promise.all(requests).then(() => undefined)
   }, [username])
 
   useEffect(() => {
@@ -215,7 +252,13 @@ export function App() {
     // device is adopted or goes offline, not every poll. Per-device detail is
     // pushed over the live channel instead.
     const t = setInterval(refresh, 30_000)
-    return () => clearInterval(t)
+    return () => {
+      clearInterval(t)
+      dashboardRefresh.current?.abort()
+      devicesRefresh.current?.abort()
+      dashboardRefresh.current = null
+      devicesRefresh.current = null
+    }
   }, [username, refresh])
 
   // Close the live channel on sign-out, but not before we know whether anyone
@@ -457,10 +500,16 @@ export function App() {
                 session={session}
                 onSessionChange={setSession}
                 onCurrentSessionRevoked={dropSession}
+                initialNetworkSection={settingsIntent}
+                onInitialNetworkSectionHandled={() => setSettingsIntent(null)}
               />
             )}
             {screen === 'adopt' && <Adopt onAdopted={refresh} />}
-            {screen === 'logs' && <Logs />}
+            {screen === 'logs' && (
+              <Logs onConfigureIPv6={() => {
+                navigate('settings', 'ipv6')
+              }} />
+            )}
           </ScreenBoundary>
         </main>
       </div>

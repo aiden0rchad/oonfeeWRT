@@ -54,5 +54,11 @@ release-check:
 	@test -n "$(RELEASE_VERSION)" || { \
 		echo 'release-check: set RELEASE_VERSION (for example v0.1.0)' >&2; exit 2; \
 	}
+	@test -f "RELEASE-NOTES-$(RELEASE_VERSION).md" || { \
+		echo 'release-check: missing RELEASE-NOTES-$(RELEASE_VERSION).md' >&2; exit 2; \
+	}
+	@cmp -s "RELEASE-NOTES-$(RELEASE_VERSION).md" RELEASE-NOTES.md || { \
+		echo 'release-check: versioned notes differ from RELEASE-NOTES.md' >&2; exit 2; \
+	}
 	./tools/secret-scan.sh
 	./tools/reproducible-build-check.sh "$(RELEASE_VERSION)"

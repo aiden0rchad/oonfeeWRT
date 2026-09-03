@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
+	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/telemetry"
@@ -818,16 +819,41 @@ func (s *Server) handleEventsKeyset(w http.ResponseWriter, r *http.Request, scop
 	if handleStoreErr(w, err, "event coverage") {
 		return
 	}
+	generatedAt := s.now()
+	conditions := []store.IPv6RAConditionStatus{}
+	if scope == "general" {
+		conditions, err = s.Store.IPv6RAConditionStatuses(r.Context(),
+			store.IPv6RAConditionWindows{
+				Now: generatedAt, CursorFreshFor: routerLogCoverageStaleAfter,
+				RecentFor: ipv6RAConditionRecentFor, QuietFor: ipv6RAConditionQuietFor,
+			})
+		if handleStoreErr(w, err, "event conditions") {
+			return
+		}
+	}
+	routerClocks := []collector.RouterClock{}
+	if scope == "general" {
+		if source, ok := s.Fleet.(interface {
+			RouterClocks() []collector.RouterClock
+		}); ok {
+			routerClocks = source.RouterClocks()
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"events": events, "total": total, "limit": limit, "scope": scope,
-		"next_before": next,
-		"facets":      map[string]any{"category": cats, "severity": sevs},
-		"coverage":    coverage,
+		"next_before":   next,
+		"facets":        map[string]any{"category": cats, "severity": sevs},
+		"coverage":      coverage,
+		"conditions":    conditions,
+		"router_clocks": routerClocks,
+		"generated_at":  generatedAt.UnixMilli(),
 	})
 }
 
 const routerLogCoverageStaleAfter = 3 * time.Minute
 const routerLogCoverageWindow = 24 * time.Hour
+const ipv6RAConditionRecentFor = 10 * time.Minute
+const ipv6RAConditionQuietFor = 15 * time.Minute
 
 type eventCoverage struct {
 	Complete        bool     `json:"complete"`

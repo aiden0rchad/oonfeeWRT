@@ -317,6 +317,52 @@ func TestStagedSectionsCarryOwnershipTag(t *testing.T) {
 	}
 }
 
+func TestOptionPatchLeavesExistingSectionUnowned(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	seed(t, c, "oonfeewrt_probe", "BASE_PATCH")
+
+	p := Plan{Timeout: 2 * time.Second, Ops: []Op{{
+		Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe",
+		Values: map[string]string{"marker": "PATCHED"}, Patch: true,
+	}}}
+	if _, err := fastEngine().Apply(ctx, c, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply patch: %v", err)
+	}
+	fresh, err := c.FreshSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Destroy(ctx)
+	var out struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := fresh.Call(ctx, "uci", "get", map[string]any{
+		"config": "oonfeewrt_probe", "section": "probe"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Values["marker"] != "PATCHED" || out.Values[OwnershipTag] != "" {
+		t.Fatalf("option patch changed ownership: %v", out.Values)
+	}
+}
+
+func TestInvalidPatchShapesAreRejectedBeforeApply(t *testing.T) {
+	tests := []Op{
+		{Kind: OpAdd, Config: "oonfeewrt_probe", Type: "probe", Name: "probe", Patch: true},
+		{Kind: OpDelete, Config: "oonfeewrt_probe", Section: "probe", Option: "marker", Patch: true},
+		{Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Values: map[string]string{OwnershipTag: "1"}, Patch: true},
+		{Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Lists: map[string][]string{"value": {"x"}}, Patch: true},
+	}
+	for i, op := range tests {
+		c := dial(t)
+		if _, err := fastEngine().Apply(context.Background(), c,
+			Plan{Timeout: 2 * time.Second, Ops: []Op{op}}, nil); err == nil {
+			t.Errorf("case %d: invalid patch was accepted", i)
+		}
+	}
+}
+
 func marker(t *testing.T, c *ubus.Client, config string) string {
 	t.Helper()
 	var out struct {

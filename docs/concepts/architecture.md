@@ -5,7 +5,7 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture shipped in **oonfeeWRT v0.1.3**. For the
+This page describes the architecture shipped in **oonfeeWRT v0.1.4**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
@@ -127,7 +127,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.3
+failed topology read from looking like an empty network. The exact v0.1.4
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ### Shareable compatibility evidence
@@ -220,18 +220,34 @@ interface. The baseline 15-minute topology cadence is not a failover monitor
 and does not model policy-routing-table selection, `mwan3`, ECMP, per-uplink
 health, or bond members.
 
+### Transitive wired-topology evidence
+
+v0.1.4 keeps raw FDB/LLDP observations in topology history, but projects the
+live graph through a fresh source-aware multi-hop path when those observations
+prove that one managed device is reached through another. This prevents a
+downstream managed device from appearing as a second direct child of the
+gateway. The projection is not permanent truth: stale, failed, or ambiguous
+sources expose the ambiguity again instead of carrying a prior path forward.
+
+Unchanged links do not churn history rows. Closed-history lookup uses the
+schema-20 index, and browser refreshes cancel abandoned requests rather than
+stacking overlapping topology queries.
+
 ## Deployment boundary
 
-The default container mapping publishes `127.0.0.1:8080`. Bridge networking
-supports normal L3 management and add-by-address adoption, but does not carry
-host LAN interfaces into the container's automatic discovery plan. Discovery
-is a bounded IPv4 TCP/HTTP scan with an unauthenticated `/ubus` object-list
+The default container mapping publishes port 8080 on host loopback.
+`OONFEE_HTTP_BIND` can deliberately select one host management IP or every
+IPv4 interface without changing the container's internal `:8080` listener.
+Bridge networking supports normal L3 management and add-by-address adoption,
+but does not carry host LAN interfaces into the container's automatic
+discovery plan. Discovery is a bounded IPv4 TCP/HTTP scan with an
+unauthenticated `/ubus` object-list
 fingerprint; it implements neither ARP-table discovery nor mDNS. Linux host
 networking can expose eligible directly attached host LAN interfaces to that
 same scanner, but also exposes the listener according to the host's network and
 firewall configuration.
 
-The v0.1.3 HTTP listener has no native TLS. Keep it on loopback or a trusted,
+The HTTP listener has no native TLS. Keep it on loopback or a trusted,
 isolated management network and use a trusted reverse proxy for remote browser
 access. Review [Requirements](../reference/requirements.md) before deployment.
 

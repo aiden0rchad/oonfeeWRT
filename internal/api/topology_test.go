@@ -46,13 +46,15 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	edge := model.TopologyEdge{
 		ChildNode: "device:aa:bb:cc:00:00:02", ChildMAC: "aa:bb:cc:00:00:12",
 		ParentNode: "device:aa:bb:cc:00:00:01", ParentDeviceID: &parentID,
-		ParentPort: "lan2", Medium: "wired", Confidence: "ambiguous",
+		ParentPort: "lan2", Medium: "wired", Confidence: "inferred",
 		ValidFrom: now.Add(-time.Minute).UnixMilli(), LastSeen: now.UnixMilli(),
 		Evidence: []model.TopologyEvidence{{
 			Kind: "bridge_fdb", Source: "brctl.showmacs", DeviceID: &parentID,
-			Detail: map[string]any{"bridge": "br-lan", "observed_mac": "aa:bb:cc:00:00:12"},
+			Detail: map[string]any{
+				"bridge": "br-lan", "observed_mac": "aa:bb:cc:00:00:12", "vlan_available": false,
+			},
 		}},
-		Ambiguities: []string{"BusyBox brctl showmacs does not identify VLAN"},
+		Ambiguities: []string{},
 	}
 	if err := h.db.SaveTopologyEdge(context.Background(), &edge); err != nil {
 		t.Fatal(err)
@@ -83,7 +85,7 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	}
 	joinedGaps := strings.Join(got.Gaps, "\n")
 	if !strings.Contains(joinedGaps, "lldp: package unavailable") ||
-		!strings.Contains(joinedGaps, "does not identify VLAN") {
+		strings.Contains(strings.ToLower(joinedGaps), "vlan") {
 		t.Fatalf("gaps = %#v", got.Gaps)
 	}
 	if !sort.StringsAreSorted(got.Gaps) {
@@ -103,6 +105,144 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	}
 	if c6.ID == 0 {
 		t.Fatal("test device was not persisted")
+	}
+}
+
+func TestTopologyKeepsActualEdgeAmbiguitiesAsCoverageGaps(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	device := topologyDevice(t, h, "AA:BB:CC:00:00:01", "Gateway", now)
+	edge := model.TopologyEdge{
+		ChildNode: "mac:aa:bb:cc:00:00:44", ChildMAC: "aa:bb:cc:00:00:44",
+		ParentNode: "device:aa:bb:cc:00:00:01", ParentDeviceID: &device.ID,
+		Medium: "unknown", Confidence: "ambiguous",
+		ValidFrom: now.Add(-time.Minute).UnixMilli(), LastSeen: now.UnixMilli(),
+		Evidence: []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: "brctl.showmacs", DeviceID: &device.ID,
+			Detail: map[string]any{"bridge": "br-lan", "port_number": 2, "vlan_available": false},
+		}},
+		Ambiguities: []string{"bridge port number could not be mapped to an interface"},
+	}
+	if err := h.db.SaveTopologyEdge(context.Background(), &edge); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.SaveTopologySourceState(context.Background(), model.TopologySourceObservation{
+		DeviceID: device.ID, Source: "brctl.showmacs", State: model.TopologySourceObserved,
+		ObservedAt: now.UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := h.do(http.MethodGet, "/api/v1/topology", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body.String())
+	}
+	var got topologyResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Complete || len(got.Gaps) != 1 ||
+		!strings.Contains(got.Gaps[0], "bridge port number could not be mapped") {
+		t.Fatalf("actual edge ambiguity was hidden: %#v", got.Gaps)
+	}
+}
+
+func TestTopologyShadowsManagedLinkTransitOnlyWhileMatchingDirectSourceIsFresh(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	h.srv.Now = func() time.Time { return now }
+	gateway := topologyDevice(t, h, "02:00:00:00:00:01", "Gateway", now)
+	switchDevice := topologyDevice(t, h, "02:00:00:00:00:02", "Switch", now)
+	clientMAC := "02:00:00:00:00:55"
+	if err := h.db.UpsertClients(ctx, []store.SeenClient{{
+		MAC: clientMAC, Name: "Laptop", Scope: store.ScopeLocal,
+	}}, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	direct := model.TopologyEdge{
+		ChildNode: "client:" + clientMAC, ChildMAC: clientMAC,
+		ParentNode: "device:" + gateway.MAC, ParentDeviceID: &gateway.ID,
+		ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "ambiguous",
+		ValidFrom: now.Add(-time.Minute).UnixMilli(), LastSeen: now.Add(-2 * time.Second).UnixMilli(),
+		Evidence: []model.TopologyEvidence{{
+			Kind: "association", Source: "hostapd.get_clients", DeviceID: &gateway.ID,
+		}},
+		Ambiguities: []string{"concurrent evidence yields multiple candidate parents or ports"},
+	}
+	transit := model.TopologyEdge{
+		ChildNode: "client:" + clientMAC, ChildMAC: clientMAC,
+		ParentNode: "device:" + switchDevice.MAC, ParentDeviceID: &switchDevice.ID,
+		ParentPort: "eth0", Medium: "wired", Confidence: "ambiguous",
+		ValidFrom: now.Add(-time.Minute).UnixMilli(), LastSeen: now.Add(-2 * time.Second).UnixMilli(),
+		Evidence: []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: "brctl.showmacs", DeviceID: &switchDevice.ID,
+			Detail: map[string]any{
+				"attachment": "physical", "stp_state": "forwarding",
+				"managed_link_transit_possible": true, "managed_link_peer": "device:" + gateway.MAC,
+			},
+		}},
+		Ambiguities: []string{
+			"bridge FDB may be transit evidence through a managed-device link",
+			"concurrent evidence yields multiple candidate parents or ports",
+		},
+	}
+	for _, edge := range []*model.TopologyEdge{&direct, &transit} {
+		if err := h.db.SaveTopologyEdge(ctx, edge); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.db.SaveTopologySourceState(ctx, model.TopologySourceObservation{
+		DeviceID: gateway.ID, Source: "hostapd.get_clients", State: model.TopologySourceObserved,
+		ObservedAt: now.Add(-time.Second).UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	historical := h.do(http.MethodGet, "/api/v1/topology?at="+strconv.FormatInt(now.UnixMilli(), 10), nil)
+	if historical.Code != http.StatusOK {
+		t.Fatalf("%d: %s", historical.Code, historical.Body.String())
+	}
+	var historicalGot topologyResponse
+	if err := json.Unmarshal(historical.Body.Bytes(), &historicalGot); err != nil {
+		t.Fatal(err)
+	}
+	if len(historicalGot.Edges) != 2 {
+		t.Fatalf("historical projection discarded raw evidence: %+v", historicalGot.Edges)
+	}
+
+	read := func() topologyResponse {
+		w := h.do(http.MethodGet, "/api/v1/topology", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%d: %s", w.Code, w.Body.String())
+		}
+		var got topologyResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	got := read()
+	if len(got.Edges) != 1 || got.Edges[0].ID != direct.ID ||
+		got.Edges[0].Confidence != "measured" || len(got.Edges[0].Ambiguities) != 0 {
+		t.Fatalf("fresh direct projection = %+v", got.Edges)
+	}
+	raw, err := h.db.TopologyEdgesAt(ctx, 0)
+	if err != nil || len(raw) != 2 {
+		t.Fatalf("raw transit evidence was not preserved: edges=%+v err=%v", raw, err)
+	}
+
+	if err := h.db.SaveTopologySourceState(ctx, model.TopologySourceObservation{
+		DeviceID: gateway.ID, Source: "hostapd.get_clients", State: model.TopologySourceError,
+		Reason: "source call failure: transport error", ObservedAt: now.UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got = read()
+	if len(got.Edges) != 2 {
+		t.Fatalf("uncertain direct source still hid transit: %+v", got.Edges)
 	}
 }
 
@@ -152,6 +292,33 @@ func TestTopologyReturnsLatestClosedPlacementForUnplacedDevice(t *testing.T) {
 	}
 	if len(got.LastKnown) != 0 {
 		t.Fatalf("historical snapshot exposed presentation-only last-known edges: %#v", got.LastKnown)
+	}
+}
+
+func TestTopologyRejectsConcurrentReadsWithoutJoiningTheDatabaseQueue(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	h.srv.topologyMu.Lock()
+	defer h.srv.topologyMu.Unlock()
+
+	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC).UnixMilli()
+	paths := []string{
+		"/api/v1/topology",
+		"/api/v1/topology/history?from=" + strconv.FormatInt(base, 10) +
+			"&to=" + strconv.FormatInt(base+time.Hour.Milliseconds(), 10),
+	}
+	for _, path := range paths {
+		w := h.do(http.MethodGet, path, nil)
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "1" {
+			t.Fatalf("%s: status/retry-after = %d/%q, body=%s",
+				path, w.Code, w.Header().Get("Retry-After"), w.Body.String())
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Code != "topology_busy" {
+			t.Fatalf("%s: body=%s err=%v", path, w.Body.String(), err)
+		}
 	}
 }
 

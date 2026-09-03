@@ -3,11 +3,99 @@ package collector
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
+
+func TestRouterClockUsesUTCLuCISourceAndStrictVersionFallback(t *testing.T) {
+	p := &poller{c: New(newRecorder(), Options{}), target: Target{DeviceID: 1}}
+	var clock call
+	for _, spec := range p.buildCalls(Baseline, nil, nil) {
+		if spec.clockMethod != "" {
+			clock = spec
+			break
+		}
+	}
+	if clock.inv.Object != "luci" || clock.inv.Method != clockMethodUnix || !clock.optional {
+		t.Fatalf("initial clock call=%+v", clock)
+	}
+	for _, tc := range []struct {
+		status ubus.Status
+		want   bool
+	}{
+		{ubus.StatusMethodNotFound, true},
+		{ubus.StatusNotFound, false},
+		{ubus.StatusPermissionDenied, false},
+		{ubus.StatusNotSupported, false},
+	} {
+		if got := shouldFallbackClock(clockMethodUnix, tc.status); got != tc.want {
+			t.Errorf("getUnixtime %s fallback=%v, want %v", tc.status, got, tc.want)
+		}
+		if shouldFallbackClock(clockMethodLocal, tc.status) {
+			t.Errorf("legacy method %s triggered another fallback", tc.status)
+		}
+	}
+	for _, tc := range []struct {
+		method string
+		status ubus.Status
+		want   bool
+	}{
+		{clockMethodUnix, ubus.StatusNotFound, true},
+		{clockMethodUnix, ubus.StatusMethodNotFound, false},
+		{clockMethodLocal, ubus.StatusMethodNotFound, true},
+		{clockMethodLocal, ubus.StatusNotFound, true},
+		{clockMethodLocal, ubus.StatusPermissionDenied, false},
+	} {
+		if got := clockSourceUnavailable(tc.method, tc.status); got != tc.want {
+			t.Errorf("%s %s unavailable=%v, want %v", tc.method, tc.status, got, tc.want)
+		}
+	}
+
+	snap := Snapshot{DeviceID: 1, clockAttempted: true,
+		clockMethodMissing: clockMethodUnix}
+	p.succeed(snap)
+	if got := p.clockSourceMethod(); got != clockMethodLocal {
+		t.Fatalf("clock source after METHOD_NOT_FOUND=%q", got)
+	}
+	p.succeed(Snapshot{DeviceID: 1, clockAttempted: true, clockUnavailable: true})
+	if got := p.clockSourceMethod(); got != "" {
+		t.Fatalf("clock source after both methods absent=%q", got)
+	}
+	for _, spec := range p.buildCalls(Baseline, nil, nil) {
+		if spec.clockMethod != "" {
+			t.Fatalf("unavailable clock source was retried: %+v", spec.inv)
+		}
+	}
+}
+
+func TestDecodeRouterUnixTimeRequiresNumericResult(t *testing.T) {
+	for _, want := range []int64{0, 1788253200, maxExactClockInteger} {
+		var snap Snapshot
+		raw := json.RawMessage(fmt.Sprintf(`{"result":%d}`, want))
+		if err := decodeRouterUnixTime(raw, &snap); err != nil {
+			t.Fatalf("decode %d: %v", want, err)
+		}
+		if snap.RouterUnixTime == nil || *snap.RouterUnixTime != want {
+			t.Fatalf("router Unix time=%v, want %d", snap.RouterUnixTime, want)
+		}
+	}
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{}`),
+		json.RawMessage(`{"result":"1788253200"}`),
+		json.RawMessage(`{"result":null}`),
+		json.RawMessage(`{"result":-1}`),
+		json.RawMessage(`{"result":9007199254740992}`),
+		json.RawMessage(`{"result":1.5}`),
+		json.RawMessage(`{"result":9223372036854775808}`),
+	} {
+		if err := decodeRouterUnixTime(raw, &Snapshot{}); err == nil {
+			t.Errorf("accepted invalid clock response %s", raw)
+		}
+	}
+}
 
 func TestLogReadCallsUseBoundedNonStreamingSlowCadence(t *testing.T) {
 	now := time.Unix(100, 0)

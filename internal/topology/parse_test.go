@@ -192,20 +192,24 @@ func TestParseShowSTPDoesNotInventMissingPortState(t *testing.T) {
 func TestDecodeNetworkDevicesIsSelectiveAndStable(t *testing.T) {
 	raw := []byte(`{
 	  "wan":{"devtype":"dsa","parent":"eth0","macaddr":"AA:BB:CC:DD:EE:01","up":true,"secret_future":"discard"},
+	  "phy0-ap0":{"wireless":true,"mac":"AA:BB:CC:DD:EE:02","up":true},
 	  "br-lan":{"devtype":"bridge","ports":["lan2","lan1"]}
 	}`)
 	got, err := DecodeNetworkDevices(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Name != "br-lan" || got[1].Name != "wan" {
+	if len(got) != 3 || got[0].Name != "br-lan" || got[1].Name != "phy0-ap0" || got[2].Name != "wan" {
 		t.Fatalf("devices not deterministically ordered: %#v", got)
 	}
 	if !reflect.DeepEqual(got[0].BridgeOf, []string{"lan1", "lan2"}) {
 		t.Fatalf("bridge ports = %#v", got[0].BridgeOf)
 	}
-	if got[1].MAC != "aa:bb:cc:dd:ee:01" || got[1].Up == nil || !*got[1].Up {
-		t.Fatalf("wan = %#v", got[1])
+	if !got[1].Wireless || got[1].MAC != "aa:bb:cc:dd:ee:02" {
+		t.Fatalf("wireless interface = %#v", got[1])
+	}
+	if got[2].MAC != "aa:bb:cc:dd:ee:01" || got[2].Up == nil || !*got[2].Up {
+		t.Fatalf("wan = %#v", got[2])
 	}
 	encoded, _ := json.Marshal(got)
 	if strings.Contains(string(encoded), "secret_future") || strings.Contains(string(encoded), "discard") {

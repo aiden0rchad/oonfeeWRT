@@ -1,6 +1,6 @@
 # Install with Docker
 
-The v0.1.3 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
+The v0.1.4 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
 
 > **Outcome:** oonfeeWRT runs as non-root in a hardened container, publishes HTTP only on host loopback, and persists state in a named Docker volume.
 
@@ -28,7 +28,7 @@ Keep `docker-compose.yml` and `passphrase` in this private directory. The contro
 ```sh
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.3/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
 ```
 
 The file pins the image version through the required `OONFEE_VERSION` value instead of silently following `latest`.
@@ -46,16 +46,16 @@ The Compose service runs as UID/GID 65532, so the bind-mounted mode-`0600` file 
 
 This is the controller runtime/boot passphrase, not an owner account password. Store a protected recovery copy separately.
 
-## 4. Start v0.1.3
+## 4. Start v0.1.4
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose up -d
+OONFEE_VERSION=v0.1.4 docker compose up -d
 ```
 
 The release image is:
 
 ```text
-ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
+ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 ```
 
 The supplied service hardening includes:
@@ -66,14 +66,14 @@ The supplied service hardening includes:
 - `no-new-privileges:true`;
 - private `noexec,nosuid,nodev` tmpfs;
 - state mounted at `/data`;
-- host-loopback mapping `127.0.0.1:8080:8080`;
+- host-loopback mapping `127.0.0.1:8080:8080` by default;
 - 150-second stop grace period for an in-flight rollback/confirm cycle.
 
 ## 5. Verify the service
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose ps
-OONFEE_VERSION=v0.1.3 docker compose logs --tail=100 oonfeewrt
+OONFEE_VERSION=v0.1.4 docker compose ps
+OONFEE_VERSION=v0.1.4 docker compose logs --tail=100 oonfeewrt
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
@@ -84,6 +84,39 @@ ok
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080) on the controller host and create the first owner.
+
+## Choose where Docker publishes HTTP
+
+The v0.1.4 Compose file keeps loopback as the safe default and accepts
+`OONFEE_HTTP_BIND`, a Compose-only host publish IP. It does not replace
+`OONFEE_LISTEN`; the container must continue listening on `:8080` internally.
+
+To reach the controller from a trusted management LAN, bind the host port to
+the controller host's specific LAN address:
+
+```sh
+OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION=v0.1.4 docker compose up -d
+curl --fail http://192.168.1.20:8080/healthz
+```
+
+Repeat `OONFEE_HTTP_BIND` on every Compose lifecycle command or store
+`OONFEE_HTTP_BIND=192.168.1.20` in the `.env` file beside
+`docker-compose.yml`. Without either, a later recreate uses the loopback
+default again.
+
+Use the controller's real address in the browser. `0.0.0.0` is a bind target,
+not a browser URL. To deliberately publish on every host IPv4 interface:
+
+```sh
+OONFEE_HTTP_BIND=0.0.0.0 OONFEE_VERSION=v0.1.4 docker compose up -d
+```
+
+The controller has no native TLS listener. Prefer one management IP over
+`0.0.0.0`, enforce host/network firewall policy, and never expose port 8080
+directly to the Internet. During first-owner setup, browse to a literal IP;
+DNS names are deliberately rejected at that one-time boundary to prevent DNS
+rebinding. Existing deployments keep their current mapping until their local
+Compose file is replaced or edited; pulling an image alone does not rewrite it.
 
 ## Container networking and discovery
 
@@ -113,16 +146,16 @@ Host mode exposes the daemon directly according to its listen address. Review ho
 
 ## Optional: verify the published image signature
 
-Install `cosign` using Sigstore's official instructions, then verify the v0.1.3 GitHub Actions identity:
+Install `cosign` using Sigstore's official instructions, then verify the v0.1.4 GitHub Actions identity:
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.3" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.4" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 ```
 
-Deployments should pin `v0.1.3` or the reported digest. The `0.1.3`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
+Deployments should pin `v0.1.4` or the reported digest. The `0.1.4`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
 
 ## Optional: run without Compose
 
@@ -152,7 +185,7 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 ```
 
 ## Stop and restart safely
@@ -160,8 +193,8 @@ docker run -d \
 Compose sends SIGTERM and allows 150 seconds for shutdown:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose stop
-OONFEE_VERSION=v0.1.3 docker compose start
+OONFEE_VERSION=v0.1.4 docker compose stop
+OONFEE_VERSION=v0.1.4 docker compose start
 ```
 
 The longer grace period lets an Apply that reached OpenWrt's rollback-protected stage finish its confirm decision. Do not force-kill the container during an Apply unless the host itself is failing.
@@ -184,7 +217,7 @@ Confirm that `passphrase` is a file, not a directory.
 Inspect the startup error:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose logs --tail=200 oonfeewrt
+OONFEE_VERSION=v0.1.4 docker compose logs --tail=200 oonfeewrt
 ```
 
 Common causes are a missing/unreadable passphrase, the wrong passphrase for the volume's keyring, a missing keyring beside an existing database, an unsupported database downgrade, or port 8080 already in use.
@@ -202,20 +235,23 @@ Check that the same `oonfee-data` volume is mounted at `/data`. A new volume cre
 
 ### The browser cannot connect from another computer
 
-The default mapping is intentionally loopback-only. Add [trusted reverse-proxy TLS](reverse-proxy.md) or deliberately bind on an isolated management LAN. Do not publish raw port 8080 to the Internet.
+The default mapping is intentionally loopback-only. Set `OONFEE_HTTP_BIND` to
+the controller's isolated management-LAN IP;
+otherwise add [trusted reverse-proxy TLS](reverse-proxy.md). Do not publish raw
+port 8080 to the Internet.
 
 ### Avoid accidental deletion
 
 This removes the container but preserves the named volume:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose down
+OONFEE_VERSION=v0.1.4 docker compose down
 ```
 
 This also deletes the named volume and controller state:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose down -v
+OONFEE_VERSION=v0.1.4 docker compose down -v
 ```
 
 Use `-v` only after a verified backup and only when deletion is intentional.

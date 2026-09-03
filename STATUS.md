@@ -6632,9 +6632,9 @@ written and believed.
 
 ## 7. Practical notes
 
-- The module requires **Go 1.25** because `modernc.org/sqlite` does and pins the
-  patched **Go 1.26.6** toolchain. The container builder uses the same patch
-  release; `govulncheck` was clean under it on 2026-08-18.
+- The module requires **Go 1.26** because `golang.org/x/crypto v0.56.0` does and
+  pins the patched **Go 1.26.6** toolchain. The container builder uses the same
+  patch release; `govulncheck` found no reachable vulnerabilities on 2026-09-03.
 - `CGO_ENABLED=0` cross-compiles cleanly for `linux/amd64` and `linux/arm64` —
   verified, and the reason decision D3 chose that driver.
 - **The device credential is not recorded in this repo, and must not be.** This

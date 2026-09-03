@@ -30,7 +30,7 @@ function clockSkewLabel(milliseconds: number): string {
  * page" — while the endpoint returned at most 300 of however many rows exist.
  * The comment asserted precisely the property it did not have.
  */
-export function Logs() {
+export function Logs({ onConfigureIPv6 }: { onConfigureIPv6?: () => void }) {
   const [scope, setScope] = useState<EventScope>('general')
   const [category, setCategory] = useState('')
   const [severity, setSeverity] = useState('')
@@ -143,18 +143,28 @@ export function Logs() {
     gaps: ['router log coverage was not reported by this controller response'],
   }
   const rows = page?.events ?? []
-  const ipv6RAConditions = rows.flatMap((event) => {
-    const condition = ipv6RACondition(event)
-    return condition ? [condition] : []
-  })
+  const ipv6RAConditions = (page?.conditions ?? []).filter(
+    (condition) => condition.state === 'recent',
+  )
   const ipv6RAOccurrences = ipv6RAConditions.reduce(
     (total, condition) => total + condition.occurrences,
     0,
   )
-  const clockSkew = scope === 'general'
-    ? rows.find((event) => event.Source === 'openwrt-logd' && event.IngestedAt > 0 &&
-        Math.abs(event.TS * 1000 - event.IngestedAt) >= 5 * 60_000)
-    : undefined
+  const deviceLabel = (deviceID: number | null) => {
+    if (deviceID == null) return 'Unidentified router'
+    return devices.find((device) => device.id === deviceID)?.name ?? `Device ${deviceID}`
+  }
+  const ipv6RARouters = Array.from(new Set(
+    ipv6RAConditions.map((condition) => deviceLabel(condition.device_id)),
+  ))
+  const clockSkews = scope === 'general'
+    ? (page?.router_clocks ?? []).filter(
+        (clock) => Math.abs(clock.offset_seconds) >= 5 * 60,
+      )
+    : []
+  const clockSkewSummary = clockSkews.map((clock) =>
+    `${deviceLabel(clock.device_id)} is ${clock.offset_seconds > 0 ? 'ahead' : 'behind'} by about ${clockSkewLabel(Math.abs(clock.offset_seconds) * 1000)}`,
+  ).join('; ')
   const err = failure?.query === query ? failure.message : ''
   const loading = page === null && err === ''
 
@@ -330,35 +340,59 @@ export function Logs() {
             <div className="logs-notice-row">
               <Notice
                 compact
+                popoverDetails
                 component="Router log coverage"
                 summary={(
                   <div role="status">
-                    <strong>Router log coverage is incomplete.</strong>{' '}
-                    {coverage.observed_devices} of {coverage.expected_devices} expected routers reported coverage;
-                    an empty result is not proven.
+                    <strong>Some router log intervals are unverified.</strong>{' '}
+                    {coverage.observed_devices < coverage.expected_devices
+                      ? `${coverage.observed_devices} of ${coverage.expected_devices} expected routers reported coverage.`
+                      : `All ${coverage.expected_devices} expected routers responded, but at least one interval lacks positive coverage evidence.`}
+                    {' '}“No events” cannot be confirmed for those intervals.
                   </div>
                 )}
-                details={coverage.gaps.length > 0
-                  ? <ul style={{ margin: 0, paddingLeft: 20 }}>{coverage.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
-                  : 'The controller response did not include a per-router explanation.'}
+                details={(
+                  <div>
+                    <p style={{ marginTop: 0 }}>
+                      Coverage describes what the controller successfully checked; it is
+                      not a warning that router logs are growing without a limit.
+                    </p>
+                    {coverage.gaps.length > 0
+                      ? <ul style={{ margin: 0, paddingLeft: 20 }}>{coverage.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
+                      : <p>The controller response did not include a per-router explanation.</p>}
+                    <p style={{ marginBottom: 0 }}>
+                      Restore reachability or credentials for a named router, then check
+                      again after its next collection cycle.
+                    </p>
+                  </div>
+                )}
+                actions={<Button onClick={() => void load()}>Check again</Button>}
                 closedLabel="More information about log coverage"
                 openLabel="Hide log coverage information"
               />
             </div>
           )}
-          {clockSkew && (
+          {clockSkews.length > 0 && (
             <div className="logs-notice-row">
               <Notice
                 compact
+                popoverDetails
                 component="Router clock"
                 summary={(
                   <div role="status">
-                    Router event time differs from controller receive time by about{' '}
-                    {clockSkewLabel(Math.abs(clockSkew.TS * 1000 - clockSkew.IngestedAt))}.
-                    General events remain ordered by their router source time.
+                    <strong>{clockSkews.length} router clock{clockSkews.length === 1 ? ' differs' : 's differ'} from the controller.</strong>{' '}
+                    {clockSkewSummary}. General events remain ordered by router source time.
                   </div>
                 )}
-                details="Check the router clock and NTP configuration before relying on event chronology."
+                details={(
+                  <div>
+                    This warning comes from a fresh UTC clock measurement, not from how long
+                    a log entry took to reach the controller. In the router’s LuCI interface,
+                    open System → System → Time Synchronization, enable the NTP client and
+                    confirm it has reachable time servers. Then wait for the next device poll.
+                    Existing event timestamps are retained and are not rewritten.
+                  </div>
+                )}
                 closedLabel="More information about event time"
                 openLabel="Hide event time information"
               />
@@ -369,14 +403,59 @@ export function Logs() {
               <Notice
                 tone="warning"
                 compact
+                popoverDetails
                 component="IPv6 router advertisements"
                 summary={(
                   <div role="status">
-                    OpenWrt found no usable IPv6 default route for router advertisements.
-                    {' '}This warning is IPv6-only; it does not indicate an IPv4 outage.
+                    <strong>Affected: {ipv6RARouters.join(', ')}</strong>.{' '}
+                    LAN IPv6 advertisements have no usable upstream route. IPv4 is unaffected.
                   </div>
                 )}
-                details={`${ipv6RAOccurrences.toLocaleString()} reported occurrence${ipv6RAOccurrences === 1 ? '' : 's'} ${ipv6RAOccurrences === 1 ? 'is' : 'are'} condensed into ${ipv6RAConditions.length} condition record${ipv6RAConditions.length === 1 ? '' : 's'} on this page. The original warning priority, message, first and latest source timestamps remain in event detail.`}
+                details={(
+                  <div className="ipv6-warning-details">
+                    <p>
+                      <strong>{ipv6RAOccurrences.toLocaleString()} reported occurrence{ipv6RAOccurrences === 1 ? '' : 's'}</strong>{' '}
+                      {ipv6RAOccurrences === 1 ? 'is' : 'are'} condensed into{' '}
+                      {ipv6RAConditions.length} current condition record{ipv6RAConditions.length === 1 ? '' : 's'}.
+                      {' '}This status is independent of the selected filters and page. Repeats
+                      increment the occurrence count instead of creating a full event row.
+                      Once current router-log collection stays quiet, this banner clears while
+                      the retained event remains available as history.
+                    </p>
+                    <div className="ipv6-warning-solutions">
+                      <section>
+                        <strong>Keep IPv6</strong>
+                        <span>
+                          Edit the primary management network (usually <code>lan</code>),
+                          choose Prefix delegation, then Preview and Apply. oonfeeWRT updates
+                          conventional upstream IPv6 sections and serves the delegated prefix
+                          on that LAN.
+                        </span>
+                      </section>
+                      <section>
+                        <strong>Do not use IPv6 on this LAN</strong>
+                        <span>
+                          Edit the primary management network (usually <code>lan</code>),
+                          choose Disabled, then Preview and Apply. oonfeeWRT disables IPv6 on
+                          conventional upstream sections plus LAN router advertisements,
+                          DHCPv6 and NDP while leaving IPv4 active.
+                        </span>
+                      </section>
+                    </div>
+                    <p>
+                      Router managed leaves current IPv6 option values and supporting rules
+                      already owned by oonfeeWRT in place, then stops changing those values.
+                      It will not clear this condition by itself or restore values from before
+                      an earlier Apply. IPv6 modes on other managed VLANs are LAN-only.
+                      {' '}Custom and multi-WAN policy remains router-managed.
+                    </p>
+                  </div>
+                )}
+                actions={onConfigureIPv6 && (
+                  <Button kind="primary" onClick={onConfigureIPv6}>
+                    Review IPv6 and Apply
+                  </Button>
+                )}
                 closedLabel="More information about this IPv6 warning"
                 openLabel="Hide IPv6 warning information"
               />

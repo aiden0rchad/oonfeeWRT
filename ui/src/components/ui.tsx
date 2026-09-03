@@ -424,8 +424,9 @@ export function DetailsPopover({
 }
 
 /** Authored progressive disclosure. Consequences, affected components, and
- *  actions stay visible. Passive informational details use a nonmodal popover;
- *  warnings, errors, actions, and active plans stay inline. */
+ *  actions stay visible. Supplemental information and explicitly opted-in
+ *  warning guidance may use a nonmodal popover; critical and active plans stay
+ *  inline. */
 export function Notice({
   tone = 'warning',
   component,
@@ -449,16 +450,16 @@ export function Notice({
   actions?: ReactNode
   closedLabel?: string
   openLabel?: string
-  /** Move supplemental detail into a nonmodal popover. Use only for passive
-   *  informational copy; warnings, errors, actions, and active plans stay inline. */
+  /** Move supplemental detail into a nonmodal popover. The summary, severity,
+   *  and actions remain visible. Critical notices and active plans stay inline. */
   popoverDetails?: boolean
 }) {
   const [inlineOpen, setInlineOpen] = useState(defaultOpen)
   const detailsID = useId()
   const toneLabel = tone === 'accent' ? 'Information' : tone === 'critical' ? 'Critical' : 'Warning'
   const visibleToneLabel = compact && tone === 'accent' ? 'Info' : toneLabel
-  const popover = popoverDetails && tone === 'accent' && !defaultOpen &&
-    actions == null && !bannerHasAction(details)
+  const popover = popoverDetails && tone !== 'critical' && !defaultOpen &&
+    !bannerHasAction(details)
 
   useEffect(() => {
     setInlineOpen(defaultOpen)

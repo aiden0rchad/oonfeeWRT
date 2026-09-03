@@ -118,6 +118,48 @@ type DHCPConfig struct {
 	LeaseTime string `json:"leasetime"`
 }
 
+// IPv6Mode is the controller's policy for IPv6 on one network.
+//
+// Preserve is the upgrade-safe default: the controller leaves the router's
+// existing IPv6 configuration alone. Prefix delegation and disabled are
+// explicit requests that may take ownership of the corresponding OpenWrt
+// network and odhcpd settings.
+type IPv6Mode string
+
+const (
+	IPv6Preserve         IPv6Mode = "preserve"
+	IPv6PrefixDelegation IPv6Mode = "prefix_delegation"
+	IPv6Disabled         IPv6Mode = "disabled"
+)
+
+// IPv6Config is the IPv6 policy for one network. AssignmentLength is the
+// delegated prefix length OpenWrt receives through ip6assign when prefix
+// delegation is selected.
+type IPv6Config struct {
+	Mode             IPv6Mode `json:"mode"`
+	AssignmentLength int      `json:"assignment_length"`
+}
+
+// DefaultIPv6Config preserves pre-controller router configuration. This makes
+// the historical ipv6_json={} representation safe: upgrading alone never
+// enables, disables, or otherwise takes ownership of IPv6 on a router.
+func DefaultIPv6Config() IPv6Config {
+	return IPv6Config{Mode: IPv6Preserve, AssignmentLength: 60}
+}
+
+// Validate rejects policy values that cannot be rendered safely by OpenWrt.
+func (c IPv6Config) Validate() error {
+	switch c.Mode {
+	case IPv6Preserve, IPv6PrefixDelegation, IPv6Disabled:
+	default:
+		return errf("IPv6 mode %q is invalid; use preserve, prefix_delegation or disabled", c.Mode)
+	}
+	if c.AssignmentLength < 48 || c.AssignmentLength > 64 {
+		return errf("IPv6 assignment length must be between 48 and 64")
+	}
+	return nil
+}
+
 // DefaultDHCPConfig is the policy older network rows received from the
 // renderer before DHCP became editable. It is also the default for a new
 // network, so upgrading does not create a device diff by itself.
@@ -207,6 +249,9 @@ type Network struct {
 	// Nil means the caller omitted DHCP. A pointer is intentional: disabled is
 	// a real value, not the same thing as an absent configuration.
 	DHCP *DHCPConfig
+	// Nil means the caller omitted IPv6. On an update that preserves the stored
+	// policy; for a new or legacy network EffectiveIPv6 returns preserve mode.
+	IPv6 *IPv6Config
 	// LegacyDHCPDefaults records an upgraded dhcp_json={} row. Its effective
 	// values remain the historical defaults, but the distinction matters when
 	// those defaults cannot fit a small subnet: the operator must explicitly
@@ -221,6 +266,15 @@ func (n Network) EffectiveDHCP() DHCPConfig {
 		return DefaultDHCPConfig()
 	}
 	return *n.DHCP
+}
+
+// EffectiveIPv6 returns the explicit policy or the upgrade-safe historical
+// default. It returns a value so callers cannot mutate the stored pointer.
+func (n Network) EffectiveIPv6() IPv6Config {
+	if n.IPv6 == nil {
+		return DefaultIPv6Config()
+	}
+	return *n.IPv6
 }
 
 // WLAN is one SSID, published on some bands, for some group of APs.
@@ -369,6 +423,9 @@ func (s Site) Validate() []error {
 			errs = append(errs, errf("VLAN %d is used by both %q and %q", n.VLAN, prev, n.Name))
 		}
 		seenVLAN[n.VLAN] = n.Name
+		if err := n.EffectiveIPv6().Validate(); err != nil {
+			errs = append(errs, errf("network %q: %v", n.Name, err))
+		}
 		// VLAN 0/1 is the operator-owned LAN and disabled networks render
 		// nothing. Their dormant DHCP values must not block an unrelated apply.
 		if n.Enabled && n.VLAN > 1 {

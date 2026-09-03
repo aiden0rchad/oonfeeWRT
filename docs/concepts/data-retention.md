@@ -5,7 +5,7 @@ description: What oonfeeWRT stores, for how long, and what must be backed up tog
 
 # Data and retention
 
-oonfeeWRT v0.1.3 keeps configuration, evidence, and audit history locally. It
+oonfeeWRT v0.1.4 keeps configuration, evidence, and audit history locally. It
 does not require a cloud account or external database.
 
 ## Storage locations
@@ -79,10 +79,15 @@ exist.
 When per-device or global row-count caps truncate router-log evidence, the
 controller records a continuity gap rather than making the remaining history
 look complete. The ordinary 24-hour age prune does not add that marker.
-Repeated exact OpenWrt IPv6 router-advertisement/no-default-route warnings may
-be condensed per producer epoch while retaining counts and source boundaries.
+The exact OpenWrt odhcpd IPv6 router-advertisement/no-default-route warning is
+condensed into one warning condition per router-log producer epoch. Repeats
+increment its occurrence count while preserving warning severity and
+first/latest source evidence; similar or unrelated warnings remain individual
+rows. This bounds controller SQLite rows, not the router's own `logd` output.
+Correct the upstream IPv6/prefix-delegation configuration or disable IPv6
+service on the affected LAN to stop the message at its source.
 
-### What v0.1.3 retains about the effective WAN
+### Effective-WAN retention (introduced in v0.1.3)
 
 The collector does not store the raw `ip` route-table output or raw netifd dump
 as WAN history. A successful composite observation produces the scoped logical
@@ -113,9 +118,12 @@ On the first v0.1.1 start, older completed/failed speed-test rows beyond the
 newest three are permanently pruned. Back up v0.1.0 data before upgrading if
 that history matters.
 
-v0.1.2 and v0.1.3 both use schema 19. The v0.1.2 → v0.1.3 upgrade adds no
-migration and no startup deletion; its WAN behavior changes how new read-only
-observations are interpreted.
+v0.1.4 migrates schema 19 to schema 20. The migration adds an index for closed
+topology-history lookup and normalizes old development-era topology source
+keys; it does not delete user configuration, credentials, secrets, or topology
+intervals. The v0.1.3 daemon cannot open schema-20 state, so rollback requires
+the matching pre-upgrade schema-19 database, keyring, passphrase, and old
+binary/image together.
 
 ## Diagnostics content and limits
 

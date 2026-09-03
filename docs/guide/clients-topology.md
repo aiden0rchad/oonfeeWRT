@@ -20,7 +20,7 @@ Filters operate on the complete matching result before pagination:
 - connection evidence (**Wireless**, **Unknown**, or all).
 
 The current table does not claim that an endpoint is wired merely because no
-managed AP reports it, and v0.1.3 has no client text-search or source-coverage
+managed AP reports it, and v0.1.4 has no client text-search or source-coverage
 filter.
 
 The count above the table is the filtered total, not merely the number of rows
@@ -81,7 +81,7 @@ Open **Topology** to view nodes and active link intervals. Sources can include:
 Each edge includes a confidence and medium. Confidence describes the evidence,
 not the importance of the device.
 
-For the Internet edge, v0.1.3 selects the unique usable lowest-metric IPv4
+For the Internet edge, the selector introduced in v0.1.3 chooses the unique usable lowest-metric IPv4
 default in the installed main table and maps it to one active OpenWrt logical
 interface. The edge's port is the runtime kernel device, such as
 `pppoe-wan`; expanded evidence can also show the different logical interface,

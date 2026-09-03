@@ -172,24 +172,32 @@ describe('Notice', () => {
     expect(within(dialog).getByText('The LLDP source did not report a neighbour on lan3.')).toBeTruthy()
   })
 
-  it('keeps warning details inline even when popover presentation is requested', () => {
+  it('keeps warning severity and actions visible while requested guidance opens in a popover', () => {
     render(
       <Notice
         popoverDetails
         component="Optional controller access payload"
         summary="Adoption adds one scoped rpcd ACL file and login."
-        details="Exact router changes remain reviewable inline."
+        details="Exact router changes remain reviewable."
+        actions={<Button>Review changes</Button>}
       />,
     )
 
     const warning = screen.getByRole('group', {
       name: 'Warning: Optional controller access payload',
     })
-    expect(warning.querySelector('details')).toBeTruthy()
-    expect(within(warning).queryByRole('button', {
-      name: /More information about Optional controller access payload/,
-    })).toBeNull()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(warning.querySelector('details')).toBeNull()
+    expect(within(warning).getByText('Warning')).toBeTruthy()
+    expect(within(warning).getByRole('button', { name: 'Review changes' })).toBeTruthy()
+    const trigger = within(warning).getByRole('button', {
+      name: 'More information about Optional controller access payload',
+    })
+    fireEvent.click(trigger, { detail: 0 })
+    const dialog = screen.getByRole('dialog', {
+      name: 'Warning: Optional controller access payload',
+    })
+    expect(within(dialog).getByText('Exact router changes remain reviewable.')).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: 'Review changes' })).toBeNull()
   })
 
   it('gives adjacent passive information triggers unique accessible names', () => {

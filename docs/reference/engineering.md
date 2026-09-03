@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.3** codebase. The repository's
+This page orients contributors to the **v0.1.4** codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -13,7 +13,7 @@ hardware behavior.
 
 | Layer | Current choice |
 |---|---|
-| Go | Module declares Go 1.25 semantics and pins toolchain `go1.26.6` |
+| Go | Module declares Go 1.26 semantics and pins toolchain `go1.26.6` |
 | Database | Pure-Go `modernc.org/sqlite`; cgo is not used |
 | HTTP | Standard-library `net/http` pattern mux |
 | WebSocket | `github.com/coder/websocket` |
@@ -291,7 +291,7 @@ verifies public aliases, and finally publishes the GitHub release.
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.3
+make release-check RELEASE_VERSION=v0.1.4
 ```
 
 only from the exact intended clean release tree. A local build from another

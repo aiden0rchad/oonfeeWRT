@@ -131,7 +131,7 @@ function completedJob(id = 'download-job'): BackupJob {
     expires_at: 1_725_000_900_200,
     size_bytes: 4096,
     sha256: 'a'.repeat(64),
-    schema_version: 19,
+    schema_version: 20,
     controller_version: 'v0.1.0',
   }
 }
@@ -174,7 +174,7 @@ function completedRestorePreview(): RestorePreview {
       database_size_bytes: 2048,
     },
     source_schema: 18,
-    target_schema: 19,
+    target_schema: 20,
     counts: { devices: 2, credentials: 2, owned_sections: 4, wlans: 1, meshes: 0 },
   }
 }
@@ -435,7 +435,7 @@ describe('Backups', () => {
     vi.mocked(api.restores).mockResolvedValue(restoreHistory([completedRestorePreview()]))
     render(<Backups session={session} />)
 
-    expect(await screen.findByText(/v0.1.0 · schema 18 → 19 · 2 devices/)).toBeTruthy()
+    expect(await screen.findByText(/v0.1.0 · schema 18 → 20 · 2 devices/)).toBeTruthy()
     const previewNotice = screen.getByRole('group', { name: 'Information: Authenticated restore preview' })
     expect(previewNotice.querySelector('details')?.open).toBe(false)
     expect(screen.getByText('Credentials').closest('div')?.textContent).toContain('2')

@@ -15,7 +15,7 @@
 				"network.interface.*": [ "status" ],
 				"network.device": [ "status" ],
 				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
-				"luci": [ "getFeatures" ],
+				"luci": [ "getFeatures", "getLocaltime", "getUnixtime" ],
 				"log": [ "read" ],
 				"hostapd.*": [ "get_status", "get_clients", "get_features", "list_bans", "rrm_nr_get_own", "rrm_nr_list" ]
 			},

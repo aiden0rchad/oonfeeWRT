@@ -558,3 +558,123 @@ func TestLegacyEmptyDHCPJSONLoadsHistoricalDefaults(t *testing.T) {
 		t.Fatal("explicit DHCP choice did not clear the legacy-default marker")
 	}
 }
+
+func TestNetworkIPv6SurvivesRoundTripAndOlderClientUpdate(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	ipv6 := model.IPv6Config{Mode: model.IPv6PrefixDelegation, AssignmentLength: 56}
+	n := &model.Network{Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24",
+		IPv6: &ipv6, Enabled: true}
+	if err := db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+
+	older := &model.Network{ID: n.ID, Name: "things", VLAN: 20,
+		CIDR: "10.0.20.1/24", Zone: n.Zone, Enabled: true}
+	if err := db.SaveNetwork(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(site.Networks) != 1 || site.Networks[0].EffectiveIPv6() != ipv6 {
+		t.Fatalf("IPv6 changed during an older-client update: %+v", site.Networks)
+	}
+}
+
+func TestNewNetworkPersistsExplicitIPv6PreservePolicy(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	n := &model.Network{Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24", Enabled: true}
+	if err := db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	want := model.IPv6Config{Mode: model.IPv6Preserve, AssignmentLength: 60}
+	if n.IPv6 == nil || *n.IPv6 != want {
+		t.Fatalf("created network IPv6 = %+v, want %+v", n.IPv6, want)
+	}
+	var raw string
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT ipv6_json FROM networks WHERE id=?`, n.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if isEmptyJSONObject(raw) {
+		t.Fatalf("new network retained legacy empty IPv6 policy: %q", raw)
+	}
+	if got, err := decodeIPv6JSON(raw); err != nil || got != want {
+		t.Fatalf("stored IPv6 = %+v, %v; want %+v", got, err, want)
+	}
+}
+
+func TestSaveNetworkRejectsInvalidIPv6Policy(t *testing.T) {
+	db := open(t)
+	bad := model.IPv6Config{Mode: model.IPv6PrefixDelegation, AssignmentLength: 47}
+	n := &model.Network{Name: "iot", VLAN: 20, CIDR: "10.0.20.1/24",
+		IPv6: &bad, Enabled: true}
+	if err := db.SaveNetwork(context.Background(), n); err == nil ||
+		!strings.Contains(err.Error(), "between 48 and 64") {
+		t.Fatalf("error = %v, want assignment-length validation", err)
+	}
+}
+
+func TestLegacyEmptyIPv6JSONPreservesRouterConfiguration(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	if _, err := db.SQL().ExecContext(ctx,
+		`INSERT INTO networks (name, vlan, cidr, zone, ipv6_json, enabled)
+		 VALUES ('legacy', 20, '10.0.20.1/24', 'legacy', ' { } ', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	site, err := db.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := model.IPv6Config{Mode: model.IPv6Preserve, AssignmentLength: 60}
+	if got := site.Networks[0].EffectiveIPv6(); got != want {
+		t.Fatalf("legacy IPv6 = %+v, want %+v", got, want)
+	}
+
+	legacy := site.Networks[0]
+	legacy.Name = "renamed"
+	legacy.IPv6 = nil
+	if err := db.SaveNetwork(ctx, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT ipv6_json FROM networks WHERE id=?`, legacy.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !isEmptyJSONObject(raw) {
+		t.Fatalf("older-client update rewrote legacy ipv6_json: %q", raw)
+	}
+}
+
+func TestNetworkIPv6JSONIsDecodedStrictly(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"unknown field", `{"mode":"preserve","assignment_length":60,"typo":true}`, "unknown field"},
+		{"missing assignment", `{"mode":"disabled"}`, "missing assignment_length"},
+		{"missing mode", `{"assignment_length":60}`, "missing mode"},
+		{"invalid mode", `{"mode":"automatic","assignment_length":60}`, "mode"},
+		{"unsafe assignment", `{"mode":"prefix_delegation","assignment_length":65}`, "between 48 and 64"},
+		{"null", `null`, "JSON object"},
+		{"trailing value", `{"mode":"preserve","assignment_length":60} {}`, "trailing JSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := open(t)
+			ctx := context.Background()
+			if _, err := db.SQL().ExecContext(ctx,
+				`INSERT INTO networks (name, vlan, cidr, zone, ipv6_json, enabled)
+				 VALUES ('bad', 20, '10.0.20.1/24', 'bad', ?, 1)`, tc.raw); err != nil {
+				t.Fatal(err)
+			}
+			_, err := db.Site(ctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want text %q", err, tc.want)
+			}
+		})
+	}
+}

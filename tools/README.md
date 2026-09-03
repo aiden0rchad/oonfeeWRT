@@ -4,13 +4,14 @@
 
 `dryrun`, `optdiff`, `stalecheck`, `livecheck`, `recoverycheck`, and `applyone`
 open controller state through the same schema-14 cryptographic boundary as the
-daemon. The current source schema is **19**: 14 remains the secret-sealing
+daemon. The current source schema is **20**: 14 remains the secret-sealing
 epoch, 15 is the cross-feature policy semantic boundary, 16 is the attested
 observability shape, 17 adds the optional-capability rollback ledger, and 18
 adds controller-host speed-test jobs/history. Schema 19 adds the controller
 account foundation: canonical roles, enabled/deleted state, ASCII-NOCASE
 username uniqueness, last-enabled-owner protection and transactional mutation
-audit. The published RC, v40 artifact and live lab remain schema 17. Set
+audit. Schema 20 adds the closed-topology-history query index. The published RC,
+v40 artifact and live lab remain schema 17. Set
 `OONFEE_PASSPHRASE_FILE` to an absolute path naming the controller's mode-0600
 passphrase file. The tools open `keyring.json` next to the database and refuse a
 missing, wrong, or mismatched keyring.
@@ -27,7 +28,7 @@ go run ./tools/applyone /absolute/path/to/oonfeewrt.db DEVICE_HOST
 ```
 
 The first five open SQLite with `mode=ro` plus `query_only`. This source build
-requires schema 19 and `secret_state.scrub_complete=1`; they never migrate,
+requires schema 20 and `secret_state.scrub_complete=1`; they never migrate,
 finish a scrub or
 repair a colliding/partial observability table. Start the controller writable
 first when upgrading an older database.

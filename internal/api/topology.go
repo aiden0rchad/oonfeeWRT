@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/topology"
 )
 
 const maxTopologyHistory = 31 * 24 * time.Hour
@@ -69,7 +70,20 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	edges, err := s.Store.TopologyEdgesAt(r.Context(), at)
+	if !s.beginTopologyRead(w) {
+		return
+	}
+	defer s.topologyMu.Unlock()
+	var (
+		edges  []model.TopologyEdge
+		states []model.TopologySourceObservation
+		err    error
+	)
+	if exists {
+		edges, err = s.Store.TopologyEdgesAt(r.Context(), at)
+	} else {
+		edges, states, err = s.Store.CurrentTopologySnapshot(r.Context())
+	}
 	if handleStoreErr(w, err, "topology") {
 		return
 	}
@@ -93,7 +107,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	truncated := exists && at < s.now().Add(-maxTopologyHistory).UnixMilli()
-	s.writeTopology(w, r, responseAt, responseAt, !exists, truncated, edges, lastKnown)
+	s.writeTopology(w, r, responseAt, responseAt, !exists, truncated, edges, lastKnown, states)
 }
 
 func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
@@ -115,13 +129,27 @@ func (s *Server) handleTopologyHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "topology history range cannot exceed 31 days")
 		return
 	}
+	if !s.beginTopologyRead(w) {
+		return
+	}
+	defer s.topologyMu.Unlock()
 	edges, queryTruncated, err := s.Store.TopologyEdgesBetween(
 		r.Context(), from, to, maxTopologyHistoryEdges)
 	if handleStoreErr(w, err, "topology history") {
 		return
 	}
 	retentionTruncated := from < s.now().Add(-maxTopologyHistory).UnixMilli()
-	s.writeTopology(w, r, to, from, false, queryTruncated || retentionTruncated, edges, nil)
+	s.writeTopology(w, r, to, from, false, queryTruncated || retentionTruncated, edges, nil, nil)
+}
+
+func (s *Server) beginTopologyRead(w http.ResponseWriter) bool {
+	if s.topologyMu.TryLock() {
+		return true
+	}
+	w.Header().Set("Retry-After", "1")
+	writeCodedErr(w, http.StatusServiceUnavailable, "topology_busy",
+		"another topology request is still running; retry shortly")
+	return false
 }
 
 func topologyTimeParam(r *http.Request, name string) (int64, bool) {
@@ -134,7 +162,11 @@ func topologyTimeParam(r *http.Request, name string) (int64, bool) {
 }
 
 func (s *Server) writeTopology(w http.ResponseWriter, r *http.Request, at, coverageAt int64,
-	includeLive, truncated bool, edges, lastKnown []model.TopologyEdge) {
+	includeLive, truncated bool, edges, lastKnown []model.TopologyEdge,
+	states []model.TopologySourceObservation) {
+	if includeLive {
+		edges = topology.CurrentPresentationEdges(edges, states, at, maxCurrentTopologySourceAge.Milliseconds())
+	}
 	nodes, err := s.topologyNodes(r, edges, includeLive, at)
 	if handleStoreErr(w, err, "topology nodes") {
 		return
@@ -152,10 +184,6 @@ func (s *Server) writeTopology(w http.ResponseWriter, r *http.Request, at, cover
 		lastKnownViews = append(lastKnownViews, topologyEdgeViewFromModel(edge))
 	}
 	if includeLive {
-		states, err := s.Store.TopologySourceStates(r.Context())
-		if handleStoreErr(w, err, "topology source state") {
-			return
-		}
 		for _, state := range states {
 			switch {
 			case state.State == model.TopologySourceUnknown || state.State == model.TopologySourceError:

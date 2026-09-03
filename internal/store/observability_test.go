@@ -54,9 +54,9 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 	}
 }
 
-func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.T) {
-	if schemaVersion != 19 || secretSchemaVersion != 14 {
-		t.Fatalf("schema epochs=(%d,%d), want (19,14)", schemaVersion, secretSchemaVersion)
+func TestCurrentSchemaIsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.T) {
+	if schemaVersion != 20 || secretSchemaVersion != 14 {
+		t.Fatalf("schema epochs=(%d,%d), want (20,14)", schemaVersion, secretSchemaVersion)
 	}
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "newer.db")
@@ -73,7 +73,7 @@ func TestSchema16IsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.
 	}
 	if newer, err := Open(ctx, driver, path, testProtector(t, path)); err == nil {
 		newer.Close()
-		t.Fatal("v19 build accepted a v20 database")
+		t.Fatalf("v%d build accepted a v%d database", schemaVersion, schemaVersion+1)
 	} else if !strings.Contains(err.Error(), "refusing to downgrade") {
 		t.Fatalf("downgrade error=%v", err)
 	}
@@ -1138,6 +1138,11 @@ func TestTopologyIntervalsUnknownStateAndMalformedRowsFailClosed(t *testing.T) {
 	if err != nil || len(states) != 1 || states[0].State != model.TopologySourceEmpty {
 		t.Fatalf("source states=%+v err=%v", states, err)
 	}
+	snapshotEdges, snapshotStates, err := db.CurrentTopologySnapshot(ctx)
+	if err != nil || len(snapshotEdges) != 1 || snapshotEdges[0].ID != edge.ID ||
+		len(snapshotStates) != 1 || snapshotStates[0].State != model.TopologySourceEmpty {
+		t.Fatalf("current snapshot edges=%+v states=%+v err=%v", snapshotEdges, snapshotStates, err)
+	}
 	current, err := db.TopologyEdgesAt(ctx, 0)
 	if err != nil || len(current) != 1 {
 		t.Fatalf("current edges=%+v err=%v", current, err)
@@ -1212,11 +1217,16 @@ func TestLatestClosedTopologyEdgesSinceReturnsOnePerChild(t *testing.T) {
 	ctx := context.Background()
 	db := open(t)
 	ptr := func(value int64) *int64 { return &value }
-	for _, edge := range []*model.TopologyEdge{
-		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:11", Medium: "wired", Confidence: "measured", ValidFrom: 100, ValidTo: ptr(int64(150)), LastSeen: 149},
-		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:12", ParentPort: "lan3", Medium: "wired", Confidence: "measured", ValidFrom: 200, ValidTo: ptr(int64(250)), LastSeen: 249},
-		{ChildNode: "device:02:00:00:00:00:02", ParentNode: "device:02:00:00:00:00:13", Medium: "wired", Confidence: "measured", ValidFrom: 210, ValidTo: ptr(int64(260)), LastSeen: 259},
-	} {
+	edgesToSave := []*model.TopologyEdge{
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:11", Medium: "wired", Confidence: "measured", ValidFrom: 100, ValidTo: ptr(150), LastSeen: 149},
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:12", Medium: "wired", Confidence: "measured", ValidFrom: 200, ValidTo: ptr(250), LastSeen: 249},
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:13", ParentPort: "lan3", Medium: "wired", Confidence: "measured", ValidFrom: 210, ValidTo: ptr(250), LastSeen: 249},
+		{ChildNode: "device:02:00:00:00:00:01", ParentNode: "device:02:00:00:00:00:14", Medium: "wired", Confidence: "measured", ValidFrom: 250, LastSeen: 260},
+		{ChildNode: "device:02:00:00:00:00:02", ParentNode: "device:02:00:00:00:00:15", Medium: "wired", Confidence: "measured", ValidFrom: 150, ValidTo: ptr(200), LastSeen: 199},
+		{ChildNode: "device:02:00:00:00:00:03", ParentNode: "device:02:00:00:00:00:16", Medium: "wired", Confidence: "measured", ValidFrom: 100, ValidTo: ptr(199), LastSeen: 198},
+		{ChildNode: "device:02:00:00:00:00:04", ParentNode: "device:02:00:00:00:00:17", Medium: "wired", Confidence: "measured", ValidFrom: 200, LastSeen: 260},
+	}
+	for _, edge := range edgesToSave {
 		edge.Evidence, edge.Ambiguities = []model.TopologyEvidence{}, []string{}
 		if err := db.SaveTopologyEdge(ctx, edge); err != nil {
 			t.Fatal(err)
@@ -1226,7 +1236,9 @@ func TestLatestClosedTopologyEdgesSinceReturnsOnePerChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(edges) != 2 || edges[0].ParentNode != "device:02:00:00:00:00:12" || edges[0].ParentPort != "lan3" || edges[1].ChildNode != "device:02:00:00:00:00:02" {
+	if len(edges) != 2 || edges[0].ID != edgesToSave[2].ID ||
+		edges[0].ParentNode != "device:02:00:00:00:00:13" || edges[0].ParentPort != "lan3" ||
+		edges[1].ID != edgesToSave[4].ID {
 		t.Fatalf("latest closed edges=%+v", edges)
 	}
 	if _, err := db.LatestClosedTopologyEdgesSince(ctx, 0); err == nil {

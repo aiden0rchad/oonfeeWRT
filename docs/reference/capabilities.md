@@ -1,36 +1,36 @@
 ---
 title: Capabilities and limits
-description: What oonfeeWRT v0.1.3 can do, what depends on device evidence, and what is unavailable.
+description: What oonfeeWRT v0.1.4 can do, what depends on device evidence, and what is unavailable.
 ---
 
 # Capabilities and limits
 
-This is the user-facing capability boundary for **oonfeeWRT v0.1.3**. It is
+This is the user-facing capability boundary for **oonfeeWRT v0.1.4**. It is
 intentionally narrower than the long-term roadmap.
 
 ## How to read status
 
 | Status | Meaning |
 |---|---|
-| **Shipped** | Present in v0.1.3 source, UI/API, and automated tests |
+| **Shipped** | Present in v0.1.4 source, UI/API, and automated tests |
 | **Hardware-verified** | Exercised on the published physical-router validation setup |
 | **Capability-dependent** | Shipped, but visibility or operation depends on the router, driver, package set, and measured source |
 | **Source-tested only** | Automated contracts exist, but the published hardware run did not execute the disruptive or optional operation |
 | **Unverified** | Intended/shipped path lacks the stated physical topology or hardware proof |
-| **Unavailable** | Not provided by v0.1.3 or deliberately outside the project boundary |
+| **Unavailable** | Not provided by v0.1.4 or deliberately outside the project boundary |
 
 An unavailable measurement is not a zero. The UI distinguishes unknown,
 unsupported, stale, partial, and observed-empty evidence.
 
 ## Deployment and controller
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Standalone Linux/macOS controller | **Shipped** | amd64 and arm64 release archives |
-| Linux container/Compose deployment | **Shipped** | amd64/arm64, non-root scratch image, read-only root filesystem in supplied Compose setup |
+| Linux container/Compose deployment | **Shipped** | amd64/arm64, non-root scratch image, read-only root filesystem, loopback publish by default; `OONFEE_HTTP_BIND` may deliberately select one management address |
 | Embedded web UI | **Shipped** | One process; no separate web server |
 | Local SQLite storage | **Shipped** | WAL mode; database and keyring must be backed up together |
-| Light and dark controller themes | **Shipped** | UI-side switch; v0.1.3 defaults to dark and does not persist the choice across reloads |
+| Light and dark controller themes | **Shipped** | UI-side switch; v0.1.4 defaults to dark and does not persist the choice across reloads |
 | Native controller TLS | **Unavailable** | Use a trusted reverse proxy or trusted isolated management LAN |
 | Cloud account or relay | **Unavailable** | Self-hosted only |
 | Multi-site/NAT traversal | **Unavailable by design** | Use an existing routed management network or VPN |
@@ -38,7 +38,7 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Discovery, inspection, and adoption
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Add router by management address | **Shipped, hardware-verified** | Works without layer-2 discovery |
 | On-demand discovery | **Shipped** | Bounded IPv4 TCP scan of eligible directly attached networks, fingerprinted by unauthenticated `/ubus` object listing; it implements neither ARP-table discovery nor mDNS, and a bridged container normally sees only its container networks |
@@ -52,19 +52,21 @@ unsupported, stale, partial, and observed-empty evidence.
 
 ## Fleet visibility and telemetry
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Device inventory, health, model, firmware, uptime | **Shipped, hardware-verified** | Freshness and source gaps remain visible |
 | Interface throughput and durable metric history | **Shipped, hardware-verified** | Five-minute rollups for 14 days; hourly for 396 days |
 | Management-overhead readout | **Shipped, hardware-verified** | Reports poll interval, request rate/bytes, failures, installed-capability packages, and only measured attributable CPU estimates |
 | Per-device poll interval override | **Shipped** | UI offers 60 seconds to 15 minutes. `0` clears the override, and values below the controller default do not increase the effective poll rate |
 | OpenWrt log ingestion | **Shipped, hardware-verified** | Once per minute, bounded retention and explicit continuity gaps |
+| Repeated IPv6 warning compaction | **Shipped** | Exact odhcpd no-default-route repeats become one counted condition per router-log evidence epoch; this bounds controller rows but does not alter the router's log |
+| Router event-time status | **Shipped, source-tested only** | UTC comes from `luci.getUnixtime` with `luci.getLocaltime` fallback; older adoptions need a separately reviewed access-payload refresh for this read only |
 | Live UI updates | **Shipped** | Bounded WebSocket `device.stats`; durable history remains SQLite-backed |
 | Application/DPI identification and flow history | **Unavailable** | No controller-authored router agent; DPI is outside the constrained-device budget |
 
 ## Dashboard and WAN evidence
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Fleet status and warning/error summary | **Shipped** | Partial data is disclosed rather than flattened |
 | Effective main-table IPv4 WAN selection | **Shipped, source-tested only** | Selects one usable lowest-metric installed route and maps its kernel device to exactly one active netifd default-route interface; the issue supplied real route evidence, but the v0.1.3 fix is proved by regression fixtures rather than a new published physical-controller run |
@@ -72,7 +74,7 @@ unsupported, stale, partial, and observed-empty evidence.
 | Dashboard WAN throughput | **Shipped** | Uses the proved kernel route interface only when the exact RX/TX series key exists; otherwise it stays unavailable instead of guessing `wan`, an Ethernet interface, or the first series |
 | Device Detail interface chart | **Shipped** | Uses the current proved route-device candidate directly and can remain empty until that series has samples; explicit `null` from a v0.1.3 server prevents guessing, while omission from an older server retains the rolling-version fallback |
 | Controller-host speed test | **Shipped** | Cloudflare endpoint, about 15 MiB, one active job, 30-second hard bound, three terminal results retained |
-| Gateway-run speed test | **Unavailable in v0.1.3** | Would need a separately approved router capability |
+| Gateway-run speed test | **Unavailable in v0.1.4** | Would need a separately approved router capability |
 | Loaded latency and loaded jitter | **Unavailable** | The controller-host method reports idle latency/jitter only |
 
 The WAN proof is a composite of the installed kernel route table and netifd's
@@ -85,29 +87,30 @@ The baseline 15-minute collection cadence is not rapid failover detection.
 
 ## Topology
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Internet → gateway → infrastructure → client graph | **Shipped, hardware-verified baseline; v0.1.3 route fix source-tested** | Internet edge uses the proved kernel default-route interface; the remaining graph is inferred from FDB/neighbor, association, and optional LLDP evidence |
 | Current measured/inferred source labels | **Shipped** | Ambiguous links stay ambiguous; expired evidence can leave an online device unplaced |
 | Topology history | **Shipped** | Closed intervals retained for 31 days |
+| Transitive managed-device projection | **Shipped, source-tested only** | Fresh multi-hop FDB/LLDP evidence avoids duplicate direct-parent edges in the live graph; raw history remains intact and stale, failed, or ambiguous evidence becomes visible again |
 | Baseline topology without extra package | **Shipped** | BusyBox FDB sources may lack VLAN identity |
 | LLDP adjacency enrichment | **Shipped optional workflow, hardware-verified** | Exact official-feed package/config/service plan, separate consent, durable rollback ledger |
 | Continuous physical truth without LLDP | **Unavailable** | Dynamic FDB evidence can age out |
 
 ## Clients and observability
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Client inventory, address/name/vendor hints, association and connection source | **Shipped, hardware-verified** | Depends on host hints, DHCP/neighbor and wireless sources available on each router |
 | Current wireless signal/rates/retries | **Capability-dependent, hardware-verified** | Driver/hostapd source gaps are disclosed |
 | Client observability timeline | **Shipped, hardware-verified** | Joins bounded exact events, topology intervals, AP/radio/path evidence, and rollups at one cursor |
 | Wi-Fi experience score | **Shipped, capability-dependent** | Requires RSSI, retry delta, and TX-failure delta in one sample; missing inputs do not get reweighted |
 | Private-MAC indication | **Shipped** | Warning from the locally administered MAC bit, not identity proof |
-| Durable per-client application usage | **Unavailable** | Requires optional accounting/DPI not shipped as a v0.1.3 controller capability |
+| Durable per-client application usage | **Unavailable** | Requires optional accounting/DPI not shipped as a v0.1.4 controller capability |
 
 ## Radios and RF
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Radio inventory, band, channel, width, power, client count | **Shipped, hardware-verified** | Stable radio identity is separated from driver naming |
 | Channel-plan view | **Shipped, hardware-verified** | Shows In use, Enabled, Restricted, or Unknown from actual frequency evidence |
@@ -120,14 +123,14 @@ The baseline 15-minute collection cadence is not rapid failover detection.
 
 ## Site configuration
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Site-wide WLANs and AP groups | **Shipped, hardware-verified** | Deterministic fan-out to selected APs; write-only secrets remain redacted after save |
 | 2.4/5/6 GHz and WPA2/WPA3/OWE/open WLAN fields | **Shipped, capability-dependent** | Includes PMF and 802.11r/k/v fields; hardware defects and missing support can block or warn |
-| Networks, VLANs, addressing, and DHCP intent | **Shipped** | Rendered only to devices with the required Gateway/Switch function and capabilities |
+| Networks, VLANs, addressing, DHCP, and per-network IPv6 intent | **Shipped** | IPv6 supports Router managed, Prefix delegation (`/48`–`/64`), and Disabled; Preview blocks unsafe foreign-section or static-IPv6 conflicts, and ISP delegation remains externally required |
 | Firewall zones and directed forwarding | **Shipped** | Controller-owned firewall4 sections only |
 | IPv4 policy records, static routes, and port forwards | **Shipped** | Preview/gates remain authoritative; application-based matching is unavailable without DPI |
-| Client block and fixed-IPv4 desired policy | **Shipped** | Per-client rate limiting, QoS/SQM, and application/DPI policy backends are unavailable in v0.1.3 |
+| Client block and fixed-IPv4 desired policy | **Shipped** | Per-client rate limiting, QoS/SQM, and application/DPI policy backends are unavailable in v0.1.4 |
 | Per-device overrides | **Shipped** | Limited to WLAN publication, hidden beacon, isolation, and client limit; SSID/key/security/PMF/roaming settings cannot diverge per AP |
 | Preview and multi-device Apply | **Shipped, hardware-verified** | Full-fleet preflight, OpenWrt rollback timer, runtime verification, durable receipts |
 | Automatic silent reconciliation of every desired edit | **Unavailable by design** | Saving does not Apply; operator review remains required |
@@ -151,7 +154,7 @@ The following release boundaries remain:
 
 ## Accounts, backup, and diagnostics
 
-| Capability | v0.1.3 status | Important boundary |
+| Capability | v0.1.4 status | Important boundary |
 |---|---|---|
 | Owner, Administrator, Operator, Read-only roles | **Shipped** | Server-enforced; see [Permissions](../concepts/permissions.md) |
 | Session inventory/revocation and password step-up | **Shipped** | Sessions are in memory and end on restart |
@@ -192,7 +195,7 @@ cycle. The safely demonstrated configuration was WPA2-only, PMF disabled, FT
 disabled, and 802.11k/v enabled after cold boot. Do not generalize a WLAN option
 being present in the model into proof that this router can run it safely.
 
-The current controller serves REST/WebSocket routes under `/api/v1`, but v0.1.3
+The current controller serves REST/WebSocket routes under `/api/v1`, but v0.1.4
 does not publish a stable third-party API compatibility guarantee. Treat that
 surface as the controller/UI contract unless a future release documents one.
 

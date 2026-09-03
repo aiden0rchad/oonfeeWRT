@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
@@ -22,8 +23,10 @@ type topologyStore interface {
 }
 
 type topologyAliasCache struct {
-	network, wireless           []string
-	networkKnown, wirelessKnown bool
+	network, wireless             []string
+	networkKnown, wirelessKnown   bool
+	networkState, wirelessState   model.TopologySourceState
+	networkReason, wirelessReason string
 }
 
 type topologyIngestor struct {
@@ -72,27 +75,30 @@ func (t *topologyIngestor) record(ctx context.Context, snap collector.Snapshot) 
 			delete(t.aliases, deviceID)
 		}
 	}
-
 	sources := append([]model.TopologySourceObservation(nil), snap.Topology.Sources...)
-	if !deviceFunctions(current).Wireless() {
+	wirelessProvenEmpty, wirelessEmptyReason := wirelessAliasesProvenEmpty(current, snap, sources)
+	if wirelessProvenEmpty {
 		sources = replaceTopologySource(sources, snap.DeviceID, topology.SourceAssociations,
-			model.TopologySourceEmpty, "device has no access-point function", snap.At.UnixMilli())
+			model.TopologySourceEmpty, wirelessEmptyReason, snap.At.UnixMilli())
+		sources = replaceTopologySource(sources, snap.DeviceID, collector.TopologySourceWirelessDevices,
+			model.TopologySourceEmpty, wirelessEmptyReason, snap.At.UnixMilli())
 	}
-	t.updateAliases(snap, sources)
+	t.updateAliases(snap, sources, wirelessProvenEmpty)
 
 	bridges := append([]topology.BridgeObservation(nil), snap.Topology.Bridges...)
-	if len(bridges) > 0 && topologySourceAnswered(sources, topology.SourceBridgeFDB) &&
-		(!topologySourceAnswered(sources, collector.TopologySourceNetworkDevices) ||
-			!topologySourceAnswered(sources, collector.TopologySourceWirelessDevices) ||
-			!topologySourceAnswered(sources, collector.TopologySourceBridgeSTP)) {
+	if gaps := unansweredTopologySources(sources,
+		collector.TopologySourceNetworkDevices,
+		collector.TopologySourceWirelessDevices,
+		collector.TopologySourceBridgeSTP,
+	); len(bridges) > 0 && topologySourceAnswered(sources, topology.SourceBridgeFDB) && len(gaps) > 0 {
 		bridges = nil
 		sources = replaceTopologySource(sources, snap.DeviceID, topology.SourceBridgeFDB,
-			model.TopologySourceUnknown, "bridge port mapping sources are unavailable", snap.At.UnixMilli())
+			model.TopologySourceUnknown, "bridge evidence prerequisites unavailable: "+strings.Join(gaps, "; "), snap.At.UnixMilli())
 	}
-	if len(bridges) > 0 && !t.allAliasesKnown(adopted) {
+	if gaps := t.unknownAliasSources(adopted); len(bridges) > 0 && len(gaps) > 0 {
 		bridges = nil
 		sources = replaceTopologySource(sources, snap.DeviceID, topology.SourceBridgeFDB,
-			model.TopologySourceUnknown, "managed-device alias inventory is incomplete", snap.At.UnixMilli())
+			model.TopologySourceUnknown, "managed-device alias inventory is incomplete: "+strings.Join(gaps, "; "), snap.At.UnixMilli())
 	}
 	if len(sources) == 0 {
 		return nil
@@ -123,7 +129,7 @@ func (t *topologyIngestor) record(ctx context.Context, snap collector.Snapshot) 
 	for _, rows := range snap.Topology.Neighbors {
 		input.Neighbors[snap.DeviceID] = append(input.Neighbors[snap.DeviceID], rows...)
 	}
-	if deviceFunctions(current).Wireless() {
+	if !wirelessProvenEmpty {
 		if stations, known := snap.LiveStations(); known {
 			macs := make([]string, 0, len(stations))
 			for mac := range stations {
@@ -184,6 +190,36 @@ func (t *topologyIngestor) record(ctx context.Context, snap collector.Snapshot) 
 	return nil
 }
 
+func wirelessAliasesProvenEmpty(device *store.Device, snap collector.Snapshot,
+	sources []model.TopologySourceObservation) (bool, string) {
+	if deviceFunctions(device).Wireless() {
+		return false, ""
+	}
+	if snap.APsFresh && len(snap.APs) > 0 {
+		return false, ""
+	}
+	for _, radio := range snap.Topology.Wireless {
+		for _, iface := range radio.Interfaces {
+			if iface.IfName != "" || iface.BSSID != "" {
+				return false, ""
+			}
+		}
+	}
+	for _, networkDevice := range snap.Topology.NetworkDevices {
+		if networkDevice.Wireless {
+			return false, ""
+		}
+	}
+	if snap.IfacesFresh && len(snap.Ifaces) == 0 {
+		return true, "fresh iwinfo.devices inventory contains no active wireless interfaces"
+	}
+	if source, ok := topologySource(sources, collector.TopologySourceNetworkDevices); ok &&
+		source.State == model.TopologySourceObserved && len(snap.Topology.NetworkDevices) > 0 {
+		return true, "fresh luci-rpc.getNetworkDevices inventory contains no active wireless interfaces"
+	}
+	return false, ""
+}
+
 func (t *topologyIngestor) unavailable(ctx context.Context, snap collector.Snapshot) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -208,29 +244,51 @@ func (t *topologyIngestor) unavailable(ctx context.Context, snap collector.Snaps
 			ObservedAt: snap.At.UnixMilli(),
 		})
 	}
+	for _, source := range []string{
+		collector.TopologySourceNetworkDevices,
+		collector.TopologySourceWirelessDevices,
+	} {
+		if _, ok := topologySource(failed, source); ok {
+			continue
+		}
+		failed = append(failed, model.TopologySourceObservation{
+			DeviceID: snap.DeviceID, Source: source,
+			State: model.TopologySourceError, Reason: "device poll failed",
+			ObservedAt: snap.At.UnixMilli(),
+		})
+	}
 	if err := t.store.ApplyTopologyObservation(ctx, store.TopologyChanges{}, failed); err != nil {
 		return fmt.Errorf("topology ingest: persist device failure: %w", err)
 	}
+	t.updateAliases(snap, failed, false)
 	return nil
 }
 
 func (t *topologyIngestor) updateAliases(snap collector.Snapshot,
-	sources []model.TopologySourceObservation) {
+	sources []model.TopologySourceObservation, wirelessProvenEmpty bool) {
 	cached := t.aliases[snap.DeviceID]
-	if topologySourceAnswered(sources, collector.TopologySourceNetworkDevices) {
-		cached.network, cached.networkKnown = nil, true
-		for _, device := range snap.Topology.NetworkDevices {
-			if device.MAC != "" {
-				cached.network = append(cached.network, device.MAC)
+	if source, ok := topologySource(sources, collector.TopologySourceNetworkDevices); ok {
+		cached.networkState, cached.networkReason = source.State, source.Reason
+		if topologySourceStateAnswered(source.State) {
+			cached.network, cached.networkKnown = nil, true
+			for _, device := range snap.Topology.NetworkDevices {
+				if device.MAC != "" {
+					cached.network = append(cached.network, device.MAC)
+				}
 			}
 		}
 	}
-	if topologySourceAnswered(sources, collector.TopologySourceWirelessDevices) {
-		cached.wireless, cached.wirelessKnown = nil, true
-		for _, radio := range snap.Topology.Wireless {
-			for _, iface := range radio.Interfaces {
-				if iface.BSSID != "" {
-					cached.wireless = append(cached.wireless, iface.BSSID)
+	if source, ok := topologySource(sources, collector.TopologySourceWirelessDevices); ok {
+		cached.wirelessState, cached.wirelessReason = source.State, source.Reason
+		if topologySourceStateAnswered(source.State) {
+			cached.wireless, cached.wirelessKnown = nil, true
+			if !wirelessProvenEmpty {
+				for _, radio := range snap.Topology.Wireless {
+					for _, iface := range radio.Interfaces {
+						if iface.BSSID != "" {
+							cached.wireless = append(cached.wireless, iface.BSSID)
+						}
+					}
 				}
 			}
 		}
@@ -240,23 +298,76 @@ func (t *topologyIngestor) updateAliases(snap collector.Snapshot,
 	t.aliases[snap.DeviceID] = cached
 }
 
-func (t *topologyIngestor) allAliasesKnown(devices []*store.Device) bool {
+func (t *topologyIngestor) unknownAliasSources(devices []*store.Device) []string {
+	var gaps []string
 	for _, device := range devices {
 		cached := t.aliases[device.ID]
-		if !cached.networkKnown || !cached.wirelessKnown {
-			return false
+		if !cached.networkKnown {
+			gaps = append(gaps, aliasSourceGap(device.ID, collector.TopologySourceNetworkDevices,
+				cached.networkState, cached.networkReason))
+		}
+		if !cached.wirelessKnown {
+			gaps = append(gaps, aliasSourceGap(device.ID, collector.TopologySourceWirelessDevices,
+				cached.wirelessState, cached.wirelessReason))
 		}
 	}
-	return true
+	return gaps
+}
+
+func aliasSourceGap(deviceID int64, source string, state model.TopologySourceState, reason string) string {
+	detail := strings.TrimSpace(reason)
+	if detail == "" && state != "" {
+		detail = string(state)
+	}
+	if detail == "" {
+		detail = "not observed"
+	}
+	return fmt.Sprintf("device:%d/%s (%s)", deviceID, source, detail)
 }
 
 func topologySourceAnswered(sources []model.TopologySourceObservation, name string) bool {
+	source, ok := topologySource(sources, name)
+	return ok && topologySourceStateAnswered(source.State)
+}
+
+func topologySource(sources []model.TopologySourceObservation,
+	name string) (model.TopologySourceObservation, bool) {
 	for _, source := range sources {
 		if source.Source == name {
-			return source.State == model.TopologySourceObserved || source.State == model.TopologySourceEmpty
+			return source, true
 		}
 	}
-	return false
+	return model.TopologySourceObservation{}, false
+}
+
+func topologySourceStateAnswered(state model.TopologySourceState) bool {
+	return state == model.TopologySourceObserved || state == model.TopologySourceEmpty
+}
+
+func unansweredTopologySources(sources []model.TopologySourceObservation, names ...string) []string {
+	var gaps []string
+	for _, name := range names {
+		found := false
+		for _, source := range sources {
+			if source.Source != name {
+				continue
+			}
+			found = true
+			if source.State == model.TopologySourceObserved || source.State == model.TopologySourceEmpty {
+				break
+			}
+			reason := strings.TrimSpace(source.Reason)
+			if reason == "" {
+				reason = string(source.State)
+			}
+			gaps = append(gaps, fmt.Sprintf("%s (%s)", name, reason))
+			break
+		}
+		if !found {
+			gaps = append(gaps, name+" (not observed)")
+		}
+	}
+	return gaps
 }
 
 func replaceTopologySource(sources []model.TopologySourceObservation, deviceID int64,

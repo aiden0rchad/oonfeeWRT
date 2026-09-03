@@ -1529,6 +1529,7 @@ describe('Settings — mesh editor', () => {
         vlan: 1,
         cidr: '192.168.1.1/24',
         zone: 'lan',
+        ipv6: { mode: 'preserve', assignment_length: 60 },
         enabled: true,
       },
     ],
@@ -1823,6 +1824,104 @@ describe('Settings — desired-state controls', () => {
     fireEvent.click(within(networkCard).getByRole('button', { name: 'Delete network lan' }))
     expect(api.deleteNetwork).toHaveBeenCalledWith(1)
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('makes LAN IPv6 policy explicit without silently changing upgraded sites', async () => {
+    api.saveNetwork.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+
+    const status = await screen.findByText('Router managed')
+    expect(status.closest('table')).toBeTruthy()
+    fireEvent.click(status)
+
+    const dialog = screen.getByRole('dialog', { name: 'lan' })
+    const modes = within(dialog).getByRole('group', { name: 'IPv6 mode' })
+    expect((within(modes).getByRole('radio', { name: /Router managed/i }) as HTMLInputElement).checked).toBe(true)
+    expect(within(dialog).getByText(/also update conventional upstream wan\/wan6/i)).toBeTruthy()
+
+    fireEvent.click(within(modes).getByRole('radio', { name: /Disabled/i }))
+    expect(within(dialog).getByRole('status').textContent).toMatch(
+      /upstream WAN IPv6 and IPv6 service on this LAN will stop after Apply.*IPv4 is unchanged/i,
+    )
+
+    fireEvent.click(within(modes).getByRole('radio', { name: /Prefix delegation/i }))
+    const length = within(dialog).getByLabelText('LAN assignment length') as HTMLInputElement
+    expect(length.value).toBe('60')
+    fireEvent.change(length, { target: { value: '56' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(api.saveNetwork).toHaveBeenCalledWith(expect.objectContaining({
+      id: 1,
+      ipv6: { mode: 'prefix_delegation', assignment_length: 56 },
+    })))
+  })
+
+  it('keeps IPv6 changes on an ordinary managed VLAN separate from gateway WAN IPv6', async () => {
+    api.site.mockResolvedValue({
+      ...site,
+      networks: [{
+        ...site.networks[0],
+        id: 20,
+        name: 'guest',
+        vlan: 20,
+        cidr: '192.168.20.1/24',
+        zone: 'guest',
+      }],
+    })
+    render(<Settings devices={[]} />)
+
+    fireEvent.click(await screen.findByText('Router managed'))
+    const dialog = screen.getByRole('dialog', { name: 'guest' })
+    expect(within(dialog).getByText(/controls IPv6 on this LAN only.*reuses the gateway’s existing upstream/i)).toBeTruthy()
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Disabled/i }))
+    expect(within(dialog).getByRole('status').textContent).toMatch(
+      /IPv6 service will stop on this LAN.*Upstream WAN IPv6 and IPv4 are unchanged/i,
+    )
+  })
+
+  it('describes Router managed as preserving current owned support, not rolling IPv6 back', async () => {
+    api.site.mockResolvedValue({
+      ...site,
+      networks: [{
+        ...site.networks[0],
+        id: 20,
+        name: 'guest',
+        vlan: 20,
+        cidr: '192.168.20.1/24',
+        zone: 'guest',
+        ipv6: { mode: 'prefix_delegation', assignment_length: 60 },
+      }],
+    })
+    render(<Settings devices={[]} />)
+
+    fireEvent.click(await screen.findByText('Prefix delegation · /60'))
+    const dialog = screen.getByRole('dialog', { name: 'guest' })
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Router managed/i }))
+
+    expect(within(dialog).getByText(
+      /supporting rules already owned by oonfeeWRT in place.*does not restore values/i,
+    )).toBeTruthy()
+    expect(within(dialog).getByRole('status').textContent).toMatch(
+      /current IPv6 option values and supporting rules already owned by oonfeeWRT stay in place.*does not restore earlier values/i,
+    )
+  })
+
+  it('opens and focuses the primary network IPv6 controls from a warning intent', async () => {
+    const handled = vi.fn()
+    render(
+      <Settings
+        devices={[]}
+        initialNetworkSection="ipv6"
+        onInitialNetworkSectionHandled={handled}
+      />,
+    )
+
+    const dialog = await screen.findByRole('dialog', { name: 'lan' })
+    const ipv6 = within(dialog).getByLabelText('IPv6 settings')
+    await waitFor(() => expect(document.activeElement).toBe(ipv6))
+    expect(handled).toHaveBeenCalledTimes(1)
+    expect(within(ipv6).getByRole('group', { name: 'IPv6 mode' })).toBeTruthy()
   })
 
   it('labels selected WLAN controls and the AP-group name input', async () => {
@@ -4439,14 +4538,14 @@ describe('Logs', () => {
     expect(sourceNotice.getAttribute('data-compact')).toBe('true')
     const coverageNotice = await screen.findByRole('group', { name: 'Warning: Router log coverage' })
     expect(coverageNotice.getAttribute('data-compact')).toBe('true')
-    expect(within(coverageNotice).getByText(/Router log coverage is incomplete/)).toBeTruthy()
-    expect(within(coverageNotice).getByText(/an empty result is not proven/)).toBeTruthy()
+    expect(within(coverageNotice).getByText(/Some router log intervals are unverified/)).toBeTruthy()
+    expect(within(coverageNotice).getByText(/“No events” cannot be confirmed/)).toBeTruthy()
+    expect(within(coverageNotice).getByRole('button', { name: 'Check again' })).toBeTruthy()
     const coverageToggle = within(coverageNotice).getByText('More information about log coverage')
-    const coverageDetails = coverageToggle.closest('details') as HTMLDetailsElement
-    expect(coverageDetails.open).toBe(false)
-    fireEvent.click(coverageToggle)
-    expect(coverageDetails.open).toBe(true)
-    expect(within(coverageNotice).getByText(/has not been observed on AP one/)).toBeTruthy()
+    expect(coverageToggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(coverageToggle, { detail: 0 })
+    const coverageDetails = screen.getByRole('dialog', { name: 'Warning: Router log coverage' })
+    expect(within(coverageDetails).getByText(/has not been observed on AP one/)).toBeTruthy()
     expect(screen.queryByText('No general events were observed.')).toBeNull()
     unmount()
 
@@ -4497,14 +4596,19 @@ describe('Logs', () => {
   })
 
   it('discloses router clock skew instead of silently presenting misleading event times', async () => {
-    api.devices.mockResolvedValue({ devices: [] })
+    api.devices.mockResolvedValue({ devices: [{ id: 7, name: 'Gateway' }] })
     api.events.mockResolvedValue({
-      events: [ev({ Source: 'openwrt-logd', IngestedAt: 1755486400000 })],
+      events: [ev({ DeviceID: 7, Source: 'openwrt-logd', IngestedAt: 1755486400000 })],
       total: 1,
       limit: 100,
       scope: 'general',
       next_before: null,
       facets: { category: [], severity: [] },
+      router_clocks: [{
+        device_id: 7,
+        observed_at: 1755486400000,
+        offset_seconds: 24 * 60 * 60,
+      }],
       coverage: {
         complete: true,
         expected_devices: 1,
@@ -4517,14 +4621,69 @@ describe('Logs', () => {
 
     const clockNotice = await screen.findByRole('group', { name: 'Warning: Router clock' })
     expect(within(clockNotice).getByRole('status').textContent ?? '').toMatch(
-      /Router event time differs.*24 hours.*ordered by their router source time/i,
+      /1 router clock differs.*Gateway is ahead by about 24 hours.*ordered by router source time/i,
     )
     const toggle = within(clockNotice).getByText('More information about event time')
-    const details = toggle.closest('details') as HTMLDetailsElement
-    expect(details.open).toBe(false)
-    fireEvent.click(toggle)
-    expect(details.open).toBe(true)
-    expect(within(clockNotice).getByText(/Check the router clock and NTP/)).toBeTruthy()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle, { detail: 0 })
+    const details = screen.getByRole('dialog', { name: 'Warning: Router clock' })
+    expect(within(details).getByText(/fresh UTC clock measurement/)).toBeTruthy()
+  })
+
+  it('reports every skewed router clock with its direction', async () => {
+    api.devices.mockResolvedValue({ devices: [
+      { id: 7, name: 'Gateway' },
+      { id: 8, name: 'Office AP' },
+    ] })
+    api.events.mockResolvedValue({
+      events: [],
+      total: 0,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
+      facets: { category: [], severity: [] },
+      router_clocks: [
+        { device_id: 7, observed_at: 1755486400000, offset_seconds: 6 * 60 },
+        { device_id: 8, observed_at: 1755486400000, offset_seconds: -11 * 60 },
+      ],
+      coverage: {
+        complete: true,
+        expected_devices: 2,
+        observed_devices: 2,
+        gaps: [],
+      },
+    })
+
+    render(<Logs />)
+
+    const notice = await screen.findByRole('group', { name: 'Warning: Router clock' })
+    expect(within(notice).getByRole('status').textContent ?? '').toMatch(
+      /2 router clocks differ.*Gateway is ahead by about 6 minutes.*Office AP is behind by about 11 minutes/i,
+    )
+  })
+
+  it('does not mistake delayed router-log delivery for clock skew', async () => {
+    api.devices.mockResolvedValue({ devices: [{ id: 7, name: 'Gateway' }] })
+    api.events.mockResolvedValue({
+      events: [ev({ DeviceID: 7, Source: 'openwrt-logd', IngestedAt: 1755486400000 })],
+      total: 1,
+      limit: 100,
+      scope: 'general',
+      next_before: null,
+      facets: { category: [], severity: [] },
+      router_clocks: [],
+      coverage: {
+        complete: true,
+        expected_devices: 1,
+        observed_devices: 1,
+        gaps: [],
+      },
+    })
+
+    render(<Logs />)
+
+    await waitFor(() => expect(screen.getByText('device.reachable')).toBeTruthy())
+    expect(screen.queryByRole('group', { name: 'Warning: Router clock' })).toBeNull()
   })
 
   // Every device event carries a device_id, the API has always returned it, and
@@ -4595,9 +4754,13 @@ describe('Logs', () => {
   })
 
   it('explains and condenses the known IPv6 router-advertisement condition', async () => {
-	api.devices.mockResolvedValue({ devices: [] })
+	api.devices.mockResolvedValue({ devices: [
+	  { id: 7, name: 'Linksys gateway' },
+	  { id: 8, name: 'Office gateway' },
+	] })
 	api.events.mockResolvedValue({
 	  events: [ev({
+		DeviceID: 7,
 		Event: 'openwrt.ipv6_ra_no_default_route',
 		Severity: 'warning',
 		Source: 'openwrt-logd',
@@ -4606,28 +4769,89 @@ describe('Logs', () => {
 		  priority: 28,
 		  occurrences: 37,
 		},
+	  }), ev({
+		ID: 2,
+		DeviceID: 8,
+		Event: 'openwrt.ipv6_ra_no_default_route',
+		Severity: 'warning',
+		Source: 'openwrt-logd',
+		Detail: {
+		  message: 'odhcpd[82]: No default route present, setting ra_lifetime to 0!',
+		  priority: 28,
+		  occurrences: 4,
+		},
+	  })],
+	  total: 2,
+	  limit: 100,
+	  scope: 'general',
+	  next_before: null,
+	  facets: { category: [], severity: [] },
+	  conditions: [{
+		event_id: 1,
+		device_id: 7,
+		state: 'recent',
+		occurrences: 37,
+		last_observed_at: 1755400000000,
+	  }, {
+		event_id: 2,
+		device_id: 8,
+		state: 'recent',
+		occurrences: 4,
+		last_observed_at: 1755400000000,
+	  }],
+	  coverage: { complete: true, expected_devices: 2, observed_devices: 2, gaps: [] },
+	})
+
+	const onConfigureIPv6 = vi.fn()
+	render(<Logs onConfigureIPv6={onConfigureIPv6} />)
+
+	expect(await screen.findByText(/IPv6 router advertisements have no usable default route · 37 occurrences/)).toBeTruthy()
+	const notice = screen.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
+	expect(notice.getAttribute('data-compact')).toBe('true')
+	expect(within(notice).getByRole('status').textContent ?? '').toMatch(
+	  /Affected: Linksys gateway, Office gateway.*LAN IPv6 advertisements have no usable upstream route.*IPv4 is unaffected/i,
+	)
+	fireEvent.click(within(notice).getByRole('button', { name: 'Review IPv6 and Apply' }))
+	expect(onConfigureIPv6).toHaveBeenCalledTimes(1)
+	const toggle = within(notice).getByText('More information about this IPv6 warning')
+	expect(toggle.getAttribute('aria-expanded')).toBe('false')
+	fireEvent.click(toggle, { detail: 0 })
+	const details = screen.getByRole('dialog', { name: 'Warning: IPv6 router advertisements' })
+	expect(details.textContent).toMatch(/41 reported occurrences.*2 current condition records/i)
+	expect(details.textContent).toMatch(/instead of creating a full event row/i)
+	expect(within(details).getByText('Keep IPv6')).toBeTruthy()
+	expect(within(details).getByText('Do not use IPv6 on this LAN')).toBeTruthy()
+  })
+
+  it('keeps historical IPv6 evidence in the table without showing an active banner', async () => {
+	api.devices.mockResolvedValue({ devices: [{ id: 7, name: 'Linksys gateway' }] })
+	api.events.mockResolvedValue({
+	  events: [ev({
+		DeviceID: 7,
+		Event: 'openwrt.ipv6_ra_no_default_route',
+		Severity: 'warning',
+		Source: 'openwrt-logd',
+		Detail: { occurrences: 37 },
 	  })],
 	  total: 1,
 	  limit: 100,
 	  scope: 'general',
 	  next_before: null,
 	  facets: { category: [], severity: [] },
+	  conditions: [{
+		event_id: 1,
+		device_id: 7,
+		state: 'historical',
+		occurrences: 37,
+		last_observed_at: 1755400000000,
+	  }],
 	  coverage: { complete: true, expected_devices: 1, observed_devices: 1, gaps: [] },
 	})
 
 	render(<Logs />)
 
 	expect(await screen.findByText(/IPv6 router advertisements have no usable default route · 37 occurrences/)).toBeTruthy()
-	const notice = screen.getByRole('group', { name: 'Warning: IPv6 router advertisements' })
-	expect(notice.getAttribute('data-compact')).toBe('true')
-	expect(within(notice).getByRole('status').textContent ?? '').toMatch(
-	  /IPv6-only.*does not indicate an IPv4 outage/i,
-	)
-	const toggle = within(notice).getByText('More information about this IPv6 warning')
-	const details = toggle.closest('details') as HTMLDetailsElement
-	expect(details.open).toBe(false)
-	fireEvent.click(toggle)
-	expect(within(notice).getByText(/37 reported occurrences.*1 condition record/i)).toBeTruthy()
+	expect(screen.queryByRole('group', { name: 'Warning: IPv6 router advertisements' })).toBeNull()
   })
 
   it('never renders an out-of-order response under newer filters', async () => {
@@ -5018,6 +5242,33 @@ describe('Dashboard', () => {
     expect(await screen.findByText('Complete coverage')).toBeTruthy()
     expect(screen.queryByRole('group', { name: 'Warning: Topology summary' })).toBeNull()
     expect(api.topology).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not overlap topology summary polling or a manual retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let resolveRetry!: (value: typeof topology) => void
+      api.topology
+        .mockRejectedValueOnce(new Error('topology store unavailable'))
+        .mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve }))
+      const { Dashboard } = await import('./Dashboard')
+      render(<Dashboard data={data as never} />)
+
+      await screen.findByRole('group', { name: 'Warning: Topology summary' })
+      const retry = screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement
+      fireEvent.click(retry)
+      expect(retry.disabled).toBe(true)
+      fireEvent.click(retry)
+      act(() => vi.advanceTimersByTime(90_000))
+      expect(api.topology).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('region', { name: 'Network topology' }).getAttribute('aria-busy')).toBe('true')
+
+      await act(async () => resolveRetry(topology))
+      expect(await screen.findByText('Complete coverage')).toBeTruthy()
+      expect(screen.getByRole('region', { name: 'Network topology' }).getAttribute('aria-busy')).toBe('false')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('renders only the bounded warning/error feed and keeps legacy activity out', async () => {

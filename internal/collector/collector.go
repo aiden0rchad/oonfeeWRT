@@ -63,6 +63,12 @@ const (
 
 	// maxWiden bounds evidence-based widening to 8× the tier interval.
 	maxWiden = 3
+
+	// Router clock evidence is for a current log-ordering warning, not history.
+	// This is the minimum lifetime; RouterClocks extends it through the device's
+	// healthy full-poll interval so an intentionally slow cadence does not make a
+	// verified warning blink out between polls.
+	routerClockFreshAfter = 3 * time.Minute
 )
 
 // Sink receives completed polls, including failed ones.
@@ -101,6 +107,12 @@ type Target struct {
 	// device. Hardware labels and interface names are not substitutes: AP-only
 	// devices must never each emit a competing "site" series.
 	Gateway bool
+	// WiredOnly says the stored device functions explicitly exclude access-point
+	// service. It is a scheduling signal only: changing it forces fresh interface
+	// and topology inventory. It never authorizes skipping wireless observation or
+	// treating desired state as proof that the hardware has no radios or BSSes.
+	// The zero value preserves the historical polling behaviour.
+	WiredOnly bool
 	// AirtimeSplit is true only when the stored capability probe proved that
 	// iwinfo's rx_time/tx_time counters track reality. Presence of the fields is
 	// not proof: some drivers return plausible-looking counters that never move.
@@ -217,10 +229,25 @@ func (c *Collector) Add(t Target) {
 	defer c.mu.Unlock()
 	if p, ok := c.pollers[t.DeviceID]; ok {
 		p.mu.Lock()
+		wirelessChanged := p.target.WiredOnly != t.WiredOnly
 		changed := p.target.MAC != t.MAC || p.target.ConnectionKey == "" ||
 			t.ConnectionKey == "" || p.target.ConnectionKey != t.ConnectionKey
 		scheduleChanged := p.target.Gateway != t.Gateway || p.target.Baseline != t.Baseline
+		if wirelessChanged {
+			// Desired function changes do not prove that runtime wireless state is
+			// empty. Keep the last observation until a fresh call replaces it, but
+			// force that call and its topology reconciliation now.
+			p.ifaceAt = time.Time{}
+			p.ifaceRefetchAt = time.Time{}
+			p.topologyAt = time.Time{}
+		}
 		p.target = t
+		// A deliberate retrack/reprobe is the boundary for retrying a clock
+		// source previously proved absent, including after a firmware change.
+		p.clockMethod = ""
+		p.clockFallback = false
+		p.clockUnavailable = false
+		p.clockAttemptOK = false
 		p.mu.Unlock()
 		if changed {
 			// The endpoint/auth identity changed, or the caller could not prove it
@@ -229,6 +256,9 @@ func (c *Collector) Add(t Target) {
 		}
 		if scheduleChanged && c.started {
 			p.pokeSchedule()
+		}
+		if wirelessChanged && c.started {
+			p.poke()
 		}
 		return
 	}
@@ -257,6 +287,10 @@ func (c *Collector) RefreshAccess(deviceID int64) bool {
 	p.meshAt = time.Time{}
 	p.radioAt = time.Time{}
 	p.boardAt = time.Time{}
+	p.clockMethod = ""
+	p.clockFallback = false
+	p.clockUnavailable = false
+	p.clockAttemptOK = false
 	p.logAt = time.Time{}
 	p.wanProbeAt = time.Time{}
 	p.topologyAt = time.Time{}
@@ -469,6 +503,40 @@ func (c *Collector) Degraded(deviceID int64) ([]Degradation, bool) {
 	out := make([]Degradation, len(p.degraded))
 	copy(out, p.degraded)
 	return out, true
+}
+
+// RouterClocks returns only current, successful UTC clock comparisons. A
+// failed full poll, a failed clock call, or an observation outside the live
+// evidence window removes the device from the result instead of preserving a
+// warning after the router has gone offline.
+func (c *Collector) RouterClocks() []RouterClock {
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]RouterClock, 0, len(c.pollers))
+	for _, p := range c.pollers {
+		p.mu.Lock()
+		clock := p.routerClock
+		live := p.routerClockKnown && p.clockAttemptOK && p.fails == 0
+		freshFor := routerClockFreshAfter
+		if live {
+			// Full polls run start-to-start. Allow one bounded poll duration past
+			// the scheduled interval so the old observation remains current while
+			// its healthy replacement is in flight.
+			freshFor = max(freshFor, p.nextLocked()+p.pollTimeout(p.tierLocked()))
+		}
+		p.mu.Unlock()
+		if !live {
+			continue
+		}
+		age := now.Sub(time.UnixMilli(clock.ObservedAt))
+		if age < 0 || age > freshFor {
+			continue
+		}
+		out = append(out, clock)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DeviceID < out[j].DeviceID })
+	return out
 }
 
 // Broadcasting is every BSS the last poll saw in hostapd/interface inventory,
@@ -923,16 +991,22 @@ type poller struct {
 	// beside the modes and refreshed with them. It is what makes "did this
 	// controller write that BSS?" answerable at all: the poll sees interfaces
 	// and SSIDs, and only this says which section produced one.
-	ifaceSections   map[string]string
-	ifaceRadios     map[string]string
-	radios          []radio.LiveState
-	radiosKnown     bool
-	radioAt         time.Time
-	radioObservedAt time.Time
-	radioAttemptAt  time.Time
-	radioAttemptOK  bool
-	boardAt         time.Time
-	logAt           time.Time
+	ifaceSections    map[string]string
+	ifaceRadios      map[string]string
+	radios           []radio.LiveState
+	radiosKnown      bool
+	radioAt          time.Time
+	radioObservedAt  time.Time
+	radioAttemptAt   time.Time
+	radioAttemptOK   bool
+	boardAt          time.Time
+	clockMethod      string
+	clockFallback    bool
+	clockUnavailable bool
+	routerClock      RouterClock
+	routerClockKnown bool
+	clockAttemptOK   bool
+	logAt            time.Time
 	// logInterval is fixed at one minute in production. Tests shorten it while
 	// preserving the ratio to a modeled slow full baseline.
 	logInterval time.Duration
@@ -1352,6 +1426,36 @@ func (p *poller) succeed(snap Snapshot) {
 	p.fails = 0
 	p.polls++
 	p.lastPoll = p.c.now()
+	if snap.clockMethodMissing == clockMethodUnix {
+		p.clockMethod = ""
+		p.clockFallback = true
+	}
+	if snap.clockUnavailable {
+		p.clockMethod = ""
+		p.clockFallback = false
+		p.clockUnavailable = true
+	}
+	clockOK := snap.clockAttempted && snap.clockAttemptOK &&
+		snap.RouterUnixTime != nil && !snap.RouterClockAt.IsZero()
+	offsetSeconds := int64(0)
+	if clockOK {
+		offsetSeconds, clockOK = routerClockOffsetSeconds(
+			*snap.RouterUnixTime, snap.RouterClockAt.Unix())
+	}
+	if snap.clockMethod != "" && clockOK {
+		p.clockMethod = snap.clockMethod
+		p.clockFallback = snap.clockMethod == clockMethodLocal
+		p.clockUnavailable = false
+	}
+	p.clockAttemptOK = clockOK
+	if p.clockAttemptOK {
+		p.routerClock = RouterClock{
+			DeviceID:      snap.DeviceID,
+			ObservedAt:    snap.RouterClockAt.UnixMilli(),
+			OffsetSeconds: offsetSeconds,
+		}
+		p.routerClockKnown = true
+	}
 	if snap.Board != nil {
 		p.boardAt = p.c.now()
 	} else if permanentlyDenied(snap, "system", "board") {
@@ -1381,6 +1485,25 @@ func (p *poller) succeed(snap Snapshot) {
 	case p.widen > 0:
 		p.widen--
 	}
+}
+
+func routerClockOffsetSeconds(routerUnix, controllerUnix int64) (int64, bool) {
+	const (
+		minInt64 = -1 << 63
+		maxInt64 = 1<<63 - 1
+	)
+	if routerUnix < 0 || routerUnix > maxExactClockInteger {
+		return 0, false
+	}
+	if controllerUnix > 0 && routerUnix < minInt64+controllerUnix ||
+		controllerUnix < 0 && routerUnix > maxInt64+controllerUnix {
+		return 0, false
+	}
+	offset := routerUnix - controllerUnix
+	if offset < -maxExactClockInteger || offset > maxExactClockInteger {
+		return 0, false
+	}
+	return offset, true
 }
 
 // next returns the delay before the following poll.

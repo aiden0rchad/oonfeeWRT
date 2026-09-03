@@ -107,6 +107,14 @@ func (f fleetAdapter) Quiesced(deviceID int64) bool {
 	return c != nil && c.Quiesced(deviceID)
 }
 
+func (f fleetAdapter) RouterClocks() []collector.RouterClock {
+	c := f.d.collectorRef()
+	if c == nil {
+		return []collector.RouterClock{}
+	}
+	return c.RouterClocks()
+}
+
 func (f fleetAdapter) Broadcasting(deviceID int64) ([]collector.AP, bool) {
 	c := f.d.collectorRef()
 	if c == nil {

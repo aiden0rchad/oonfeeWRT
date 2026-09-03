@@ -44,7 +44,7 @@ func openMaintainerDB(t *testing.T) (*store.DB, int64) {
 func TestFinalFlushPersistsCompletedBucketsWithoutWritingCurrentPartial(t *testing.T) {
 	ctx := context.Background()
 	db, deviceID := openMaintainerDB(t)
-	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	base := time.Now().UTC().Truncate(5 * time.Minute)
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	// Process A has one completed bucket and one sample in the current bucket.
