@@ -1,5 +1,19 @@
 # Where this project is
 
+> **Current release status — 2026-09-03**
+>
+> The current public release is
+> [`v0.1.4`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4),
+> commit `fb199064`, using database schema 20. Its release workflow completed
+> successfully and published four checksummed standalone archives plus the
+> signed `linux/amd64` and `linux/arm64` container image.
+>
+> The detailed handoff below records historical development and physical-lab
+> checkpoints through August 23. Statements using “current” inside that record
+> are relative to their documented checkpoint unless this banner explicitly
+> supersedes them. The active public release and schema are v0.1.4/schema 20;
+> §5br remains the historical schema-19 live-lab checkpoint.
+
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
 through **2026-08-23**, with the earlier Phase-3 hardware endpoint in §5bg, the
 schema-15/16 source-only checkpoint in §5bh, the read-only live schema-16

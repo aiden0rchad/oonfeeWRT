@@ -63,6 +63,23 @@ claim that delegated IPv6
 has been live-proved with every ISP or OpenWrt layout. Legacy rows resolve to
 `preserve` with a `/60` assignment default and cause no IPv6 device change.
 
+It also separates durable exact-warning compaction from current operational
+status. Compaction shipped in v0.1.1; v0.1.4 classifies the current IPv6
+no-default-route condition independently of event filters/page, reports router
+names and retained occurrences, links to the primary-network IPv6 editor, and
+clears only the banner after verified quiet coverage. Router UTC is observed
+read-only through `luci.getUnixtime` with `luci.getLocaltime` fallback; the UI
+warns at five minutes, and older adoptions need a separately reviewed ACL
+refresh only for that status.
+
+For topology, v0.1.4 projects source-aware transitive FDB/LLDP paths in the
+current view while retaining raw intervals. Stale, failed, or ambiguous proof
+becomes visible again. Clean FDB-only physical links are inferred, and missing
+BusyBox VLAN provenance is neutral unavailable metadata. Same-geometry partial
+observations retain prior semantic payload, the closed-history query is
+indexed, and current/history API work is serialized while browser requests are
+cancelled when abandoned.
+
 ---
 
 ## 0. The constraint that shapes everything
@@ -738,7 +755,7 @@ and are never resumed after controller restart.
 | PoE control/state | Hardware-specific ubus objects on the few supported PoE switches | **Mostly unavailable.** See RISKS. |
 | CPU / memory / temperature | `system.info`, `/sys/class/thermal` | |
 | WAN latency / loss / reachability | Gateway-vantage `file.exec` of stock `/bin/ping`: exactly 3 ICMP packets to fixed target `1.1.1.1`, at most once/minute | This is one fixed reachability vantage, not HTTP validation, ISP uptime, DNS health or a configurable multi-target SLA. Missing/refused/malformed output is unknown; zero replies is measured 100% loss. |
-| Topology adjacency | stock `brctl showmacs` + ARP + wireless assoc; optional `lldpd` (`lldpcli show neighbors -f json`) | FDB gives the no-install baseline. Fresh LLDP marks possible transit evidence on physical forwarding links. The live graph hides it only while that exact managed peer resolves through recent evidence to a direct placement; raw intervals remain stored for history and later moves. `bridge -j fdb` is ACL-allowed but not yet collected. |
+| Topology adjacency | stock `brctl showmacs` + STP port mapping + ARP + wireless assoc; optional `lldpd` (`lldpcli show neighbors -f json`) | FDB gives the no-install baseline. Fresh source-aware FDB/LLDP and direct-placement evidence can prove a transitive managed path across multiple hops; the current graph hides only the redundant candidate while the complete proof is fresh, and raw intervals remain stored. Clean FDB-only physical paths are inferred. Missing BusyBox VLAN provenance is neutral unavailable metadata; other ambiguity stays explicit. `bridge -j fdb` is ACL-allowed but not yet collected. |
 | DNS queries | dnsmasq query log, tailed via `file.read` with an offset | Optional; privacy-sensitive, off by default. |
 | Flows + application ID | `netifyd` (nDPI) if it's in the official feed for the target **[verify]**, else `ntopng`; both write to disk and are polled via `file.read` | The expensive one, and the one most likely to fail the no-device-code rule. See PARITY-MATRIX. |
 
@@ -775,21 +792,30 @@ never raw samples:
 |---|---|---|
 | 5m avg/min/max/count | 14d | ranges up to 7d |
 | 1h avg/min/max/count | 13mo (396d) | longer ranges |
-| OpenWrt `logd` events | 24h, at most 50,000/device and 100,000 total; exact repeated odhcpd IPv6-RA/no-default-route warnings condense per producer epoch without changing warning severity | General Logs and client incidents |
+| OpenWrt `logd` events | 24h, at most 50,000/device and 100,000 total; since v0.1.1, exact repeated odhcpd IPv6-RA/no-default-route warnings condense per producer epoch without changing warning severity | General Logs and client incidents |
 | Controller/audit events | newest 100,000 rows; every event has a 64 KiB aggregate stored-text/detail limit | Audit and controller history |
 | Closed topology intervals | 31d; active intervals do not expire | current graph and replay |
 | RF scan runs/BSS rows | newest terminal run per `(device_id,radio_key)`; pending/running preserved; BSS cascade | newest explicit scan per radio |
 
-The IPv6 condition compactor recognizes only the exact odhcpd
+The v0.1.1 IPv6 condition compactor recognizes only the exact odhcpd
 RA/no-default-route warning. It retains warning severity and one condition row
 per router-log producer epoch, incrementing an occurrence count and retaining
 the first/latest source evidence; near matches and unrelated warnings remain
-ordinary event rows. The Logs notice names every affected router, explains that
-IPv4 is unaffected, and offers the two source-level remedies: configure Prefix
-delegation or disable IPv6 on the affected LAN, then Preview and Apply. This
-bounds controller event-row growth but does not suppress the router's own log
-emission. Only correcting the OpenWrt IPv6 configuration stops that source
-noise.
+ordinary event rows. Startup also folds matching legacy raw rows without making
+old evidence current. v0.1.4 adds a separate current-condition query that is
+independent of event filters/page. The Logs notice names every affected router,
+shows retained occurrences, and links to the two source-level remedies:
+configure Prefix delegation or disable IPv6 on the affected LAN, then Preview
+and Apply. Verified quiet coverage clears the notice without deleting retained
+history; stale or gapped coverage is unknown. Compaction bounds controller rows
+but does not suppress the router's own log emission. Only correcting the
+OpenWrt IPv6 configuration stops that source noise.
+
+Router-clock status is a separate live-only observation. A successful full
+poll reads UTC through `luci.getUnixtime` or the bounded
+`luci.getLocaltime` fallback and compares it with a fresh controller midpoint.
+The UI warns at an absolute offset of five minutes. No clock series is retained,
+no router clock is set, and stored event timestamps are not rewritten.
 
 Five-minute rows are flushed in one transaction only after the bucket closes;
 shutdown discards the in-progress RAM bucket rather than writing a partial row

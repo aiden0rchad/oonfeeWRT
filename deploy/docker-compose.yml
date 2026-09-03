@@ -15,9 +15,10 @@
 #
 # NETWORKING — the safe, portable bridge mode is the default:
 #
-#   Bridge mode works everywhere, including Docker Desktop. HTTP is exposed
-#   only on host loopback. Subnet TCP probing still works; ARP/mDNS discovery
-#   does not cross the bridge, so adopt devices by IP.
+#   Bridge mode works everywhere, including Docker Desktop. HTTP is exposed on
+#   host loopback by default, or on the explicit OONFEE_HTTP_BIND address.
+#   Subnet TCP probing still works; ARP/mDNS discovery does not cross the
+#   bridge, so adopt devices by IP.
 #
 # Linux-only host networking is an explicit discovery opt-in. Remove `ports:`,
 # add `network_mode: host`, and put TLS/firewall policy in front of port 8080.

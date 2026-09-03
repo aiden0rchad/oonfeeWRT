@@ -120,31 +120,47 @@ OONFEE_VERSION=v0.1.4 docker compose -f docker-compose.yml.v0.1.4 config --quiet
 ```
 
 After reviewing the diff, replace `docker-compose.yml` with the v0.1.4 file or
-merge its changes deliberately. From that directory:
+merge its changes deliberately. Update the existing `.env` without removing
+other intentional deployment values. Pin both the release and the publish
+address you intend to retain across future lifecycle commands:
 
-```sh
-OONFEE_VERSION=v0.1.4 docker compose pull
-OONFEE_VERSION=v0.1.4 docker compose up -d
+```dotenv
+OONFEE_VERSION=v0.1.4
+OONFEE_HTTP_BIND=127.0.0.1
 ```
 
-The service keeps the existing `oonfee-data` volume and passphrase bind mount. Confirm that you did not add `-v` to any `down` command.
+Use the controller's specific trusted management-LAN IP instead of `127.0.0.1`
+when remote browsers must connect directly. Then, from that directory:
 
-Loopback remains the default. To use the new trusted-management-LAN bind, put
-`OONFEE_HTTP_BIND=<controller-LAN-IP>` in `.env` before `pull`/`up`, or repeat
-it on every Compose lifecycle command. Do not publish raw port 8080 to the
-Internet.
+```sh
+docker compose config --quiet
+docker compose pull
+docker compose up -d
+```
+
+The service keeps the existing `oonfee-data` volume and passphrase bind mount.
+Confirm that you did not add `-v` to any `down` command.
+
+Loopback remains the default. If you do not persist `.env`, repeat both
+`OONFEE_VERSION` and `OONFEE_HTTP_BIND` on every Compose lifecycle command.
+Do not publish raw port 8080 to the Internet.
 
 ## 3. Verify the upgraded controller
 
 ```sh
-curl --fail http://127.0.0.1:8080/healthz
+CONTROLLER_URL=http://127.0.0.1:8080
+curl --fail "$CONTROLLER_URL/healthz"
 ```
+
+Set `CONTROLLER_URL` to `http://<controller-LAN-IP>:8080` instead when `.env`
+publishes only on that trusted address.
 
 For Compose:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose ps
-OONFEE_VERSION=v0.1.4 docker compose logs --tail=200 oonfeewrt
+docker compose ps
+docker compose logs --tail=200 oonfeewrt
+docker compose exec oonfeewrt /oonfeewrtd -version
 ```
 
 In the browser:

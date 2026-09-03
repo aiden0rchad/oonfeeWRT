@@ -10,19 +10,32 @@ UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
 shape of Phases 4 and 6 below, but does **not** justify skipping the safety and
 site-model work ahead of them.
 
-**Current patch roll-up (v0.1.4):** v0.1.2 shipped the bounded, sanitized,
-browser-local compatibility report on successful read-only Inspect and corrected
-physical-radio/direct-Ethernet inspection for the externally reported Cudy
-M3000 v2 variant. v0.1.3 replaced WAN interface-name heuristics with a
-read-only installed-route + active-netifd proof, including logical PPPoE `wan`
-to runtime counter device `pppoe-wan`. Equal-best defaults, multipath, custom
-policy routing, `mwan3`, manual selection, per-uplink health and bond-member
-attribution remain explicit gaps. v0.1.4 adds explicit per-network IPv6
-preserve, prefix-delegation and disabled policies behind Preview and Apply;
-read-only router-clock observation; bounded IPv6 warning conditions; transitive
-wired-topology presentation fixes; reduced unchanged-topology churn; and an
-explicit Docker management-address bind. Existing networks remain Router
-managed after upgrade, so the release does not silently broaden router writes.
+**Current stable patch (v0.1.4, released 2026-09-03):** v0.1.2 shipped the
+bounded, sanitized, browser-local compatibility report on successful read-only
+Inspect and corrected physical-radio/direct-Ethernet inspection for the
+externally reported Cudy M3000 v2 variant. v0.1.3 replaced WAN interface-name
+heuristics with a read-only installed-route + active-netifd proof, including
+logical PPPoE `wan` to runtime counter device `pppoe-wan`. Equal-best defaults,
+multipath, custom policy routing, `mwan3`, manual selection, per-uplink health,
+and bond-member attribution remain explicit gaps.
+
+v0.1.4 adds explicit per-network IPv6 preserve, prefix-delegation, and disabled
+policies behind Preview and Apply; read-only router-clock observation; a
+filter- and page-independent current status/action UI built on exact-warning
+compaction shipped in v0.1.1; transitive wired-topology projection; retention of
+prior link semantics for same-geometry partial observations; indexed closed-
+history lookup; and an explicit Docker management-address bind. Existing
+networks remain Router managed and upgrade startup makes no router write.
+Selecting an explicit management-LAN policy is the narrow exception to the
+usual owned-section rule: it may patch only allowlisted options on exact
+existing LAN/DHCP and supported conventional `wan`/`wan6` sections, and cannot
+create, claim, rename, or delete them.
+
+The first v0.1.4 start migrates schema 19 to schema 20. A direct v0.1.3 rollback
+therefore requires the matching pre-upgrade database, keyring, and runtime
+passphrase, not only a binary/image change. Existing adoptions need no
+re-adoption; a separately reviewed ACL refresh is required only to add
+router-clock status.
 
 ---
 

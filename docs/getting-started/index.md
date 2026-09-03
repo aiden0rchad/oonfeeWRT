@@ -58,12 +58,16 @@ On a new controller, starting it, opening the dashboard, scanning the LAN, addin
 Router-changing actions are explicit:
 
 - **Adoption** installs one scoped `oonfeewrt` rpcd login and `/usr/share/rpcd/acl.d/oonfeewrt.json` after you acknowledge the displayed plan. It installs no package, executable, service, daemon, or firmware.
-- **Apply** changes controller-owned network, wireless, DHCP, and firewall UCI sections only after Preview and safety acknowledgements.
+- **Apply** changes reviewed controller-owned network, wireless, DHCP, and firewall UCI sections only after Preview and safety acknowledgements. An explicit non-Router-managed IPv6 mode on the Gateway management LAN is the one narrower exception: it may patch allowlisted IPv6 options on exact existing LAN/DHCP and supported conventional WAN sections.
 - **RF scan** takes the selected serving radio off-channel temporarily and requires disruption acknowledgement.
 - **Optional LLDP** may install the official OpenWrt `lldpd` package after separate plan and installation approvals.
 - **Un-adoption** reverts controller-owned state and removes the scoped login and ACL after review.
 
-Existing human-managed UCI sections remain foreign and read-only. A conflict blocks Preview or Apply instead of being silently overwritten.
+Existing human-managed UCI sections remain foreign and are normally read-only.
+The management-LAN IPv6 exception never creates, claims, renames, or deletes a
+foreign section; missing, ambiguous, wrong-type, or unsafe static-IPv6 targets
+block Preview. Other conflicts block Preview or Apply instead of being silently
+overwritten.
 
 ## The safe first-run sequence
 
@@ -82,13 +86,13 @@ Existing human-managed UCI sections remain foreign and read-only. A conflict blo
 ## What the interface covers
 
 - **Dashboard:** fleet state, clients, Internet reachability and traffic history, topology summary, warnings, and controller-host speed tests.
-- **Topology:** current and historical links with source and confidence information.
+- **Topology:** current and historical links with source and confidence information. v0.1.4 uses fresh multi-hop FDB/LLDP evidence to avoid presenting one managed device as directly attached to several upstream devices; raw intervals remain available in history.
 - **Radios:** radio inventory, channel plans, utilization evidence, and explicit RF scans.
-- **Devices:** health, capabilities, collection overhead, polling, ACL refresh, optional LLDP, and un-adoption.
+- **Devices:** health, capabilities, collection overhead, polling, ACL refresh, optional LLDP, and un-adoption. Older adoptions need a separately reviewed ACL refresh only if you want the new router-clock status; ordinary management continues without re-adoption.
 - **Client Devices:** client inventory, filters, and a time-aligned observability workspace.
 - **Policy Engine:** objects, firewall/NAT/route records, whole-zone forwarding, and inspectable desired state.
 - **Settings:** networks, DHCP, WLANs, AP groups, roaming, mesh backhauls, wireless uplinks, accounts, diagnostics, and backup/restore.
-- **Logs:** General and Audit events with provenance and coverage information.
+- **Logs:** General and Audit events with provenance and coverage information, an active IPv6 no-default-route condition, and fresh router-clock skew warnings.
 
 Unavailable features are capability-gated. For example, a legacy `swconfig` device may provide port observations without supporting managed per-port VLAN changes.
 
@@ -108,6 +112,9 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
 - The discovery scan probes TCP `/ubus` on eligible interface subnets; it does
   not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
+- Existing networks upgrade to **Router managed** IPv6 and receive no IPv6
+  router write merely from installing v0.1.4. Prefix delegation and Disabled
+  remain explicit Preview-and-Apply choices.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
 - Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.4.
 

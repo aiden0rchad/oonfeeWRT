@@ -203,6 +203,7 @@ What each screen actually costs on class C. Use this to decide what ships.
 | Band steering / roaming assist | 2 | `usteer` or `dawn` | modest, event-driven | opt-in |
 | Queue management / SQM | 2 | `sqm-scripts` (CAKE) | **significant CPU at gigabit on class C** — user's existing decision, we only expose it | opt-in |
 | Router/hostapd event log | 0 | native `log.read`, once/minute cursor ingest | bounded ring read; does not install a tailer | **on** |
+| Router UTC comparison | 0 | native `luci.getUnixtime`, with bounded `luci.getLocaltime` fallback | one optional native call inside the existing full poll; unavailable permission/method stays explicit | on when permitted |
 | Firewall event enrichment | 0 | nftables rate-limited log lines when configured | scales with rule hit rate; no nflog pipeline in Phase 4 | opt-in |
 | RF scan | 0 | native `iwinfo.scan`, explicit acknowledged request | disrupts clients on that radio; 45s timeout; never scheduled | manual only |
 | **Flows / DPI / app identification** | 2 | `netifyd`, `ntopng` | **out of budget** | **unavailable on class C** |
@@ -228,8 +229,10 @@ These are memory/query/retention limits, not managed-router work to spend:
 Persisted RF scan history is count-bounded by the five-minute controller
 maintenance transaction: one newest terminal run per stable radio key, with
 pending/running work preserved and child BSS rows removed by foreign-key
-cascade. The live lab has not created scans under schema 16, so this retention
-path remains source-tested rather than hardware-exercised.
+cascade. FS-052 records one explicitly acknowledged C6 5 GHz scan under schema
+16 with 14 BSS rows and a channel-44 suggestion. That proves one scan result;
+pruning across repeated terminal scans and other radios remains source-tested,
+not broadly hardware-proven.
 
 ---
 

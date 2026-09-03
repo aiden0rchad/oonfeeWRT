@@ -88,6 +88,18 @@ Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
 unavailable rather than guessed. Those layouts can still be managed outside
 oonfeeWRT, but v0.1.4 does not claim their Dashboard WAN path is authoritative.
 
+### Optional router-clock status prerequisites
+
+v0.1.4 can compare fresh router UTC with the controller through
+`luci.getUnixtime`, falling back to `luci.getLocaltime` only when the preferred
+method is unavailable. A new adoption's reviewed ACL includes these read-only
+methods. An adoption created by an older release keeps ordinary polling,
+Preview, Apply, and WAN observation without any change; only the clock status
+may remain unavailable. If that status is wanted, an Administrator or Owner
+must provide the device-administrator credential and separately approve the
+updated access payload. Re-adoption is not required, and the controller never
+sets the router clock or changes NTP configuration.
+
 ## Network reachability
 
 The controller host must be able to reach every router's management address.

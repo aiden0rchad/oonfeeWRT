@@ -5,8 +5,9 @@ description: What oonfeeWRT v0.1.4 can do, what depends on device evidence, and 
 
 # Capabilities and limits
 
-This is the user-facing capability boundary for **oonfeeWRT v0.1.4**. It is
-intentionally narrower than the long-term roadmap.
+This is the user-facing capability boundary for stable **oonfeeWRT v0.1.4**,
+published September 3, 2026. It is intentionally narrower than the long-term
+roadmap.
 
 ## How to read status
 
@@ -30,6 +31,7 @@ unsupported, stale, partial, and observed-empty evidence.
 | Linux container/Compose deployment | **Shipped** | amd64/arm64, non-root scratch image, read-only root filesystem, loopback publish by default; `OONFEE_HTTP_BIND` may deliberately select one management address |
 | Embedded web UI | **Shipped** | One process; no separate web server |
 | Local SQLite storage | **Shipped** | WAL mode; database and keyring must be backed up together |
+| Schema-20 upgrade | **Shipped** | First v0.1.4 startup migrates schema 19 without configuring routers; direct rollback requires the matching pre-upgrade database, keyring, and runtime passphrase because v0.1.3 cannot open schema 20 |
 | Light and dark controller themes | **Shipped** | UI-side switch; v0.1.4 defaults to dark and does not persist the choice across reloads |
 | Native controller TLS | **Unavailable** | Use a trusted reverse proxy or trusted isolated management LAN |
 | Cloud account or relay | **Unavailable** | Self-hosted only |
@@ -59,8 +61,9 @@ unsupported, stale, partial, and observed-empty evidence.
 | Management-overhead readout | **Shipped, hardware-verified** | Reports poll interval, request rate/bytes, failures, installed-capability packages, and only measured attributable CPU estimates |
 | Per-device poll interval override | **Shipped** | UI offers 60 seconds to 15 minutes. `0` clears the override, and values below the controller default do not increase the effective poll rate |
 | OpenWrt log ingestion | **Shipped, hardware-verified** | Once per minute, bounded retention and explicit continuity gaps |
-| Repeated IPv6 warning compaction | **Shipped** | Exact odhcpd no-default-route repeats become one counted condition per router-log evidence epoch; this bounds controller rows but does not alter the router's log |
-| Router event-time status | **Shipped, source-tested only** | UTC comes from `luci.getUnixtime` with `luci.getLocaltime` fallback; older adoptions need a separately reviewed access-payload refresh for this read only |
+| Repeated IPv6 warning compaction | **Shipped since v0.1.1** | Exact odhcpd no-default-route repeats become one counted condition per router-log evidence epoch; this bounds controller rows but does not alter the router's log |
+| Current IPv6 warning condition status | **Shipped in v0.1.4** | Current state and retained occurrence count are independent of event filters and page; the UI names affected routers and links to the primary-network IPv6 editor, while verified quiet coverage clears only the banner, not history |
+| Router event-time status | **Shipped, source-tested only** | UTC comes from `luci.getUnixtime` with `luci.getLocaltime` fallback; the UI warns at five minutes of offset, does not set router clocks, and older adoptions need a separately reviewed access-payload refresh for this read only |
 | Live UI updates | **Shipped** | Bounded WebSocket `device.stats`; durable history remains SQLite-backed |
 | Application/DPI identification and flow history | **Unavailable** | No controller-authored router agent; DPI is outside the constrained-device budget |
 
@@ -91,9 +94,9 @@ The baseline 15-minute collection cadence is not rapid failover detection.
 |---|---|---|
 | Internet → gateway → infrastructure → client graph | **Shipped, hardware-verified baseline; v0.1.3 route fix source-tested** | Internet edge uses the proved kernel default-route interface; the remaining graph is inferred from FDB/neighbor, association, and optional LLDP evidence |
 | Current measured/inferred source labels | **Shipped** | Ambiguous links stay ambiguous; expired evidence can leave an online device unplaced |
-| Topology history | **Shipped** | Closed intervals retained for 31 days |
+| Topology history | **Shipped** | Closed intervals retained for 31 days; same-geometry partial-source observations retain prior semantics instead of creating needless interval splits, and closed-history lookup is indexed |
 | Transitive managed-device projection | **Shipped, source-tested only** | Fresh multi-hop FDB/LLDP evidence avoids duplicate direct-parent edges in the live graph; raw history remains intact and stale, failed, or ambiguous evidence becomes visible again |
-| Baseline topology without extra package | **Shipped** | BusyBox FDB sources may lack VLAN identity |
+| Baseline topology without extra package | **Shipped** | A clean physical FDB-only path is inferred rather than automatically ambiguous; missing BusyBox VLAN identity is unavailable metadata, surfaced as an Unknown VLAN count rather than a repeated link warning |
 | LLDP adjacency enrichment | **Shipped optional workflow, hardware-verified** | Exact official-feed package/config/service plan, separate consent, durable rollback ledger |
 | Continuous physical truth without LLDP | **Unavailable** | Dynamic FDB evidence can age out |
 
@@ -127,7 +130,7 @@ The baseline 15-minute collection cadence is not rapid failover detection.
 |---|---|---|
 | Site-wide WLANs and AP groups | **Shipped, hardware-verified** | Deterministic fan-out to selected APs; write-only secrets remain redacted after save |
 | 2.4/5/6 GHz and WPA2/WPA3/OWE/open WLAN fields | **Shipped, capability-dependent** | Includes PMF and 802.11r/k/v fields; hardware defects and missing support can block or warn |
-| Networks, VLANs, addressing, DHCP, and per-network IPv6 intent | **Shipped** | IPv6 supports Router managed, Prefix delegation (`/48`–`/64`), and Disabled; Preview blocks unsafe foreign-section or static-IPv6 conflicts, and ISP delegation remains externally required |
+| Networks, VLANs, addressing, DHCP, and per-network IPv6 intent | **Shipped** | IPv6 supports Router managed, Prefix delegation (`/48`–`/64`), and Disabled. Controller-owned VLANs use owned sections; explicit management-LAN modes are the narrow exception, patching only allowlisted options on exact existing LAN/DHCP and supported conventional `wan`/`wan6` sections. They cannot create, claim, rename, or delete those sections; Preview blocks unsafe targets or static-IPv6 conflicts, and ISP delegation remains externally required |
 | Firewall zones and directed forwarding | **Shipped** | Controller-owned firewall4 sections only |
 | IPv4 policy records, static routes, and port forwards | **Shipped** | Preview/gates remain authoritative; application-based matching is unavailable without DPI |
 | Client block and fixed-IPv4 desired policy | **Shipped** | Per-client rate limiting, QoS/SQM, and application/DPI policy backends are unavailable in v0.1.4 |

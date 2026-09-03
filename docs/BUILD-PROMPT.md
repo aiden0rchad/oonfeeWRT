@@ -7,8 +7,10 @@ sessions.
 **Current UI reference (2026-08-18):** stable UniFi Network 10.5.67. Read the
 Network-10.5 current-baseline section in `PARITY-MATRIX.md` and the Current
 reference section in `UI-SPEC.md` before UI work. The milestone table below is
-the build order, not the live queue; `STATUS.md` §5 is authoritative for what
-comes next.
+the historical build order, not a live queue. For released behavior, start with
+`RELEASE-NOTES-v0.1.4.md`, `reference/capabilities.md`, and the dated banner at
+the top of `STATUS.md`; the numbered STATUS sections preserve evidence from
+their own checkpoints and must not be read as a current-version override.
 
 ## Ground rules to give the agent (paste into every session)
 
@@ -112,6 +114,24 @@ already-landed contracts while finishing a milestone:
   RSSI, retry delta and TX-failure delta coexist; never renormalize. The WAN
   series is exactly a three-packet, once/minute Gateway ICMP probe to `1.1.1.1`
   and must not be labelled HTTP/DNS/ISP uptime;
+- schema 17 makes optional official-feed capabilities recoverable: retain the
+  exact package/config/service before-state and added-package set, verify final
+  state before deleting the ledger, and block un-adoption while ownership is
+  unresolved;
+- schema 18 stores bounded controller-host speed-test jobs. The action is
+  explicit and plan-bound, uses the disclosed Cloudflare endpoints, never runs
+  on a router, and retains only the newest three terminal attempts;
+- schema 19 adds server-enforced owner/admin/operator/viewer accounts,
+  last-enabled-owner protection, audited account mutation, stored-only
+  diagnostics, and encrypted staged backup/restore. A confirmed restore revokes
+  sessions and suppresses router writes until reviewed;
+- v0.1.4 uses schema 20. Its migration adds the closed-topology lookup index and
+  normalizes historical `luci.get*Devices` source names without deleting edge
+  intervals. Per-network IPv6 defaults to `preserve`; explicit
+  `prefix_delegation` or `disabled` intent may patch only allowlisted options on
+  exact management-LAN/DHCP and supported conventional `wan`/`wan6` sections,
+  never create, claim, rename, or delete those foreign sections. Router-clock
+  reads and source-aware transitive topology must remain evidence-gated;
 - keep Phase-4 bounds visible: OpenWrt logs 24h + 50k/device + 100k global,
   controller/audit 100k, event pages 1..1000 and producer coverage stale after
   3m; topology 31d/10k with current sources stale after 31m and historical
@@ -140,15 +160,22 @@ already-landed contracts while finishing a milestone:
   on the next tick without immediately discarding the rpcd session;
 - DHCP enablement/start/limit/lease time are site-model data, validated before
   render; VLAN 0/1 management LANs, foreign DHCP/zone sections and flat bridges
-  remain outside controller ownership.
+  remain outside controller ownership. The explicit v0.1.4 management-LAN IPv6
+  option patch above is the narrow exception to foreign-option read-only
+  behavior, not ownership transfer.
 
 ## When validating new hardware
 
-Run `tools/probe.py <router-ip> --write-tests --json report.json` on the target
-OpenWrt router, commit `report.json` into the repo, and give the next session this
-instruction: *"Resolve IMPLEMENTATION.md §14 open items against report.json;
-adjust code where the mock and hardware disagree; where they disagree, hardware
-wins and the mock gets fixed to match."*
+Run `tools/probe.py <router-ip> --write-tests --json /path/outside/repo/report.json`
+on the target OpenWrt router. Keep the raw report private: it can contain device
+and deployment details and must never be committed. Use **Export sanitized
+compatibility report** after read-only Inspect when that bounded format answers
+the support question. For regression coverage, manually review and minimize the
+relevant fact into a synthetic fixture with addresses, identifiers, free text,
+and secrets removed. Give the next session this instruction: *"Resolve the named
+IMPLEMENTATION.md §14 item against the reviewed fixture; adjust code where the
+mock and hardware disagree; hardware wins and the synthetic mock gets fixed to
+match."*
 
 That last clause matters: the mock is the contract fixture, so hardware
 discoveries flow back into it — that's how CI stays honest after you've
@@ -167,7 +194,7 @@ device/group routing remain honestly gated. STATUS §5bg closes the confirmed te
 explicit-policy cleanup and managed-WLAN key rotation; do not repeat them as
 pending. The controller must still never create VLAN-awareness itself.
 
-**Current Phase-4 validation boundary (2026-08-20):** the live lab database is
+**Historical Phase-4 validation boundary (2026-08-20):** the live lab database was
 schema 16. An initial signed-in pass exercised Topology/history, Radios,
 General/Audit Logs and Client Observability under both routers' older ACLs. The
 operator later accepted the separate scoped capability-refresh prompt on both
@@ -176,7 +203,10 @@ WAN ICMP sources. The refresh remains optional/default-off elsewhere. Accepting
 installs or replaces one rpcd ACL JSON file; it installs no package, binary,
 daemon, service or firmware and changes no UCI. No before/after package
 inventory was captured, so do not claim it was unchanged. No RF scan ran.
-Unchecked/cancelled leaves the router unchanged and source gaps visible.
+Unchecked/cancelled leaves the router unchanged and source gaps visible. Later
+fresh-start work reached schema 17 and includes the separately acknowledged C6
+RF scan in FS-052; the controlled live-lab checkpoint later reached schema 19.
+The public v0.1.4 release uses schema 20. Keep those evidence epochs separate.
 
 ## What NOT to delegate
 

@@ -2,7 +2,9 @@
 
 The v0.1.4 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
 
-> **Outcome:** oonfeeWRT runs as non-root in a hardened container, publishes HTTP only on host loopback, and persists state in a named Docker volume.
+> **Outcome:** oonfeeWRT runs as non-root in a hardened container, publishes
+> HTTP on host loopback by default (or one explicitly selected management
+> address), and persists state in a named Docker volume.
 
 ## Prerequisites
 
@@ -17,8 +19,9 @@ The v0.1.4 container is a multi-platform Linux image containing one static contr
 ## 1. Create the deployment directory
 
 ```sh
-mkdir -p oonfeewrt
+install -d -m 0700 oonfeewrt
 cd oonfeewrt
+umask 077
 ```
 
 Keep `docker-compose.yml` and `passphrase` in this private directory. The controller database itself lives in Docker's named `oonfee-data` volume.
@@ -36,7 +39,6 @@ The file pins the image version through the required `OONFEE_VERSION` value inst
 ## 3. Create the runtime passphrase
 
 ```sh
-umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
@@ -46,10 +48,17 @@ The Compose service runs as UID/GID 65532, so the bind-mounted mode-`0600` file 
 
 This is the controller runtime/boot passphrase, not an owner account password. Store a protected recovery copy separately.
 
-## 4. Start v0.1.4
+## 4. Pin and start v0.1.4
+
+Store the image tag and host publish address in `.env` so every Compose
+lifecycle command uses the same values:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose up -d
+printf '%s\n' \
+  'OONFEE_VERSION=v0.1.4' \
+  'OONFEE_HTTP_BIND=127.0.0.1' > .env
+chmod 600 .env
+docker compose up -d
 ```
 
 The release image is:
@@ -72,8 +81,9 @@ The supplied service hardening includes:
 ## 5. Verify the service
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose ps
-OONFEE_VERSION=v0.1.4 docker compose logs --tail=100 oonfeewrt
+docker compose ps
+docker compose logs --tail=100 oonfeewrt
+docker compose exec oonfeewrt /oonfeewrtd -version
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
@@ -91,24 +101,24 @@ The v0.1.4 Compose file keeps loopback as the safe default and accepts
 `OONFEE_HTTP_BIND`, a Compose-only host publish IP. It does not replace
 `OONFEE_LISTEN`; the container must continue listening on `:8080` internally.
 
-To reach the controller from a trusted management LAN, bind the host port to
-the controller host's specific LAN address:
+To reach the controller from a trusted management LAN, change
+`OONFEE_HTTP_BIND` in `.env` to the controller host's specific LAN address,
+then recreate the service:
 
 ```sh
-OONFEE_HTTP_BIND=192.168.1.20 OONFEE_VERSION=v0.1.4 docker compose up -d
+docker compose up -d
 curl --fail http://192.168.1.20:8080/healthz
 ```
 
-Repeat `OONFEE_HTTP_BIND` on every Compose lifecycle command or store
-`OONFEE_HTTP_BIND=192.168.1.20` in the `.env` file beside
-`docker-compose.yml`. Without either, a later recreate uses the loopback
-default again.
+If you do not use `.env`, repeat both variables on every Compose lifecycle
+command. Without either, a later recreate can return to the loopback default
+or fail because the required image version is unset.
 
 Use the controller's real address in the browser. `0.0.0.0` is a bind target,
 not a browser URL. To deliberately publish on every host IPv4 interface:
 
 ```sh
-OONFEE_HTTP_BIND=0.0.0.0 OONFEE_VERSION=v0.1.4 docker compose up -d
+OONFEE_HTTP_BIND=0.0.0.0 docker compose up -d
 ```
 
 The controller has no native TLS listener. Prefer one management IP over
@@ -193,8 +203,8 @@ docker run -d \
 Compose sends SIGTERM and allows 150 seconds for shutdown:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose stop
-OONFEE_VERSION=v0.1.4 docker compose start
+docker compose stop
+docker compose start
 ```
 
 The longer grace period lets an Apply that reached OpenWrt's rollback-protected stage finish its confirm decision. Do not force-kill the container during an Apply unless the host itself is failing.
@@ -217,7 +227,7 @@ Confirm that `passphrase` is a file, not a directory.
 Inspect the startup error:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose logs --tail=200 oonfeewrt
+docker compose logs --tail=200 oonfeewrt
 ```
 
 Common causes are a missing/unreadable passphrase, the wrong passphrase for the volume's keyring, a missing keyring beside an existing database, an unsupported database downgrade, or port 8080 already in use.
@@ -245,13 +255,13 @@ port 8080 to the Internet.
 This removes the container but preserves the named volume:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose down
+docker compose down
 ```
 
 This also deletes the named volume and controller state:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose down -v
+docker compose down -v
 ```
 
 Use `-v` only after a verified backup and only when deletion is intentional.

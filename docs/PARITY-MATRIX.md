@@ -148,7 +148,7 @@ read-only authenticated inspection.
 
 | UniFi element | OpenWrt source | Verdict |
 |---|---|---|
-| Tree graph internet → gateway → switches → APs → clients | stock `brctl showmacs` FDB + ARP + wireless assoc; optional `lldpd` enrichment | 🟢 Baseline topology needs no added package. Fresh LLDP marks possible transit on managed physical links. The live graph hides it only while that exact peer resolves through recent evidence to a direct placement; raw history remains intact and other uncertainty stays explicit. `bridge -j fdb` is ACL-allowed future enrichment, not a current collector source |
+| Tree graph internet → gateway → switches → APs → clients | stock `brctl showmacs` FDB + STP port mapping + ARP + wireless association; optional `lldpd` enrichment | 🟢 Baseline topology needs no added package. v0.1.4 uses fresh source-aware FDB/LLDP and direct-placement evidence across multiple managed hops to hide only redundant transit candidates in the current view; raw history remains intact, and stale, failed, or ambiguous evidence reappears. Clean physical FDB-only paths are inferred. Missing BusyBox VLAN provenance is neutral unavailable metadata, not an automatic warning. `bridge -j fdb` is ACL-allowed future enrichment, not a current collector source |
 | Expand/collapse node badges, zoom/pan, navigation mode | UI-side (d3/Cytoscape) | 🟢 |
 | Filter rail: device status, client type, VLAN, WiFi broadcast, vendor | our indices | 🟢 |
 | "Show Internet Traffic" overlay on links | live throughput per link from interface counters | 🟢 |

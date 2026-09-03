@@ -33,19 +33,23 @@ Keep this terminal open while completing the browser setup. For unattended start
 Create a private working directory, download the exact v0.1.4 Compose file, and create the runtime passphrase:
 
 ```sh
-mkdir -p oonfeewrt
+install -d -m 0700 oonfeewrt
 cd oonfeewrt
+umask 077
 
 curl --fail --location \
   --output docker-compose.yml \
   https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
 
-umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
-OONFEE_VERSION=v0.1.4 docker compose up -d
+printf '%s\n' \
+  'OONFEE_VERSION=v0.1.4' \
+  'OONFEE_HTTP_BIND=127.0.0.1' > .env
+chmod 600 .env
+docker compose up -d
 ```
 
 The supplied Compose file:
@@ -85,9 +89,12 @@ ok
 For Docker, also check:
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose ps
-OONFEE_VERSION=v0.1.4 docker compose logs --tail=100 oonfeewrt
+docker exec oonfeewrt /oonfeewrtd -version
+docker compose ps
+docker compose logs --tail=100 oonfeewrt
 ```
+
+The version command must print `v0.1.4`, and the service must report healthy.
 
 In the browser, confirm that the left navigation shows **Dashboard**, **Topology**, **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Settings**, **Adopt a device**, and **Logs**.
 
@@ -139,7 +146,8 @@ isolated management-network bind. Prefer one concrete IP; `0.0.0.0` exposes
 the port on every host IPv4 interface and is never the browser URL. Do not
 expose raw port 8080 to the Internet. Configure
 [reverse-proxy TLS](../installation/reverse-proxy.md) for access beyond the
-trusted management network.
+trusted management network. Change the value in `.env` and run
+`docker compose up -d` again so later lifecycle commands retain it.
 
 ## Next steps
 
