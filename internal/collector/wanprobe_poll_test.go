@@ -236,7 +236,11 @@ func TestDefaultMinuteBaselineAbsorbsWANProbeWithoutExtraRequest(t *testing.T) {
 		MaxInterval: time.Second, Log: quiet()})
 	c.Add(Target{DeviceID: 1, MAC: "aa:bb:cc:dd:ee:ff", Name: "gateway",
 		Gateway: true, Connect: mockConnect(t)})
-	c.pollers[1].wanInterval = 40 * time.Millisecond
+	p := c.pollers[1]
+	if _, err := p.dial(context.Background(), p.target); err != nil {
+		t.Fatal(err)
+	}
+	p.wanInterval = 40 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	c.Start(ctx)
 	t.Cleanup(func() { cancel(); c.Stop() })
