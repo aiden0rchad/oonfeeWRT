@@ -39,7 +39,7 @@ not from a cloud service.
 
 ### Observed Gateway path
 
-v0.1.3 identifies one effective IPv4 uplink from the installed kernel routing
+The selector introduced in v0.1.3 identifies one effective IPv4 uplink from the installed kernel routing
 table. It selects the unique usable, lowest-metric default in the main table,
 then maps that kernel device to exactly one active OpenWrt logical interface
 that also reports a default-route candidate. This prevents a modem-management
@@ -107,12 +107,12 @@ controller's public IP and test requests are visible to Cloudflare.
 1. Open **Dashboard**.
 2. Open the impact and consent details and review the exact endpoint, limits,
    controller-host vantage point, and data-use disclosure.
-3. Select **Run speed test**. In v0.1.3 this action is the explicit,
+3. Select **Run speed test**. In v0.1.4 this action is the explicit,
    plan-bound acknowledgement and starts the test immediately.
 4. Leave the Dashboard open to watch progress.
 
 The result can include download, upload, idle latency, and idle jitter. Loaded
-latency and loaded jitter are not measured in v0.1.3. The controller retains
+latency and loaded jitter are not measured in v0.1.4. The controller retains
 the newest three terminal attempts, including failed or cancelled attempts, so
 a failure does not disappear from history.
 
@@ -166,7 +166,7 @@ When the Dashboard looks unhealthy:
 | Speed test fails immediately | Controller cannot reach the Cloudflare endpoints or the job was refused by current state | Check controller logs, DNS/HTTPS egress, and whether another test is active |
 | A device is online but WAN health is missing | Device management reachability and Gateway Internet evidence are separate | Verify the Gateway function, default route source, and probe result on that device |
 | PPPoE WAN traffic is unavailable | The kernel L3 route device has no matching counter series, cannot map to exactly one active logical interface, or the composite source failed | Compare the main-table route with OpenWrt interface state, correct the inconsistency, and wait for the next network/topology cycle; do not rename interfaces as a workaround |
-| Main-table route is healthy but a policy-routed path differs | v0.1.3 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
+| Main-table route is healthy but a policy-routed path differs | v0.1.4 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
 
 ## Related guides
 

@@ -49,8 +49,9 @@ its public artifacts.
 All durable Phase-4 data is REST; the WebSocket supplies only `device.stats`
 focus/current updates.
 
-**Current schema-19 UI and historical live checkpoint:** the post-`v0.1.0` source
-renders equal-height WAN-health and controller-speed-test cards. Internet health
+**Historical schema-19 UI checkpoint:** the post-`v0.1.0` source introduced
+equal-height WAN-health and controller-speed-test cards retained by the current
+UI. Internet health
 shows the observed gateway, default-route interface and fixed-target probe as
 separate evidence, then plots server-selected six-hour throughput, latency and
 loss as zero-based five-minute activity columns. Missing buckets remain missing
@@ -84,7 +85,7 @@ restore execution, public-provider speed-test run or router restore. The
 completed `v0.1.0` tag workflow and GitHub Release are the
 publication authority and own the final isolated release evidence.
 
-**Current v0.1.2/v0.1.3 UI patch boundary:** after a successful authenticated
+**Current v0.1.2–v0.1.4 UI patch boundary:** after a successful authenticated
 read-only Inspect, the adoption review can download the server-built,
 privacy-bounded compatibility DTO as
 `oonfeewrt-compatibility-report.json`. The action appears only when that bounded
@@ -99,12 +100,12 @@ gateway and fixed-target probe—for example, logical `wan` over PPPoE can resol
 to `pppoe-wan`. Dashboard uses that runtime device for WAN throughput only when
 the exact key also exists in the RX/TX series catalog. Device Detail receives
 the current route-device candidate directly, so its chart can stay empty until
-samples for that key exist. There is no manual WAN picker. With a v0.1.3 server,
+samples for that key exist. There is no manual WAN picker. With a v0.1.3-or-newer server,
 an explicit `wan_interface:null` renders unavailable and the client does not
 infer from interface names. During a rolling upgrade only, an older server that
 omits the additive `wan_interface` field retains the compatibility fallback
 (`wan`, then the first `eth*`, then the first series). Missing, incomplete,
-unsupported or ambiguous v0.1.3 route/netifd evidence never invokes that
+unsupported or ambiguous route/netifd evidence never invokes that
 fallback or becomes a guessed uplink.
 
 ---
@@ -688,9 +689,10 @@ descriptor states `mode: stored`, `router_management_calls: false` and
 members, a manifest and checksums. Stored evidence gaps do not fail the whole
 bundle.
 
-**Settings → Backup & Restore.** Implemented for `owner` in schema-19 source;
-the live owner screen has passed route/render smoke, but its workflow actions
-are not claimed by that smoke.
+**Settings → Backup & Restore.** Implemented for `owner`; current restore
+previews migrate supported artifacts to schema 20. The historical schema-19
+owner screen passed route/render smoke, but its workflow actions are not
+claimed by that smoke.
 The existing export UI remains available and explains that its native
 `.oowrtbak` contains a consistent live-WAL controller database/key pair under a
 separate export passphrase. Backup and restore are available only over TLS or

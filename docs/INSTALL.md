@@ -3,8 +3,8 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets schema-19 patch release `v0.1.3`. The
-[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.3)
+This guide targets schema-20 patch release `v0.1.4`. The
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4)
 and its completed tag workflow are the publication source of truth; run the
 download commands only after that release is available. Back up both the
 controller and each router before using it on a network you cannot afford to
@@ -26,9 +26,10 @@ device address. Router changes are separate, default-off actions:
    interfaces each require their own acknowledgement. Rollback restores the
    recorded configuration and service state and removes only packages recorded
    as additions.
-3. **Network configuration:** WLAN, network, DHCP, and firewall changes occur
-   only after Preview and Apply. They are controller desired state, not hidden
-   adoption side effects.
+3. **Network configuration:** WLAN, network, DHCP, firewall, and explicit IPv6
+   policy changes occur only after Preview and Apply. They are controller
+   desired state, not hidden adoption side effects. Existing networks upgrade
+   to **Router managed**, which leaves their IPv6 settings unchanged.
 
 Un-adoption removes the scoped login and ACL. It is blocked until any recorded
 LLDP capability is rolled back, so package residue cannot be silently orphaned.
@@ -51,7 +52,7 @@ Set the release and platform. On macOS, `uname -m` reports `x86_64` rather than
 the archive's `amd64`, so normalize it:
 
 ```sh
-VERSION=v0.1.3
+VERSION=v0.1.4
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -113,7 +114,7 @@ first run and once after each restart.
 ## Run the container
 
 After the tag workflow succeeds, its immutable release tag is
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.3`. It is multi-platform, defaults to
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.4`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
 backups straightforward on both Linux and Docker Desktop.
@@ -121,8 +122,8 @@ backups straightforward on both Linux and Docker Desktop.
 Install `cosign` from the
 [official Sigstore instructions](https://docs.sigstore.dev/cosign/system_config/installation/),
 then verify the GitHub Actions keyless identity before first use. Stable aliases
-`0.1.3`, `0.1`, and `latest` resolve to the same final manifest, but deployments
-should pin `v0.1.3` or its reported digest.
+`0.1.4`, `0.1`, and `latest` resolve to the same final manifest, but deployments
+should pin `v0.1.4` or its reported digest.
 
 ```sh
 [ "$(id -u)" -ne 0 ] || { echo "run Docker as a non-root user" >&2; exit 1; }
@@ -141,9 +142,9 @@ by address.
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.3" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.4" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 
 docker run -d \
   --name oonfeewrt \
@@ -160,7 +161,7 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.3
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 ```
 
 The release archive also includes `docker-compose.yml`. It uses the same final
@@ -168,16 +169,15 @@ image, a named data volume, a mode-0600 passphrase file owned by UID 65532, and
 the loopback-only bridge mapping above. Host networking is documented in the
 file but remains an explicit Linux-only opt-in.
 
-Set the exact published image version when using the current v0.1.3 file:
+Set the exact published image version when using the current v0.1.4 file:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose up -d
+OONFEE_VERSION=v0.1.4 docker compose up -d
 ```
 
-The Compose file in the unreleased v0.1.4 source keeps the loopback default but
-accepts `OONFEE_HTTP_BIND=<controller-LAN-IP>` when browsers must connect
-directly from a trusted management LAN. This changes host-side publishing and
-may be used with an exact compatible candidate or release image tag.
+The v0.1.4 Compose file keeps the loopback default but accepts
+`OONFEE_HTTP_BIND=<controller-LAN-IP>` when browsers must connect directly from
+a trusted management LAN. This changes only host-side publishing.
 `OONFEE_HTTP_BIND=0.0.0.0` explicitly publishes on every host IPv4 interface;
 it is not a browser URL. Prefer one concrete host IP, use a literal IP during
 first-owner setup, enforce firewall policy, and do not expose the controller's
@@ -242,6 +242,12 @@ cp -p "$HOME/.local/share/oonfeewrt-container/oonfeewrt.db" \
 docker start oonfeewrt
 ```
 
+For a Compose named volume, stop the service and use trusted volume-snapshot
+tooling to preserve the whole volume before v0.1.4 opens it. Record the exact
+Compose project/volume identity and retain the matching passphrase file. This
+raw snapshot is the simplest direct rollback path; never copy only the main
+SQLite file while WAL may be active.
+
 Verify the copied pair with the release archive's `oonfeewrt-recoverycheck`
 before restarting after a real restore.
 
@@ -249,33 +255,48 @@ To upgrade, retain that backup, stop the old process cleanly, replace the binary
 or container tag, and restart with the same data volume and passphrase file. The
 controller migrates its database on startup and refuses an unsupported downgrade.
 
-### Upgrade from v0.1.2 and roll back
+### Upgrade from v0.1.3 and roll back
 
-v0.1.2 and v0.1.3 both use schema 19. The upgrade needs no database migration
-and makes no router change. Before upgrading, preserve the matching database,
-keyring, and passphrase recovery set. A clean rollback to v0.1.2 is
-schema-compatible; retain the v0.1.3 data pair first.
+v0.1.3 uses schema 19; v0.1.4 migrates it to schema 20. Before upgrading,
+preserve and verify the matching schema-19 database, keyring, and passphrase.
+The migration adds the closed-topology lookup index and normalizes two old
+development-era topology-source names, retaining the newest observation when
+both spellings exist. It does not remove user configuration, credentials,
+secrets, or topology intervals.
 
-v0.1.3 adds one read-only installed-route observation to the existing slower
-network/topology collection cycle. Its exact
-`/sbin/ip -4 route show table all` command pattern was already present in the
-scoped controller ACL shipped before this release, so adopted devices do not
-need re-adoption or an ACL refresh. The controller does not change route metrics,
-PPPoE, firewall, failover or policy routing during this upgrade.
+The v0.1.3 daemon cannot open schema 20. To roll back, stop v0.1.4, retain its
+schema-20 data separately, restore the matching pre-upgrade schema-19 database
+and keyring, install v0.1.3, and start it with the corresponding passphrase.
+Changing only the binary or `OONFEE_VERSION` is not a valid rollback.
+
+If the portable `.oowrtbak` is your only schema-19 recovery point, start
+v0.1.3 against a new empty data directory or volume and restore the artifact
+through **Settings → Backup & Restore** with its export passphrase. Confirmation
+also uses that clean instance's runtime passphrase. Do not point v0.1.3 at the
+schema-20 live volume; the public recovery helper does not extract a portable
+backup in place.
+
+The upgrade itself makes no router change. Existing networks decode as
+**Router managed**, so no IPv6 setting is rewritten merely by starting v0.1.4.
+Read-only route polling continues under the existing ACL. The new router-clock
+observation requires an explicit, separately acknowledged controller-access
+refresh on already-adopted routers; without it, only clock status remains
+unavailable. Re-adoption is not required.
 
 ### Upgrade from v0.1.0-rc.1 and roll back
 
-`v0.1.0-rc.1` uses schema 17; `v0.1.0` migrates it to schema 19. Before the
-upgrade, stop the RC cleanly and copy its database and matching keyring. Verify
+`v0.1.0-rc.1` uses schema 17; v0.1.4 migrates supported state through schemas
+18 and 19 to schema 20. Before the upgrade, stop the RC cleanly and copy its
+database and matching keyring. Verify
 that pair with the RC archive's `oonfeewrt-recoverycheck`, then retain it without
-opening it with the final daemon. Start v0.1.0 with a copy of the same data pair
+opening it with the final daemon. Start v0.1.4 with a copy of the same data pair
 and unchanged passphrase file.
 
-Rollback is a data restore, not merely an image-tag change: stop v0.1.0, retain
-the schema-19 state separately, restore the untouched schema-17 database and
+Rollback is a data restore, not merely an image-tag change: stop v0.1.4, retain
+the schema-20 state separately, restore the untouched schema-17 database and
 matching keyring, then restart `v0.1.0-rc.1` with its prior passphrase. Never
-point the RC daemon at a schema-19 database. Controller migration and rollback
-make no router request and do not revert router configuration.
+point the RC daemon at a schema-19 or schema-20 database. Controller migration
+and rollback make no router request and do not revert router configuration.
 
 ## Portable backup and restore
 

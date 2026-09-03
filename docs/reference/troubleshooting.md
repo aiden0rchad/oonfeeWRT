@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.3.
+description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.4.
 ---
 
 # Troubleshooting
@@ -17,7 +17,7 @@ until you know the previous operation's terminal state.
    oonfeewrtd -version
    ```
 
-   Expected for this guide: `v0.1.3`.
+   Expected for this guide: `v0.1.4`.
 
 2. Check controller liveness using the same listener configuration as the
    running process:
@@ -177,7 +177,7 @@ Inspect can still display the ordinary result and adds a note explaining that
 the sanitized report was unavailable.
 
 1. Confirm both daemon and UI are the same v0.1.2-or-newer release; for this
-   guide, both should be v0.1.3.
+   guide, both should be v0.1.4.
 2. Repeat read-only Inspect once after confirming the target address and
    credentials. It makes a fresh probe, but do not loop it aggressively.
 3. Record the controller version, router model/OpenWrt version, the displayed
@@ -203,6 +203,41 @@ Use **Re-probe capabilities** after an intentional firmware/package/ACL change.
 Read the exact source reason. Do not install packages manually merely to remove
 an unavailable badge; adoption promises not to do that, and optional capability
 state needs a recorded plan and rollback.
+
+## An IPv6 router-advertisement warning remains after choosing Disabled
+
+Saving **Disabled** changes controller desired state only. Generate a fresh
+Preview, resolve any static-IPv6 or foreign-section gate, and Apply the reviewed
+plan before expecting the router to stop advertising IPv6 on that network.
+Static IPv6 addresses, prefixes, or gateways are never deleted implicitly.
+
+After a successful Apply, verify the affected network rather than deleting log
+rows. Existing warning evidence can remain visible until the 24-hour router-log
+retention window expires. Its occurrence count and latest timestamp should stop
+advancing once OpenWrt stops producing the message. v0.1.4 condenses exact
+repeats into one condition per router-log evidence epoch; this bounds controller
+rows but does not suppress the router's own `logd` output.
+
+## Router clock status is unavailable or reports a large offset
+
+On an adoption created before v0.1.4, ordinary management keeps working but the
+new UTC read is outside the older scoped ACL. Review and apply the updated
+controller-access payload from the device screen. Re-adoption is not required,
+and this read does not set the router clock.
+
+If an offset remains, compare the controller and router over an independently
+trusted shell without changing either clock:
+
+```sh
+date -u +%s
+ubus call luci getUnixtime
+ubus call luci getLocaltime
+```
+
+Check the router's NTP synchronization, upstream reachability, and timezone
+configuration through OpenWrt. v0.1.4 prefers `luci.getUnixtime` and uses
+`luci.getLocaltime` only as a compatibility fallback, so local timezone display
+must not be treated as UTC.
 
 ## Preview is blocked
 
@@ -249,13 +284,14 @@ accurate.
 ## WAN route or WAN throughput is unavailable
 
 Online state does not prove an effective Internet route, and a route does not
-prove that a matching durable counter series exists. v0.1.3 requires one
-composite observation: the installed main-table IPv4 route and netifd's logical
-interfaces must both answer in the same slow topology poll.
+prove that a matching durable counter series exists. The WAN selector
+introduced in v0.1.3 requires one composite observation: the installed
+main-table IPv4 route and netifd's logical interfaces must both answer in the
+same slow topology poll.
 
 Start read-only:
 
-1. Confirm the controller is v0.1.3 and the device is adopted as a Gateway.
+1. Confirm the controller is v0.1.4 and the device is adopted as a Gateway.
 2. Allow one topology cycle (normally up to 15 minutes) after startup, adoption,
    or a route change, then read the device's source/degradation reason.
 3. From an independently trusted router shell, if appropriate, inspect the two
@@ -286,7 +322,7 @@ stale evidence does not become a current Dashboard WAN path.
 
 Do not change route metrics, PPPoE, firewall, or failover configuration merely
 to populate a chart. If the route layout is intentional but outside the modeled
-scope, treat WAN selection as unavailable in v0.1.3. Re-probing capabilities
+scope, treat WAN selection as unavailable in v0.1.4. Re-probing capabilities
 does not force or repair this topology observation.
 
 ## Charts are initially empty after startup or adoption
@@ -336,7 +372,7 @@ seconds. Only one test may be active.
 - Verify the controller host/container has HTTPS and DNS access to the provider.
 - Run during a quiet period if saturation affects clients.
 - Do not interpret the result as router-local forwarding performance.
-- Loaded latency and jitter are unavailable in v0.1.3.
+- Loaded latency and jitter are unavailable in v0.1.4.
 
 ## Diagnostics or backup download expired
 
@@ -387,14 +423,20 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 ## Upgrade or rollback trouble
 
-v0.1.3 and v0.1.2 both use schema 19. A clean binary/image rollback from
-v0.1.3 to v0.1.2 is schema-compatible, but keep the v0.1.3 data pair first.
-The v0.1.2 → v0.1.3 upgrade performs no migration or startup deletion, and the
-route observation needs no ACL refresh or re-adoption because its exact
-read-only command was already in the scoped ACL.
+v0.1.4 migrates schema 19 to schema 20 on startup. The migration adds a closed
+topology-history index and normalizes old development-era topology source keys;
+it does not delete user configuration, credentials, secrets, or topology
+intervals. The v0.1.3 daemon cannot open the migrated schema-20 database.
+
+To roll back to v0.1.3, stop the controller and restore the matching
+pre-upgrade schema-19 database, `keyring.json`, runtime passphrase, and old
+binary/image together. Replacing only the executable or image tag is not a
+valid rollback. Upgrading does not require re-adoption; existing scoped access
+keeps ordinary management working. Router-clock status alone needs a separately
+reviewed controller-access refresh on an older adoption.
 
 Rollback to historical `v0.1.0-rc.1` is different: that daemon uses schema 17
-and must not open schema-19 state. Stop the controller and restore the untouched
+and must not open schema-20 state. Stop the controller and restore the untouched
 pre-upgrade schema-17 database, matching keyring, passphrase file, and old
 binary/image together. Migration/rollback does not revert router configuration.
 

@@ -10,14 +10,19 @@ UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
 shape of Phases 4 and 6 below, but does **not** justify skipping the safety and
 site-model work ahead of them.
 
-**Current patch roll-up (v0.1.3):** v0.1.2 shipped the bounded, sanitized,
+**Current patch roll-up (v0.1.4):** v0.1.2 shipped the bounded, sanitized,
 browser-local compatibility report on successful read-only Inspect and corrected
 physical-radio/direct-Ethernet inspection for the externally reported Cudy
 M3000 v2 variant. v0.1.3 replaced WAN interface-name heuristics with a
 read-only installed-route + active-netifd proof, including logical PPPoE `wan`
 to runtime counter device `pppoe-wan`. Equal-best defaults, multipath, custom
 policy routing, `mwan3`, manual selection, per-uplink health and bond-member
-attribution remain explicit gaps. Neither patch broadens router writes.
+attribution remain explicit gaps. v0.1.4 adds explicit per-network IPv6
+preserve, prefix-delegation and disabled policies behind Preview and Apply;
+read-only router-clock observation; bounded IPv6 warning conditions; transitive
+wired-topology presentation fixes; reduced unchanged-topology churn; and an
+explicit Docker management-address bind. Existing networks remain Router
+managed after upgrade, so the release does not silently broaden router writes.
 
 ---
 

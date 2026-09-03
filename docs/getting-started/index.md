@@ -109,7 +109,7 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
   not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
-- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.3.
+- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.4.
 
 ## Next steps
 

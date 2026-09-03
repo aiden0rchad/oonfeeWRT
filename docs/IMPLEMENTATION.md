@@ -153,7 +153,7 @@ The completed `v0.1.0` tag workflow and GitHub Release are the authority for
 final publication; the workflow must pass the isolated release matrix before it
 publishes artifacts.
 
-### v0.1.2 and v0.1.3 patch boundary
+### v0.1.2 through v0.1.4 patch boundary
 
 Release `v0.1.2` adds a privacy-bounded compatibility report to successful,
 authenticated read-only Inspect. The server constructs the report from a strict
@@ -191,7 +191,7 @@ the pre-fix `draytek_mgmt`/`pppoe-wan` reproduction; source and release tests
 cover the correction, but the reporter has not yet supplied post-upgrade
 hardware confirmation.
 
-Current post-`v0.1.3` source adds the D11 IPv6 policy. Schema 20 adds a
+Release `v0.1.4` adds the D11 IPv6 policy. Schema 20 adds a
 closed-topology lookup index and migrates the two historical `luci.get*Devices`
 topology-source keys to their actual `luci-rpc.get*Devices` names; the existing
 `networks.ipv6_json` column now stores
@@ -1338,7 +1338,7 @@ Runtime contract (what `deploy/docker-compose.yml` encodes):
 | Config | container env vars `OONFEE_DATA_DIR`, `OONFEE_LISTEN`, `OONFEE_PASSPHRASE_FILE` (secrets via file, never env value); `OONFEE_HTTP_BIND` is host-side Compose interpolation and is not passed into the container |
 | Health | `GET /healthz` (no auth, no body beyond `ok`) wired as the compose healthcheck |
 | Upgrade | pull new image, restart; schema migrates forward on boot; downgrade = restore volume backup |
-| Backup | schema-19 source exports a native authenticated-encryption `.oowrtbak` containing a consistent database/key pair, and restores only through bounded preview plus plan-bound confirmation. Keep `/data` and the same `OONFEE_PASSPHRASE_FILE` across ordinary container restarts; the current runtime passphrase is verified before a prepared keyring is created. Successful restore writes `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`; after audit acknowledgement, fixed-shape retention targets three newest-first while always preserving active restore references. |
+| Backup | The controller exports a native authenticated-encryption `.oowrtbak` containing a consistent database/key pair, and restores only through bounded preview plus plan-bound confirmation. Keep `/data` and the same `OONFEE_PASSPHRASE_FILE` across ordinary container restarts; the current runtime passphrase is verified before a prepared keyring is created. Successful restore writes `<data-dir>/.oonfeewrt-recovery/safety-<restore-id>.oowrtbak`; after audit acknowledgement, fixed-shape retention targets three newest-first while always preserving active restore references. |
 
 Graceful shutdown on SIGTERM: finish (or abandon pre-APPLY) any in-flight
 changeset, flush completed telemetry buckets, discard the in-progress RAM
@@ -1466,8 +1466,8 @@ parent/child depth. V39 first yielded five nodes, four links and no reciprocal
 edge on the signed-in direct `/topology` render. V40 retained that graph; after a
 complete poll, gateway association coverage was observed and AP coverage was
 observed-empty. At that historical checkpoint, the two BusyBox `brctl showmacs`
-VLAN limitations were still presented as topology gaps. The unreleased v0.1.4
-source instead labels clean FDB-only paths `inferred`, keeps missing VLAN
+VLAN limitations were still presented as topology gaps. v0.1.4 instead labels
+clean FDB-only paths `inferred`, keeps missing VLAN
 identity as neutral unavailable metadata, and uses fresh managed LLDP port
 evidence to mark possible transit rows. The live graph hides one only while its
 exact managed peer resolves through recent evidence to a direct association,

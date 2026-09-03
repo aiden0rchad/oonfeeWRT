@@ -1,6 +1,6 @@
 # Quick start
 
-This page starts oonfeeWRT v0.1.3 on one host and creates the first owner account. It offers a standalone-binary path and a Docker Compose path; use only one.
+This page starts oonfeeWRT v0.1.4 on one host and creates the first owner account. It offers a standalone-binary path and a Docker Compose path; use only one.
 
 > **Outcome:** The controller answers at `http://127.0.0.1:8080`, `/healthz` returns `ok`, and you can sign in as the first owner.
 
@@ -10,7 +10,7 @@ You need:
 
 - a supported 64-bit Linux or macOS host;
 - network reachability from that host to the OpenWrt management address;
-- either Docker with Compose support or the v0.1.3 release archive;
+- either Docker with Compose support or the v0.1.4 release archive;
 - a private place to retain the controller runtime passphrase and data.
 
 **Write impact:** With a new data directory or volume, these steps write only to the controller host and do not contact a router. Reusing existing controller state resumes adopted-device polling and may resume automatic runtime 802.11k neighbour maintenance. Router access on a fresh controller begins when you explicitly inspect or adopt a device.
@@ -30,7 +30,7 @@ Keep this terminal open while completing the browser setup. For unattended start
 
 ## Option B: Docker Compose
 
-Create a private working directory, download the exact v0.1.3 Compose file, and create the runtime passphrase:
+Create a private working directory, download the exact v0.1.4 Compose file, and create the runtime passphrase:
 
 ```sh
 mkdir -p oonfeewrt
@@ -38,14 +38,14 @@ cd oonfeewrt
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.3/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
 
 umask 077
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
-OONFEE_VERSION=v0.1.3 docker compose up -d
+OONFEE_VERSION=v0.1.4 docker compose up -d
 ```
 
 The supplied Compose file:
@@ -85,8 +85,8 @@ ok
 For Docker, also check:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose ps
-OONFEE_VERSION=v0.1.3 docker compose logs --tail=100 oonfeewrt
+OONFEE_VERSION=v0.1.4 docker compose ps
+OONFEE_VERSION=v0.1.4 docker compose logs --tail=100 oonfeewrt
 ```
 
 In the browser, confirm that the left navigation shows **Dashboard**, **Topology**, **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Settings**, **Adopt a device**, and **Logs**.
@@ -128,13 +128,13 @@ Choose another loopback port for a standalone process, for example:
 ./oonfeewrtd -data-dir "$PWD/data" -listen 127.0.0.1:8081
 ```
 
-Then open `http://127.0.0.1:8081`. If using the v0.1.4 Compose file, change
+Then open `http://127.0.0.1:8081`. With the v0.1.4 Compose file, change
 `published: "8080"` to the desired host port and keep `target: 8080`.
 
 ### The browser is on another computer
 
-`127.0.0.1` is reachable only on the controller host. The unreleased v0.1.4
-Compose file accepts `OONFEE_HTTP_BIND=<controller-LAN-IP>` for a deliberate
+`127.0.0.1` is reachable only on the controller host. The v0.1.4 Compose file
+accepts `OONFEE_HTTP_BIND=<controller-LAN-IP>` for a deliberate
 isolated management-network bind. Prefer one concrete IP; `0.0.0.0` exposes
 the port on every host IPv4 interface and is never the browser URL. Do not
 expose raw port 8080 to the Internet. Configure

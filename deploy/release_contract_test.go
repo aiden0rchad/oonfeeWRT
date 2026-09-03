@@ -71,6 +71,14 @@ func TestReleaseBuildContract(t *testing.T) {
 			t.Errorf("Makefile lost documented target %q", target)
 		}
 	}
+	for _, required := range []string{
+		`test -f "RELEASE-NOTES-$(RELEASE_VERSION).md"`,
+		`cmp -s "RELEASE-NOTES-$(RELEASE_VERSION).md" RELEASE-NOTES.md`,
+	} {
+		if !strings.Contains(string(makefile), required) {
+			t.Errorf("Makefile release check lost %q", required)
+		}
+	}
 	for _, script := range []string{
 		"../tools/release-build.sh", "../tools/reproducible-build-check.sh", "../tools/generate-third-party-licenses.py",
 	} {

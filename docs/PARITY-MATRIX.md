@@ -55,12 +55,12 @@ custom policy routing, `mwan3`, manual selection and bond-member attribution are
 explicitly unavailable. Collection is read-only on the slow network/topology
 cadence and needs neither re-adoption nor an ACL refresh.
 
-Current post-`v0.1.3` source adds an explicit per-network IPv6 policy rather
+`v0.1.4` adds an explicit per-network IPv6 policy rather
 than claiming generic IPv6 parity. Existing rows upgrade to **Router managed**
 (`preserve`, effective assignment length `/60`) and produce no IPv6 write.
 **Prefix delegation** and **Disabled** are explicit desired-state choices with
 an assignment-length input bounded to `/48`–`/64`; they still require Preview
-and Apply. The source and UI tests cover the policy, but ISP prefix delegation
+and Apply. Source and UI tests cover the policy, but ISP prefix delegation
 and the resulting client path have not been proved on release hardware.
 
 ---

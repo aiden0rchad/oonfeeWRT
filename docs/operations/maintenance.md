@@ -46,13 +46,13 @@ The daemon writes human-readable structured logs to standard error. Read them th
 For Compose:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose logs --tail=200 oonfeewrt
+OONFEE_VERSION=v0.1.4 docker compose logs --tail=200 oonfeewrt
 ```
 
 To follow new Compose output:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose logs --follow oonfeewrt
+OONFEE_VERSION=v0.1.4 docker compose logs --follow oonfeewrt
 ```
 
 ### Retained private log
@@ -132,7 +132,7 @@ The per-device poll-interval control can make baseline polling slower, not faste
 
 The controller holds raw telemetry in memory temporarily and stores completed rollups in SQLite:
 
-| Data | v0.1.3 retention/bound |
+| Data | v0.1.4 retention/bound |
 |---|---|
 | Five-minute average/min/max/count | 14 days |
 | Hourly average/min/max/count | 396 days (13 months) |
@@ -170,7 +170,7 @@ The Dashboard speed test:
 - exposes the controller host's public IP and test requests to Cloudflare;
 - measures idle latency/jitter and throughput, not loaded latency/jitter.
 
-The Run action is the plan-bound acknowledgement. Do not schedule repeated tests; v0.1.3 exposes an explicit operator action, not an automatic test loop.
+The Run action is the plan-bound acknowledgement. Do not schedule repeated tests; v0.1.4 exposes an explicit operator action, not an automatic test loop.
 
 ## Generate safe diagnostics
 
@@ -212,7 +212,7 @@ For a foreground binary, press `Ctrl-C` once and wait. A second signal is an eme
 For Compose:
 
 ```sh
-OONFEE_VERSION=v0.1.3 docker compose stop
+OONFEE_VERSION=v0.1.4 docker compose stop
 ```
 
 The supplied service grants 150 seconds. Avoid `docker kill` during Apply or restore confirmation.
@@ -262,7 +262,10 @@ from the 15-minute route/interface observation. Equal-metric distinct
 defaults, ECMP/multipath, policy routing, or a kernel device that cannot map to
 one active logical interface are intentional evidence gaps. After correcting
 a normal DHCP/static/PPPoE route, wait for the next network/topology cycle.
-Upgrading from v0.1.2 does not itself require ACL refresh or re-adoption.
+Upgrading to v0.1.4 does not require re-adoption. Existing scoped access keeps
+ordinary polling and management working. Router-clock status remains
+unavailable on an older adoption until an Administrator separately reviews
+and applies the updated controller-access payload.
 
 ### Apply status is unknown after reload
 

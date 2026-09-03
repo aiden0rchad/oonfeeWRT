@@ -37,7 +37,7 @@ restore. The completed `v0.1.0` tag workflow and
 GitHub Release, not this historical checkpoint, are the publication authority
 and own the isolated restore/container evidence.
 
-**Current v0.1.3 patch boundary:** v0.1.2 added a versioned, server-built
+**Current v0.1.4 patch boundary:** v0.1.2 added a versioned, server-built
 compatibility report to a successful read-only Inspect result. That document is
 a bounded allowlist rather than a copy of the probe or form state: it carries
 hardware, firmware, radio, port, feature-state and supported-function evidence,
@@ -57,9 +57,9 @@ inconsistent mappings, policy-routing rules and unsupported route shapes remain
 explicitly unavailable. Collection is read-only and uses the controller ACL
 already shipped in v0.1.0; existing devices need no re-adoption or ACL refresh.
 
-**Current post-v0.1.3 source boundary (2026-09-01):** networks carry an explicit
-IPv6 policy with `preserve`, `prefix_delegation` and `disabled` modes. This is a
-source-built desired-state and safety contract, not a claim that delegated IPv6
+v0.1.4 adds an explicit IPv6 policy with `preserve`, `prefix_delegation` and
+`disabled` modes. This is a released desired-state and safety contract, not a
+claim that delegated IPv6
 has been live-proved with every ISP or OpenWrt layout. Legacy rows resolve to
 `preserve` with a `/60` assignment default and cause no IPv6 device change.
 
@@ -506,7 +506,7 @@ passphrase. The passphrase is never retained.
 Restore accepts a bounded raw artifact over TLS or direct loopback. Disposable
 private staging authenticates the fixed artifact, proves manifest schema equals
 the actual source database schema, rejects unsupported future schema, migrates a
-scratch copy to exactly schema 19, and validates integrity, secrets and a usable
+scratch copy to exactly schema 20, and validates integrity, secrets and a usable
 owner. The preview returns only authenticated manifest/schema/count information.
 Confirmation is bound to its artifact and `plan_id`; it requires recent password
 reauthentication, the export passphrase again, the current destination runtime

@@ -41,11 +41,11 @@ capability evidence determine what each Preview can safely render.
 A VLAN ID labels traffic; it does not configure every switch between the
 controller and the client. oonfeeWRT will not silently convert a bridge that is
 not already VLAN-aware. Legacy swconfig port writes remain observe-only in
-v0.1.3 because port topology and safe mutation are hardware-specific.
+v0.1.4 because port topology and safe mutation are hardware-specific.
 
 A board may instead present LAN as one direct interface, such as `eth1`, with
 no independent switch ports. That is not automatically `swconfig` and does not
-mean inspection missed hardware. v0.1.3 does not create tagged VLAN
+mean inspection missed hardware. v0.1.4 does not create tagged VLAN
 attachments on this layout: Preview omits the unsupported attachment and
 leaves existing LAN/VLAN configuration unchanged. Untagged or manually
 prepared behavior still requires a fresh Preview; do not generalize from the
@@ -57,6 +57,38 @@ validated.
 DHCP settings must stay within the network CIDR. The editor validates missing,
 inverted, or out-of-range pool values before Apply. Plan the router address,
 static infrastructure, reservations, and dynamic range together.
+
+### IPv6 policy
+
+v0.1.4 exposes one explicit policy per network:
+
+| Setting | Effect after Preview and Apply |
+|---|---|
+| **Router managed** | Leaves existing router IPv6 option values unchanged. This is the upgrade-safe default. Selecting it after a prior controller Apply does not restore older values. |
+| **Prefix delegation** | Assigns the selected `/48`–`/64` prefix length to the LAN, serves RA and DHCPv6, disables NDP proxy/relay, and removes `ra_default`. The length is the LAN assignment, not the prefix requested from the ISP. |
+| **Disabled** | Stops controller-managed RA, DHCPv6, NDP, and delegated LAN assignment while leaving IPv4 and DHCPv4 independent. It does not erase operator-assigned static IPv6 values. |
+
+For a controller-owned tagged VLAN, the Gateway renders the corresponding
+network, odhcpd, DHCP/DNS, and ICMPv6 policy. APs do not request a delegated
+prefix or serve RA/DHCPv6.
+
+The management LAN is deliberately narrower because its UCI sections remain
+operator-owned. An explicit non-Router-managed policy patches only the exact
+existing LAN interface and its single matching DHCP section. It also
+coordinates conventional upstream controls when they exist in supported forms:
+
+- Disable sets `network.wan.ipv6=0` and sets a DHCPv6
+  `network.wan6.auto=0`;
+- Prefix delegation enables a supported PPP parent and DHCPv6 client without
+  creating a duplicate dynamic IPv6 client;
+- an absent `wan` or `wan6` is valid and remains absent;
+- custom/static `wan6` protocols remain router-managed; and
+- a wrong-type present section, missing/ambiguous LAN or DHCP target, or static
+  `ip6addr`, `ip6prefix`, or `ip6gw` on a Disable target blocks Preview.
+
+Prefix delegation still requires a working upstream/ISP delegated prefix. The
+controller does not invent an IPv6 default route, and this release does not
+claim end-to-end IPv6 validation for every provider or OpenWrt layout.
 
 ### Firewall zone
 
@@ -78,7 +110,9 @@ blocks or warns on conflicts it cannot safely reconcile.
 6. Choose or create the firewall zone.
 7. Enable DHCP only if this managed Gateway should provide it.
 8. Set the DHCP pool and lease options shown by the editor.
-9. Save desired state.
+9. Choose the IPv6 policy. Leave **Router managed** selected unless you intend
+   to review and apply an explicit IPv6 change.
+10. Save desired state.
 
 At this point no router Apply has happened.
 
@@ -136,6 +170,8 @@ After completion:
 - verify the management path still works;
 - connect a test client to the segment;
 - verify address, gateway, DNS, and intended Internet/inter-zone reachability;
+- when IPv6 changed, verify delegated-prefix status, a client IPv6 address,
+  DNS, IPv6 Internet reachability, and the absence/presence of RA as intended;
 - inspect **Logs → Audit** for the Apply record;
 - compare the device's owned-state/capability view with the preview.
 
@@ -175,7 +211,7 @@ network in both LuCI and oonfeeWRT.
 |---|---|---|
 | Bridge is not VLAN-aware | The live bridge cannot accept the requested safe rendering | Convert it manually with a tested OpenWrt-specific plan, or use an untagged design; oonfeeWRT will not convert it silently |
 | Legacy swconfig device | Per-port VLAN writes are not safely generalized | Keep port configuration outside oonfeeWRT and use supported observation/site features |
-| Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.3 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
+| Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.4 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
 | Foreign firewall conflict | A human-owned rule/zone affects the requested traffic path | Inspect the exact UCI/nft behavior, then remove or redesign one owner intentionally |
 | Missing `firewall4` capability | The controller cannot establish the required firewall backend | Install/enable the supported OpenWrt component outside adoption, then reprobe |
 | DHCP range invalid | Pool is incomplete, outside the subnet, or conflicts with the interface plan | Correct the CIDR/pool before preview |

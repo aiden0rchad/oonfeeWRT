@@ -1,12 +1,12 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.3.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.4.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.3**.
+v0.1.4**.
 
 ## Controller host
 
@@ -86,7 +86,7 @@ Ordinary single DHCP, static, and PPPoE uplinks satisfy the modeled shape.
 Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
 `mwan3`, unmappable runtime devices, and bond-member selection remain
 unavailable rather than guessed. Those layouts can still be managed outside
-oonfeeWRT, but v0.1.3 does not claim their Dashboard WAN path is authoritative.
+oonfeeWRT, but v0.1.4 does not claim their Dashboard WAN path is authoritative.
 
 ## Network reachability
 
@@ -175,15 +175,15 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.3:
+For v0.1.4:
 
-- download release archives and `SHA256SUMS` from the v0.1.3 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.4 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.3`. Stable aliases
+The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.4`. Stable aliases
 exist, but deployments should pin the exact version or digest.
 
 ## Source-build requirements
@@ -231,7 +231,7 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.3` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.4` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.

@@ -5,7 +5,7 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.3**.
+Answers below describe **oonfeeWRT v0.1.4**.
 
 ## What is oonfeeWRT?
 
@@ -124,9 +124,10 @@ Zero is a measurement. Unavailable means the controller could not obtain or
 trust the measurement. Treating a missing driver counter or failed RPC as zero
 would produce confident but false charts and health claims.
 
-## How does v0.1.3 choose the WAN interface?
+## How does oonfeeWRT choose the WAN interface?
 
-It reads the installed IPv4 route table and netifd logical interfaces in one
+The selector introduced in v0.1.3 reads the installed IPv4 route table and
+netifd logical interfaces in one
 topology poll. The controller selects the unique usable lowest-metric default
 in the kernel main table, then maps its kernel device to exactly one active
 logical interface that also reports a default. This is why logical `wan` over
@@ -138,6 +139,36 @@ policy-routing tables, `mwan3`, unmappable devices, or bond members. Missing,
 malformed, ambiguous, or inconsistent evidence stays unavailable, and an exact
 matching RX/TX series must exist before WAN throughput is shown. Collection is
 on a baseline 15-minute topology cycle, not a rapid failover monitor.
+
+## Can oonfeeWRT disable IPv6?
+
+v0.1.4 adds a per-network IPv6 policy. **Router managed** preserves the
+router's existing IPv6 settings, **Prefix delegation** renders a `/48`–`/64`
+LAN assignment, and **Disabled** stops controller-managed RA, DHCPv6, NDP, and
+delegated assignment. Existing networks migrate to Router managed, so upgrading
+alone does not change a router.
+
+The change still requires Preview and Apply. On a controller-owned VLAN it
+manages that VLAN's IPv6 interface/service/firewall state. On the management
+LAN, it patches the exact existing LAN/DHCP sections and also coordinates
+supported conventional upstream sections: Disable sets `network.wan.ipv6=0`
+and a DHCPv6 `network.wan6.auto=0`; Prefix delegation can enable a supported PPP
+parent and DHCPv6 client. Missing `wan`/`wan6` sections are accepted and remain
+absent; custom/static `wan6` protocols remain router-managed.
+
+Static `ip6addr`, `ip6prefix`, or `ip6gw` values on the management LAN or a
+conventional WAN target block Disable instead of being deleted. Prefix
+delegation also depends on a working ISP/upstream delegation; oonfeeWRT does not
+invent an IPv6 default route.
+
+## Why is router clock status unavailable after upgrading?
+
+v0.1.4 can read router UTC through `luci.getUnixtime`, with
+`luci.getLocaltime` as a compatibility fallback. Existing adopted routers keep
+their older scoped ACL, so ordinary management continues but this new read is
+unavailable until an Administrator separately reviews and applies the updated
+controller-access payload. Re-adoption is not required, and the read does not
+set the router clock.
 
 ## Why is an online device “Unplaced” in Topology?
 
@@ -161,11 +192,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.3.
+v0.1.4.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.3. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.4. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -224,18 +255,26 @@ OpenWrt logs for 24 hours, closed topology intervals for 31 days, 100,000
 controller/audit events, and the newest three terminal speed tests. See the
 complete [retention table](../concepts/data-retention.md).
 
-## Can I downgrade from v0.1.3?
+## Can I downgrade from v0.1.4?
 
-v0.1.3 and v0.1.2 both use schema 19, so a clean binary/image rollback is
-schema-compatible; preserve the v0.1.3 data pair first.
+v0.1.4 migrates the controller database from schema 19 to schema 20. The
+v0.1.3 binary cannot open schema-20 state. To roll back, stop the controller and
+restore the matching pre-upgrade schema-19 database, `keyring.json`, runtime
+passphrase, and v0.1.3 binary/image together. Replacing only the executable or
+image tag is not a valid rollback.
 
-v0.1.1 also uses schema 19, but rolling back skips later fixes and features.
-Preserve the current database/keyring pair and use the exact release notes when
-choosing a target; schema compatibility alone is not an operational guarantee.
+If you retained only the pre-upgrade portable `.oowrtbak`, start v0.1.3 against
+a separate empty data directory or volume and restore that artifact through its
+Backup & Restore screen. Do not reuse the schema-20 live volume; no public CLI
+extracts the portable artifact in place.
+
+Preserve the current pair before any restore as well. Migration or rollback
+does not revert configuration that was already Applied to routers.
 
 Historical `v0.1.0-rc.1` uses schema 17. Rolling back that far requires the
 untouched pre-upgrade schema-17 database, matching keyring, prior passphrase,
-and old binary/image together. Do not open schema-19 data with the RC daemon.
+and old binary/image together. Do not open schema-19 or schema-20 data with the
+RC daemon.
 
 ## What is deliberately out of scope?
 
@@ -246,7 +285,7 @@ and old binary/image together. Do not open schema-19 data with the RC daemon.
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.3.
+- DPI/application flow history on constrained routers in v0.1.4.
 
 ## Where should I start?
 
