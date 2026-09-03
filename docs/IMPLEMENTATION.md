@@ -1465,9 +1465,16 @@ root path and suppresses a reciprocal direction that conflicts with rooted
 parent/child depth. V39 first yielded five nodes, four links and no reciprocal
 edge on the signed-in direct `/topology` render. V40 retained that graph; after a
 complete poll, gateway association coverage was observed and AP coverage was
-observed-empty. Only the two BusyBox `brctl showmacs` VLAN ambiguities remain as
-current topology gaps. Historical log/topology coverage is still unavailable
-rather than inferred; DFS and scan outcomes remain evidence-gated. Persisted RF
+observed-empty. At that historical checkpoint, the two BusyBox `brctl showmacs`
+VLAN limitations were still presented as topology gaps. The unreleased v0.1.4
+source instead labels clean FDB-only paths `inferred`, keeps missing VLAN
+identity as neutral unavailable metadata, and uses fresh managed LLDP port
+evidence to mark possible transit rows. The live graph hides one only while its
+exact managed peer resolves through recent evidence to a direct association,
+LLDP, or forwarding physical-port placement. Raw intervals remain stored for
+history and later moves, and possible transit remains visible when it is the only evidence.
+Historical log/topology coverage is still unavailable rather than inferred;
+DFS and scan outcomes remain evidence-gated. Persisted RF
 scan history is bounded to the newest terminal result per stable radio key by
 the normal maintenance transaction.
 

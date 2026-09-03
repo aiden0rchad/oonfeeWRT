@@ -343,7 +343,8 @@ func ParseNeighbors(family int, out []byte) ([]Neighbor, error) {
 }
 
 // FDBEntry is one row from `brctl showmacs BRIDGE`. BusyBox does not expose a
-// VLAN in this format; consumers must retain that ambiguity.
+// VLAN in this format; consumers retain that as unavailable evidence metadata,
+// not as a repeated parent-placement ambiguity.
 type FDBEntry struct {
 	Port       int     `json:"port"`
 	MAC        string  `json:"mac"`

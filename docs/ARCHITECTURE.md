@@ -738,7 +738,7 @@ and are never resumed after controller restart.
 | PoE control/state | Hardware-specific ubus objects on the few supported PoE switches | **Mostly unavailable.** See RISKS. |
 | CPU / memory / temperature | `system.info`, `/sys/class/thermal` | |
 | WAN latency / loss / reachability | Gateway-vantage `file.exec` of stock `/bin/ping`: exactly 3 ICMP packets to fixed target `1.1.1.1`, at most once/minute | This is one fixed reachability vantage, not HTTP validation, ISP uptime, DNS health or a configurable multi-target SLA. Missing/refused/malformed output is unknown; zero replies is measured 100% loss. |
-| Topology adjacency | stock `brctl showmacs` (or `bridge -j fdb`) + ARP + wireless assoc; optional `lldpd` (`lldpcli show neighbors -f json`) | FDB gives the no-install baseline. LLDP enriches managed adjacency and removes ambiguity. |
+| Topology adjacency | stock `brctl showmacs` + ARP + wireless assoc; optional `lldpd` (`lldpcli show neighbors -f json`) | FDB gives the no-install baseline. Fresh LLDP marks possible transit evidence on physical forwarding links. The live graph hides it only while that exact managed peer resolves through recent evidence to a direct placement; raw intervals remain stored for history and later moves. `bridge -j fdb` is ACL-allowed but not yet collected. |
 | DNS queries | dnsmasq query log, tailed via `file.read` with an offset | Optional; privacy-sensitive, off by default. |
 | Flows + application ID | `netifyd` (nDPI) if it's in the official feed for the target **[verify]**, else `ntopng`; both write to disk and are polled via `file.read` | The expensive one, and the one most likely to fail the no-device-code rule. See PARITY-MATRIX. |
 

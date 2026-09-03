@@ -351,6 +351,10 @@ func (db *DB) validateTopologyParent(ctx context.Context, deviceID *int64, paren
 // TopologyEdgesAt returns the current graph when at is zero, or the half-open
 // historical intervals containing at otherwise.
 func (db *DB) TopologyEdgesAt(ctx context.Context, at int64) ([]model.TopologyEdge, error) {
+	return topologyEdgesAt(ctx, db.sql, at)
+}
+
+func topologyEdgesAt(ctx context.Context, q rowsQuerier, at int64) ([]model.TopologyEdge, error) {
 	query := `SELECT id, child_node, child_mac, parent_node, parent_device_id,
  parent_port, medium, confidence, valid_from, valid_to, last_seen,
  evidence_json, ambiguity_json FROM topology_edges WHERE valid_to IS NULL`
@@ -364,7 +368,7 @@ func (db *DB) TopologyEdgesAt(ctx context.Context, at int64) ([]model.TopologyEd
 	} else if at < 0 {
 		return nil, errors.New("store: topology timestamp cannot be negative")
 	}
-	rows, err := db.sql.QueryContext(ctx, query+` ORDER BY child_node, id`, args...)
+	rows, err := q.QueryContext(ctx, query+` ORDER BY child_node, id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -501,7 +505,11 @@ func normalizeTopologySourceState(state *model.TopologySourceObservation) error 
 }
 
 func (db *DB) TopologySourceStates(ctx context.Context) ([]model.TopologySourceObservation, error) {
-	rows, err := db.sql.QueryContext(ctx, `
+	return topologySourceStates(ctx, db.sql)
+}
+
+func topologySourceStates(ctx context.Context, q rowsQuerier) ([]model.TopologySourceObservation, error) {
+	rows, err := q.QueryContext(ctx, `
 SELECT device_id, source, state, reason, observed_at
   FROM topology_source_states ORDER BY device_id, source`)
 	if err != nil {
@@ -518,6 +526,30 @@ SELECT device_id, source, state, reason, observed_at
 		out = append(out, state)
 	}
 	return out, rows.Err()
+}
+
+// CurrentTopologySnapshot reads active intervals and their source states from
+// one SQLite snapshot so presentation never combines opposite sides of an
+// ingestion commit.
+func (db *DB) CurrentTopologySnapshot(ctx context.Context) ([]model.TopologyEdge,
+	[]model.TopologySourceObservation, error) {
+	tx, err := db.sql.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: begin current topology snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	edges, err := topologyEdgesAt(ctx, tx, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	states, err := topologySourceStates(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("store: finish current topology snapshot: %w", err)
+	}
+	return edges, states, nil
 }
 
 // CreateRadioScan records an explicit scan before device work begins.

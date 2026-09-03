@@ -395,10 +395,14 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     [data, historyAt, mode],
   )
   const vlanOptions = useMemo(
-    () => [...new Set((data?.edges ?? []).map(edgeVLAN))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-    [data],
+    () => [...new Set(intervalEdges.map(edgeVLAN))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [intervalEdges],
   )
+  useEffect(() => {
+    if (data && vlan !== 'all' && !vlanOptions.includes(vlan)) setVLAN('all')
+  }, [data, vlan, vlanOptions])
   const knownVLANs = vlanOptions.filter((value) => value !== 'unknown')
+  const unknownVLANCount = intervalEdges.filter((edge) => edgeVLAN(edge) === 'unknown').length
   const visibleEdges = useMemo(() => intervalEdges.filter((edge) =>
     (confidence === 'all' || edge.confidence === confidence)
       && (medium === 'all' || edge.medium === medium)
@@ -650,7 +654,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
               </select>
             </label>
             {knownVLANs.length > 0 ? (
-              <div aria-label="VLAN filter" style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div aria-label="VLAN filter" role="group" style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>VLAN</span>
                 <Button aria-pressed={vlan === 'all'} kind={vlan === 'all' ? 'primary' : 'default'} onClick={() => setVLAN('all')}>All</Button>
                 {vlanOptions.map((value) => (
@@ -658,6 +662,11 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                     {value === 'unknown' ? 'Unknown' : value}
                   </Button>
                 ))}
+                {unknownVLANCount > 0 && (
+                  <div role="note" style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                    {unknownVLANCount} of {intervalEdges.length} links {unknownVLANCount === 1 ? 'has' : 'have'} no VLAN metadata. Use the Unknown filter to isolate {unknownVLANCount === 1 ? 'it' : 'them'}.
+                  </div>
+                )}
               </div>
             ) : (
               <div role="note" style={{ color: 'var(--text-muted)', fontSize: 11 }}>

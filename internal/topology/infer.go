@@ -14,6 +14,10 @@ import (
 
 const InternetNode = "synthetic:internet"
 const competingParentsAmbiguity = "concurrent evidence yields multiple candidate parents or ports"
+const managedLinkTransitAmbiguity = "bridge FDB may be transit evidence through a managed-device link"
+const managedLinkTransitDetail = "managed_link_transit_possible"
+const managedLinkPeerDetail = "managed_link_peer"
+const stpStateDetail = "stp_state"
 
 const (
 	PortAttachmentPhysical  = "physical"
@@ -193,6 +197,50 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 		}
 	}
 
+	// LLDP identifies a managed device directly connected to one local port.
+	// Other MACs learned there may be beyond that peer; mark them for fleet-level
+	// comparison without discarding sole/shared-segment evidence. Use only the
+	// current snapshot so stale or failed LLDP cannot affect placement.
+	type localPort struct {
+		deviceID int64
+		name     string
+	}
+	type observedLLDP struct {
+		link               LLDPLink
+		parent, child, mac string
+		identityAmbiguity  string
+	}
+	managedLLDPPeers := map[localPort]map[string]bool{}
+	freshLLDP := make([]observedLLDP, 0, len(input.LLDP))
+	for _, link := range input.LLDP {
+		parent, ok := deviceNodes[link.DeviceID]
+		if !ok {
+			return InferenceResult{}, fmt.Errorf("topology: LLDP references unknown device %d", link.DeviceID)
+		}
+		if !validInterfaceName(link.Port) {
+			return InferenceResult{}, errors.New("topology: valid LLDP local port is required")
+		}
+		mac, err := canonicalMAC(link.RemoteMAC)
+		if err != nil {
+			return InferenceResult{}, err
+		}
+		if !sourceFreshlyObserved(input.Sources, link.DeviceID, SourceLLDP, input.At) {
+			continue
+		}
+		peer, identityAmbiguity := resolver.resolve(mac)
+		freshLLDP = append(freshLLDP, observedLLDP{
+			link: link, parent: parent, child: peer, mac: mac, identityAmbiguity: identityAmbiguity,
+		})
+		if identityAmbiguity != "" || peer == parent || !strings.HasPrefix(peer, "device:") {
+			continue
+		}
+		key := localPort{link.DeviceID, link.Port}
+		if managedLLDPPeers[key] == nil {
+			managedLLDPPeers[key] = map[string]bool{}
+		}
+		managedLLDPPeers[key][peer] = true
+	}
+
 	for _, observation := range input.Bridges {
 		parent, ok := deviceNodes[observation.DeviceID]
 		if !ok {
@@ -202,6 +250,7 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 			return InferenceResult{}, fmt.Errorf("topology: invalid bridge %q", observation.Bridge)
 		}
 		portNames := map[int]string{}
+		portStates := map[int]string{}
 		for port, medium := range observation.PortMedia {
 			if port < 0 || (medium != "wired" && medium != "wireless" && medium != "mesh" && medium != "unknown") {
 				return InferenceResult{}, fmt.Errorf("topology: bridge %q port %d has invalid medium %q", observation.Bridge, port, medium)
@@ -221,6 +270,7 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 					return InferenceResult{}, fmt.Errorf("topology: bridge %q port %d maps to both %q and %q", observation.Bridge, port.Port, old, port.Name)
 				}
 				portNames[port.Port] = port.Name
+				portStates[port.Port] = port.State
 			}
 		}
 		for _, entry := range observation.Entries {
@@ -244,9 +294,23 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 			if port != "" {
 				attachment = observation.PortAttachment[entry.Port]
 			}
-			ambiguities := []string{
-				"BusyBox brctl showmacs does not identify VLAN",
-				identityAmbiguity,
+			peers := managedLLDPPeers[localPort{observation.DeviceID, port}]
+			managedPeer := ""
+			if len(peers) == 1 {
+				for peer := range peers {
+					managedPeer = peer
+				}
+			}
+			transitPossible := sourceFreshlyObserved(input.Sources, observation.DeviceID, SourceBridgeFDB, input.At) &&
+				sourceFreshlyObserved(input.Sources, observation.DeviceID, SourceBridgeSTP, input.At) &&
+				attachment == PortAttachmentPhysical && portStates[entry.Port] == "forwarding" &&
+				managedPeer != "" && child != managedPeer
+			ambiguities := []string{identityAmbiguity}
+			if transitPossible {
+				ambiguities = append(ambiguities, managedLinkTransitAmbiguity)
+			}
+			if len(peers) > 1 {
+				ambiguities = append(ambiguities, "bridge port has multiple managed LLDP peers")
 			}
 			if port == "" {
 				ambiguities = append(ambiguities, "bridge port number could not be mapped to an interface")
@@ -256,9 +320,9 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 				ambiguities = append(ambiguities, "bridge evidence does not identify link medium")
 				result.Gaps = append(result.Gaps, fmt.Sprintf("device:%d/medium: bridge %s port %d is unclassified", observation.DeviceID, observation.Bridge, entry.Port))
 			}
-			result.Gaps = append(result.Gaps, fmt.Sprintf("device:%d/vlan: brctl showmacs does not expose VLAN", observation.DeviceID))
 			detail := map[string]any{
 				"bridge": observation.Bridge, "port_number": entry.Port, "observed_mac": mac,
+				"vlan_available": false,
 			}
 			if port != "" {
 				detail["interface"] = port
@@ -266,11 +330,22 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 			if attachment != "" {
 				detail["attachment"] = attachment
 			}
+			if state := portStates[entry.Port]; state != "" {
+				detail[stpStateDetail] = state
+			}
+			if transitPossible {
+				detail[managedLinkTransitDetail] = true
+				detail[managedLinkPeerDetail] = managedPeer
+			}
 			parentID := observation.DeviceID
+			confidence := "inferred"
+			if transitPossible || identityAmbiguity != "" || len(peers) > 1 || port == "" || medium == "unknown" {
+				confidence = "ambiguous"
+			}
 			edge := model.TopologyEdge{
 				ChildNode: child, ChildMAC: mac, ParentNode: parent,
 				ParentDeviceID: &parentID, ParentPort: port, Medium: medium,
-				Confidence: "ambiguous", ValidFrom: input.At, LastSeen: input.At,
+				Confidence: confidence, ValidFrom: input.At, LastSeen: input.At,
 			}
 			add(edge, EdgeEvidence{Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: observation.DeviceID, Detail: detail}, ambiguities...)
 
@@ -314,19 +389,9 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 		}, identityAmbiguity)
 	}
 
-	for _, link := range input.LLDP {
-		parent, ok := deviceNodes[link.DeviceID]
-		if !ok {
-			return InferenceResult{}, fmt.Errorf("topology: LLDP references unknown device %d", link.DeviceID)
-		}
-		if !validInterfaceName(link.Port) {
-			return InferenceResult{}, errors.New("topology: valid LLDP local port is required")
-		}
-		mac, err := canonicalMAC(link.RemoteMAC)
-		if err != nil {
-			return InferenceResult{}, err
-		}
-		child, identityAmbiguity := resolver.resolve(mac)
+	for _, observed := range freshLLDP {
+		link, parent, child, mac := observed.link, observed.parent, observed.child, observed.mac
+		identityAmbiguity := observed.identityAmbiguity
 		if child == parent {
 			continue
 		}
@@ -389,6 +454,9 @@ func Infer(input InferenceInput) (InferenceResult, error) {
 	for _, candidate := range candidates {
 		ambiguities := sortedSet(candidate.ambiguities)
 		candidate.edge.Ambiguities = ambiguities
+		if len(ambiguities) > 0 {
+			candidate.edge.Confidence = "ambiguous"
+		}
 		result.Edges = append(result.Edges, candidate.edge)
 	}
 	sort.Slice(result.Edges, func(i, j int) bool {
@@ -548,6 +616,27 @@ func edgeHasAssociation(edge model.TopologyEdge) bool {
 	return false
 }
 
+func edgeEvidenceConfidence(edge model.TopologyEdge) string {
+	if len(edge.Ambiguities) > 0 {
+		return "ambiguous"
+	}
+	for _, evidence := range edge.Evidence {
+		switch evidence.Kind {
+		case "association", "lldp_neighbor", "default_route":
+			return "measured"
+		}
+	}
+	for _, evidence := range edge.Evidence {
+		if evidence.Kind == "bridge_fdb" {
+			return "inferred"
+		}
+	}
+	if edge.Confidence == "measured" || edge.Confidence == "inferred" {
+		return edge.Confidence
+	}
+	return "ambiguous"
+}
+
 func edgePortAttachment(edge model.TopologyEdge) string {
 	attachment := ""
 	for _, evidence := range edge.Evidence {
@@ -593,6 +682,15 @@ func normalizedSourceStates(states []model.TopologySourceObservation) []model.To
 		return out[i].DeviceID < out[j].DeviceID
 	})
 	return out
+}
+
+func sourceFreshlyObserved(states []model.TopologySourceObservation, deviceID int64, source string, at int64) bool {
+	for _, state := range states {
+		if state.DeviceID == deviceID && state.Source == source {
+			return state.State == model.TopologySourceObserved && state.ObservedAt == at
+		}
+	}
+	return false
 }
 
 func validateSourceStates(states []model.TopologySourceObservation, deviceNodes map[int64]string) error {
@@ -887,8 +985,8 @@ func reconcileFleetCompetingParents(active []model.TopologyEdge, changes Interva
 		if len(parents[edge.ChildNode]) > 1 {
 			edge.Ambiguities = append(edge.Ambiguities, competingParentsAmbiguity)
 			edge.Confidence = "ambiguous"
-		} else if hadCompetition && len(edge.Ambiguities) == 0 && edge.Confidence == "ambiguous" {
-			edge.Confidence = "measured"
+		} else if hadCompetition {
+			edge.Confidence = edgeEvidenceConfidence(edge)
 		}
 		sort.Strings(edge.Ambiguities)
 		future[key] = edge
@@ -925,6 +1023,188 @@ func reconcileFleetCompetingParents(active []model.TopologyEdge, changes Interva
 	})
 	changes.Upsert = upserts
 	return changes, nil
+}
+
+// CurrentPresentationEdges hides a possible managed-link transit placement only
+// while that exact LLDP peer resolves through recent, successful evidence to a
+// direct observation of the same child. Raw intervals remain intact so history
+// and later moves keep their provenance.
+func CurrentPresentationEdges(edges []model.TopologyEdge, sources []model.TopologySourceObservation,
+	at, maxSourceAge int64) []model.TopologyEdge {
+	states := map[string]model.TopologySourceObservation{}
+	for _, state := range sources {
+		key := sourceStateKey(state.DeviceID, state.Source)
+		if prior, ok := states[key]; !ok || state.ObservedAt > prior.ObservedAt {
+			states[key] = state
+		}
+	}
+	direct := map[string]map[string]bool{}
+	for _, edge := range edges {
+		if !edgeHasFreshDirectEvidence(edge, states, at, maxSourceAge) {
+			continue
+		}
+		if direct[edge.ChildNode] == nil {
+			direct[edge.ChildNode] = map[string]bool{}
+		}
+		direct[edge.ChildNode][edge.ParentNode] = true
+	}
+	type placement struct {
+		child, parent string
+	}
+	type transit struct {
+		index  int
+		parent string
+		fresh  bool
+	}
+	byPeer := map[placement][]transit{}
+	for i, edge := range edges {
+		peer, possible := managedLinkTransitPeer(edge)
+		if !possible {
+			continue
+		}
+		key := placement{child: edge.ChildNode, parent: peer}
+		byPeer[key] = append(byPeer[key], transit{
+			index: i, parent: edge.ParentNode,
+			fresh: managedLinkTransitRecentlyObserved(edge, states, at, maxSourceAge),
+		})
+	}
+	resolved := map[placement]bool{}
+	queue := make([]placement, 0)
+	for child, parents := range direct {
+		for parent := range parents {
+			key := placement{child: child, parent: parent}
+			resolved[key] = true
+			queue = append(queue, key)
+		}
+	}
+	hidden := make([]bool, len(edges))
+	for head := 0; head < len(queue); head++ {
+		for _, candidate := range byPeer[queue[head]] {
+			hidden[candidate.index] = true
+			if !candidate.fresh {
+				continue
+			}
+			upstream := placement{child: queue[head].child, parent: candidate.parent}
+			if resolved[upstream] {
+				continue
+			}
+			resolved[upstream] = true
+			queue = append(queue, upstream)
+		}
+	}
+	visible := make([]model.TopologyEdge, 0, len(edges))
+	for i, edge := range edges {
+		if hidden[i] {
+			continue
+		}
+		edge.Ambiguities = append([]string(nil), edge.Ambiguities...)
+		visible = append(visible, edge)
+	}
+	parents := map[string]map[string]bool{}
+	for _, edge := range visible {
+		if edge.ParentNode == InternetNode {
+			continue
+		}
+		if parents[edge.ChildNode] == nil {
+			parents[edge.ChildNode] = map[string]bool{}
+		}
+		parents[edge.ChildNode][edge.ParentNode+"\x00"+edge.ParentPort] = true
+	}
+	for i := range visible {
+		ambiguities := visible[i].Ambiguities[:0]
+		for _, ambiguity := range visible[i].Ambiguities {
+			if ambiguity != competingParentsAmbiguity {
+				ambiguities = append(ambiguities, ambiguity)
+			}
+		}
+		visible[i].Ambiguities = ambiguities
+		if len(parents[visible[i].ChildNode]) > 1 {
+			visible[i].Ambiguities = append(visible[i].Ambiguities, competingParentsAmbiguity)
+			visible[i].Confidence = "ambiguous"
+		} else {
+			visible[i].Confidence = edgeEvidenceConfidence(visible[i])
+		}
+		sort.Strings(visible[i].Ambiguities)
+	}
+	return visible
+}
+
+func managedLinkTransitPeer(edge model.TopologyEdge) (string, bool) {
+	if edgeHasAssociation(edge) || edgeHasLLDP(edge) {
+		return "", false
+	}
+	peer := ""
+	for _, evidence := range edge.Evidence {
+		if evidence.Kind != "bridge_fdb" {
+			continue
+		}
+		possible, _ := evidence.Detail[managedLinkTransitDetail].(bool)
+		candidate, _ := evidence.Detail[managedLinkPeerDetail].(string)
+		attachment, _ := evidence.Detail["attachment"].(string)
+		stpState, _ := evidence.Detail[stpStateDetail].(string)
+		if evidence.DeviceID == nil || !possible || attachment != PortAttachmentPhysical ||
+			stpState != "forwarding" || !strings.HasPrefix(candidate, "device:") ||
+			(peer != "" && peer != candidate) {
+			return "", false
+		}
+		peer = candidate
+	}
+	return peer, peer != ""
+}
+
+func managedLinkTransitRecentlyObserved(edge model.TopologyEdge,
+	states map[string]model.TopologySourceObservation, at, maxSourceAge int64) bool {
+	found := false
+	for _, evidence := range edge.Evidence {
+		if evidence.Kind != "bridge_fdb" {
+			continue
+		}
+		if evidence.DeviceID == nil ||
+			!sourceRecentlyObserved(states, *evidence.DeviceID, SourceBridgeFDB, at, maxSourceAge) ||
+			!sourceRecentlyObserved(states, *evidence.DeviceID, SourceBridgeSTP, at, maxSourceAge) ||
+			!sourceRecentlyObserved(states, *evidence.DeviceID, SourceLLDP, at, maxSourceAge) {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+func edgeHasFreshDirectEvidence(edge model.TopologyEdge,
+	states map[string]model.TopologySourceObservation, at, maxSourceAge int64) bool {
+	for _, ambiguity := range edge.Ambiguities {
+		if ambiguity != competingParentsAmbiguity {
+			return false
+		}
+	}
+	for _, evidence := range edge.Evidence {
+		if evidence.DeviceID == nil {
+			continue
+		}
+		switch evidence.Kind {
+		case "association", "lldp_neighbor":
+			if sourceRecentlyObserved(states, *evidence.DeviceID, evidence.Source, at, maxSourceAge) {
+				return true
+			}
+		case "bridge_fdb":
+			possible, _ := evidence.Detail[managedLinkTransitDetail].(bool)
+			attachment, _ := evidence.Detail["attachment"].(string)
+			stpState, _ := evidence.Detail[stpStateDetail].(string)
+			if !possible && attachment == PortAttachmentPhysical && stpState == "forwarding" &&
+				sourceRecentlyObserved(states, *evidence.DeviceID, SourceBridgeFDB, at, maxSourceAge) &&
+				sourceRecentlyObserved(states, *evidence.DeviceID, SourceBridgeSTP, at, maxSourceAge) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sourceRecentlyObserved(states map[string]model.TopologySourceObservation, deviceID int64, source string,
+	at, maxAge int64) bool {
+	state := states[sourceStateKey(deviceID, source)]
+	return state.State == model.TopologySourceObserved && state.ObservedAt <= at &&
+		maxAge >= 0 && state.ObservedAt >= at-maxAge
 }
 
 // A managed-device LLDP observation has no inherent direction. Admit it only

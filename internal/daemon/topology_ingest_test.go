@@ -1021,6 +1021,221 @@ func TestTopologyIngestConcurrentStartupSuppressesReciprocalLLDP(t *testing.T) {
 	}
 }
 
+func TestTopologyIngestProjectsManagedLinkFDBTransitInEitherPollOrder(t *testing.T) {
+	const (
+		gatewayMAC  = "02:00:00:00:00:01"
+		switchMAC   = "02:00:00:00:00:02"
+		wifiClient  = "02:00:00:00:00:44"
+		wiredClient = "02:00:00:00:00:55"
+	)
+	adopted := time.Now().Unix()
+	devices := []*store.Device{
+		{ID: 1, MAC: gatewayMAC, Role: "gateway",
+			Functions: []string{"gateway", "ap", "switch"}, AdoptedAt: &adopted},
+		{ID: 2, MAC: switchMAC, Role: "switch",
+			Functions: []string{"switch"}, AdoptedAt: &adopted},
+	}
+	snapshot := func(deviceID, at int64) collector.Snapshot {
+		source := func(name string) model.TopologySourceObservation {
+			return model.TopologySourceObservation{
+				DeviceID: deviceID, Source: name, State: model.TopologySourceObserved, ObservedAt: at,
+			}
+		}
+		out := collector.Snapshot{DeviceID: deviceID, At: time.UnixMilli(at)}
+		if deviceID == 1 {
+			out.APsFresh = true
+			out.APs = []collector.AP{{Iface: "phy0-ap0", Stations: map[string]collector.LiveStation{
+				wifiClient: {Iface: "phy0-ap0"},
+			}}}
+			out.Topology = collector.TopologySnapshot{
+				Cycle: true,
+				NetworkDevices: []topology.NetworkDevice{{
+					Name: "br-lan", MAC: gatewayMAC, BridgeOf: []string{"eth1"},
+				}},
+				Wireless: []topology.WirelessRadio{{Key: "radio0", Interfaces: []topology.WirelessInterface{{
+					IfName: "phy0-ap0", Mode: "ap", BSSID: "02:00:00:00:10:01",
+				}}}},
+				Bridges: []topology.BridgeObservation{{
+					DeviceID: 1, Bridge: "br-lan",
+					Entries: []topology.FDBEntry{
+						{Port: 1, MAC: switchMAC}, {Port: 1, MAC: wiredClient},
+					},
+					STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{{
+						Name: "eth1", Port: 1, State: "forwarding",
+					}}},
+					PortMedia:      map[int]string{1: "wired"},
+					PortAttachment: map[int]string{1: topology.PortAttachmentPhysical},
+				}},
+				LLDP:    []topology.LLDPLink{{DeviceID: 1, Port: "eth1", RemoteMAC: switchMAC}},
+				Uplinks: []topology.Uplink{{DeviceID: 1, Interface: "wan", Active: true}},
+				Sources: []model.TopologySourceObservation{
+					source(topology.SourceBridgeFDB), source(topology.SourceLLDP),
+					source(topology.SourceAssociations), source(topology.SourceDefaultRoute),
+					source(collector.TopologySourceNetworkDevices),
+					source(collector.TopologySourceWirelessDevices),
+					source(collector.TopologySourceBridgeSTP),
+				},
+			}
+			return out
+		}
+		out.Topology = collector.TopologySnapshot{
+			Cycle: true,
+			NetworkDevices: []topology.NetworkDevice{{
+				Name: "br-lan", MAC: switchMAC, BridgeOf: []string{"eth0", "eth1"},
+			}},
+			Bridges: []topology.BridgeObservation{{
+				DeviceID: 2, Bridge: "br-lan",
+				Entries: []topology.FDBEntry{
+					{Port: 1, MAC: gatewayMAC}, {Port: 1, MAC: wifiClient},
+					{Port: 2, MAC: wiredClient},
+				},
+				STP: &topology.STPState{Bridge: "br-lan", Ports: []topology.STPPort{
+					{Name: "eth0", Port: 1, State: "forwarding"},
+					{Name: "eth1", Port: 2, State: "forwarding"},
+				}},
+				PortMedia: map[int]string{1: "wired", 2: "wired"},
+				PortAttachment: map[int]string{
+					1: topology.PortAttachmentPhysical, 2: topology.PortAttachmentPhysical,
+				},
+			}},
+			LLDP: []topology.LLDPLink{{DeviceID: 2, Port: "eth0", RemoteMAC: gatewayMAC}},
+			Sources: []model.TopologySourceObservation{
+				source(topology.SourceBridgeFDB), source(topology.SourceLLDP),
+				source(collector.TopologySourceNetworkDevices),
+				{DeviceID: 2, Source: collector.TopologySourceWirelessDevices,
+					State: model.TopologySourceEmpty, ObservedAt: at},
+				source(collector.TopologySourceBridgeSTP),
+			},
+		}
+		return out
+	}
+	seedEdges := func(at int64) []model.TopologyEdge {
+		gatewayID, switchID := int64(1), int64(2)
+		return []model.TopologyEdge{
+			{
+				ID: 1, ChildNode: "client:" + wifiClient, ChildMAC: wifiClient,
+				ParentNode: "device:" + gatewayMAC, ParentDeviceID: &gatewayID,
+				ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "association", Source: topology.SourceAssociations,
+					DeviceID: &gatewayID, Detail: map[string]any{"interface": "phy0-ap0", "observed_mac": wifiClient}}},
+				Ambiguities: []string{"concurrent evidence yields multiple candidate parents or ports"},
+			},
+			{
+				ID: 2, ChildNode: "client:" + wiredClient, ChildMAC: wiredClient,
+				ParentNode: "device:" + switchMAC, ParentDeviceID: &switchID,
+				ParentPort: "eth1", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &switchID, Detail: map[string]any{"attachment": topology.PortAttachmentPhysical}}},
+				Ambiguities: []string{"concurrent evidence yields multiple candidate parents or ports"},
+			},
+			{
+				ID: 3, ChildNode: "client:" + wifiClient, ChildMAC: wifiClient,
+				ParentNode: "device:" + switchMAC, ParentDeviceID: &switchID,
+				ParentPort: "eth0", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &switchID, Detail: map[string]any{
+						"attachment": topology.PortAttachmentPhysical, "stp_state": "forwarding",
+						"managed_link_transit_possible": true, "managed_link_peer": "device:" + gatewayMAC,
+					}}},
+				Ambiguities: []string{
+					"bridge FDB may be transit evidence through a managed-device link",
+					"concurrent evidence yields multiple candidate parents or ports",
+				},
+			},
+			{
+				ID: 4, ChildNode: "client:" + wiredClient, ChildMAC: wiredClient,
+				ParentNode: "device:" + gatewayMAC, ParentDeviceID: &gatewayID,
+				ParentPort: "eth1", Medium: "wired", Confidence: "ambiguous",
+				ValidFrom: at - 2_000, LastSeen: at - 1_000,
+				Evidence: []model.TopologyEvidence{{Kind: "bridge_fdb", Source: topology.SourceBridgeFDB,
+					DeviceID: &gatewayID, Detail: map[string]any{
+						"attachment": topology.PortAttachmentPhysical, "stp_state": "forwarding",
+						"managed_link_transit_possible": true, "managed_link_peer": "device:" + switchMAC,
+					}}},
+				Ambiguities: []string{
+					"bridge FDB may be transit evidence through a managed-device link",
+					"concurrent evidence yields multiple candidate parents or ports",
+				},
+			},
+		}
+	}
+	hasPlacement := func(edges []model.TopologyEdge, child, parent, port string) bool {
+		for _, edge := range edges {
+			if edge.ChildNode == child && edge.ParentNode == parent && edge.ParentPort == port {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, order := range [][]int64{{1, 2}, {2, 1}} {
+		name := "gateway then switch"
+		if order[0] == 2 {
+			name = "switch then gateway"
+		}
+		t.Run(name, func(t *testing.T) {
+			at := int64(1_800_000_000_000)
+			db := &fakeTopologyStore{
+				devices: devices,
+				clients: []store.Client{{MAC: wifiClient}, {MAC: wiredClient}},
+				active:  seedEdges(at), nextID: 4,
+			}
+			ingest := newTopologyIngestor(db)
+			for _, deviceID := range []int64{1, 2} {
+				ingest.aliases[deviceID] = topologyAliasCache{
+					networkKnown: true, wirelessKnown: true,
+					networkState:  model.TopologySourceObserved,
+					wirelessState: model.TopologySourceEmpty,
+				}
+			}
+			var fleetSources []model.TopologySourceObservation
+			for _, deviceID := range order {
+				snap := snapshot(deviceID, at)
+				fleetSources = append(fleetSources, snap.Topology.Sources...)
+				if err := ingest.record(context.Background(), snap); err != nil {
+					t.Fatal(err)
+				}
+				if !hasPlacement(db.active, "client:"+wifiClient, "device:"+switchMAC, "eth0") ||
+					!hasPlacement(db.active, "client:"+wiredClient, "device:"+gatewayMAC, "eth1") {
+					t.Fatalf("raw possible-transit evidence was destroyed: active=%+v", db.active)
+				}
+				at += 1_000
+			}
+			if len(db.active) != 6 {
+				t.Fatalf("raw links=%d, want 6: %+v", len(db.active), db.active)
+			}
+
+			visible := topology.CurrentPresentationEdges(db.active, fleetSources, at, (31 * time.Minute).Milliseconds())
+			placements := map[string]string{}
+			for _, edge := range visible {
+				placements[edge.ChildNode] = edge.ParentNode + "\x00" + edge.ParentPort
+			}
+			want := map[string]string{
+				"device:" + gatewayMAC:  topology.InternetNode + "\x00wan",
+				"device:" + switchMAC:   "device:" + gatewayMAC + "\x00eth1",
+				"client:" + wifiClient:  "device:" + gatewayMAC + "\x00phy0-ap0",
+				"client:" + wiredClient: "device:" + switchMAC + "\x00eth1",
+			}
+			if len(visible) != len(want) {
+				t.Fatalf("visible links=%d, want %d: %+v; raw=%+v", len(visible), len(want), visible, db.active)
+			}
+			for child, placement := range want {
+				if placements[child] != placement {
+					t.Fatalf("%s placement=%q, want %q; all=%+v", child, placements[child], placement, db.active)
+				}
+			}
+			for _, edge := range visible {
+				if strings.Contains(strings.Join(edge.Ambiguities, " "), "multiple candidate parents") {
+					t.Fatalf("transitive FDB left a competing parent: %+v", edge)
+				}
+			}
+		})
+	}
+}
+
 func TestTopologyIngestStartupCleansPersistedReciprocalLLDP(t *testing.T) {
 	const wrtMAC, c6MAC = "02:00:00:00:00:01", "02:00:00:00:00:02"
 	wrtID, c6ID := int64(1), int64(2)

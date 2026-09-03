@@ -1138,6 +1138,11 @@ func TestTopologyIntervalsUnknownStateAndMalformedRowsFailClosed(t *testing.T) {
 	if err != nil || len(states) != 1 || states[0].State != model.TopologySourceEmpty {
 		t.Fatalf("source states=%+v err=%v", states, err)
 	}
+	snapshotEdges, snapshotStates, err := db.CurrentTopologySnapshot(ctx)
+	if err != nil || len(snapshotEdges) != 1 || snapshotEdges[0].ID != edge.ID ||
+		len(snapshotStates) != 1 || snapshotStates[0].State != model.TopologySourceEmpty {
+		t.Fatalf("current snapshot edges=%+v states=%+v err=%v", snapshotEdges, snapshotStates, err)
+	}
 	current, err := db.TopologyEdgesAt(ctx, 0)
 	if err != nil || len(current) != 1 {
 		t.Fatalf("current edges=%+v err=%v", current, err)

@@ -24,7 +24,7 @@ const current: TopologySnapshot = {
   at: 1_787_100_000_000,
   complete: false,
   truncated: false,
-  gaps: ['device:2/lldp: unknown', 'device:1/vlan: unavailable'],
+  gaps: ['device:2/lldp: unknown', 'edge:7: bridge port number could not be mapped to an interface'],
   nodes: [
     { id: 'device:aa:bb:cc:dd:ee:01', kind: 'device', name: 'Gateway', device_id: 1, online: true, synthetic: false },
     { id: 'device:aa:bb:cc:dd:ee:02', kind: 'device', name: 'Hall AP', device_id: 2, online: true, synthetic: false },
@@ -43,7 +43,7 @@ const current: TopologySnapshot = {
       kind: 'bridge_fdb', source: 'brctl.showmacs', device_id: 1,
       detail: { bridge: 'br-lan', observed_mac: 'aa:bb:cc:dd:ee:02' },
     }],
-    ambiguities: ['BusyBox FDB does not identify VLAN'],
+    ambiguities: ['bridge port number could not be mapped to an interface'],
   }],
 }
 
@@ -76,6 +76,59 @@ beforeEach(() => {
 })
 
 describe('Topology', () => {
+  it('keeps the neutral VLAN note when every active link lacks VLAN metadata', async () => {
+    render(<Topology />)
+
+    expect(await screen.findByText('VLAN evidence is unavailable; no VLAN path filter is shown.')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'VLAN filter' })).toBeNull()
+  })
+
+  it('summarizes unknown VLAN metadata once when active links are mixed', async () => {
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      edges: [current.edges[0], {
+        ...current.edges[0],
+        id: 8,
+        evidence: [{
+          ...current.edges[0].evidence[0],
+          detail: { ...current.edges[0].evidence[0].detail, vlan: 20 },
+        }],
+      }],
+    })
+    render(<Topology />)
+
+    const filter = await screen.findByRole('group', { name: 'VLAN filter' })
+    expect(within(filter).getByRole('button', { name: 'Unknown' })).toBeTruthy()
+    expect(within(filter).getByRole('button', { name: '20' })).toBeTruthy()
+    expect(within(filter).getByRole('note').textContent)
+      .toBe('1 of 2 links has no VLAN metadata. Use the Unknown filter to isolate it.')
+  })
+
+  it('preserves a valid VLAN selection while another topology query loads', async () => {
+    const withVLAN = {
+      ...current,
+      edges: [{
+        ...current.edges[0],
+        evidence: [{...current.edges[0].evidence[0], detail: {vlan: 20}}],
+      }],
+    }
+    let resolveHistory!: (value: TopologySnapshot) => void
+    api.topology.mockResolvedValueOnce(withVLAN)
+    api.topologyHistory.mockReturnValueOnce(new Promise<TopologySnapshot>((resolve) => {
+      resolveHistory = resolve
+    }))
+    render(<Topology />)
+
+    const currentFilter = await screen.findByRole('group', {name: 'VLAN filter'})
+    fireEvent.click(within(currentFilter).getByRole('button', {name: '20'}))
+    fireEvent.click(screen.getByRole('button', {name: 'History'}))
+    await screen.findByText('Loading topology…')
+    resolveHistory(withVLAN)
+
+    const historyFilter = await screen.findByRole('group', {name: 'VLAN filter'})
+    expect(within(historyFilter).getByRole('button', {name: '20'}).getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('renders partial evidence as unknown and exposes the graph in a table', async () => {
     const reviewCapabilities = vi.fn()
     render(<Topology onReviewCapabilities={reviewCapabilities} />)
@@ -99,7 +152,7 @@ describe('Topology', () => {
     expect(within(table).getByText('Gateway')).toBeTruthy()
     expect(within(table).getByText('ambiguous')).toBeTruthy()
     fireEvent.click(within(table).getByText(/1 source · 1 ambiguity/))
-    expect(within(table).getByText(/BusyBox FDB does not identify VLAN/)).toBeTruthy()
+    expect(within(table).getByText(/bridge port number could not be mapped to an interface/)).toBeTruthy()
     expect(within(table).getByText(/bridge_fdb via brctl.showmacs/)).toBeTruthy()
     expect(screen.queryByText(/optional oonfeeWRT topology capability/i)).toBeNull()
     const lldpNotice = screen.getByRole('group', { name: 'Information: LLDP source' })
@@ -240,6 +293,39 @@ describe('Topology', () => {
       const table = screen.getByRole('table', { name: /All link intervals intersecting/ })
       expect(within(table).getByText('lan1')).toBeTruthy()
       expect(within(table).getByText('lan2')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears a VLAN filter when the selected history interval no longer has that VLAN', async () => {
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    vi.setSystemTime(new Date('2026-08-19T12:00:00Z'))
+    try {
+      const transition = current.edges[0].valid_from
+      api.topologyHistory.mockResolvedValueOnce({
+        ...current,
+        complete: true,
+        gaps: [],
+        edges: [
+          {...current.edges[0], id: 6, valid_from: transition - 10_000, valid_to: transition},
+          {
+            ...current.edges[0],
+            evidence: [{...current.edges[0].evidence[0], detail: {vlan: 20}}],
+            valid_from: transition,
+          },
+        ],
+      })
+      render(<Topology />)
+      await screen.findByText('VLAN evidence is unavailable; no VLAN path filter is shown.')
+      fireEvent.click(screen.getByRole('button', {name: 'History'}))
+
+      const vlanFilter = await screen.findByRole('group', {name: 'VLAN filter'})
+      fireEvent.click(within(vlanFilter).getByRole('button', {name: '20'}))
+      fireEvent.change(screen.getByLabelText('Selected topology history time'), {target: {value: transition - 1}})
+
+      await screen.findByText('VLAN evidence is unavailable; no VLAN path filter is shown.')
+      expect(screen.getByRole('group', {name: /2 topology nodes and 1 links/})).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }

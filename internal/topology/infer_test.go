@@ -59,8 +59,8 @@ func TestInferResolvesSeveralC6MACsToOneStableDeviceNode(t *testing.T) {
 	if edge.ChildNode != "device:"+c6MAC || edge.ParentNode != "device:"+wrtMAC || edge.ParentPort != "lan2" {
 		t.Fatalf("edge = %#v", edge)
 	}
-	if edge.Confidence != "ambiguous" {
-		t.Errorf("confidence = %q; a brctl FDB has no VLAN", edge.Confidence)
+	if edge.Confidence != "inferred" {
+		t.Errorf("confidence = %q; FDB proves a path through the port, not direct attachment", edge.Confidence)
 	}
 	evidence := edge.Evidence
 	if len(evidence) != 3 {
@@ -71,16 +71,17 @@ func TestInferResolvesSeveralC6MACsToOneStableDeviceNode(t *testing.T) {
 	if !strings.Contains(encoded, c6Alias1) || !strings.Contains(encoded, c6Alias2) {
 		t.Fatalf("alias provenance missing: %s", encoded)
 	}
-	ambiguities := edge.Ambiguities
-	if len(ambiguities) != 1 || !strings.Contains(ambiguities[0], "does not identify VLAN") {
-		t.Fatalf("ambiguities = %#v", ambiguities)
+	if len(edge.Ambiguities) != 0 {
+		t.Fatalf("intrinsic missing VLAN metadata became an edge ambiguity: %#v", edge.Ambiguities)
 	}
 	if result.Complete {
-		t.Fatal("LLDP and VLAN gaps were reported complete")
+		t.Fatal("unavailable LLDP was reported complete")
 	}
-	if len(result.Gaps) != 2 || !strings.Contains(strings.Join(result.Gaps, "\n"), "lldp: not installed") ||
-		!strings.Contains(strings.Join(result.Gaps, "\n"), "vlan") {
+	if len(result.Gaps) != 1 || !strings.Contains(result.Gaps[0], "lldp: not installed") {
 		t.Fatalf("gaps = %#v", result.Gaps)
+	}
+	if edge.Evidence[0].Detail["vlan_available"] != false {
+		t.Fatalf("missing VLAN metadata is not explicit in evidence: %#v", edge.Evidence)
 	}
 }
 
@@ -216,6 +217,221 @@ func TestInferPreservesCompetingParentsInsteadOfPickingOne(t *testing.T) {
 		if edge.Confidence != "ambiguous" || !strings.Contains(strings.Join(edge.Ambiguities, " "), "multiple candidate parents") {
 			t.Fatalf("ambiguity lost: %#v", edge)
 		}
+	}
+}
+
+func TestInferMarksPossibleFDBTransitOnFreshManagedLLDPPort(t *testing.T) {
+	client := "02:00:00:00:00:55"
+	third := "02:00:00:00:00:03"
+	devices := []InventoryDevice{
+		{ID: 1, PrimaryMAC: wrtMAC},
+		{ID: 2, PrimaryMAC: c6MAC},
+		{ID: 3, PrimaryMAC: third},
+	}
+	bridge := func(deviceID int64, peer, clientPort int, peerMAC, peerName, clientName string) BridgeObservation {
+		return BridgeObservation{
+			DeviceID: deviceID, Bridge: "br-lan",
+			Entries: []FDBEntry{{Port: peer, MAC: peerMAC}, {Port: clientPort, MAC: client}},
+			STP: &STPState{Bridge: "br-lan", Ports: []STPPort{
+				{Name: peerName, Port: peer, State: "forwarding"},
+				{Name: clientName, Port: clientPort, State: "forwarding"},
+			}},
+			PortMedia: map[int]string{peer: "wired", clientPort: "wired"},
+			PortAttachment: map[int]string{
+				peer: PortAttachmentPhysical, clientPort: PortAttachmentPhysical,
+			},
+		}
+	}
+
+	for _, tt := range []struct {
+		name        string
+		deviceID    int64
+		peerMAC     string
+		peerPort    string
+		clientPort  int
+		wantParent  string
+		wantPort    string
+		wantTransit bool
+	}{
+		{
+			name:     "gateway does not claim a client beyond the downstream switch",
+			deviceID: 1, peerMAC: c6MAC, peerPort: "eth1", clientPort: 1,
+			wantParent: "device:" + wrtMAC, wantPort: "eth1", wantTransit: true,
+		},
+		{
+			name:     "switch does not claim an upstream Wi-Fi client",
+			deviceID: 2, peerMAC: wrtMAC, peerPort: "eth0", clientPort: 1,
+			wantParent: "device:" + c6MAC, wantPort: "eth0", wantTransit: true,
+		},
+		{
+			name:     "unrelated local port remains a candidate",
+			deviceID: 2, peerMAC: wrtMAC, peerPort: "eth0", clientPort: 2,
+			wantParent: "device:" + c6MAC, wantPort: "eth1",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			peerNumber := 1
+			clientName := tt.peerPort
+			if tt.clientPort != peerNumber {
+				clientName = "eth1"
+			}
+			input := InferenceInput{
+				At: 4000, Devices: devices, Clients: []InventoryClient{{MAC: client}},
+				Bridges: []BridgeObservation{bridge(
+					tt.deviceID, peerNumber, tt.clientPort, tt.peerMAC, tt.peerPort, clientName,
+				)},
+				LLDP: []LLDPLink{{DeviceID: tt.deviceID, Port: tt.peerPort, RemoteMAC: tt.peerMAC}},
+				Sources: []model.TopologySourceObservation{
+					{DeviceID: tt.deviceID, Source: SourceBridgeFDB, State: model.TopologySourceObserved, ObservedAt: 4000},
+					{DeviceID: tt.deviceID, Source: SourceBridgeSTP, State: model.TopologySourceObserved, ObservedAt: 4000},
+					{DeviceID: tt.deviceID, Source: SourceLLDP, State: model.TopologySourceObserved, ObservedAt: 4000},
+				},
+			}
+			result, err := Infer(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var clientEdges []model.TopologyEdge
+			var peerEdge *model.TopologyEdge
+			for _, edge := range result.Edges {
+				if edge.ChildNode == "client:"+client {
+					clientEdges = append(clientEdges, edge)
+				}
+				if edge.ChildMAC == tt.peerMAC {
+					copy := edge
+					peerEdge = &copy
+				}
+			}
+			if peerEdge == nil || peerEdge.Confidence != "measured" || len(peerEdge.Ambiguities) != 0 {
+				t.Fatalf("matching FDB and LLDP did not produce one measured peer edge: %#v", result.Edges)
+			}
+			if len(clientEdges) != 1 || clientEdges[0].ParentNode != tt.wantParent ||
+				clientEdges[0].ParentPort != tt.wantPort {
+				t.Fatalf("local placement = %#v", clientEdges)
+			}
+			marked, _ := clientEdges[0].Evidence[0].Detail[managedLinkTransitDetail].(bool)
+			if tt.wantTransit {
+				if clientEdges[0].Confidence != "ambiguous" || !marked ||
+					!strings.Contains(strings.Join(clientEdges[0].Ambiguities, " "), managedLinkTransitAmbiguity) {
+					t.Fatalf("possible transit evidence was not retained as ambiguous: %#v", clientEdges[0])
+				}
+			} else if marked || clientEdges[0].Confidence != "inferred" {
+				t.Fatalf("unrelated local placement was marked as transit: %#v", clientEdges[0])
+			}
+		})
+	}
+
+	for _, tt := range []struct {
+		name       string
+		state      model.TopologySourceState
+		observedAt int64
+	}{
+		{name: "failed LLDP coverage", state: model.TopologySourceError, observedAt: 4000},
+		{name: "stale LLDP coverage", state: model.TopologySourceObserved, observedAt: 3999},
+		{name: "unknown LLDP coverage", state: model.TopologySourceUnknown, observedAt: 4000},
+	} {
+		t.Run(tt.name+" cannot suppress FDB", func(t *testing.T) {
+			result, err := Infer(InferenceInput{
+				At: 4000, Devices: devices, Clients: []InventoryClient{{MAC: client}},
+				Bridges: []BridgeObservation{bridge(1, 1, 1, c6MAC, "eth1", "eth1")},
+				LLDP:    []LLDPLink{{DeviceID: 1, Port: "eth1", RemoteMAC: c6MAC}},
+				Sources: []model.TopologySourceObservation{
+					{DeviceID: 1, Source: SourceBridgeFDB, State: model.TopologySourceObserved, ObservedAt: 4000},
+					{DeviceID: 1, Source: SourceBridgeSTP, State: model.TopologySourceObserved, ObservedAt: 4000},
+					{DeviceID: 1, Source: SourceLLDP, State: tt.state, ObservedAt: tt.observedAt},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, edge := range result.Edges {
+				found = found || edge.ChildNode == "client:"+client
+				for _, evidence := range edge.Evidence {
+					if evidence.Kind == "lldp_neighbor" {
+						t.Fatalf("unusable LLDP emitted measured evidence: %#v", result.Edges)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("unusable LLDP erased FDB evidence: %#v", result.Edges)
+			}
+		})
+	}
+
+	t.Run("multiple managed peers on one port remain ambiguous", func(t *testing.T) {
+		result, err := Infer(InferenceInput{
+			At: 4000, Devices: devices, Clients: []InventoryClient{{MAC: client}},
+			Bridges: []BridgeObservation{bridge(1, 1, 1, c6MAC, "eth1", "eth1")},
+			LLDP: []LLDPLink{
+				{DeviceID: 1, Port: "eth1", RemoteMAC: c6MAC},
+				{DeviceID: 1, Port: "eth1", RemoteMAC: third},
+			},
+			Sources: []model.TopologySourceObservation{
+				{DeviceID: 1, Source: SourceBridgeFDB, State: model.TopologySourceObserved, ObservedAt: 4000},
+				{DeviceID: 1, Source: SourceBridgeSTP, State: model.TopologySourceObserved, ObservedAt: 4000},
+				{DeviceID: 1, Source: SourceLLDP, State: model.TopologySourceObserved, ObservedAt: 4000},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found *model.TopologyEdge
+		for _, edge := range result.Edges {
+			if edge.ChildNode == "client:"+client {
+				copy := edge
+				found = &copy
+			}
+		}
+		if found == nil || found.Confidence != "ambiguous" ||
+			!strings.Contains(strings.Join(found.Ambiguities, " "), "multiple managed LLDP peers") {
+			t.Fatalf("ambiguous shared segment was collapsed: %#v", result.Edges)
+		}
+	})
+
+	for _, tt := range []struct {
+		name       string
+		attachment string
+		state      string
+		fdbAt      int64
+		stpAt      int64
+	}{
+		{name: "aggregate port", attachment: PortAttachmentAggregate, state: "forwarding", fdbAt: 4000, stpAt: 4000},
+		{name: "blocked physical port", attachment: PortAttachmentPhysical, state: "blocking", fdbAt: 4000, stpAt: 4000},
+		{name: "disabled physical port", attachment: PortAttachmentPhysical, state: "disabled", fdbAt: 4000, stpAt: 4000},
+		{name: "stale FDB source", attachment: PortAttachmentPhysical, state: "forwarding", fdbAt: 3999, stpAt: 4000},
+		{name: "stale STP source", attachment: PortAttachmentPhysical, state: "forwarding", fdbAt: 4000, stpAt: 3999},
+	} {
+		t.Run(tt.name+" is not classified as transit", func(t *testing.T) {
+			observation := bridge(1, 1, 1, c6MAC, "eth1", "eth1")
+			observation.PortAttachment[1] = tt.attachment
+			for i := range observation.STP.Ports {
+				observation.STP.Ports[i].State = tt.state
+			}
+			result, err := Infer(InferenceInput{
+				At: 4000, Devices: devices, Clients: []InventoryClient{{MAC: client}},
+				Bridges: []BridgeObservation{observation},
+				LLDP:    []LLDPLink{{DeviceID: 1, Port: "eth1", RemoteMAC: c6MAC}},
+				Sources: []model.TopologySourceObservation{
+					{DeviceID: 1, Source: SourceBridgeFDB, State: model.TopologySourceObserved, ObservedAt: tt.fdbAt},
+					{DeviceID: 1, Source: SourceBridgeSTP, State: model.TopologySourceObserved, ObservedAt: tt.stpAt},
+					{DeviceID: 1, Source: SourceLLDP, State: model.TopologySourceObserved, ObservedAt: 4000},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, edge := range result.Edges {
+				if edge.ChildNode != "client:"+client {
+					continue
+				}
+				if marked, _ := edge.Evidence[0].Detail[managedLinkTransitDetail].(bool); marked {
+					t.Fatalf("unsafe port was marked as managed-link transit: %#v", edge)
+				}
+				return
+			}
+			t.Fatalf("sole FDB evidence disappeared: %#v", result.Edges)
+		})
 	}
 }
 
@@ -411,6 +627,195 @@ func TestSourceAwareReconcileMarksCompetingParentsAcrossDevicePolls(t *testing.T
 			t.Fatalf("fleet competition missing: %+v", edge)
 		}
 	}
+}
+
+func TestSourceAwareReconcileRestoresInferredConfidenceAfterFDBCompetitionEnds(t *testing.T) {
+	device1, device2 := int64(1), int64(2)
+	client := "client:02:00:00:00:00:55"
+	fdb := func(id, deviceID int64, parent, port string) model.TopologyEdge {
+		return model.TopologyEdge{
+			ID: id, ChildNode: client, ParentNode: parent, ParentDeviceID: &deviceID,
+			ParentPort: port, Medium: "wired", Confidence: "ambiguous",
+			ValidFrom: 100, LastSeen: 100,
+			Evidence: []model.TopologyEvidence{{
+				Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &deviceID,
+				Detail: map[string]any{"attachment": PortAttachmentPhysical},
+			}},
+			Ambiguities: []string{competingParentsAmbiguity},
+		}
+	}
+	remaining := fdb(1, device1, "device:"+wrtMAC, "lan1")
+	disappeared := fdb(2, device2, "device:"+c6MAC, "eth1")
+
+	changes, err := ReconcileIntervalsBySource(
+		[]model.TopologyEdge{remaining, disappeared}, nil, 200,
+		[]model.TopologySourceObservation{{
+			DeviceID: device2, Source: SourceBridgeFDB,
+			State: model.TopologySourceEmpty, ObservedAt: 200,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := map[int64]bool{}
+	for _, edge := range changes.Close {
+		closed[edge.ID] = true
+	}
+	if !closed[remaining.ID] || !closed[disappeared.ID] || len(changes.Upsert) != 1 {
+		t.Fatalf("competition cleanup did not version both old states: %+v", changes)
+	}
+	got := changes.Upsert[0]
+	if got.ID != 0 || got.Confidence != "inferred" || len(got.Ambiguities) != 0 {
+		t.Fatalf("remaining FDB placement was falsely promoted: %+v", got)
+	}
+}
+
+func TestCurrentPresentationEdgesShadowsOnlyFreshMatchingManagedLinkTransit(t *testing.T) {
+	directOwner, transitOwner := int64(1), int64(2)
+	client := "client:02:00:00:00:00:55"
+	peer := "device:" + wrtMAC
+	direct := model.TopologyEdge{
+		ID: 1, ChildNode: client, ParentNode: peer, ParentDeviceID: &directOwner,
+		ParentPort: "phy0-ap0", Medium: "wireless", Confidence: "ambiguous",
+		ValidFrom: 100, LastSeen: 190,
+		Evidence: []model.TopologyEvidence{{
+			Kind: "association", Source: SourceAssociations, DeviceID: &directOwner,
+		}},
+		Ambiguities: []string{competingParentsAmbiguity},
+	}
+	transit := model.TopologyEdge{
+		ID: 2, ChildNode: client, ParentNode: "device:" + c6MAC,
+		ParentDeviceID: &transitOwner, ParentPort: "eth0", Medium: "wired",
+		Confidence: "ambiguous", ValidFrom: 100, LastSeen: 190,
+		Evidence: []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &transitOwner,
+			Detail: map[string]any{
+				"attachment": PortAttachmentPhysical, stpStateDetail: "forwarding",
+				managedLinkTransitDetail: true, managedLinkPeerDetail: peer,
+			},
+		}},
+		Ambiguities: []string{managedLinkTransitAmbiguity, competingParentsAmbiguity},
+	}
+	associationState := func(state model.TopologySourceState, observedAt int64) []model.TopologySourceObservation {
+		return []model.TopologySourceObservation{{
+			DeviceID: directOwner, Source: SourceAssociations, State: state, ObservedAt: observedAt,
+		}}
+	}
+
+	t.Run("fresh matching association hides only the presentation copy", func(t *testing.T) {
+		got := CurrentPresentationEdges([]model.TopologyEdge{direct, transit},
+			associationState(model.TopologySourceObserved, 200), 200, 50)
+		if len(got) != 1 || got[0].ID != direct.ID || got[0].Confidence != "measured" ||
+			len(got[0].Ambiguities) != 0 {
+			t.Fatalf("visible edges = %+v", got)
+		}
+		if len(direct.Ambiguities) != 1 || len(transit.Ambiguities) != 2 {
+			t.Fatal("presentation mutated stored evidence")
+		}
+	})
+
+	for _, tt := range []struct {
+		name       string
+		state      model.TopologySourceState
+		observedAt int64
+	}{
+		{name: "error", state: model.TopologySourceError, observedAt: 200},
+		{name: "unknown", state: model.TopologySourceUnknown, observedAt: 200},
+		{name: "stale", state: model.TopologySourceObserved, observedAt: 149},
+	} {
+		t.Run(tt.name+" direct source cannot hide transit", func(t *testing.T) {
+			got := CurrentPresentationEdges([]model.TopologyEdge{direct, transit},
+				associationState(tt.state, tt.observedAt), 200, 50)
+			if len(got) != 2 || got[0].Confidence != "ambiguous" || got[1].Confidence != "ambiguous" {
+				t.Fatalf("visible edges = %+v", got)
+			}
+		})
+	}
+
+	t.Run("fresh source survives a later fleet reconcile timestamp", func(t *testing.T) {
+		clamped := direct
+		clamped.LastSeen = 200
+		got := CurrentPresentationEdges([]model.TopologyEdge{clamped, transit},
+			associationState(model.TopologySourceObserved, 189), 200, 50)
+		if len(got) != 1 || got[0].ID != direct.ID || got[0].Confidence != "measured" {
+			t.Fatalf("visible edges = %+v", got)
+		}
+	})
+
+	t.Run("unrelated direct parent cannot hide transit", func(t *testing.T) {
+		unrelated := direct
+		unrelated.ParentNode = "device:02:00:00:00:00:03"
+		got := CurrentPresentationEdges([]model.TopologyEdge{unrelated, transit},
+			associationState(model.TopologySourceObserved, 200), 200, 50)
+		if len(got) != 2 {
+			t.Fatalf("unrelated placement hid transit: %+v", got)
+		}
+	})
+
+	t.Run("fresh matching physical FDB hides transit", func(t *testing.T) {
+		wired := direct
+		wired.ParentPort, wired.Medium = "eth1", "wired"
+		wired.Evidence = []model.TopologyEvidence{{
+			Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &directOwner,
+			Detail: map[string]any{"attachment": PortAttachmentPhysical, stpStateDetail: "forwarding"},
+		}}
+		states := []model.TopologySourceObservation{
+			{DeviceID: directOwner, Source: SourceBridgeFDB, State: model.TopologySourceObserved, ObservedAt: 200},
+			{DeviceID: directOwner, Source: SourceBridgeSTP, State: model.TopologySourceObserved, ObservedAt: 200},
+		}
+		got := CurrentPresentationEdges([]model.TopologyEdge{wired, transit}, states, 200, 50)
+		if len(got) != 1 || got[0].ID != wired.ID || got[0].Confidence != "inferred" {
+			t.Fatalf("visible edges = %+v", got)
+		}
+		for _, state := range []string{"blocking", "disabled"} {
+			wired.Evidence[0].Detail[stpStateDetail] = state
+			if got := CurrentPresentationEdges([]model.TopologyEdge{wired, transit}, states, 200, 50); len(got) != 2 {
+				t.Fatalf("%s FDB hid transit: %+v", state, got)
+			}
+		}
+	})
+
+	t.Run("fresh transit chain resolves multiple managed hops", func(t *testing.T) {
+		upstreamOwner := int64(3)
+		upstream := model.TopologyEdge{
+			ID: 3, ChildNode: client, ParentNode: "device:02:00:00:00:00:03",
+			ParentDeviceID: &upstreamOwner, ParentPort: "eth0", Medium: "wired",
+			Confidence: "ambiguous", ValidFrom: 100, LastSeen: 190,
+			Evidence: []model.TopologyEvidence{{
+				Kind: "bridge_fdb", Source: SourceBridgeFDB, DeviceID: &upstreamOwner,
+				Detail: map[string]any{
+					"attachment": PortAttachmentPhysical, stpStateDetail: "forwarding",
+					managedLinkTransitDetail: true, managedLinkPeerDetail: transit.ParentNode,
+				},
+			}},
+			Ambiguities: []string{managedLinkTransitAmbiguity, competingParentsAmbiguity},
+		}
+		states := associationState(model.TopologySourceObserved, 200)
+		for _, source := range []string{SourceBridgeFDB, SourceBridgeSTP, SourceLLDP} {
+			states = append(states, model.TopologySourceObservation{
+				DeviceID: transitOwner, Source: source, State: model.TopologySourceObserved, ObservedAt: 200,
+			})
+		}
+		got := CurrentPresentationEdges([]model.TopologyEdge{direct, transit, upstream}, states, 200, 50)
+		if len(got) != 1 || got[0].ID != direct.ID || got[0].Confidence != "measured" {
+			t.Fatalf("visible edges = %+v", got)
+		}
+
+		states[len(states)-1].State = model.TopologySourceError
+		got = CurrentPresentationEdges([]model.TopologyEdge{direct, transit, upstream}, states, 200, 50)
+		if len(got) != 2 || got[0].ID != direct.ID || got[1].ID != upstream.ID {
+			t.Fatalf("stale intermediate transit hid upstream evidence: %+v", got)
+		}
+	})
+
+	t.Run("transit resurfaces immediately after direct placement closes", func(t *testing.T) {
+		if got := CurrentPresentationEdges([]model.TopologyEdge{transit},
+			associationState(model.TopologySourceEmpty, 210), 210, 50); len(got) != 1 ||
+			got[0].ID != transit.ID || got[0].Confidence != "ambiguous" ||
+			len(got[0].Ambiguities) != 1 || got[0].Ambiguities[0] != managedLinkTransitAmbiguity {
+			t.Fatalf("resurfaced transit = %+v", got)
+		}
+	})
 }
 
 func TestSourceAwareReconcileRemovesAggregateTransitCandidate(t *testing.T) {
