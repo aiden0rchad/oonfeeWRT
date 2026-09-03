@@ -208,7 +208,34 @@ Current source also reads router UTC time through `luci.getUnixtime`, with the
 older `luci.getLocaltime` compatibility fallback. Already-adopted routers keep
 their installed ACL until the operator explicitly refreshes the controller
 access payload; clock status remains unavailable until that acknowledged
-refresh grants these methods. No router setting is changed by the clock read.
+refresh grants these methods. No router setting is changed by the clock read;
+the UI warns only on a fresh absolute offset of at least five minutes, keeps the
+comparison in memory, and never rewrites stored event timestamps.
+
+Exact odhcpd IPv6-RA/no-default-route repeat and startup compaction shipped in
+v0.1.1. v0.1.4 adds a separate current-condition query to the events response:
+classification is independent of event filters and pagination, preserves the
+retained occurrence total, names affected routers, and links the UI to the
+primary-network IPv6 editor. Recent, historical, and unknown are evidence
+states. Verified continuous quiet clears the live banner without deleting
+retained history; stale/gapped coverage cannot assert recovery.
+
+v0.1.4 also projects source-aware transitive FDB/LLDP paths for the current
+topology without deleting raw intervals. A redundant upstream candidate is
+hidden only while fresh, unambiguous direct-placement and managed-hop evidence
+proves the more specific path; stale, failed, or ambiguous evidence becomes
+visible again. Clean physical FDB-only paths are inferred, while missing
+BusyBox VLAN provenance is neutral unavailable metadata. Same-geometry partial
+observations retain earlier semantic payload, schema 20 indexes closed-history
+lookup, topology endpoints share a serialization gate, and the UI cancels
+abandoned requests and repairs invalid VLAN filters.
+
+The v0.1.4 Compose file adds host-side `OONFEE_HTTP_BIND` interpolation.
+Loopback remains the default; one management IP is preferred, and `0.0.0.0`
+requires explicit firewall/TLS review. The value is not a daemon environment
+variable and has no effect in host-network mode. Operators must replace or
+merge the Compose file and persist the bind for lifecycle commands; pulling the
+new image alone cannot update host port publishing.
 
 ---
 

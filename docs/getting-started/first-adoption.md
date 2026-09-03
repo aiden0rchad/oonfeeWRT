@@ -137,7 +137,13 @@ before planning a tagged network.
 Open **Review exact router changes** and read the displayed plan. The scoped ACL grants:
 
 - supported inventory, topology, radio/scan, OpenWrt log, and fixed-target `1.1.1.1` ICMP observations;
-- UCI writes only for controller-owned network, wireless, firewall, and DHCP sections after a separate Preview and Apply;
+- read-only router UTC observation through `luci.getUnixtime`, with
+  `luci.getLocaltime` as a compatibility fallback;
+- ordinary UCI writes for controller-owned network, wireless, firewall, and
+  DHCP sections after a separate Preview and Apply;
+- allowlisted option-only patches to exact existing management-LAN, DHCP, and
+  supported conventional `wan`/`wan6` sections only when an explicit
+  non-**Router managed** IPv6 policy is separately previewed and applied; and
 - runtime 802.11k neighbour-list updates for managed WLANs that request them.
 
 It does not grant client disconnection or steering. The client keeps the roaming decision.

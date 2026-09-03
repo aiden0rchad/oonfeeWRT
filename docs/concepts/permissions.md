@@ -144,6 +144,14 @@ the pre-existing ACL grant for `/sbin/ip -4 route show table all`. The command
 is read-only, and upgrading a router already adopted by v0.1.2 requires neither
 an ACL refresh nor a device-administrator credential.
 
+v0.1.4 adds a separate read-only router-clock observation. New adoptions include
+`luci.getUnixtime` and the compatibility fallback `luci.getLocaltime` in the
+reviewed access payload. Devices adopted before v0.1.4 keep ordinary polling,
+Apply, and WAN observation without any access change; only router-clock status
+requires an Administrator or Owner to supply the device-administrator credential
+and approve the updated payload. The refresh does not set the clock, alter NTP,
+or require re-adoption.
+
 ## Deployment implications
 
 The v0.1.4 listener is plain HTTP. Cookies are marked `Secure` only when the

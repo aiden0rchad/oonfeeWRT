@@ -66,12 +66,19 @@ stored.
 
 ## Can I keep using LuCI and SSH?
 
-Yes. oonfeeWRT writes only sections it owns and leaves foreign/human-managed
-sections alone. If a foreign section conflicts with desired state, Preview
-blocks or reports the conflict instead of silently taking it over.
+Yes. oonfeeWRT ordinarily writes only sections it owns and leaves
+foreign/human-managed sections alone. v0.1.4 has one explicit exception: a
+non-Router-managed IPv6 policy on the Gateway management LAN may patch only
+allowlisted IPv6 options on the exact existing LAN interface, its single
+matching DHCP section, and supported conventional `wan`/`wan6` sections when
+present. It never creates, claims, renames, or deletes those foreign sections.
+Missing, ambiguous, wrong-type, or unsafe static-IPv6 targets block Preview.
+Other foreign conflicts are reported instead of silently taken over.
 
 Avoid editing the same controller-owned section simultaneously through LuCI.
-Finish or abandon one change path, then generate a fresh Preview.
+For an explicit management-LAN IPv6 change, also avoid editing the named
+foreign options during Apply. Finish or abandon one change path, then generate
+a fresh Preview.
 
 ## Does saving a WLAN or network immediately change routers?
 
@@ -161,6 +168,28 @@ conventional WAN target block Disable instead of being deleted. Prefix
 delegation also depends on a working ISP/upstream delegation; oonfeeWRT does not
 invent an IPv6 default route.
 
+The option patches do not transfer section ownership and are excluded from
+normal prune/drift ownership. Switching back to **Router managed** or
+un-adopting does not reconstruct earlier values; use a router backup when an
+exact reversal matters.
+
+## Why does one IPv6 warning show many occurrences?
+
+Exact repeat compaction shipped in v0.1.1. The odhcpd
+router-advertisement/no-usable-default-route message uses one condition row per
+router-log producer epoch; repeats increment its count while retaining
+first/latest evidence. Startup converts matching legacy raw rows to the same
+bounded form. This only bounds controller SQLite rows; it does not suppress or
+delete the router's own `logd` output.
+
+v0.1.4 adds the card above **Logs → General**. It is current status, not a view
+of every retained row: independently of table filters and pagination, it names
+affected routers, totals occurrences, links to **Review IPv6 and Apply**, and
+appears only for recent evidence with a fresh router-log cursor. Fresh quiet
+clears the banner while an old compact row can remain; stale or gapped
+collection is unknown, not proof that IPv6 recovered. Fix upstream delegation
+or apply Disabled, then verify fresh coverage stays quiet.
+
 ## Why is router clock status unavailable after upgrading?
 
 v0.1.4 can read router UTC through `luci.getUnixtime`, with
@@ -168,13 +197,23 @@ v0.1.4 can read router UTC through `luci.getUnixtime`, with
 their older scoped ACL, so ordinary management continues but this new read is
 unavailable until an Administrator separately reviews and applies the updated
 controller-access payload. Re-adoption is not required, and the read does not
-set the router clock.
+set the router clock. The General Logs notice uses only a fresh successful
+comparison and appears when the absolute offset is at least five minutes;
+existing event timestamps are not rewritten.
 
 ## Why is an online device “Unplaced” in Topology?
 
 Online proves controller reachability. It does not prove a current physical
 parent. Dynamic FDB or neighbor evidence can expire, and some stock BusyBox
 sources omit VLAN/port identity. The graph refuses to invent a link.
+
+v0.1.4 also treats some FDB rows as possible transit evidence. When fresh
+direct evidence proves a multi-hop managed path, the current view hides the
+redundant upstream candidate rather than drawing several direct parents. The
+raw interval remains in history and can reappear if the direct proof becomes
+stale, fails, is ambiguous, or closes. A clean FDB-only link is labelled
+inferred; missing BusyBox VLAN provenance alone is neutral unavailable
+metadata, not proof that the link is wrong.
 
 Optional LLDP can provide stronger managed adjacency, at the cost of an
 explicit official-package/service workflow.

@@ -4,7 +4,7 @@ Network settings describe the site you want: IPv4 networks, optional VLANs,
 DHCP service, and firewall zones. Saving a model records intent in the
 controller. **Preview and Apply are separate actions.**
 
-<div class="write-impact warning"><strong>Router write impact</strong><span>Editing and saving desired state changes only the controller database. Apply can change controller-owned `network`, `dhcp`, `firewall`, and related wireless UCI sections after preview, preflight, and acknowledgement.</span></div>
+<div class="write-impact warning"><strong>Router write impact</strong><span>Editing and saving desired state changes only the controller database. Apply can change controller-owned `network`, `dhcp`, `firewall`, and related wireless UCI sections after preview, preflight, and acknowledgement. An explicit management-LAN IPv6 mode can also patch only the allowlisted options on exact existing foreign sections described below.</span></div>
 
 ## Before you configure a network
 
@@ -77,6 +77,10 @@ operator-owned. An explicit non-Router-managed policy patches only the exact
 existing LAN interface and its single matching DHCP section. It also
 coordinates conventional upstream controls when they exist in supported forms:
 
+- Prefix delegation sets only `ip6assign` on the LAN; Disabled deletes only
+  `ip6assign`, `ip6hint`, and `ip6class`;
+- the matching DHCP section receives only `ra`, `dhcpv6`, `ndp`, and removal of
+  `ra_default`;
 - Disable sets `network.wan.ipv6=0` and sets a DHCPv6
   `network.wan6.auto=0`;
 - Prefix delegation enables a supported PPP parent and DHCPv6 client without
@@ -85,6 +89,13 @@ coordinates conventional upstream controls when they exist in supported forms:
 - custom/static `wan6` protocols remain router-managed; and
 - a wrong-type present section, missing/ambiguous LAN or DHCP target, or static
   `ip6addr`, `ip6prefix`, or `ip6gw` on a Disable target blocks Preview.
+
+These are non-owning patches. They never add the ownership marker, create or
+delete a section, participate in pruning, or make the rest of a foreign section
+writable. Two desired networks that would patch the same foreign target conflict
+instead of depending on render order. Returning the policy to **Router managed**
+stops further IPv6 option changes; it does not restore values from before an
+earlier Apply.
 
 Prefix delegation still requires a working upstream/ISP delegated prefix. The
 controller does not invent an IPv6 default route, and this release does not
@@ -116,6 +127,40 @@ blocks or warns on conflicts it cannot safely reconcile.
 
 At this point no router Apply has happened.
 
+## Respond to the IPv6 condition in Logs
+
+The warning card added in v0.1.4 at the top of **Logs → General** is an
+active-condition view, not merely a search result. It appears only when the exact odhcpd
+router-advertisement/no-usable-default-route message was recently received and
+router-log coverage is fresh. It remains independent of the selected event
+filters and page, names the affected routers, and totals the occurrences stored
+in their current condition records. **Review IPv6 and Apply** opens the relevant
+network settings.
+
+That card must not be confused with retained event history. Since v0.1.1, exact
+new repeats have incremented one row per router-log producer epoch, and every
+startup has converted matching legacy raw rows into the same bounded form.
+v0.1.4 adds the current-condition classification and guided card; it does not
+introduce repeat compaction. Old compacted rows can remain in the event table
+without making the card active. When collection is stale, restarted, or has a
+continuity gap, status is unknown rather than proof that the problem cleared.
+With fresh coverage and no recent occurrence, the active banner clears;
+continued quiet reaches historical classification after 15 minutes, while the
+retained row can remain visible until normal log retention removes it.
+
+Use the card as a guided workflow:
+
+1. Confirm the named router and that router-log coverage is current.
+2. To keep IPv6, edit the primary management network and choose **Prefix
+   delegation**. Confirm the ISP actually delegates a prefix.
+3. To stop IPv6 service on that LAN, choose **Disabled**. Resolve any static
+   IPv6 or target-shape blocker deliberately.
+4. Generate a new Preview and inspect every option-level patch, especially the
+   management path and conventional WAN targets.
+5. Apply once, verify IPv4 and the intended IPv6 behavior, then wait for fresh
+   log collection to stay quiet. Do not delete event rows to make the card
+   disappear.
+
 ## Review zone behavior
 
 Before Apply, open the **Policy Engine → Zone Matrix** and **Master Table** and
@@ -141,7 +186,8 @@ again.
 
 Inspect every device bucket:
 
-- **Changes** — owned UCI sections/options that would be staged;
+- **Changes** — owned UCI sections/options and any explicit, allowlisted
+  management-LAN IPv6 option patches that would be staged;
 - **No change** — desired state already matches observed owned state;
 - **Omissions** — capability or device-function rules intentionally skip work;
 - **Conflicts/blockers** — foreign state, missing sources, unsupported bridge
@@ -194,13 +240,18 @@ router as changed until independently inspected.
 
 ## Coexist with LuCI and existing UCI
 
-oonfeeWRT owns only sections it created and recorded. Human-managed sections
-remain visible but are not silently rewritten. This has two consequences:
+oonfeeWRT ordinarily writes only sections it created and recorded.
+Human-managed sections remain visible but are not silently rewritten, except
+for the explicit, allowlisted management-LAN IPv6 option patches documented
+above. This has three consequences:
 
 - foreign configuration can block a requested intent when both would control
   the same effective behavior;
 - renaming or manually removing an owned section outside the controller can
-  break ownership evidence and requires investigation, not automatic takeover.
+  break ownership evidence and requires investigation, not automatic takeover;
+- an IPv6 option patch does not transfer ownership, so Router managed,
+  controller pruning, and un-adoption do not reconstruct earlier foreign
+  values.
 
 Make a deliberate ownership choice. Do not repeatedly edit the same logical
 network in both LuCI and oonfeeWRT.
@@ -213,6 +264,8 @@ network in both LuCI and oonfeeWRT.
 | Legacy swconfig device | Per-port VLAN writes are not safely generalized | Keep port configuration outside oonfeeWRT and use supported observation/site features |
 | Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.4 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
 | Foreign firewall conflict | A human-owned rule/zone affects the requested traffic path | Inspect the exact UCI/nft behavior, then remove or redesign one owner intentionally |
+| Management-LAN IPv6 target is missing or ambiguous | The exact existing LAN interface or its single matching DHCP section cannot be proved | Correct the OpenWrt section shape deliberately; oonfeeWRT will not guess, create, or claim a target |
+| Disabled is blocked by static IPv6 | `ip6addr`, `ip6prefix`, or `ip6gw` exists on a management-LAN or conventional WAN target | Decide whether the static value is still required; remove it manually only with a recovery-tested plan, then Preview again |
 | Missing `firewall4` capability | The controller cannot establish the required firewall backend | Install/enable the supported OpenWrt component outside adoption, then reprobe |
 | DHCP range invalid | Pool is incomplete, outside the subnet, or conflicts with the interface plan | Correct the CIDR/pool before preview |
 | Stale preview | Desired state or fleet changed after preview | Generate and review a new preview |

@@ -207,23 +207,40 @@ state needs a recorded plan and rollback.
 ## An IPv6 router-advertisement warning remains after choosing Disabled
 
 Saving **Disabled** changes controller desired state only. Generate a fresh
-Preview, resolve any static-IPv6 or foreign-section gate, and Apply the reviewed
-plan before expecting the router to stop advertising IPv6 on that network.
-Static IPv6 addresses, prefixes, or gateways are never deleted implicitly.
+Preview and inspect the option-level plan. On the management LAN, the sections
+remain foreign: v0.1.4 can patch only the allowlisted IPv6 options on the exact
+existing LAN/DHCP and supported conventional WAN targets. It cannot create,
+claim, rename, or delete them. Resolve any missing, ambiguous, wrong-type, or
+static-IPv6 blocker deliberately, then Apply once. Static IPv6 addresses,
+prefixes, or gateways are never deleted implicitly.
 
-After a successful Apply, verify the affected network rather than deleting log
-rows. Existing warning evidence can remain visible until the 24-hour router-log
-retention window expires. Its occurrence count and latest timestamp should stop
-advancing once OpenWrt stops producing the message. v0.1.4 condenses exact
-repeats into one condition per router-log evidence epoch; this bounds controller
-rows but does not suppress the router's own `logd` output.
+After a successful Apply, verify the affected network and **Logs → General**
+rather than deleting log rows. The active card is independent of table filters
+and pagination. It represents only recent evidence with a fresh router-log
+cursor; retained event history is separate. Its occurrence count and latest
+timestamp should stop advancing once OpenWrt stops producing the message.
+Fifteen minutes of continuous fresh quiet can classify the condition as
+historical. Stale collection, a continuity gap, or an unsettled producer epoch
+is unknown—not proof that the fix worked.
+
+Exact repeat compaction shipped in v0.1.1: new matching messages increment one
+condition per router-log producer epoch, and startup converts matching legacy
+raw rows into that bounded form while preserving original receive evidence.
+v0.1.4 adds the filter/page-independent current classifier and guided card,
+including router names, occurrence totals, and **Review IPv6 and Apply**. Fresh
+quiet clears the banner, but an old compacted row can remain until normal
+retention. Neither compaction nor deleting controller evidence suppresses the
+router's own `logd` output. **Router managed** also does not clear the source;
+it simply stops oonfeeWRT from changing existing IPv6 option values.
 
 ## Router clock status is unavailable or reports a large offset
 
 On an adoption created before v0.1.4, ordinary management keeps working but the
 new UTC read is outside the older scoped ACL. Review and apply the updated
 controller-access payload from the device screen. Re-adoption is not required,
-and this read does not set the router clock.
+and this read does not set the router clock. Refresh only when the controller
+names clock access as unavailable and that status is wanted; it is not a
+generic fix for surprising historical timestamps.
 
 If an offset remains, compare the controller and router over an independently
 trusted shell without changing either clock:
@@ -237,7 +254,10 @@ ubus call luci getLocaltime
 Check the router's NTP synchronization, upstream reachability, and timezone
 configuration through OpenWrt. v0.1.4 prefers `luci.getUnixtime` and uses
 `luci.getLocaltime` only as a compatibility fallback, so local timezone display
-must not be treated as UTC.
+must not be treated as UTC. The General Logs warning is based only on a fresh,
+successful UTC comparison and appears at an absolute offset of five minutes or
+more. Events remain ordered by router source time, and fixing the clock does not
+rewrite already stored timestamps.
 
 ## Preview is blocked
 
@@ -245,7 +265,8 @@ Read the named gate. Common causes include:
 
 - a device is unreachable;
 - capability evidence is missing or stale;
-- a foreign/human-managed section conflicts with desired state;
+- a foreign/human-managed section conflicts with desired state, including an
+  unsafe or ambiguous target for the narrow management-LAN IPv6 option patch;
 - uncommitted router edits are present;
 - the change touches the controller's management path;
 - hardware/driver facts do not prove a requested option; or
@@ -261,8 +282,8 @@ Do not click Apply again immediately.
 1. Read the durable operation and per-device receipt.
 2. Wait through the displayed OpenWrt rollback window.
 3. Test the management address from the controller host.
-4. Use independent LuCI/SSH access to inspect pending UCI and named owned
-   sections.
+4. Use independent LuCI/SSH access to inspect pending UCI, named owned
+   sections, and any exact management-LAN IPv6 patch targets in the receipt.
 5. Determine whether OpenWrt reverted or the controller confirmed.
 6. After the device is stable, generate a new Preview.
 7. Download diagnostics if evidence remains unclear.
@@ -280,6 +301,27 @@ Check source coverage and last-observed times. If durable physical adjacency is
 worth a router package/service, review the optional LLDP plan. Do not install
 `lldpd` outside the controller and then expect its rollback ledger to be
 accurate.
+
+v0.1.4 uses fresh FDB, STP-port, LLDP, association, and managed-peer evidence
+to project a transitive path in the current view. A possible upstream transit
+candidate is hidden only while a matching direct placement and every required
+hop are fresh. Raw candidate intervals remain in history. If direct proof
+closes or a required source becomes stale, fails, or is ambiguous, the
+candidate can reappear rather than being hidden by old evidence.
+
+If a client or managed device appears under several direct parents:
+
+1. Expand every edge's Evidence cell and note which device and physical port
+   observed the MAC.
+2. Check FDB, STP port mapping, direct association/placement, and LLDP source
+   freshness for each hop.
+3. Wait for one complete fresh topology cycle after reconnecting or moving a
+   device; do not delete inventory to force a layout.
+4. Treat a clean FDB-only edge as **inferred**. `vlan_available=false` means
+   stock BusyBox supplied no VLAN provenance; by itself that is neutral, not a
+   source failure.
+5. Add the optional LLDP workflow only when stronger managed-peer evidence is
+   worth its package, service, and rollback footprint.
 
 ## WAN route or WAN throughput is unavailable
 

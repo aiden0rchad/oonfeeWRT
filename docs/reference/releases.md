@@ -1,8 +1,9 @@
 # Release notes
 
-The documentation describes the current patch release, **v0.1.4**. Release
-artifacts, checksums, container digests, signatures, and attached notes on the
-GitHub release are the publication source of truth.
+The documentation describes the current stable patch release, **v0.1.4**,
+published September 3, 2026. Release artifacts, checksums, container digests,
+signatures, and attached notes on the GitHub release are the publication source
+of truth.
 
 ## Current release
 
@@ -12,16 +13,31 @@ GitHub release are the publication source of truth.
 
 v0.1.4 adds explicit per-network IPv6 preserve, prefix-delegation, and disabled
 policies behind Preview and Apply. Existing networks default to Router managed
-and receive no IPv6 write merely by upgrading. It also condenses repeated IPv6
-router-advertisement warnings in the controller database, adds read-only router
+and receive no IPv6 write merely by upgrading. Explicit management-LAN modes
+are a narrow exception to the usual owned-section rule: they may patch only
+allowlisted options on exact existing LAN/DHCP and supported conventional
+`wan`/`wan6` sections, and cannot create, claim, rename, or delete them.
+
+The release builds on exact IPv6-warning row compaction shipped in v0.1.1. Its
+new Logs condition state is independent of the selected event filters and page,
+names each affected router, reports the retained occurrence count, and links to
+the relevant IPv6 setting. Verified quiet log coverage clears the current
+banner without deleting retained history. v0.1.4 also adds read-only router
 clock observation, corrects transitive FDB presentation in wired topologies,
-and reduces work on unchanged topology data.
+and avoids semantic history splits for same-geometry partial observations.
 
 Docker Compose can now publish on one explicitly selected management IP through
 `OONFEE_HTTP_BIND`; loopback remains the default. The release also updates
 `golang.org/x/crypto` for two reachable SSH denial-of-service fixes. See the
 versioned notes for the IPv6 evidence boundary, existing-adoption ACL refresh,
 and reporter-validation status.
+
+The first v0.1.4 start migrates schema 19 to schema 20 without configuring
+routers. Preserve and verify the complete pre-upgrade database, keyring, and
+runtime passphrase recovery unit: v0.1.3 cannot open schema 20, so changing only
+the binary or image tag is not a rollback. Existing adoptions need a separately
+reviewed ACL refresh only if router-clock status is wanted; ordinary polling
+and management continue without re-adoption.
 
 ## Earlier releases
 

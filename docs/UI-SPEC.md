@@ -108,6 +108,33 @@ omits the additive `wan_interface` field retains the compatibility fallback
 unsupported or ambiguous route/netifd evidence never invokes that
 fallback or becomes a guessed uplink.
 
+v0.1.4 adds **Router managed**, **Prefix delegation**, and **Disabled** to each
+network editor. Router managed is the upgrade-safe default and does not restore
+values changed by an earlier Apply. The explicit management-LAN modes present
+their allowlisted, option-level changes in Preview; missing, ambiguous,
+wrong-type, or conflicting static-IPv6 targets render a blocker instead of a
+best-effort control. The UI must not describe these foreign sections as adopted
+or owned.
+
+**Logs → General** receives current IPv6 condition state independently of the
+selected event filters and page. It names affected routers, totals retained
+occurrences, and links **Review IPv6 and Apply** to the primary-network editor.
+Exact repeat/startup compaction predates this UI and shipped in v0.1.1. Fresh
+quiet coverage clears the current card without deleting retained history;
+stale, gapped, or unsettled coverage is unknown, not a success state. A
+separate Router clock notice appears for a fresh absolute UTC offset of at least
+five minutes. It is read-only, does not rewrite event timestamps, and can show
+an access-refresh action on adoptions whose older ACL lacks the clock methods.
+
+The current Topology view uses fresh, source-aware FDB, STP-port, LLDP, and
+direct-placement evidence to suppress a redundant transitive managed-parent
+candidate. Raw intervals remain visible in history, and stale, failed, or
+ambiguous proof makes the candidate visible again. Clean physical FDB-only
+paths are labelled inferred. Missing BusyBox VLAN provenance is neutral
+unavailable metadata, surfaced through the Unknown VLAN count rather than an
+edge warning. The browser serializes current/history requests, cancels
+abandoned fetches, and resets a VLAN filter that no longer exists.
+
 ---
 
 ## 1. Frame

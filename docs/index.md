@@ -38,6 +38,14 @@ features:
 
 <p class="doc-kicker">Documentation for v0.1.4</p>
 
+::: tip Current release — v0.1.4
+Published September 3, 2026. This release adds explicit per-network IPv6
+policy, actionable IPv6 log conditions, read-only router-clock checks,
+source-aware transitive wired topology, lower topology database load, and a
+configurable Docker host bind. [See what changed](/reference/releases) or
+[follow the schema-safe upgrade guide](/installation/upgrades).
+:::
+
 ## One control plane, explicit boundaries
 
 oonfeeWRT is a self-hosted controller for small OpenWrt networks. It gives a
@@ -97,11 +105,11 @@ optional package workflow in v0.1.4 is LLDP, with a separate plan and rollback.
   </div>
   <div class="capability-card">
     <h3>Topology and RF</h3>
-    <p>Current and historical topology with evidence confidence, VLAN and medium filters, radio inventory, channel plans, utilization, interference, and acknowledged RF scans.</p>
+    <p>Current and historical topology with evidence confidence, source-aware multi-hop FDB/LLDP projection, VLAN and medium filters, radio inventory, channel plans, utilization, interference, and acknowledged RF scans.</p>
   </div>
   <div class="capability-card">
     <h3>Site configuration</h3>
-    <p>Networks, VLANs, IPv4 CIDRs, DHCP, firewall zones, WLANs, AP groups, 802.11k/v/r, mesh backhauls, wireless uplinks, and bounded per-device overrides.</p>
+    <p>Networks, VLANs, IPv4 CIDRs, DHCP, explicit Router managed/Prefix delegation/Disabled IPv6 policy, firewall zones, WLANs, AP groups, 802.11k/v/r, mesh backhauls, wireless uplinks, and bounded per-device overrides.</p>
   </div>
   <div class="capability-card">
     <h3>Policy Engine</h3>
@@ -154,9 +162,10 @@ router-hosted agent. Remote sites need an existing management route or VPN.
    controller. Saving desired state does not silently Apply it.
 4. **Preview.** Review per-device changes, omissions, conflicts, source gaps,
    and acknowledgements.
-5. **Apply with rollback.** The controller stages owned UCI changes, uses the
-   OpenWrt rollback window, reconnects, and confirms only after reading the
-   expected state.
+5. **Apply with rollback.** The controller stages reviewed owned UCI changes
+   and any explicitly selected, allowlisted management-LAN IPv6 option patches,
+   uses the OpenWrt rollback window, reconnects, and confirms only after reading
+   the expected state.
 6. **Keep evidence.** Events, audit history, rollups, and durable operation
    receipts explain what happened later.
 

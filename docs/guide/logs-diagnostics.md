@@ -36,6 +36,66 @@ A useful incident filter sequence:
 
 v0.1.4 does not provide a device or free-text search filter on the Logs page.
 
+## Understand the active IPv6 condition
+
+On **Logs → General**, v0.1.4 adds an IPv6 condition card above the event
+table. It recognizes only the exact OpenWrt odhcpd warning that router
+advertisements have no usable default route. The card is queried independently
+of the selected event filters and page, so paging past the underlying event or
+filtering out warnings does not hide an active condition. It names affected
+routers, totals occurrences, explains that IPv4 is unaffected, and links to the
+network IPv6 editor through **Review IPv6 and Apply**.
+
+The card and stored event rows answer different questions:
+
+- **Active card:** the latest matching warning was received within 10 minutes,
+  in the current router-log producer epoch, and the router-log cursor is no more
+  than three minutes stale.
+- **Historical row:** a compact record remains available for investigation even
+  after it is no longer recent. Fifteen minutes of quiet with continuous fresh
+  coverage can classify it as historical.
+- **Unknown:** stale coverage, a continuity gap, a clock anomaly in controller
+  receive time, or an unsettled producer-epoch change prevents either an active
+  or cleared claim. Read the coverage notice; an absent active card alone is not
+  proof of resolution.
+
+Exact repeat compaction shipped in v0.1.1: new repeats increment one condition
+row per router-log producer epoch rather than adding one event row each, and
+every startup transactionally condenses matching legacy raw rows before the API
+serves. v0.1.4 adds the current-condition classifier and guided card, not the
+underlying compaction. Original receive evidence is preserved, so the startup
+pass does not make an old warning active. With fresh coverage the banner clears
+after the warning is no longer recent; continued quiet reaches historical
+classification after 15 minutes. Neither path changes or deletes the router's
+own `logd` messages.
+
+To resolve the source, open the primary management network, choose **Prefix
+delegation** if a working upstream delegation should be served or **Disabled**
+if that LAN should not run IPv6, then generate a fresh Preview and Apply it.
+**Router managed** preserves existing option values and does not clear the
+source condition by itself. Do not delete event rows as a repair.
+
+## Interpret router-clock warnings
+
+The General view also compares a router's freshly observed UTC epoch with the
+controller. A notice appears only for a fresh, successful comparison whose
+absolute offset is at least five minutes. It uses `luci.getUnixtime`, with
+`luci.getLocaltime` as an older-OpenWrt compatibility fallback. This is a
+read-only measurement; oonfeeWRT does not set either clock.
+
+General events remain ordered by the router-supplied source time. The clock
+notice does not rewrite older event timestamps or reinterpret delivery delay as
+clock skew. Correct NTP reachability and synchronization in OpenWrt, then wait
+for a successful full device poll.
+
+Adoptions created before v0.1.4 retain their older scoped ACL. Normal polling,
+Preview, and Apply continue to work, but clock status alone can remain
+unavailable. If that status is wanted, an Administrator must open the device,
+review, and approve the updated controller-access payload; re-adoption is not
+required. Do not refresh access merely because a historical event has an
+unexpected timestamp—first confirm that the UI names the clock source as
+unavailable.
+
 ## Retention boundaries
 
 - OpenWrt-origin logs: 24 hours, bounded to 50,000 per device and 100,000
@@ -116,8 +176,10 @@ keep the original hash/file when chain of custody matters.
 |---|---|---|
 | Expected event is absent | Wrong view/filter, retention expired, operation never crossed its audit boundary, or storage error | Clear filters, check both views, inspect controller logs and durable operation receipt |
 | Device log stream stops | Device/source unavailable or log retention/collection gap | Open device capability/source state and correlate last successful poll |
-| Many repeated warnings | Persistent source failure or unstable device rather than separate incidents | Group by device/type/time; fix the root source instead of acknowledging each row |
-| Timestamps appear surprising | Browser locale versus stored epoch/UTC context | Use exact detail and compare with controller host time |
+| IPv6 condition count is large but the table has one row | Exact repeats are condensed per router-log producer epoch | Use first/latest evidence and occurrence count; fix IPv6 at the source rather than deleting the row |
+| Old IPv6 row remains but no active card is shown | Retained history and current condition status are independent | Check fresh log coverage and latest receive time; a historical row can remain until retention, while stale/gapped coverage is unknown rather than cleared |
+| Timestamps appear surprising | Browser locale, router clock skew, or source time differs from controller receive time | Use exact detail, check the fresh Router clock notice, and compare controller/router UTC without changing either clock |
+| Router clock status is unavailable after upgrade | The older adopted ACL lacks the new LuCI clock-read methods, or the latest full poll could not obtain them | Review the device's named access gap and approve the updated ACL payload only if clock status is wanted; do not re-adopt |
 
 ## Troubleshooting diagnostics
 

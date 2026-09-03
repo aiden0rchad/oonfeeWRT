@@ -62,7 +62,7 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#0f1114', media: '(prefers-color-scheme: dark)' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.4 Documentation' }],
-    ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with safe configuration, compatibility reporting, and evidence-backed WAN telemetry.' }],
+    ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with safe Apply, explicit IPv6 policy, evidence-backed topology, and recovery.' }],
     ['meta', { property: 'og:image', content: 'https://aiden0rchad.github.io/oonfeeWRT/social-card.svg' }],
   ],
   markdown: {

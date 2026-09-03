@@ -3,10 +3,10 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets schema-20 patch release `v0.1.4`. The
+This guide targets the current stable, schema-20 release `v0.1.4`, published
+September 3, 2026. The
 [GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4)
-and its completed tag workflow are the publication source of truth; run the
-download commands only after that release is available. Back up both the
+and its completed tag workflow are the publication source of truth. Back up both the
 controller and each router before using it on a network you cannot afford to
 interrupt. Upgrade and rollback from historical `v0.1.0-rc.1` are documented
 below.
@@ -29,7 +29,12 @@ device address. Router changes are separate, default-off actions:
 3. **Network configuration:** WLAN, network, DHCP, firewall, and explicit IPv6
    policy changes occur only after Preview and Apply. They are controller
    desired state, not hidden adoption side effects. Existing networks upgrade
-   to **Router managed**, which leaves their IPv6 settings unchanged.
+   to **Router managed**, which leaves their IPv6 settings unchanged. Explicit
+   **Prefix delegation** or **Disabled** policy is the sole narrow exception to
+   section ownership: it may patch allowlisted options on the exact existing
+   management LAN, its single matching DHCP section, and conventional
+   `wan`/`wan6`; it never creates, claims, renames, or deletes those foreign
+   sections, and ambiguous or conflicting layouts block Preview.
 
 Un-adoption removes the scoped login and ACL. It is blocked until any recorded
 LLDP capability is rolled back, so package residue cannot be silently orphaned.
@@ -103,7 +108,7 @@ oonfeewrtd \
   -listen 127.0.0.1:8080
 ```
 
-Open `http://127.0.0.1:8080` and create the first administrator. The generated
+Open `http://127.0.0.1:8080` and create the first owner. The generated
 passphrase enables unattended restarts: it is no longer an independent second
 factor, so protect it with host permissions and backups. Setting
 `OONFEE_PASSPHRASE` is rejected; secrets never belong in environment values.
@@ -113,7 +118,7 @@ first run and once after each restart.
 
 ## Run the container
 
-After the tag workflow succeeds, its immutable release tag is
+The published immutable release image is
 `ghcr.io/aiden0rchad/oonfeewrt:v0.1.4`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
@@ -164,15 +169,29 @@ docker run -d \
   ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
 ```
 
-The release archive also includes `docker-compose.yml`. It uses the same final
-image, a named data volume, a mode-0600 passphrase file owned by UID 65532, and
-the loopback-only bridge mapping above. Host networking is documented in the
-file but remains an explicit Linux-only opt-in.
-
-Set the exact published image version when using the current v0.1.4 file:
+To use Compose instead of the direct `docker run` command, create a private
+deployment directory, download the exact v0.1.4 file, and create its dedicated
+mode-0600 passphrase. The service uses the same release image, a named data
+volume, and a loopback-default bridge mapping. Its `OONFEE_HTTP_BIND` override
+can select one deliberate management address; host networking remains an
+explicit Linux-only edit documented in the file.
 
 ```sh
-OONFEE_VERSION=v0.1.4 docker compose up -d
+install -d -m 0700 oonfeewrt-compose
+cd oonfeewrt-compose
+umask 077
+curl --fail --location \
+  --output docker-compose.yml \
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
+head -c 32 /dev/urandom | base64 > passphrase
+sudo chown 65532:65532 passphrase
+sudo chmod 600 passphrase
+
+printf '%s\n' \
+  'OONFEE_VERSION=v0.1.4' \
+  'OONFEE_HTTP_BIND=127.0.0.1' > .env
+chmod 600 .env
+docker compose up -d
 ```
 
 The v0.1.4 Compose file keeps the loopback default but accepts

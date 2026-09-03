@@ -79,13 +79,53 @@ exist.
 When per-device or global row-count caps truncate router-log evidence, the
 controller records a continuity gap rather than making the remaining history
 look complete. The ordinary 24-hour age prune does not add that marker.
-The exact OpenWrt odhcpd IPv6 router-advertisement/no-default-route warning is
-condensed into one warning condition per router-log producer epoch. Repeats
-increment its occurrence count while preserving warning severity and
+Since v0.1.1, the exact OpenWrt odhcpd IPv6
+router-advertisement/no-default-route warning has been condensed into one
+warning condition per router-log producer epoch. Repeats increment its
+occurrence count while preserving warning severity and
 first/latest source evidence; similar or unrelated warnings remain individual
 rows. This bounds controller SQLite rows, not the router's own `logd` output.
 Correct the upstream IPv6/prefix-delegation configuration or disable IPv6
 service on the affected LAN to stop the message at its source.
+
+Also since v0.1.1, startup condenses exact matching legacy raw rows in one
+transaction before the API serves requests. It retains their original
+first/latest evidence and receive timing, then removes only the raw duplicates
+represented by the condition record. It does not relabel an old record as newly
+observed.
+
+v0.1.4 adds the separate, non-destructive current-condition query and guided
+card in **Logs → General**. It is independent of event filters and pagination,
+names affected routers, totals occurrences, links to **Review IPv6 and Apply**,
+and displays only a recent condition backed by a fresh router-log cursor. The
+shipped windows are 10 minutes for recent evidence, three minutes for cursor
+freshness, and 15 minutes of continuous quiet before historical
+classification. The banner clears when evidence is no longer recent; stale or
+gapped coverage and unsettled producer changes are **unknown**, not proof of
+recovery. Thus a retained compact row can outlive the active card, and removing
+a row is neither necessary nor sufficient to fix IPv6 on the router.
+
+Router-clock comparisons are different again: the collector keeps only a
+current, successful UTC comparison in memory for the General Logs notice. They
+are not a durable clock time series and do not rewrite persisted router event
+timestamps. The notice is shown for a fresh absolute offset of at least five
+minutes.
+
+### Current topology projection versus retained intervals
+
+v0.1.4 can remove a redundant managed-parent candidate from the **current**
+presentation while fresh FDB/LLDP/direct-placement evidence proves that it was
+seen only through a multi-hop path. This is a view-time projection, not
+retention or data deletion: the raw link interval and its evidence remain in
+topology history. If a required source becomes stale, fails, is ambiguous, or
+the direct placement closes, the candidate can appear again rather than being
+suppressed by old proof.
+
+Clean FDB-only placements are stored as inferred. Missing BusyBox VLAN
+provenance is retained as neutral `vlan_available=false` evidence instead of an
+edge warning by itself. Unchanged link observations extend the existing
+interval instead of closing and recreating equivalent history; closed intervals
+still follow the 31-day policy.
 
 ### Effective-WAN retention (introduced in v0.1.3)
 

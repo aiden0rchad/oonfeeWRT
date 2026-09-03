@@ -183,11 +183,16 @@ contract, omitted `wan_interface` means an older server and retains the rolling
 compatibility fallback; JSON `null` from v0.1.3 means no current proof and must
 not trigger a client-side guess.
 
-### Foreign UCI is read-only
+### Foreign UCI is read-only except for explicit management-LAN IPv6 patches
 
-Render/apply/cleanup operates only on controller-owned sections. A conflicting
-foreign section is a gate. Ownership and cleanup tests are security and data-loss
-tests, not formatting tests.
+Ordinary render/apply/cleanup operates only on controller-owned sections. The
+sole exception is an explicitly selected v0.1.4 management-LAN IPv6 mode, whose
+rendered `Patch` operations are option-allowlisted and limited to the exact
+existing LAN interface, its single matching DHCP section, and supported
+conventional `wan`/`wan6` sections. Patches may not create, claim, rename,
+prune, or delete foreign sections. A conflicting or ambiguous foreign target is
+a gate. Ownership and cleanup tests are security and data-loss tests, not
+formatting tests.
 
 ### Preview does not authorize a changed plan
 

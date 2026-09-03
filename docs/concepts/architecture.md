@@ -154,11 +154,18 @@ policies, device functions, uplinks, meshes, and bounded per-device overrides.
 The renderer turns that model into deterministic UCI sections for each selected
 device.
 
-oonfeeWRT coexists with LuCI by owning only the sections it creates. Managed
-sections have an `oowrt_` name and/or an `oonfeewrt=1` marker, and the database
-also records ownership. Existing human-managed sections remain visible but are
-not silently rewritten or deleted. A foreign section that conflicts with the
-desired result is a blocking conflict, not permission to take it over.
+oonfeeWRT coexists with LuCI by owning the sections it creates. Managed sections
+have an `oowrt_` name and/or an `oonfeewrt=1` marker, and the database also
+records ownership. Existing human-managed sections remain visible and ordinary
+rendering never rewrites or deletes them.
+
+v0.1.4 has one narrow, non-owning exception. After an operator explicitly
+selects **Prefix delegation** or **Disabled**, Preview may contain allowlisted
+option patches for the exact existing management LAN interface, its single
+matching DHCP section, and supported conventional `wan`/`wan6` sections. These
+patches cannot create, claim, rename, prune, or delete a foreign section.
+Ambiguous, wrong-type, or conflicting static-IPv6 targets block Preview rather
+than widening ownership.
 
 ## Preview and Apply pipeline
 
@@ -166,11 +173,12 @@ Saving desired state changes the controller database only. It does not write a
 router. Router changes follow a separate workflow:
 
 1. **Render:** build the complete per-device desired documents.
-2. **Diff:** compare desired state with current, owned router sections.
+2. **Diff:** compare desired state with current owned sections and any
+   explicitly selected, allowlisted management-LAN IPv6 option patches.
 3. **Preview:** show exact creates, updates, deletes, gaps, and required
    acknowledgements.
 4. **Fleet preflight:** verify every selected device before the first write.
-5. **Apply:** stage owned UCI changes with OpenWrt rollback enabled.
+5. **Apply:** stage the reviewed UCI changes with OpenWrt rollback enabled.
 6. **Health verification:** reconnect and read the expected runtime state.
 7. **Confirm:** cancel OpenWrt's rollback timer only after verification passes.
 8. **Receipt:** preserve the operation and per-device outcomes so a page reload

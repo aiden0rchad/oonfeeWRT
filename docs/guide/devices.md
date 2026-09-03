@@ -208,6 +208,14 @@ identity lacks a currently required permission. This uses the device
 administrator credential for a bounded update. Review the exact payload again;
 do not treat it as a generic repair step for transport failures.
 
+v0.1.4 adds read-only router UTC observation through `luci.getUnixtime`, with
+`luci.getLocaltime` as a compatibility fallback. An adoption created by an
+older release keeps its older ACL: device management, telemetry, Preview, and
+Apply continue normally, while router-clock status can be unavailable. If the
+clock comparison is useful, review and approve the updated access payload and
+wait for the next successful full poll. Re-adoption is not required. The refresh
+grants the read; neither the refresh nor the poll sets the router clock.
+
 ## Optional LLDP
 
 LLDP can improve physical topology evidence, but it is not part of adoption.
@@ -229,10 +237,22 @@ Rollback restores the recorded configuration and service state and removes
 only packages recorded as additions. A live LLDP ownership record blocks
 un-adoption until rollback is resolved.
 
+In v0.1.4, fresh LLDP port evidence can also help distinguish a direct managed
+peer from client FDB entries merely seen through that peer. The current
+topology projection may hide the redundant transit candidate while a complete
+fresh multi-hop path exists. Raw intervals remain in history, and the candidate
+returns if direct proof becomes stale, fails, or closes. Installing LLDP does
+not turn an inferred client path into permanent truth.
+
 ## Un-adopt safely
 
 Un-adoption first plans restoration/removal of controller-owned configuration,
-then removes the scoped login and ACL. It must not rewrite human-owned UCI.
+then removes the scoped login and ACL. It does not rewrite human-owned UCI.
+That also means it does not reconstruct earlier values for the option-only
+management-LAN IPv6 patches that an operator explicitly Applied in v0.1.4.
+Switch the desired IPv6 policy deliberately before un-adoption or restore the
+needed operator values from a router backup afterward; **Router managed** alone
+is a no-op, not an undo operation.
 
 Before starting:
 
@@ -256,6 +276,7 @@ from the controller.
 | Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.4 |
 | Host key or certificate changed | Factory reset, firmware reinstall, address reuse, interception | Verify identity out of band before force-un-adopting and adopting the device again |
 | Metrics say unavailable | Source not readable, driver lacks metric, ACL gap, or no completed poll | Read the source explanation; reprobe or refresh ACL only when it names a repairable cause |
+| Router clock status alone is unavailable after upgrade | The adoption's older ACL predates the read-only LuCI clock methods | If clock status is wanted, review and approve the updated controller-access payload, then wait for a full poll; do not re-adopt |
 | WAN chart is unavailable | No current main-table IPv4 default, equal-metric/ECMP ambiguity, failed route/interface read, or no unique logical-interface mapping | Read the default-route source gap and wait for the next network/topology cycle after correcting the route; do not rename interfaces or refresh the ACL speculatively |
 | Device flips offline/online | Slow polls, unstable transport, adaptive backoff, overloaded router | Review poll duration, overhead, controller logs, and network path before shortening intervals |
 | Un-adoption is blocked | Active LLDP ledger or another conflicting operation | Roll back LLDP and allow active operations to finish |

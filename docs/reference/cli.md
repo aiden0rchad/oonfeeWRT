@@ -5,8 +5,8 @@ description: Exact oonfeewrtd and recovery helper flags, environment variables, 
 
 # CLI and environment reference
 
-This reference applies to the **v0.1.4** release executables
-`oonfeewrtd` and `oonfeewrt-recoverycheck`.
+This reference applies to the stable **v0.1.4** release, published September 3,
+2026, and its `oonfeewrtd` and `oonfeewrt-recoverycheck` executables.
 
 ## `oonfeewrtd`
 
@@ -148,23 +148,33 @@ application behavior; neither adds a daemon flag or environment variable.
   contains fields outside the share-safe allowlist.
 - Effective-WAN evidence is collected automatically for adopted gateways on the
   network/topology cycle. Existing v0.1.2 adoptions need no CLI migration, ACL
-  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.3.
+  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.4.
 
 v0.1.4 adds per-network IPv6 policy, router-time observation, topology
-projection fixes, and repeated IPv6-warning compaction as application behavior,
-not daemon flags. Existing adoptions keep ordinary polling and management
-access. Router-clock status alone needs a separately reviewed controller-access
-payload refresh; re-adoption is not required.
+projection fixes, and filter- and page-independent current state/action UI for
+IPv6 warning conditions as application behavior, not daemon flags. Exact-row
+warning compaction predates this release and shipped in v0.1.1. Verified quiet
+log coverage clears the current condition banner without deleting retained
+history or router logs.
+
+Existing adoptions keep ordinary polling and management access. Router-clock
+status alone needs a separately reviewed controller-access payload refresh;
+re-adoption is not required. Explicit management-LAN IPv6 modes are a narrow
+exception to the normal owned-section write rule: behind Preview and Apply they
+may patch only allowlisted options on exact existing LAN/DHCP and supported
+conventional `wan`/`wan6` sections, never create, claim, rename, or delete them.
 
 `OONFEE_HTTP_BIND` belongs to the supplied Docker Compose file and selects the
 host-side publish address. It is not read by `oonfeewrtd` and does not replace
 the container's `OONFEE_LISTEN=:8080`.
 
 v0.1.4 uses database schema 20. Its forward migration from schema 19 is
-automatic, but a v0.1.3 executable cannot open the migrated database. A
-rollback requires the matching pre-upgrade schema-19 database, keyring, and
-passphrase. CLI compatibility does not extend the current REST/WebSocket
-surface into a stable third-party API guarantee.
+automatic and does not itself configure routers, but a v0.1.3 executable cannot
+open the migrated database. Before first startup, preserve and verify the
+matching schema-19 database, keyring, and runtime passphrase recovery unit. A
+rollback must restore that unit; changing only the binary or image tag is not a
+rollback. CLI compatibility does not extend the current REST/WebSocket surface
+into a stable third-party API guarantee.
 
 ## Healthcheck
 

@@ -23,7 +23,7 @@ mutation. A device appearing in the UI is never permission to change it.
 | Controller-host speed test | No router API/SSH call | No | Sends about 15 MiB through the normal WAN path; may saturate it for up to 30 seconds |
 | Effective-WAN/topology collection | Read-only ubus and bounded `file.exec` calls | No | Observes the route table and logical interfaces; does not change routes, metrics, PPPoE, firewall, or failover |
 | Adoption with access payload accepted | Yes, over SSH | Yes | Creates/replaces the scoped login and ACL only |
-| Apply | Yes, over ubus | Yes | Changes only reviewed, controller-owned UCI sections |
+| Apply | Yes, over ubus | Yes | Changes reviewed controller-owned UCI sections and, only for an explicit management-LAN IPv6 mode, the allowlisted options on exact existing foreign sections described below |
 | RF scan | Yes | No intended persistent change | Serving radio leaves channel temporarily; clients may be disrupted |
 | Verify on air | Yes | No intended persistent change | Uses disruptive scans and therefore requires acknowledgement |
 | Optional LLDP workflow | Yes, over SSH | Yes | May refresh package indexes, install official-feed packages, configure interfaces, and start a service after separate approvals |
@@ -83,12 +83,29 @@ approval.
 ## Ownership prevents silent takeover
 
 The controller renders named/marked UCI sections and records their ownership.
-It writes and cleans up only those sections. Foreign sections created through
-LuCI, SSH, another controller, or a package stay outside that boundary.
+It ordinarily writes and cleans up only those sections. Foreign sections
+created through LuCI, SSH, another controller, or a package stay outside that
+boundary.
+
+v0.1.4 has one deliberately narrow exception. When an operator selects
+**Prefix delegation** or **Disabled** for the Gateway management LAN, Preview
+may propose option-only patches to the exact existing LAN interface, its one
+matching DHCP section, and supported conventional `network.wan`/`network.wan6`
+sections when present. The patch is limited to IPv6 assignment, RA, DHCPv6,
+NDP, and conventional upstream IPv6-enable options. It cannot create, claim,
+rename, delete, or mark a foreign section as owned. A missing or ambiguous LAN
+or DHCP target, a wrong-type present target, or static IPv6 state that Disabled
+would need to remove blocks Preview. Absent `wan`/`wan6` sections remain absent.
+
+**Router managed** makes no such option patch. Returning to Router managed or
+un-adopting a device does not reconstruct the values from before an earlier
+explicit IPv6 Apply. Keep a router backup and restore operator-authored values
+deliberately when reversal is required.
 
 If a foreign section conflicts with desired state, stop and decide which system
 should own it. Do not delete or rename the foreign section merely to make a
-Preview green without first understanding its role.
+Preview green without first understanding its role. The management-LAN IPv6
+exception does not turn any other foreign conflict into writable state.
 
 ## How Apply protects connectivity
 
@@ -108,14 +125,15 @@ generate a fresh Preview; do not reuse a stale plan.
 
 ### After staging
 
-The apply engine stages owned UCI changes and calls OpenWrt Apply with a 90-second
-rollback timer, followed by a 15-second revert-verification grace period. It then
-reconnects and verifies the expected configuration and runtime
+The apply engine stages reviewed controller-owned UCI changes and any explicit,
+allowlisted management-LAN IPv6 option patches, then calls OpenWrt Apply with a
+90-second rollback timer followed by a 15-second revert-verification grace
+period. It reconnects and verifies the expected configuration and runtime
 health. Only a successful verification is confirmed. If connectivity is lost
 or verification fails, the OpenWrt rollback timer is left active so it can
-restore the previous state. A fresh read then distinguishes a proved
-`reverted` outcome from `unknown`; an unknown or stranded operation may still
-have the change live and must be inspected before retrying.
+restore the previous state. A fresh read then distinguishes a proved `reverted`
+outcome from `unknown`; an unknown or stranded operation may still have the
+change live and must be inspected before retrying.
 
 The operation continues independently of the browser request. Reloading the
 page reads the durable status; it does not submit the write again. A fleet
@@ -148,7 +166,8 @@ If the UI reports a failed, unknown, interrupted, or stranded result:
 3. Test the device's management address from the controller host.
 4. Check the durable Apply receipt after reconnecting or restarting the UI.
 5. Use LuCI or SSH from an independent management path to inspect pending UCI
-   state and the affected owned sections.
+   state, the affected owned sections, and any exact management-LAN IPv6 patch
+   targets named by the operation.
 6. Confirm whether OpenWrt restored the pre-change configuration before making
    another change.
 7. Generate a new Preview. Never assume an old preview token still describes
@@ -156,9 +175,9 @@ If the UI reports a failed, unknown, interrupted, or stranded result:
 8. Download a diagnostics bundle if the state remains unclear; it uses stored
    evidence and makes no router call.
 
-If you must repair manually, change only the sections named by the Preview and
-operation receipt. Preserve foreign sections and collect the event/audit detail
-before clearing anything.
+If you must repair manually, change only the sections and options named by the
+Preview and operation receipt. Preserve unrelated foreign state and collect the
+event/audit detail before clearing anything.
 
 ## Optional packages require a second boundary
 

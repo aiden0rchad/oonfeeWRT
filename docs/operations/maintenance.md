@@ -89,6 +89,13 @@ every 15 minutes. It supports ordinary DHCP, static, and PPPoE defaults, but is
 not a rapid failover monitor and does not model policy routing, `mwan3`,
 manual WAN selection, per-uplink health, or bond members.
 
+For wired placement, v0.1.4 projects a fresh multi-hop path instead of drawing
+the same managed device or client directly below every upstream router that saw
+its MAC. The current projection can hide a possible transit FDB candidate only
+while the matching direct placement and all required source evidence remain
+fresh. Raw intervals stay in history, and uncertain candidates return when
+that proof becomes stale, fails, or closes.
+
 ### Devices
 
 For each device, review:
@@ -105,6 +112,24 @@ An unavailable value is not zero. Unknown evidence may come from a denied rpcd c
 ### Logs
 
 Use **General** for operational events and **Audit** for authorized controller actions. Event details retain producer identity, provenance, severity, and supplied network fields. Coverage gaps are part of the result; the controller does not claim history for a source it did not observe.
+
+Two v0.1.4 notices deserve routine attention:
+
+- Exact odhcpd repeat compaction shipped in v0.1.1: repeats share one
+  occurrence-counted row per router-log producer epoch, and startup condenses
+  matching legacy rows. v0.1.4 adds the IPv6 router-advertisement current card,
+  independent of selected filters and page; it names routers, totals
+  occurrences, and links to **Review IPv6 and Apply**. The banner clears after
+  fresh collection stays quiet, while retained history remains. Verify fresh
+  log coverage before treating an absent banner as resolved.
+- The Router clock card appears only for a fresh UTC comparison at least five
+  minutes away from the controller. General events remain ordered by router
+  source time. Correct OpenWrt NTP rather than editing stored events.
+
+An older adoption does not need re-adoption for v0.1.4. Its existing scoped ACL
+continues ordinary management, but the new `luci.getUnixtime` read (or
+`luci.getLocaltime` fallback) may remain unavailable. Review and approve the
+updated controller-access payload only when clock status is wanted.
 
 ## Understand polling behavior
 
@@ -125,6 +150,11 @@ Network and topology discovery, including the effective WAN route, uses a
 malformed, ambiguous, or inconsistent route/interface evidence leaves the
 current source unavailable and preserves the last proved network cache; it
 does not guess a new uplink.
+
+Router UTC is a read-only observation folded into a normal successful full
+poll. The current comparison is held in memory rather than retained as a time
+series. A failed or denied clock method therefore makes clock status
+unavailable; it does not invalidate the rest of an otherwise useful poll.
 
 The per-device poll-interval control can make baseline polling slower, not faster than the controller default. Use it for constrained or remote hardware. After saving, the daemon re-registers the device so the new interval takes effect without restart.
 
@@ -234,10 +264,16 @@ Periodically:
 2. Keep its export passphrase separately and run a disposable restore preview.
 3. Review owner accounts and active sessions.
 4. Review device firmware/capability freshness and explicit ACL-refresh notices.
-5. On PPPoE or multi-uplink sites, compare the Dashboard and topology uplink
+5. Review active IPv6 conditions with router-log coverage; use Prefix
+   delegation or Disabled only through a fresh Preview and Apply, not by
+   deleting retained events.
+6. Check Router clock notices. On an older adoption, refresh the ACL only if
+   the named clock-read gap is the missing feature; correct large offsets in
+   OpenWrt NTP settings.
+7. On PPPoE or multi-uplink sites, compare the Dashboard and topology uplink
    with the installed main-table route after planned routing changes.
-6. Check host disk/RAM and the controller data-volume backup.
-7. Read release notes before changing the daemon or image.
+8. Check host disk/RAM and the controller data-volume backup.
+9. Read release notes before changing the daemon or image.
 
 ## Troubleshooting and recovery
 
@@ -266,6 +302,12 @@ Upgrading to v0.1.4 does not require re-adoption. Existing scoped access keeps
 ordinary polling and management working. Router-clock status remains
 unavailable on an older adoption until an Administrator separately reviews
 and applies the updated controller-access payload.
+
+For an IPv6 condition, distinguish the active card from its retained compact
+event row. The card depends on recent evidence and a fresh log cursor; a stale
+or gapped source is unknown, while a historical row can remain after the card
+clears. Fix the router configuration, then wait for continuous successful log
+collection instead of deleting evidence.
 
 ### Apply status is unknown after reload
 

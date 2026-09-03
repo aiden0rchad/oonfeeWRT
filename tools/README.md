@@ -10,8 +10,10 @@ observability shape, 17 adds the optional-capability rollback ledger, and 18
 adds controller-host speed-test jobs/history. Schema 19 adds the controller
 account foundation: canonical roles, enabled/deleted state, ASCII-NOCASE
 username uniqueness, last-enabled-owner protection and transactional mutation
-audit. Schema 20 adds the closed-topology-history query index. The published RC,
-v40 artifact and live lab remain schema 17. Set
+audit. Schema 20 adds the closed-topology-history query index and normalizes two
+historical topology-source names. The public v0.1.4 release uses schema 20. The
+published `v0.1.0-rc.1`, v40 artifact, and their hardware evidence remain
+historical schema-17 checkpoints; they do not describe the current release. Set
 `OONFEE_PASSPHRASE_FILE` to an absolute path naming the controller's mode-0600
 passphrase file. The tools open `keyring.json` next to the database and refuse a
 missing, wrong, or mismatched keyring.
@@ -47,12 +49,13 @@ take a consistent SQLite `.backup` (or stop/checkpoint cleanly) and copy the
 matching `keyring.json`. Do not discover a schema migration during a router
 apply.
 
-The lab has already been promoted through the attested schema 16 boundary to
-schema 17 and validated there; that promotion is no longer pending. It has not
-been promoted to schema 18 or 19 and stays at schema 17 until an authorized
-controller restart. For any older store, start the matching daemon writable and
-complete/validate migration before using a write-capable tool. Source tests
-alone are not evidence that a particular live store has been promoted.
+The published fresh-start hardware checkpoint was promoted through schema 16 to
+schema 17 and validated there. A later controlled live-lab checkpoint reached
+schema 19, while public v0.1.4 uses schema 20. These are separate evidence
+epochs: do not infer that an arbitrary retained store has migrated because the
+source or release has. For any older store, start the matching daemon writable
+and complete/validate migration before using a write-capable tool. These tools
+require the current schema and never perform that migration themselves.
 
 Database and keyring are one restore unit. A passphrase cannot recreate the
 keyring's random data key. A database copied alone from a live WAL store may be
@@ -122,8 +125,14 @@ Then the important one. This writes, but only to a scratch config no service
 reads:
 
 ```sh
-python3 probe.py 192.0.2.1 --user root --ask-password --write-tests --json report.json
+python3 probe.py 192.0.2.1 --user root --ask-password --write-tests \
+  --json /path/outside/repository/report.json
 ```
+
+The raw JSON can contain device and deployment identifiers. Keep it in private
+storage outside the repository and never commit or publish it. For a shareable
+read-only compatibility artifact, use the controller's bounded **Export
+sanitized compatibility report** instead.
 
 Useful flags:
 
@@ -132,7 +141,7 @@ Useful flags:
 | `--https` | use HTTPS (certificate not verified — measuring handshake cost, not trusting the device) |
 | `--write-tests` | run the apply/confirm/rollback tests |
 | `--poll-seconds N` | length of the CPU-cost window (`0` to skip) |
-| `--json PATH` | dump raw findings for diffing across devices |
+| `--json PATH` | dump sensitive raw findings for private diffing; keep the path outside the repository |
 
 ## What it checks
 

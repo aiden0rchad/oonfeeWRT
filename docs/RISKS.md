@@ -21,14 +21,17 @@ it — retrofitting retention onto a naive `INSERT` table is a rewrite. Batch
 aggressively (one composite call beats twenty small ones), stagger device polls
 across the interval, and sample only what an open screen actually needs.
 
-**Current source closure (2026-08-19):** raw samples stay in RAM and SQLite gets
+**Source closure recorded 2026-08-19:** raw samples stay in RAM and SQLite gets
 only completed 5-minute/hourly rollups. Phase-4 reads are bounded and disclose
 coverage: OpenWrt logs are 24h/50k-per-device/100k-global, controller/audit rows
 have a separate 100k cap, topology is 31d/10k, client incidents cap exact events
 and path work, and the WebSocket is a 32-frame drop-on-full `device.stats`
 channel rather than a durable log bus. `wifi-v1` is all-or-null, so a missing
-counter cannot improve a score by silently changing the denominator. These are
-source contracts pending live schema-16 validation.
+counter cannot improve a score by silently changing the denominator. At that
+checkpoint the contracts were pending live schema-16 validation. The later
+fresh-start record validates the joined schema-16 surfaces and one explicitly
+acknowledged RF scan; public v0.1.4 now uses schema 20. Historical proof does not
+imply that every hardware/source combination has been exercised.
 
 RF scan retention is closed at the stored/API contract: the five-minute
 maintenance transaction retains one newest terminal run per stable
@@ -77,10 +80,15 @@ replacement. If the controller overwrites hand-written config even once, trust i
 gone permanently, and rightly so.
 
 **Mitigation:** ownership tagging (`option oonfeewrt '1'`) on every managed
-section. Foreign sections are read-only. Conflicts are surfaced loudly, never
-resolved silently. Ship the diff preview. And make **un-adoption** a real,
-tested, one-click feature that leaves the device as it was found — a wrapper that
-can't cleanly remove itself doesn't deserve to be installed.
+section. Ordinary Apply and cleanup stay within those sections; conflicts are
+surfaced loudly, never resolved silently. v0.1.4 has one deliberate site-policy
+exception: an explicit non-**Router managed** IPv6 choice can patch an
+allowlisted option set on the exact existing management LAN/DHCP and supported
+conventional `wan`/`wan6` sections. Preview blocks ambiguous targets and static
+IPv6 conflicts, and the controller never creates, claims, renames, or deletes
+those foreign sections. Ship the diff preview. And make **un-adoption** a real,
+tested, one-click feature that leaves owned state as it was found — a wrapper
+that can't cleanly remove itself doesn't deserve to be installed.
 
 ---
 
@@ -169,6 +177,13 @@ Also retain the scoped ACL rather than root, review every exact `file.exec`
 command like code, pin device TLS certificates (TOFU, refuse on change), keep a
 full audit log, ship no default password, and write the threat model before v1.0.
 
+The daemon has no native TLS listener. The supplied v0.1.4 Compose file publishes
+to host loopback by default; `OONFEE_HTTP_BIND` is an explicit deployment choice,
+not an authentication control. Prefer one management-interface address. A
+wildcard `0.0.0.0` bind exposes every host IPv4 interface and requires deliberate
+host/network firewalling plus a trusted TLS reverse proxy before any untrusted
+path can reach it. Never expose raw port 8080 to the Internet.
+
 ACL evolution uses one explicit adopted-device refresh transaction, not silent
 widening during a poll. It is opt-in, identifies the exact rpcd ACL JSON file it
 writes or replaces, and states that it installs no package, binary, daemon or
@@ -177,8 +192,9 @@ unavailable. If accepted, it proves the stored controller login and inventory
 MAC before SSH, verifies/pins the host key, replaces only the scoped ACL, then
 proves a fresh controller login/MAC/capability record. The administrator
 password/private key is not stored or returned; UCI, ownership and the scoped
-login are preserved. The 2026-08-20 live validation deliberately did not run
-this transaction.
+login are preserved. The initial 2026-08-20 validation deliberately did not run
+this transaction; later evidence is recorded separately in STATUS and the
+fresh-start log rather than retroactively changing that checkpoint.
 
 ---
 
