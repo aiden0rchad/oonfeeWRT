@@ -631,7 +631,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-Go module: golang.org/x/crypto v0.55.0
+Go module: golang.org/x/crypto v0.56.0
 License file: LICENSE
 ------------------------------------------------------------------------------
 Copyright 2009 The Go Authors.

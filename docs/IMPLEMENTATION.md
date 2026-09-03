@@ -216,7 +216,7 @@ refresh grants these methods. No router setting is changed by the clock read.
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Language | Go ≥ 1.25; toolchain pinned to Go 1.26.6 | static binary in a scratch container, goroutine-per-device polling; patch pin matches the verified container build |
+| Language | Go ≥ 1.26; toolchain pinned to Go 1.26.6 | static binary in a scratch container, goroutine-per-device polling; patch pin matches the verified container build |
 | SQLite driver | `modernc.org/sqlite` | pure Go (D3) |
 | HTTP router | stdlib `net/http` (1.22+ pattern mux) | zero deps, auditable |
 | WebSocket | `github.com/coder/websocket` | maintained, minimal |

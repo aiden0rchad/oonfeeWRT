@@ -13,7 +13,7 @@ hardware behavior.
 
 | Layer | Current choice |
 |---|---|
-| Go | Module declares Go 1.25 semantics and pins toolchain `go1.26.6` |
+| Go | Module declares Go 1.26 semantics and pins toolchain `go1.26.6` |
 | Database | Pure-Go `modernc.org/sqlite`; cgo is not used |
 | HTTP | Standard-library `net/http` pattern mux |
 | WebSocket | `github.com/coder/websocket` |
