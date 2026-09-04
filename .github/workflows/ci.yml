@@ -75,6 +75,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      - name: Use supported npm audit client
+        run: npm install --global npm@11.6.4
       - name: Install dependencies
         run: npm --prefix ui ci
       - name: Install pinned browser

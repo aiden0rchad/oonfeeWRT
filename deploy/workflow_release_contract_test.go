@@ -19,6 +19,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 		"npm --prefix ui test",
 		"npm --prefix ui run test:browser:install",
 		"npm --prefix ui run test:browser",
+		"npm install --global npm@11.6.4",
 		"npm --prefix ui audit --audit-level=high",
 		"./tools/budget_check.sh",
 		"govulncheck@v1.7.0",
@@ -63,6 +64,7 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, required := range []string{
 		"./tools/reproducible-build-check.sh v0.0.0-ci",
 		"govulncheck@v1.7.0",
+		"npm install --global npm@11.6.4",
 		"npm --prefix ui audit --audit-level=high",
 		"npm --prefix ui run test:browser:install",
 		"npm --prefix ui run test:browser",
