@@ -79,6 +79,13 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(ci, "\n  vulnerabilities:\n") {
 		t.Error("vulnerability scans must remain inside the five protected CI job contexts")
 	}
+	for name, workflow := range map[string]string{"ci": ci, "release": release} {
+		setups := strings.Count(workflow, "uses: actions/setup-node@")
+		pins := strings.Count(workflow, "npm install --global npm@11.6.4")
+		if pins != setups {
+			t.Errorf("%s workflow must pin npm 11.6.4 after every Node setup: got %d pins for %d setups", name, pins, setups)
+		}
+	}
 
 	pinned := regexp.MustCompile(`^uses: (actions|docker|sigstore)/[^@[:space:]]+@[0-9a-f]{40}(?:[[:space:]]+#.*)?$`)
 	for name, workflow := range map[string]string{"ci": ci, "release": release} {
