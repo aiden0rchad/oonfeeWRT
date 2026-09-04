@@ -19,7 +19,7 @@ help:
 		'make release-check RELEASE_VERSION=  require a clean, reproducible release tree'
 
 ui:
-	npm --prefix ui ci
+	npm --prefix ui ci --no-audit
 	npm --prefix ui run build
 
 build: ui

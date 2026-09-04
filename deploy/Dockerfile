@@ -13,7 +13,7 @@
 FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS ui
 WORKDIR /src/ui
 COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit
 COPY ui/ ./
 # vite build emits ui/dist plus precompressed .gz siblings (vite plugin);
 # budget: ≤ 1.5 MB gzipped total (checked again in CI by tools/budget_check.sh)

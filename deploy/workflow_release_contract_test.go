@@ -91,6 +91,15 @@ func TestReleaseWorkflowContract(t *testing.T) {
 			t.Errorf("documentation workflow lost %q", required)
 		}
 	}
+	for path, required := range map[string]string{
+		"../Makefile":               "npm --prefix ui ci --no-audit",
+		"../tools/release-build.sh": "npm --prefix ui ci --no-audit",
+		"Dockerfile":                "RUN npm ci --no-audit",
+	} {
+		if content := readWorkflow(t, path); !strings.Contains(content, required) {
+			t.Errorf("%s lost non-auditing install %q", path, required)
+		}
+	}
 	for name, workflow := range map[string]string{"ci": ci, "docs": docs, "release": release} {
 		setups := strings.Count(workflow, "uses: actions/setup-node@")
 		pins := strings.Count(workflow, "npm install --global npm@11.6.4")
