@@ -100,6 +100,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 			t.Errorf("%s lost non-auditing install %q", path, required)
 		}
 	}
+	if count := strings.Count(readWorkflow(t, "../Makefile"), "./tools/osv-audit.sh ui/package-lock.json"); count != 2 {
+		t.Errorf("Makefile must scan dependencies in check and release-check: got %d OSV invocations", count)
+	}
 	for name, workflow := range map[string]string{"ci": ci, "docs": docs, "release": release} {
 		setups := strings.Count(workflow, "uses: actions/setup-node@")
 		pins := strings.Count(workflow, "npm install --global npm@11.6.4")
