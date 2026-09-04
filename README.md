@@ -371,7 +371,8 @@ responsible for what the project ships.
 
 AI output is not treated as evidence that the software is correct or secure.
 CI runs Go tests, `go vet`, the race detector, `govulncheck`, UI unit and browser
-tests, `npm audit`, release smoke tests, and repository/history secret scans.
+tests, OSV dependency scans, release smoke tests, and repository/history secret
+scans.
 Hardware behavior is checked separately against physical OpenWrt devices and
 the known coverage gaps are published above.
 

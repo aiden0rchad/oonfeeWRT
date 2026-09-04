@@ -85,7 +85,8 @@ release gates add those.
 ### Individual commands
 
 ```sh
-npm --prefix ui ci
+npm --prefix ui ci --no-audit
+./tools/osv-audit.sh ui/package-lock.json
 npm --prefix ui test
 npm --prefix ui run build
 go test -count=1 ./...
@@ -307,8 +308,8 @@ commit is not the published release even if its version string is changed.
 Build the documentation site before submitting a content change:
 
 ```sh
-npm --prefix docs ci
-npm --prefix docs audit --audit-level=high
+npm --prefix docs ci --no-audit
+./tools/osv-audit.sh docs/package-lock.json
 npm --prefix docs run build
 ```
 

@@ -75,18 +75,18 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - name: Use supported npm audit client
+      - name: Use pinned npm client
         run: npm install --global npm@11.6.4
       - name: Install dependencies
-        run: npm --prefix ui ci
+        run: npm --prefix ui ci --no-audit
+      - name: Audit dependencies
+        run: ./tools/osv-audit.sh ui/package-lock.json
       - name: Install pinned browser
         run: npm --prefix ui run test:browser:install
       - name: Test
         run: |
           npm --prefix ui test
           npm --prefix ui run test:browser
-      - name: Audit dependencies
-        run: npm --prefix ui audit --audit-level=high
       - name: Build
         run: npm --prefix ui run build
       - name: Check bundle budget
@@ -113,7 +113,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
-      - name: Use supported npm audit client
+      - name: Use pinned npm client
         run: npm install --global npm@11.6.4
       - name: Build and verify archives
         run: |
