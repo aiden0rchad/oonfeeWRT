@@ -19,7 +19,7 @@ help:
 		'make release-check RELEASE_VERSION=  require a clean, reproducible release tree'
 
 ui:
-	npm --prefix ui ci
+	npm --prefix ui ci --no-audit
 	npm --prefix ui run build
 
 build: ui
@@ -32,6 +32,7 @@ test: ui
 	npm --prefix ui test
 
 check: ui
+	./tools/osv-audit.sh ui/package-lock.json
 	go mod verify
 	go mod tidy -diff
 	go test -count=1 ./...
@@ -60,5 +61,6 @@ release-check:
 	@cmp -s "RELEASE-NOTES-$(RELEASE_VERSION).md" RELEASE-NOTES.md || { \
 		echo 'release-check: versioned notes differ from RELEASE-NOTES.md' >&2; exit 2; \
 	}
+	./tools/osv-audit.sh ui/package-lock.json
 	./tools/secret-scan.sh
 	./tools/reproducible-build-check.sh "$(RELEASE_VERSION)"

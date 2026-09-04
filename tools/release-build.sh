@@ -31,7 +31,7 @@ out=$(cd "$out" && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/oonfeewrt-package.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-npm --prefix ui ci
+npm --prefix ui ci --no-audit
 npm --prefix ui run build
 test -f ui/dist/index.html || {
   echo "release build: UI build produced no index.html" >&2

@@ -10,16 +10,19 @@ import (
 
 func TestReleaseWorkflowContract(t *testing.T) {
 	release := readWorkflow(t, "../.github/workflows/release.yml")
+	docs := readWorkflow(t, "../.github/workflows/docs.yml")
 	for _, required := range []string{
 		"gate:\n    name: Exact-SHA release gate",
 		"ref: ${{ github.sha }}",
 		"go test -count=1 ./...",
 		"go vet ./...",
 		"go test -race -count=1 ./...",
+		"npm --prefix ui ci --no-audit",
 		"npm --prefix ui test",
 		"npm --prefix ui run test:browser:install",
 		"npm --prefix ui run test:browser",
-		"npm --prefix ui audit --audit-level=high",
+		"npm install --global npm@11.6.4",
+		"./tools/osv-audit.sh ui/package-lock.json",
 		"./tools/budget_check.sh",
 		"govulncheck@v1.7.0",
 		"./tools/secret-scan.sh",
@@ -63,7 +66,9 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	for _, required := range []string{
 		"./tools/reproducible-build-check.sh v0.0.0-ci",
 		"govulncheck@v1.7.0",
-		"npm --prefix ui audit --audit-level=high",
+		"npm install --global npm@11.6.4",
+		"npm --prefix ui ci --no-audit",
+		"./tools/osv-audit.sh ui/package-lock.json",
 		"npm --prefix ui run test:browser:install",
 		"npm --prefix ui run test:browser",
 		"./tools/secret-scan.sh",
@@ -77,9 +82,37 @@ func TestReleaseWorkflowContract(t *testing.T) {
 	if strings.Contains(ci, "\n  vulnerabilities:\n") {
 		t.Error("vulnerability scans must remain inside the five protected CI job contexts")
 	}
+	for _, required := range []string{
+		"npm --prefix docs ci --no-audit",
+		"./tools/osv-audit.sh docs/package-lock.json",
+		`- "tools/osv-audit.sh"`,
+	} {
+		if !strings.Contains(docs, required) {
+			t.Errorf("documentation workflow lost %q", required)
+		}
+	}
+	for path, required := range map[string]string{
+		"../Makefile":               "npm --prefix ui ci --no-audit",
+		"../tools/release-build.sh": "npm --prefix ui ci --no-audit",
+		"Dockerfile":                "RUN npm ci --no-audit",
+	} {
+		if content := readWorkflow(t, path); !strings.Contains(content, required) {
+			t.Errorf("%s lost non-auditing install %q", path, required)
+		}
+	}
+	if count := strings.Count(readWorkflow(t, "../Makefile"), "./tools/osv-audit.sh ui/package-lock.json"); count != 2 {
+		t.Errorf("Makefile must scan dependencies in check and release-check: got %d OSV invocations", count)
+	}
+	for name, workflow := range map[string]string{"ci": ci, "docs": docs, "release": release} {
+		setups := strings.Count(workflow, "uses: actions/setup-node@")
+		pins := strings.Count(workflow, "npm install --global npm@11.6.4")
+		if pins != setups {
+			t.Errorf("%s workflow must pin npm 11.6.4 after every Node setup: got %d pins for %d setups", name, pins, setups)
+		}
+	}
 
 	pinned := regexp.MustCompile(`^uses: (actions|docker|sigstore)/[^@[:space:]]+@[0-9a-f]{40}(?:[[:space:]]+#.*)?$`)
-	for name, workflow := range map[string]string{"ci": ci, "release": release} {
+	for name, workflow := range map[string]string{"ci": ci, "docs": docs, "release": release} {
 		scanner := bufio.NewScanner(strings.NewReader(workflow))
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())

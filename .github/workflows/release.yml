@@ -49,6 +49,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ui/package-lock.json
+      - name: Use pinned npm client
+        run: npm install --global npm@11.6.4
       - name: Verify Go modules
         run: |
           go mod verify
@@ -59,14 +61,15 @@ jobs:
           go vet ./...
       - name: Test Go with race detector
         run: go test -race -count=1 ./...
-      - name: Install and test UI
+      - name: Install UI dependencies
+        run: npm --prefix ui ci --no-audit
+      - name: Audit UI dependencies
+        run: ./tools/osv-audit.sh ui/package-lock.json
+      - name: Install browser and test UI
         run: |
-          npm --prefix ui ci
           npm --prefix ui run test:browser:install
           npm --prefix ui test
           npm --prefix ui run test:browser
-      - name: Audit UI dependencies
-        run: npm --prefix ui audit --audit-level=high
       - name: Build UI and check budget
         run: |
           npm --prefix ui run build

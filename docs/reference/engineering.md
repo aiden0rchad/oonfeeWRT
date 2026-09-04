@@ -71,12 +71,13 @@ make check
 `make check`:
 
 1. installs UI dependencies and builds the embedded UI;
-2. verifies Go modules and checks `go mod tidy -diff`;
-3. runs all normal Go tests;
-4. runs `go vet`;
-5. runs UI unit tests;
-6. enforces the gzipped UI bundle budget; and
-7. scans the working tree for repository-specific secret patterns.
+2. scans the complete UI lockfile against the OSV vulnerability database;
+3. verifies Go modules and checks `go mod tidy -diff`;
+4. runs all normal Go tests;
+5. runs `go vet`;
+6. runs UI unit tests;
+7. enforces the gzipped UI bundle budget; and
+8. scans the working tree for repository-specific secret patterns.
 
 It does not run the Go race detector, Playwright suite, `govulncheck`, full
 history secret scan, reproducible-build check, or physical-router tests. CI and
@@ -85,7 +86,8 @@ release gates add those.
 ### Individual commands
 
 ```sh
-npm --prefix ui ci
+npm --prefix ui ci --no-audit
+./tools/osv-audit.sh ui/package-lock.json
 npm --prefix ui test
 npm --prefix ui run build
 go test -count=1 ./...
@@ -282,10 +284,16 @@ Pull requests and main-branch pushes run:
 
 - Go module verification, tests, vet, and `govulncheck`;
 - the full Go race suite;
-- UI unit/browser tests, dependency audit, production build, and bundle budget;
+- UI unit/browser tests, a fail-closed OSV lockfile scan, production build, and
+  bundle budget;
 - reproducible release archive and container restore smoke checks;
 - multi-platform container build without publishing; and
 - tree/history secret scans.
+
+The OSV gate is intentionally strict: any known vulnerability match, download
+or checksum failure, package-extraction failure, or scanner/API error fails the
+job. It replaces npm's unavailable audit service without weakening dependency
+screening and checks all severities rather than only high and critical results.
 
 A `v*` tag triggers the release workflow. It requires strict SemVer on `main`,
 repeats the complete gates at the tagged SHA, builds reproducible Linux/macOS
@@ -307,8 +315,8 @@ commit is not the published release even if its version string is changed.
 Build the documentation site before submitting a content change:
 
 ```sh
-npm --prefix docs ci
-npm --prefix docs audit --audit-level=high
+npm --prefix docs ci --no-audit
+./tools/osv-audit.sh docs/package-lock.json
 npm --prefix docs run build
 ```
 
