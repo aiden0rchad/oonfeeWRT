@@ -178,7 +178,7 @@ describe('Accounts', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke 192.168.1.22' }))
 
     expect(api.revokeManagedAccountSession).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: /revoke 192\.168\.1\.22 for.*router-operator/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /revoke 192\.168\.1\.22 for.*router-operator/i }))
     await waitFor(() => expect(api.revokeManagedAccountSession).toHaveBeenCalledWith(2, 'opaque-session-id'))
   })
 })
