@@ -355,6 +355,13 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 - [Roadmap](docs/ROADMAP.md)
 - [Risk register](docs/RISKS.md)
 
+## Support future development
+
+If oonfeeWRT is useful to you, you can support future development, hands-on
+testing across more OpenWrt hardware, and careful release validation.
+
+[![Buy me a coffee](https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=&slug=aiden0rchad&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff)](https://buymeacoffee.com/aiden0rchad)
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and

@@ -200,3 +200,10 @@ your router, create the first owner, add one non-critical OpenWrt device by
 address, inspect it, and adopt only the functions you need.
 
 [Start the guided setup →](/getting-started/)
+
+## Support future development
+
+<div class="support-card">
+  <p>If oonfeeWRT is useful to you, you can support future development, hands-on testing across more OpenWrt hardware, and careful release validation.</p>
+  <a class="support-button" href="https://buymeacoffee.com/aiden0rchad" target="_blank" rel="noopener noreferrer" aria-label="Buy me a coffee to support oonfeeWRT (opens in a new tab)">Buy me a coffee</a>
+</div>

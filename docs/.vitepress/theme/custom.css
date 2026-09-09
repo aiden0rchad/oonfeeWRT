@@ -209,6 +209,58 @@ body {
   font-weight: 650;
 }
 
+.support-card {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 24px 0;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgb(255 221 0 / 14%), var(--vp-c-bg-elv) 48%);
+  padding: 20px;
+}
+
+.dark .support-card {
+  background: linear-gradient(135deg, rgb(255 221 0 / 10%), var(--vp-c-bg-elv) 48%);
+}
+
+.support-card p {
+  margin: 0;
+  color: var(--vp-c-text-2);
+  line-height: 1.55;
+}
+
+.support-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border: 1px solid #000;
+  border-radius: 10px;
+  background: #ffdd00;
+  box-shadow: 0 3px 0 rgb(0 0 0 / 85%);
+  padding: 0 22px;
+  color: #000 !important;
+  font-weight: 750;
+  line-height: 1;
+  text-decoration: none !important;
+  white-space: nowrap;
+  transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.support-button:hover {
+  background: #ffe43b;
+  box-shadow: 0 4px 0 rgb(0 0 0 / 85%);
+  transform: translateY(-1px);
+}
+
+.support-button:active {
+  box-shadow: 0 1px 0 rgb(0 0 0 / 85%);
+  transform: translateY(2px);
+}
+
 .docs-screenshot {
   margin: 28px 0;
 }
@@ -262,6 +314,15 @@ body {
 
   .write-impact {
     display: block;
+  }
+
+  .support-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .support-button {
+    width: 100%;
   }
 }
 
