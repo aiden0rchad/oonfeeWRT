@@ -8,7 +8,7 @@ of truth.
 ## Current release
 
 - [v0.1.4 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4)
-- [v0.1.4 notes in the repository](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.4.md)
+- [v0.1.4 notes in the repository](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.4.md)
 - [All GitHub releases](https://github.com/aiden0rchad/oonfeeWRT/releases)
 
 v0.1.4 adds explicit per-network IPv6 preserve, prefix-delegation, and disabled
@@ -41,10 +41,10 @@ and management continue without re-adoption.
 
 ## Earlier releases
 
-- [v0.1.3 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.3.md)
-- [v0.1.2 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.2.md)
-- [v0.1.1 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.1.md)
-- [v0.1.0 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/RELEASE-NOTES-v0.1.0.md)
+- [v0.1.3 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.3.md)
+- [v0.1.2 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.2.md)
+- [v0.1.1 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.1.md)
+- [v0.1.0 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.0.md)
 
 Before upgrading, read both the release notes and [Upgrade and roll back](../installation/upgrades.md).
 

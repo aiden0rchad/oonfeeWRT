@@ -1966,7 +1966,7 @@ Two storage rules that follow from the refresh cadence:
 ### Phase 2's first contact with hardware (2026-08-14)
 
 The site model → render → apply pipeline was built and unit-tested in Phase 0,
-and `STATUS.md` recorded it as "mock-verified only". Wiring it to a real device
+and `docs/project/status.md` recorded it as "mock-verified only". Wiring it to a real device
 found three things in the first hour, each invisible to a mock.
 
 - **`uci.get` does not return only strings.** `ReadExisting` decoded the payload
@@ -2014,7 +2014,7 @@ The proof's "three APs" remains unmet for want of a **third** device. The
 fan-out has since been run across **two** APs and four radios — a second device
 was adopted 2026-08-16 — so what is unverified is the step from two to three,
 not the idea of fanning out at all. That is the same open hardware item
-`STATUS.md` and the README's not-tested table both track, and nothing in the
+`docs/project/status.md` and the README's not-tested table both track, and nothing in the
 pipeline is per-device: the render is driven by group membership, and the
 mobility domain is derived rather than coordinated precisely so that adding an
 AP needs no new mechanism.

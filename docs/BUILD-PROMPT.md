@@ -8,8 +8,8 @@ sessions.
 Network-10.5 current-baseline section in `PARITY-MATRIX.md` and the Current
 reference section in `UI-SPEC.md` before UI work. The milestone table below is
 the historical build order, not a live queue. For released behavior, start with
-`RELEASE-NOTES-v0.1.4.md`, `reference/capabilities.md`, and the dated banner at
-the top of `STATUS.md`; the numbered STATUS sections preserve evidence from
+`releases/v0.1.4.md`, `reference/capabilities.md`, and the dated banner at the
+top of `project/status.md`; the numbered status sections preserve evidence from
 their own checkpoints and must not be read as a current-version override.
 
 ## Ground rules to give the agent (paste into every session)

@@ -33,8 +33,8 @@ gitleaks() {
 status=0
 echo "== Gitleaks: current non-ignored tree =="
 if ! (cd "$tree_dir" && gitleaks dir \
-  --config "$root/.gitleaks.toml" \
-  --gitleaks-ignore-path "$root" \
+  --config "$root/.github/gitleaks/.gitleaks.toml" \
+  --gitleaks-ignore-path "$root/.github/gitleaks/.gitleaksignore" \
   --redact=100 --no-banner --no-color --verbose \
   --report-format json --report-path "$scan_dir/tree.json" .); then
   status=1
@@ -43,8 +43,8 @@ fi
 echo ""
 echo "== Gitleaks: all refs and history =="
 if ! gitleaks git \
-  --config "$root/.gitleaks.toml" \
-  --gitleaks-ignore-path "$root" \
+  --config "$root/.github/gitleaks/.gitleaks.toml" \
+  --gitleaks-ignore-path "$root/.github/gitleaks/.gitleaksignore" \
   --redact=100 --no-banner --no-color --verbose \
   --report-format json --report-path "$scan_dir/history.json" \
   --log-opts='--all -m' .; then

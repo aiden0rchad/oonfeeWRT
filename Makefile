@@ -5,6 +5,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf de
 IMAGE ?= oonfeewrt:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 RELEASE_DIR ?= dist
+RELEASE_NOTES_DIR := docs/releases
 
 .PHONY: help ui build test check image release release-check
 
@@ -55,11 +56,11 @@ release-check:
 	@test -n "$(RELEASE_VERSION)" || { \
 		echo 'release-check: set RELEASE_VERSION (for example v0.1.0)' >&2; exit 2; \
 	}
-	@test -f "RELEASE-NOTES-$(RELEASE_VERSION).md" || { \
-		echo 'release-check: missing RELEASE-NOTES-$(RELEASE_VERSION).md' >&2; exit 2; \
+	@test -f "$(RELEASE_NOTES_DIR)/$(RELEASE_VERSION).md" || { \
+		echo 'release-check: missing $(RELEASE_NOTES_DIR)/$(RELEASE_VERSION).md' >&2; exit 2; \
 	}
-	@cmp -s "RELEASE-NOTES-$(RELEASE_VERSION).md" RELEASE-NOTES.md || { \
-		echo 'release-check: versioned notes differ from RELEASE-NOTES.md' >&2; exit 2; \
+	@cmp -s "$(RELEASE_NOTES_DIR)/$(RELEASE_VERSION).md" "$(RELEASE_NOTES_DIR)/current.md" || { \
+		echo 'release-check: versioned notes differ from $(RELEASE_NOTES_DIR)/current.md' >&2; exit 2; \
 	}
 	./tools/osv-audit.sh ui/package-lock.json
 	./tools/secret-scan.sh

@@ -184,7 +184,7 @@ def generate() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("output", nargs="?", default="THIRD_PARTY_LICENSES")
+    parser.add_argument("output", nargs="?", default="third_party/THIRD_PARTY_LICENSES")
     args = parser.parse_args()
     target = ROOT / args.output
     content = generate()

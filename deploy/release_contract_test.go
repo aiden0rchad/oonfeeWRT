@@ -21,8 +21,8 @@ func TestReleaseBuildContract(t *testing.T) {
 		"node:22-alpine@sha256:",
 		"golang:1.26.6-alpine@sha256:",
 		`LABEL org.opencontainers.image.licenses="Apache-2.0"`,
-		"COPY LICENSE NOTICE THIRD_PARTY_LICENSES /licenses/",
-		"COPY RELEASE-NOTES.md /release/",
+		"COPY LICENSE NOTICE third_party/THIRD_PARTY_LICENSES /licenses/",
+		"COPY docs/releases/current.md /release/RELEASE-NOTES.md",
 		"COPY deploy/docker-compose.yml /release/docker-compose.yml",
 		`HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/oonfeewrtd", "-healthcheck"]`,
 	} {
@@ -72,8 +72,8 @@ func TestReleaseBuildContract(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		`test -f "RELEASE-NOTES-$(RELEASE_VERSION).md"`,
-		`cmp -s "RELEASE-NOTES-$(RELEASE_VERSION).md" RELEASE-NOTES.md`,
+		`test -f "$(RELEASE_NOTES_DIR)/$(RELEASE_VERSION).md"`,
+		`cmp -s "$(RELEASE_NOTES_DIR)/$(RELEASE_VERSION).md" "$(RELEASE_NOTES_DIR)/current.md"`,
 	} {
 		if !strings.Contains(string(makefile), required) {
 			t.Errorf("Makefile release check lost %q", required)
@@ -134,7 +134,7 @@ func TestReleaseBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, packaged := range []string{
-		"THIRD_PARTY_LICENSES", `cp RELEASE-NOTES.md "$stage/RELEASE-NOTES.md"`,
+		"third_party/THIRD_PARTY_LICENSES", `cp "$release_notes" "$stage/RELEASE-NOTES.md"`,
 		"deploy/docker-compose.yml",
 		"generate-third-party-licenses.py --check",
 	} {
@@ -142,7 +142,7 @@ func TestReleaseBuildContract(t *testing.T) {
 			t.Errorf("release archives lost %q", packaged)
 		}
 	}
-	for _, artifact := range []string{"../THIRD_PARTY_LICENSES", "../RELEASE-NOTES.md"} {
+	for _, artifact := range []string{"../third_party/THIRD_PARTY_LICENSES", "../docs/releases/current.md"} {
 		info, err := os.Stat(artifact)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestReleaseBuildContract(t *testing.T) {
 			t.Errorf("release artifact %s is empty", artifact)
 		}
 	}
-	thirdPartyLicenses, err := os.ReadFile("../THIRD_PARTY_LICENSES")
+	thirdPartyLicenses, err := os.ReadFile("../third_party/THIRD_PARTY_LICENSES")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -46,8 +46,8 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # CA roots support device HTTPS and webhook notifications.
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=build /oonfeewrtd /oonfeewrtd
-COPY LICENSE NOTICE THIRD_PARTY_LICENSES /licenses/
-COPY RELEASE-NOTES.md /release/
+COPY LICENSE NOTICE third_party/THIRD_PARTY_LICENSES /licenses/
+COPY docs/releases/current.md /release/RELEASE-NOTES.md
 COPY deploy/docker-compose.yml /release/docker-compose.yml
 
 # scratch has no /data, so Docker would create the mount point as root:root and
