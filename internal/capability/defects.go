@@ -41,7 +41,7 @@ const (
 	// documentation, or a maintainer's statement. The strongest available.
 	ConfDeviceDoc Confidence = "documented"
 	// ConfMeasuredHere is a defect this project reproduced on hardware, with
-	// the evidence written down in STATUS.md.
+	// the evidence written down in docs/project/status.md.
 	ConfMeasuredHere Confidence = "measured"
 	// ConfBugTracker is a filed, accepted issue.
 	ConfBugTracker Confidence = "reported"
@@ -205,7 +205,7 @@ var knownDefects = []Defect{
 			"other radio on the device stops answering too — including a healthy one. " +
 			"Recovery needs a power cycle. Seen at 17, 28 and 50 minutes after boot on " +
 			"one device; it is not known how widely it affects this model.",
-		Source:     "STATUS.md §5aa; hif/pcie/pcie.c in kaloz/mwlwifi db97edf2",
+		Source:     "docs/project/status.md §5aa; hif/pcie/pcie.c in kaloz/mwlwifi db97edf2",
 		Confidence: ConfMeasuredHere,
 		Severity:   SevRadioDeath,
 		Mitigation: "Power cycle. Do NOT try `rmmod mwlwifi; modprobe mwlwifi` — it " +

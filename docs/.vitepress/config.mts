@@ -54,6 +54,7 @@ export default defineConfig({
   description: 'Documentation for oonfeeWRT v0.1.4: install, configure, operate, and understand the OpenWrt controller.',
   base: '/oonfeeWRT/',
   cleanUrls: true,
+  srcExclude: ['project/**', 'releases/current.md'],
   lastUpdated: true,
   sitemap: { hostname: 'https://aiden0rchad.github.io/oonfeeWRT/' },
   head: [

@@ -22,7 +22,7 @@ does not need a dedicated machine and is not installed on the managed routers.
 
 ## Current release: v0.1.4
 
-Released September 3, 2026. [Read the complete release notes](RELEASE-NOTES-v0.1.4.md).
+Released September 3, 2026. [Read the complete release notes](docs/releases/v0.1.4.md).
 
 - Per-network IPv6 policy: **Router managed**, **Prefix delegation**, or
   **Disabled**.
@@ -344,11 +344,11 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
-- [v0.1.4 release notes](RELEASE-NOTES-v0.1.4.md)
-- [v0.1.3 release notes](RELEASE-NOTES-v0.1.3.md)
-- [v0.1.2 release notes](RELEASE-NOTES-v0.1.2.md)
-- [v0.1.1 release notes](RELEASE-NOTES-v0.1.1.md)
-- [v0.1.0 release notes](RELEASE-NOTES-v0.1.0.md)
+- [v0.1.4 release notes](docs/releases/v0.1.4.md)
+- [v0.1.3 release notes](docs/releases/v0.1.3.md)
+- [v0.1.2 release notes](docs/releases/v0.1.2.md)
+- [v0.1.1 release notes](docs/releases/v0.1.1.md)
+- [v0.1.0 release notes](docs/releases/v0.1.0.md)
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
 - [Hardware validation](docs/FRESH-START-VALIDATION.md)
 - [Feature parity and evidence](docs/PARITY-MATRIX.md)
@@ -358,7 +358,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE), [NOTICE](NOTICE), and
-[THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES). Every release archive and
+[THIRD_PARTY_LICENSES](third_party/THIRD_PARTY_LICENSES). Every release archive and
 container image includes the same notices.
 
 ## AI transparency

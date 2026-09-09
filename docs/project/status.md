@@ -2879,7 +2879,7 @@ probe — which is why no `wifi` restart or re-apply can recover it. Driver-wide
 across 88W8864/8997/8964; the hang is what the 8964 does in the field.
 
 And the refutation caught a piece of folklore in the *fix*: it recommended
-`rmmod mwlwifi; modprobe mwlwifi`, checked STATUS.md, and found this project had
+`rmmod mwlwifi; modprobe mwlwifi`, checked `docs/project/status.md`, and found this project had
 already measured that leaving `modprobe` hung with no radios at all and still
 needing the reboot. The registry now warns against it. A registry whose job is
 to stop people acting on folklore must not ship any.

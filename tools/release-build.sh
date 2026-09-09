@@ -6,14 +6,16 @@ cd "$(dirname "$0")/.."
 
 version=${1:-}
 out=${2:-dist}
+release_notes=docs/releases/current.md
+third_party_licenses=third_party/THIRD_PARTY_LICENSES
 case "$version" in
   ''|*[!A-Za-z0-9._+-]*)
     echo "usage: tools/release-build.sh <version> [empty-output-directory]" >&2
     exit 2
     ;;
 esac
-test -f RELEASE-NOTES.md || {
-  echo "release build: missing RELEASE-NOTES.md" >&2
+test -f "$release_notes" || {
+  echo "release build: missing $release_notes" >&2
   exit 1
 }
 if [ -L "$out" ] || { [ -d "$out" ] && [ -n "$(find "$out" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
@@ -37,7 +39,7 @@ test -f ui/dist/index.html || {
   echo "release build: UI build produced no index.html" >&2
   exit 1
 }
-python3 tools/generate-third-party-licenses.py --check THIRD_PARTY_LICENSES
+python3 tools/generate-third-party-licenses.py --check "$third_party_licenses"
 
 for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   os=${target%-*}
@@ -51,9 +53,9 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
     -ldflags "-s -w -buildid=" \
     -o "$stage/oonfeewrt-recoverycheck" ./tools/recoverycheck
-  cp LICENSE NOTICE THIRD_PARTY_LICENSES deploy/docker-compose.yml \
+  cp LICENSE NOTICE "$third_party_licenses" deploy/docker-compose.yml \
     docs/INSTALL.md docs/FRESH-START-VALIDATION.md "$stage/"
-  cp RELEASE-NOTES.md "$stage/RELEASE-NOTES.md"
+  cp "$release_notes" "$stage/RELEASE-NOTES.md"
 
   python3 - "$stage" "$out/$name.tar.gz" "$epoch" "$name" <<'PY'
 import gzip

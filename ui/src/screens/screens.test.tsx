@@ -5862,7 +5862,7 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     confidence: 'measured',
     severity: 'radio-death',
     mitigation: 'set PMF to disabled on this WLAN',
-    source: 'STATUS.md §5an',
+    source: 'docs/project/status.md §5an',
     ...over,
   })
 
