@@ -187,6 +187,9 @@ export interface Device {
   /** Independently managed device functions. Older servers and rows may omit
    *  this; `role` remains the compatibility fallback. */
   functions?: DeviceFunction[]
+  /** Whether the controller may include this device in desired-state writes.
+   *  Absent on older servers and rows, where managed is the historical mode. */
+  management_mode?: ManagementMode
   adopted: boolean
   adopted_at: number | null
   class: string | null
@@ -873,6 +876,7 @@ export interface SpeedTestCollection {
  *  device and a typo used to mean "silently an access point". */
 export type DeviceFunction = 'gateway' | 'ap' | 'switch'
 export type DeviceRole = DeviceFunction
+export type ManagementMode = 'managed' | 'monitor_only'
 
 export interface AdoptResult {
   device_id: number
@@ -883,6 +887,8 @@ export interface AdoptResult {
   firmware: string
   /** The functions accepted at adoption. Absent on a legacy server. */
   functions?: DeviceFunction[]
+  /** Absent on a legacy server, where every adopted device was managed. */
+  management_mode?: ManagementMode
   cert_fp?: string
   features?: string[]
   /** Checks that were REFUSED, not features the hardware lacks. */
@@ -2008,6 +2014,8 @@ export const api = {
      *  controller still has a deterministic legacy fallback. */
     functions?: DeviceFunction[]
     role?: DeviceRole
+    /** Omitted means managed for mixed-version callers and servers. */
+    management_mode?: ManagementMode
     acknowledge_router_changes: true
   }) => post<AdoptResult>('/devices/adopt', req),
   inspectDevice: (req: {

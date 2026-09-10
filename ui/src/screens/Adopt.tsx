@@ -6,8 +6,9 @@ import type {
   DeviceFunction,
   Discovered,
   InspectResult,
+  ManagementMode,
 } from '../lib/api'
-import { Button, Field, TextAreaField, Banner, Card, Notice, Prop } from '../components/ui'
+import { Button, Field, TextAreaField, Banner, Card, Notice, PageHeader, Prop } from '../components/ui'
 import type { DeviceRole } from '../lib/api'
 import { Discover } from './Discover'
 
@@ -71,6 +72,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [password, setPassword] = useState('')
   const [privateKey, setPrivateKey] = useState('')
   const [scheme, setScheme] = useState<'http' | 'https'>('http')
+  const [managementMode, setManagementMode] = useState<ManagementMode>('managed')
   // Manual entry defaults to the least invasive function. Discovery may add
   // only functions its pre-auth signals prove; switch port topology is not
   // visible until the credentialed probe, so Switch is never guessed here.
@@ -78,6 +80,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [recommended, setRecommended] = useState<DeviceFunction[]>([])
   const [possibleGateway, setPossibleGateway] = useState(false)
   const [hasAdoptedDevice, setHasAdoptedDevice] = useState<boolean | null>(null)
+  const [hasManagedGateway, setHasManagedGateway] = useState<boolean | null>(null)
   const [inspection, setInspection] = useState<InspectResult | null>(null)
   const [inspectBusy, setInspectBusy] = useState(false)
   const [inspectErr, setInspectErr] = useState('')
@@ -93,12 +96,21 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     let current = true
     api.devices()
       .then(({ devices }) => {
-        if (current) setHasAdoptedDevice(devices.some((d) => d.adopted))
+        if (!current) return
+        setHasAdoptedDevice(devices.some((d) => d.adopted))
+        setHasManagedGateway(devices.some((device) =>
+          device.adopted &&
+          (device.management_mode ?? 'managed') === 'managed' &&
+          (device.functions?.includes('gateway') || device.role === 'gateway'),
+        ))
       })
       // The server repeats this validation authoritatively. A failed roster
       // read must not turn the whole form into a dead end.
       .catch(() => {
-        if (current) setHasAdoptedDevice(null)
+        if (current) {
+          setHasAdoptedDevice(null)
+          setHasManagedGateway(null)
+        }
       })
     return () => {
       current = false
@@ -108,6 +120,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   useEffect(() => () => {
     inspectGeneration.current++
   }, [])
+
+  const managedGatewayConflict = managementMode === 'managed' &&
+    functions.includes('gateway') && hasManagedGateway === true
 
   function clearInspection() {
     inspectGeneration.current++
@@ -191,6 +206,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
         // Compatibility fallback for older rows/clients. The backend uses the
         // same precedence when it emits a single primary role.
         role,
+        management_mode: managementMode,
         acknowledge_router_changes: true,
       })
       setResult(res)
@@ -200,6 +216,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
       setPrivateKey('')
       setRouterChangesAccepted(false)
       setHasAdoptedDevice(true)
+      if (managementMode === 'managed' && functions.includes('gateway')) {
+        setHasManagedGateway(true)
+      }
       onAdopted()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e))
@@ -216,6 +235,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     setPassword('')
     setPrivateKey('')
     setScheme('http')
+    setManagementMode('managed')
     setFunctions(['ap'])
     setPossibleGateway(false)
     setPayloadReviewOpen(false)
@@ -227,11 +247,20 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   if (result) {
     return (
       <div style={{ display: 'grid', gap: 14, maxWidth: 620 }}>
-        <h1 style={{ margin: 0, fontSize: 20 }}>Adopt a device</h1>
+        <PageHeader
+          title="Adopt a device"
+          purpose="Connect OpenWrt hardware for managed configuration or read-only monitoring."
+          actions={<Button onClick={adoptAnother}>Adopt another device</Button>}
+        />
         <Banner tone="accent">
-          <strong>{result.name}</strong> is now managed. The controller created
+          <strong>{result.name}</strong> is now{' '}
+          {(result.management_mode ?? managementMode) === 'monitor_only' ? 'monitored' : 'managed'}.
+          {' '}The controller created
           its own scoped login and installed the oonfeeWRT controller
           capability; the password and private key you supplied were not stored.
+          {(result.management_mode ?? managementMode) === 'monitor_only' && (
+            <> It is excluded from desired-state Preview and Apply.</>
+          )}
         </Banner>
         {result.warnings?.map((w) => (
           <div key={w} role="alert">
@@ -247,6 +276,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             {result.functions && result.functions.length > 0 && (
               <Prop label="Functions">{functionNames(result.functions)}</Prop>
             )}
+            <Prop label="Management mode">
+              {managementModeName(result.management_mode ?? managementMode)}
+            </Prop>
           </div>
           <Section title="Available" items={result.features} />
           {/* Not "missing": permission, inactive-interface, idle-counter, and
@@ -271,16 +303,16 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             <Section title="Notes" items={result.notes} />
           )}
         </Card>
-        <div>
-          <Button onClick={adoptAnother}>Adopt another device</Button>
-        </div>
       </div>
     )
   }
 
   return (
     <form onSubmit={submit} style={{ display: 'grid', gap: 14, maxWidth: 620 }}>
-      <h1 style={{ margin: 0, fontSize: 20 }}>Adopt a device</h1>
+      <PageHeader
+        title="Adopt a device"
+        purpose="Connect OpenWrt hardware for managed configuration or read-only monitoring."
+      />
       {/* Above the form, not instead of it. Discovery cannot see the LAN from a
           bridged container, so add-by-address stays the path that always
           works — a scan that comes up empty must not look like a dead end. */}
@@ -380,7 +412,56 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
           {inspectErr && <Banner>{inspectErr}</Banner>}
           {inspection && <Inspection result={inspection} />}
 
-          {hasAdoptedDevice === false && (
+          <fieldset className="management-mode-picker">
+            <legend>Management mode</legend>
+            {([
+              {
+                value: 'managed' as const,
+                label: 'Managed',
+                description: 'Include this device in the site model and allow separately reviewed Preview and Apply operations to configure it.',
+              },
+              {
+                value: 'monitor_only' as const,
+                label: 'Monitor only',
+                description: 'Collect health, inventory and topology evidence, but never include this device in desired-state Preview or Apply.',
+              },
+            ]).map((choice) => (
+              <label
+                key={choice.value}
+                className="management-mode-choice"
+                data-selected={managementMode === choice.value ? 'true' : undefined}
+              >
+                <input
+                  type="radio"
+                  name="management-mode"
+                  value={choice.value}
+                  checked={managementMode === choice.value}
+                  onChange={() => setManagementMode(choice.value)}
+                />
+                <span>
+                  <strong>{choice.label}</strong>
+                  <span>{choice.description}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+
+          {managementMode === 'monitor_only' && (
+            <Notice
+              component="Routed monitoring scope"
+              summary="The controller must directly reach this management address; multi-site and NAT traversal are not provided."
+              details="A monitor-only router may live on another routed subnet and may be labelled Gateway for truthful topology and inventory. It does not become the managed routing anchor and cannot be targeted by Preview or Apply."
+            />
+          )}
+
+          {managementMode === 'monitor_only' && functions.includes('gateway') && hasManagedGateway === false && (
+            <Banner tone="warning">
+              This monitor-only Gateway will not become the site&apos;s managed routing anchor.
+              Adopt one Gateway in Managed mode before expecting network policy Preview or Apply.
+            </Banner>
+          )}
+
+          {hasAdoptedDevice === false && managementMode === 'managed' && (
             <Banner
               tone={
                 inspection?.functions_recommended.includes('gateway') ||
@@ -401,6 +482,12 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                 : !inspection && possibleGateway
                   ? 'The unauthenticated scan saw a WAN-named interface or DHCP service. If inspection confirms Gateway, adopt it before the devices behind it.'
                   : 'Adopt the router that provides DHCP and routing first and select Gateway. AP-only is still valid when the gateway is intentionally managed elsewhere.'}
+            </Banner>
+          )}
+          {managedGatewayConflict && (
+            <Banner tone="warning">
+              This site already has a managed Gateway. Deselect Gateway or use
+              Monitor only; oonfeeWRT permits one configuration-managing Gateway.
             </Banner>
           )}
           <fieldset
@@ -571,7 +658,7 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
             kind="primary"
             disabled={
               busy || !host || !username || functions.length === 0 ||
-              !routerChangesAccepted
+              !routerChangesAccepted || managedGatewayConflict
             }
           >
             {busy ? 'Probing and adopting…' : 'Adopt'}
@@ -704,6 +791,10 @@ function functionNames(functions: DeviceFunction[]): string {
   return functions
     .map((value) => FUNCTIONS.find((item) => item.value === value)?.label ?? value)
     .join(', ')
+}
+
+function managementModeName(mode: ManagementMode): string {
+  return mode === 'monitor_only' ? 'Monitor only' : 'Managed'
 }
 
 function lanLayoutText(result: InspectResult): string {

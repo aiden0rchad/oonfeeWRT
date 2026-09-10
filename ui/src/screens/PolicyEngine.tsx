@@ -17,7 +17,7 @@ import type {
   SiteZonePolicy,
   StaticRoute,
 } from '../lib/api'
-import { Banner, Button, Card, DataGrid, Field, Notice, SlideOver } from '../components/ui'
+import { Banner, Button, Card, DataGrid, Field, Notice, PageHeader, SlideOver } from '../components/ui'
 import type { Column } from '../components/ui'
 
 const WAN = 'wan'
@@ -215,12 +215,10 @@ export function PolicyEngine({ onReviewChanges }: { onReviewChanges?: () => void
 
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 1180 }}>
-      <header>
-        <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Policy Engine</h1>
-        <div style={{ marginTop: 3, color: 'var(--text-secondary)', fontSize: 12 }}>
-          One inspectable desired-state model for firewall, NAT, routes, client policy and zones.
-        </div>
-      </header>
+      <PageHeader
+        title="Policy Engine"
+        purpose="One inspectable desired-state model for firewall, NAT, routes, client policy and zones."
+      />
 
       {loadError && <div role="alert"><Banner tone="critical">{loadError}</Banner></div>}
       {site.problems.length > 0 && (

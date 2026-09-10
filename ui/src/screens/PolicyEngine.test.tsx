@@ -43,7 +43,9 @@ describe('Policy Engine', () => {
     api.site.mockResolvedValue(site([zone('Office', ['wan'], false)]))
     render(<PolicyEngine />)
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Policy Engine' })).toBeTruthy()
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Policy Engine' })
+    expect(heading.closest('.page-header')).toBeTruthy()
+    expect(screen.getByText(/One inspectable desired-state model/)).toBeTruthy()
     const objects = await screen.findByRole('tab', { name: 'Objects' })
     const master = screen.getByRole('tab', { name: 'Master Table' })
     const zones = screen.getByRole('tab', { name: 'Zone Matrix' })

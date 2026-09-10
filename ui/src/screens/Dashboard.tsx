@@ -10,7 +10,7 @@ import type {
   TopologySnapshot,
 } from '../lib/api'
 import { eventLabel, ipv6RACondition } from '../lib/eventCondition'
-import { Banner, Button, Card, Notice, Stat, Status, Unknown } from '../components/ui'
+import { Banner, Button, Card, Notice, PageHeader, Stat, Status, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
 
 function formatRate(value: number, unit?: string) {
@@ -1075,13 +1075,11 @@ export function Dashboard({
 
   return (
     <div className="dashboard-page">
-      <div className="dashboard-page-heading">
-        <div>
-          <h1>Dashboard</h1>
-          <div>Internet health, fleet status and recent controller activity.</div>
-        </div>
-        <span className="dashboard-freshness">Live controller view</span>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        purpose="Internet health, fleet status and recent controller activity."
+        actions={<span className="dashboard-freshness">Live controller view</span>}
+      />
       {missingWAN.length > 0 && (
         <div role="alert">
           <Banner tone="critical">

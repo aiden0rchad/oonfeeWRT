@@ -68,6 +68,9 @@ describe('Radios', () => {
   it('renders one stable radio, a categorical channel plan, and honest unavailable metrics', async () => {
     render(<Radios />)
     expect((await screen.findAllByText('Gateway AP')).length).toBeGreaterThan(0)
+    expect(screen.getByRole('heading', { level: 1, name: 'Radios & Channel Plan' })
+      .closest('.page-header')).toBeTruthy()
+    expect(screen.getByText(/Stable UCI radios, measured channel occupancy/)).toBeTruthy()
     expect(screen.getAllByText('radio0').length).toBeGreaterThan(0)
     const classification = screen.getByRole('group', { name: 'Warning: Channel classification' })
     expect(within(classification).getByText(/cannot prove which restricted channels require DFS/i)).toBeTruthy()

@@ -11,6 +11,7 @@ import type {
   ReprobeResult,
   Series,
   DeviceFunction,
+  ManagementMode,
   LLDPCapabilityResult,
 } from '../lib/api'
 import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, Notice, PageHeader, useColumnPrefs } from '../components/ui'
@@ -74,6 +75,13 @@ export function Devices({
       header: 'Functions',
       render: (d) => functionNames(deviceFunctions(d)),
       sortBy: (d) => deviceFunctions(d).join(','),
+    },
+    {
+      key: 'management',
+      header: 'Management',
+      width: 120,
+      render: (d) => managementModeName(d.management_mode),
+      sortBy: (d) => d.management_mode ?? 'managed',
     },
     {
       key: 'host',
@@ -369,6 +377,7 @@ export function DeviceDetailPanel({
           {functionNames(deviceFunctions(detail))}
           {!detail.functions && <span title="derived from this older row's legacy role"> · legacy</span>}
         </Prop>
+        <Prop label="Management mode">{managementModeName(detail.management_mode)}</Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
               and would show the tier this panel had before it subscribed. */}
@@ -392,6 +401,15 @@ export function DeviceDetailPanel({
           </>
         )}
       </div>
+
+      {detail.management_mode === 'monitor_only' && (
+        <Notice
+          tone="accent"
+          component="Monitor-only device"
+          summary="This device contributes health, inventory and topology evidence but is excluded from desired-state Preview and Apply."
+          details="Monitoring requires the controller to reach this management address directly. Multi-site and NAT traversal are not provided, and direct configuration attempts fail closed."
+        />
+      )}
 
       {stats && stats.aps.length > 0 && (
         <div>
@@ -681,6 +699,10 @@ function functionNames(functions: DeviceFunction[]): string {
     switch: 'Switch',
   }
   return functions.map((item) => labels[item]).join(' · ')
+}
+
+function managementModeName(mode?: ManagementMode): string {
+  return mode === 'monitor_only' ? 'Monitor only' : 'Managed'
 }
 
 /**
