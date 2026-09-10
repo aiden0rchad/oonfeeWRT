@@ -16,12 +16,15 @@ import (
 )
 
 func seedDashboardGateway(t *testing.T, h *harness, name, routeInterface string,
-	now, edgeSeen time.Time) *store.Device {
+	now, edgeSeen time.Time, managementMode ...string) *store.Device {
 	t.Helper()
 	recent := now.Add(-10 * time.Second).Unix()
 	gateway := h.seedDevice(name, true, &recent)
 	gateway.Role = "gateway"
 	gateway.Functions = []string{"gateway"}
+	if len(managementMode) > 0 {
+		gateway.ManagementMode = managementMode[0]
+	}
 	if err := h.db.UpsertDevice(context.Background(), gateway); err != nil {
 		t.Fatal(err)
 	}
@@ -198,18 +201,22 @@ func TestDashboardWANNeverGuessesInterfaceKeyAndRetainsStaleObservation(t *testi
 	}
 }
 
-func TestDashboardWANServerSelectsNewestCurrentRoutingEvidence(t *testing.T) {
+func TestDashboardWANUsesManagedGatewayWhileListingMonitorOnlyUplinks(t *testing.T) {
 	h := newHarness(t)
 	h.setup()
 	now := time.Date(2026, 8, 22, 12, 2, 0, 0, time.UTC)
 	h.srv.Now = func() time.Time { return now }
-	seedDashboardGateway(t, h, "older-routing-gateway", "wan-old", now, now.Add(-time.Minute))
-	newer := seedDashboardGateway(t, h, "newer-gateway", "wan-new", now, now)
+	managed := seedDashboardGateway(t, h, "managed-gateway", "wan-managed", now, now.Add(-time.Minute))
+	seedDashboardGateway(t, h, "newer-observed-gateway", "wan-observed", now, now, "monitor_only")
 
-	wan := readDashboard(t, h).WAN
-	if wan.Gateway == nil || wan.Gateway.DeviceID != newer.ID ||
-		wan.Gateway.RouteInterface != "wan-new" {
-		t.Fatalf("server-selected gateway = %+v, want newest device %d", wan.Gateway, newer.ID)
+	dashboard := readDashboard(t, h)
+	if len(dashboard.GatewayUplinks) != 2 {
+		t.Fatalf("gateway uplinks=%+v, want managed and monitor-only routers", dashboard.GatewayUplinks)
+	}
+	wan := dashboard.WAN
+	if wan.Gateway == nil || wan.Gateway.DeviceID != managed.ID ||
+		wan.Gateway.RouteInterface != "wan-managed" {
+		t.Fatalf("server-selected gateway = %+v, want managed device %d", wan.Gateway, managed.ID)
 	}
 }
 

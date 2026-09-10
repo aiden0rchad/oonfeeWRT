@@ -1179,10 +1179,10 @@ func (s *Server) dashboardGatewayTopology(ctx context.Context, devices []*store.
 				candidate := &dashboardWANGateway{DeviceID: device.ID,
 					Name: deviceDisplayName(device), RouteInterface: edge.ParentPort,
 					lastSeen: edge.LastSeen}
-				if selected == nil || candidate.lastSeen > selected.lastSeen ||
+				if device.Configurable() && (selected == nil || candidate.lastSeen > selected.lastSeen ||
 					(candidate.lastSeen == selected.lastSeen &&
 						(candidate.Name < selected.Name ||
-							(candidate.Name == selected.Name && candidate.DeviceID < selected.DeviceID))) {
+							(candidate.Name == selected.Name && candidate.DeviceID < selected.DeviceID)))) {
 					selected = candidate
 				}
 			} else if err == nil {

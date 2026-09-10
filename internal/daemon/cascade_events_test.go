@@ -276,7 +276,8 @@ func TestReachabilitySinkKeepsImmediateIndividualEventsAlongsideCascade(t *testi
 		{MAC: "00:00:00:00:10:02", Name: "child-a", Role: "ap", AdoptedAt: &adopted},
 		{MAC: "00:00:00:00:10:03", Name: "child-b", Role: "ap", AdoptedAt: &adopted},
 		{MAC: "00:00:00:00:10:04", Name: "isolated", Role: "ap", AdoptedAt: &adopted},
-		{MAC: "00:00:00:00:10:05", Name: "other-upstream", Role: "gateway", AdoptedAt: &adopted},
+		{MAC: "00:00:00:00:10:05", Name: "other-upstream", Role: "gateway",
+			ManagementMode: "monitor_only", AdoptedAt: &adopted},
 	}
 	for _, device := range devices {
 		if err := d.Store.UpsertDevice(ctx, device); err != nil {
