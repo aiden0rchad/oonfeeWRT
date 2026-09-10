@@ -1,7 +1,7 @@
 # Discovery, adoption, and devices
 
 The Devices workflow moves from **unknown address**, to **read-only inspection**,
-to **explicitly adopted functions**. Discovery never equals adoption, and
+to an explicit **management mode and adopted functions**. Discovery never equals adoption, and
 adoption never equals applying network configuration.
 
 <div class="write-impact warning"><strong>Router write impact</strong><span>Discovery, add-by-address, inspection, telemetry, rename, and reprobe are read-only to the router. Adoption can create a scoped login and ACL only after review and approval. Optional LLDP and un-adoption have separate change plans.</span></div>
@@ -11,9 +11,9 @@ adoption never equals applying network configuration.
 1. **Discover or add** an address.
 2. **Inspect** model, firmware, interfaces, functions, and source gaps without
    saving a management credential.
-3. **Adopt** selected Gateway, AP, or Switch functions and approve scoped
-   controller access.
-4. **Observe and configure** through the device and site views.
+3. **Adopt** in Managed or Monitor only mode, select Gateway, AP, or Switch
+   functions, and approve scoped controller access.
+4. **Observe**, and configure only managed devices through the device and site views.
 5. **Reprobe or refresh access** when firmware or capabilities change.
 6. **Un-adopt** through a reviewed cleanup plan when the device leaves the
    controller.
@@ -93,7 +93,29 @@ reinstallation, address reuse, or interception; verify the device out of band
 before force-un-adopting and adopting it again.
 :::
 
-## Choose device functions
+## Choose management mode and device functions
+
+Management mode defines whether the device can receive site intent:
+
+| Mode | What remains available | What is fenced |
+|---|---|---|
+| **Managed** | Polling and supported reviewed configuration | Normal capability, ownership, and permission limits still apply |
+| **Monitor only** | Polling through the distinct read-only `oonfeewrt-monitor` ACL, inventory, telemetry, events, topology including existing LLDP observation, an acknowledged RF scan when supported, ACL maintenance, and un-adoption | Preview, Apply, desired/site configuration, optional LLDP installation/configuration/removal, wireless-neighbor mutations, and other package/config/remove operations |
+
+Use monitor only for separately administered OpenWrt routers that the
+controller host can already reach, including across routed management subnets
+or a VPN. oonfeeWRT does not create that route, and adoption still installs the
+scoped polling login and distinct read-only ACL after acknowledgement. Multiple
+monitor-only routers are allowed; only one managed Gateway is allowed.
+
+Management mode and adopted functions are chosen together. To change either,
+use the reviewed un-adopt/re-adopt workflow; there is no in-place mode toggle
+that silently replaces router access.
+
+The mode fences persistent configuration authority, not every active
+observation. A separately acknowledged RF scan remains available on a capable
+radio; it can take the serving radio off-channel and interrupt clients but has
+no intended persistent configuration change.
 
 Functions describe what the controller may expect from the device:
 
@@ -117,13 +139,15 @@ SSH once to create:
 - one reviewable rpcd ACL JSON file.
 
 The router administrator credential is used for that bounded bootstrap and is
-not stored. Normal collection and configuration use rpcd/ubus with the scoped
-credential. Adoption does not install a package, executable, daemon, service,
-or firmware.
+not stored. Normal collection and managed-device configuration use rpcd/ubus
+with the scoped credential. Monitor-only adoption installs the distinct
+read-only `oonfeewrt-monitor` ACL group and does not grant the controller
+desired-configuration authority.
+Adoption does not install a package, executable, daemon, service, or firmware.
 
 1. Expand the displayed access plan.
 2. Review the destination paths and ACL operations.
-3. Confirm the inspected MAC/model evidence and selected functions.
+3. Confirm the inspected MAC/model evidence, management mode, and selected functions.
 4. Approve the controller access payload only if the scope is acceptable.
 5. Wait for the post-adoption capability report before configuring the site.
 
@@ -140,6 +164,8 @@ The list is the fleet-level view. Use status and last-seen time together:
   router itself is powered off.
 - **Unavailable** or a source gap means a specific value could not be
   established.
+- **Monitor only** names an intentional write boundary, not an offline or
+  degraded state.
 
 Open a row for the detail workspace.
 
@@ -147,7 +173,7 @@ Open a row for the detail workspace.
 
 The detail view can include:
 
-- name, address, MAC, firmware, class, and selected functions;
+- name, address, MAC, firmware, management mode, class, and selected functions;
 - load, memory, client count, and poll duration;
 - traffic and radio time series;
 - radio inventory and broadcast provenance;
@@ -169,7 +195,7 @@ can remain empty until that exact interface has collected samples. Dashboard
 adds a stricter series-catalog check before labeling data as WAN throughput.
 
 If the route cannot be mapped to exactly one active logical interface, the
-current v0.1.4 API explicitly reports no proved WAN interface and the UI leaves
+current v0.1.5 API explicitly reports no proved WAN interface and the UI leaves
 the WAN series unavailable. It does not guess from the metric catalog. Route
 evidence is refreshed on the slower network/topology cycle, approximately
 every 15 minutes; opening a focused device view does not make it a rapid
@@ -219,7 +245,9 @@ grants the read; neither the refresh nor the poll sets the router clock.
 ## Optional LLDP
 
 LLDP can improve physical topology evidence, but it is not part of adoption.
-The separate workflow can:
+It is unavailable for monitor-only devices because package installation and
+service configuration would cross their mutation boundary. For a managed
+device, the separate workflow can:
 
 1. refresh the OpenWrt package index after acknowledgement;
 2. show the exact official-feed package plan;
@@ -273,7 +301,8 @@ from the controller.
 |---|---|---|
 | Scan finds no device | Bridged-container subnet visibility, routed subnet, subnet size, or controller reachability | Add the router by hostname or IPv4 address; verify the controller can route to its management endpoint |
 | Inspection cannot connect | Address, administrator password, selected HTTP/HTTPS protocol, `rpcd`, `uhttpd` ubus handler, or firewall | Verify the ubus management endpoint from the controller host; SSH is not used by inspection |
-| Adoption refuses Gateway | Another adopted device already has the Gateway function | Review and un-adopt the existing Gateway before adopting a replacement; functions cannot be reassigned in place in v0.1.4 |
+| Adoption refuses managed Gateway | Another managed device already has the Gateway function | Keep one managed Gateway; use Monitor only to observe an additional routed router, or deliberately remove the old managed Gateway before replacing it |
+| Monitor-only device has no Preview or optional LLDP mutation action | The mode intentionally fences desired configuration and optional LLDP installation/configuration/removal; existing LLDP observation and an acknowledged RF scan remain separate observation paths | Keep it monitor only for observation, or un-adopt and deliberately adopt with Managed authority after reviewing ownership and router impact |
 | Host key or certificate changed | Factory reset, firmware reinstall, address reuse, interception | Verify identity out of band before force-un-adopting and adopting the device again |
 | Metrics say unavailable | Source not readable, driver lacks metric, ACL gap, or no completed poll | Read the source explanation; reprobe or refresh ACL only when it names a repairable cause |
 | Router clock status alone is unavailable after upgrade | The adoption's older ACL predates the read-only LuCI clock methods | If clock status is wanted, review and approve the updated controller-access payload, then wait for a full poll; do not re-adopt |

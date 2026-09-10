@@ -49,3 +49,20 @@ func TestDeviceViewReturnsFunctionsAndCanonicalLegacyRole(t *testing.T) {
 		})
 	}
 }
+
+func TestDeviceViewReturnsCanonicalManagementMode(t *testing.T) {
+	s := &Server{}
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "", want: "managed"},
+		{raw: "managed", want: "managed"},
+		{raw: "monitor_only", want: "monitor_only"},
+	} {
+		got := s.viewDevice(&store.Device{ManagementMode: tc.raw}, time.Unix(0, 0))
+		if got.ManagementMode != tc.want {
+			t.Errorf("management_mode %q rendered as %q, want %q", tc.raw, got.ManagementMode, tc.want)
+		}
+	}
+}

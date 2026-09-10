@@ -118,7 +118,7 @@ func TestValidateReturnsCountsAndUsesVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := recovery.Counts{Schema: 20, Devices: 1, Credentials: 1}
+	want := recovery.Counts{Schema: 23, Devices: 1, Credentials: 1}
 	if counts != want {
 		t.Fatalf("counts=%+v, want %+v", counts, want)
 	}

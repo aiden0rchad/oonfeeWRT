@@ -32,6 +32,7 @@ const (
 	restoreConfirmationContract = "controller-restore-confirm-v1"
 	restoreTypedConfirmation    = "RESTORE CONTROLLER"
 	restoreMediaType            = "application/vnd.oonfeewrt.backup"
+	expectedSchema              = 23
 )
 
 type secretText []byte
@@ -89,7 +90,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "release container smoke:", err)
 		os.Exit(1)
 	}
-	fmt.Println("release container smoke: clean schema-20 export/restore passed with zero devices")
+	fmt.Printf("release container smoke: clean schema-%d export/restore passed with zero devices\n", expectedSchema)
 }
 
 func loadConfig(path string) (*config, error) {
@@ -502,8 +503,8 @@ func runSmoke(ctx context.Context, cfg *config) error {
 	if err != nil {
 		return err
 	}
-	if !validRestorePlanID(preview.PlanID) || preview.SourceSchema != 20 || preview.TargetSchema != 20 || preview.Counts.Devices != 0 {
-		return errors.New("restore preview did not bind the expected zero-device schema-20 plan")
+	if !validRestorePlanID(preview.PlanID) || preview.SourceSchema != expectedSchema || preview.TargetSchema != expectedSchema || preview.Counts.Devices != 0 {
+		return fmt.Errorf("restore preview did not bind the expected zero-device schema-%d plan", expectedSchema)
 	}
 	if err := reauthenticate(ctx, api, cfg.OwnerPassword); err != nil {
 		return err

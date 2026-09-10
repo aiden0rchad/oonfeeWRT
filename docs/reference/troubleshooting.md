@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.4.
+description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.5.
 ---
 
 # Troubleshooting
@@ -17,7 +17,7 @@ until you know the previous operation's terminal state.
    oonfeewrtd -version
    ```
 
-   Expected for this guide: `v0.1.4`.
+   Expected for this guide: `v0.1.5`.
 
 2. Check controller liveness using the same listener configuration as the
    running process:
@@ -177,7 +177,7 @@ Inspect can still display the ordinary result and adds a note explaining that
 the sanitized report was unavailable.
 
 1. Confirm both daemon and UI are the same v0.1.2-or-newer release; for this
-   guide, both should be v0.1.4.
+   guide, both should be v0.1.5.
 2. Repeat read-only Inspect once after confirming the target address and
    credentials. It makes a fresh probe, but do not loop it aggressively.
 3. Record the controller version, router model/OpenWrt version, the displayed
@@ -188,6 +188,28 @@ the sanitized report was unavailable.
 
 No stored report can be recovered later because compatibility export is not a
 controller job and is not persisted.
+
+## A monitor-only router is missing configuration actions
+
+This is the intended authority boundary, not a capability failure. A
+monitor-only device uses the distinct read-only `oonfeewrt-monitor` ACL and can
+contribute polling, inventory, telemetry, events, and topology. It is excluded
+from Preview, Apply, desired/site configuration, optional LLDP installation/
+configuration/removal, wireless-neighbor mutations, and other package/config/
+remove operations. Existing LLDP observation, ACL maintenance, and un-adoption
+remain available.
+
+A supported RF scan is also available after its own disruption
+acknowledgement. It is an active, transient observation that may take the
+serving radio off-channel and interrupt clients; it does not grant persistent
+configuration authority.
+
+If observation fails, verify the existing route or VPN, firewall, SSH, and HTTP
+or HTTPS `/ubus` access from the controller host. oonfeeWRT does not establish
+cross-subnet reachability. If configuration authority is genuinely required,
+back up the router, resolve who owns DHCP/routing/firewall/Wi-Fi, then use the
+documented un-adopt/re-adopt workflow to choose Managed. Do not bypass the mode
+through direct API calls.
 
 ## A feature says unavailable, unsupported, partial, or stale
 
@@ -208,7 +230,7 @@ state needs a recorded plan and rollback.
 
 Saving **Disabled** changes controller desired state only. Generate a fresh
 Preview and inspect the option-level plan. On the management LAN, the sections
-remain foreign: v0.1.4 can patch only the allowlisted IPv6 options on the exact
+remain foreign: v0.1.5 can patch only the allowlisted IPv6 options on the exact
 existing LAN/DHCP and supported conventional WAN targets. It cannot create,
 claim, rename, or delete them. Resolve any missing, ambiguous, wrong-type, or
 static-IPv6 blocker deliberately, then Apply once. Static IPv6 addresses,
@@ -275,6 +297,50 @@ Read the named gate. Common causes include:
 Resolve the condition and generate a fresh Preview. A prior preview/acknowledgement
 does not authorize a changed plan.
 
+Monitor-only devices are deliberately absent from the Preview target fleet. If
+a direct per-device request names one, the server refuses it rather than
+silently widening authority.
+
+## A named policy set cannot save, render, or delete
+
+- Saving requires a unique nonblank name, 1–1,024 canonical exact MAC members,
+  and a stored `local` observation for every member from the currently adopted
+  Managed Gateway.
+- A firewall rule may use direct source MACs or one named set, never both.
+- Missing/empty references fail validation and rendering closed.
+- Deletion is refused while any enabled or disabled firewall rule references
+  the set's stable ID.
+
+Schema 23 stores source-relative client evidence in `client_observations`, keyed
+by device and MAC. Monitor-only observations neither satisfy nor contaminate
+the managed-Gateway proof, including after a monitoring device is un-adopted.
+Set creation/update, direct or set-backed MAC Secure drafts, and new
+blocked/fixed-address intent are refused when a referenced MAC lacks a stored
+`local` observation from the currently adopted Managed Gateway. An `upstream`
+or `unknown` observation from that Gateway is also insufficient. Active MAC
+intent blocks Preview until every referenced client has that local proof.
+
+Complete a successful client poll on the Managed Gateway if the picker is
+missing an expected client or Preview reports missing source evidence. Upgrades
+initially lack schema-23 observations, and portable restore deliberately clears
+them rather than treating evidence gathered by another controller instance as
+write authority. A successful Managed Gateway poll re-establishes the proof.
+Authorization rejects observations older than the normal 30-day client-
+retention cutoff or more than five minutes in the future even before cleanup.
+Cleanup also prunes provenance at the 30-day cutoff when desired intent keeps
+the merged client row; that intent stays stored but blocks Preview until the
+Gateway observes the MAC locally again.
+For a referenced set, find every set-backed row in the Master Table and move or
+remove those rules before deletion. After any membership edit, generate a fresh
+Preview and verify the exact resolved MACs; saving the set alone does not alter
+the managed Gateway.
+
+Removing a monitoring router cannot manufacture managed-Gateway proof; its
+observations never participate in this gate. Prefer a network/zone or explicit
+IPv4 policy that identifies the actual enforcement scope, or wait for a
+successful Managed Gateway poll. Existing blocked/fixed-address intent may be
+cleared one client at a time even while the gate is active.
+
 ## Apply failed or its outcome is uncertain
 
 Do not click Apply again immediately.
@@ -333,7 +399,7 @@ same slow topology poll.
 
 Start read-only:
 
-1. Confirm the controller is v0.1.4 and the device is adopted as a Gateway.
+1. Confirm the controller is v0.1.5 and the device is adopted as a managed Gateway.
 2. Allow one topology cycle (normally up to 15 minutes) after startup, adoption,
    or a route change, then read the device's source/degradation reason.
 3. From an independently trusted router shell, if appropriate, inspect the two
@@ -364,7 +430,7 @@ stale evidence does not become a current Dashboard WAN path.
 
 Do not change route metrics, PPPoE, firewall, or failover configuration merely
 to populate a chart. If the route layout is intentional but outside the modeled
-scope, treat WAN selection as unavailable in v0.1.4. Re-probing capabilities
+scope, treat WAN selection as unavailable in v0.1.5. Re-probing capabilities
 does not force or repair this topology observation.
 
 ## Charts are initially empty after startup or adoption
@@ -414,7 +480,7 @@ seconds. Only one test may be active.
 - Verify the controller host/container has HTTPS and DNS access to the provider.
 - Run during a quiet period if saturation affects clients.
 - Do not interpret the result as router-local forwarding performance.
-- Loaded latency and jitter are unavailable in v0.1.4.
+- Loaded latency and jitter are unavailable in v0.1.5.
 
 ## Diagnostics or backup download expired
 
@@ -465,20 +531,23 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 ## Upgrade or rollback trouble
 
-v0.1.4 migrates schema 19 to schema 20 on startup. The migration adds a closed
-topology-history index and normalizes old development-era topology source keys;
-it does not delete user configuration, credentials, secrets, or topology
-intervals. The v0.1.3 daemon cannot open the migrated schema-20 database.
+v0.1.5 migrates schema 20 → 21 → 22 → 23 on startup. The ordered steps add
+management mode with existing devices preserved as Managed, reusable policy
+sets, source-relative client provenance, and a rebuilt one-managed-Gateway
+uniqueness guard based on canonical functions plus the legacy role. Schema 23
+also adds observation and case-insensitive global-client MAC indexes for
+bounded policy checks. Migration configures no router and does not delete user
+configuration, credentials, secrets, or topology intervals. The v0.1.4 daemon
+cannot open the migrated schema-23 database.
 
-To roll back to v0.1.3, stop the controller and restore the matching
-pre-upgrade schema-19 database, `keyring.json`, runtime passphrase, and old
+To roll back to v0.1.4, stop the controller and restore the matching
+pre-upgrade schema-20 database, `keyring.json`, runtime passphrase, and old
 binary/image together. Replacing only the executable or image tag is not a
-valid rollback. Upgrading does not require re-adoption; existing scoped access
-keeps ordinary management working. Router-clock status alone needs a separately
-reviewed controller-access refresh on an older adoption.
+valid rollback. Upgrade does not require re-adoption or silently change ACLs;
+selecting Monitor only later uses the separately reviewed ACL lifecycle.
 
 Rollback to historical `v0.1.0-rc.1` is different: that daemon uses schema 17
-and must not open schema-20 state. Stop the controller and restore the untouched
+and must not open schema-20 or schema-23 state. Stop the controller and restore the untouched
 pre-upgrade schema-17 database, matching keyring, passphrase file, and old
 binary/image together. Migration/rollback does not revert router configuration.
 

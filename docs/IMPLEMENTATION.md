@@ -153,7 +153,7 @@ The completed `v0.1.0` tag workflow and GitHub Release are the authority for
 final publication; the workflow must pass the isolated release matrix before it
 publishes artifacts.
 
-### v0.1.2 through v0.1.4 patch boundary
+### v0.1.2 through v0.1.5 patch boundary
 
 Release `v0.1.2` adds a privacy-bounded compatibility report to successful,
 authenticated read-only Inspect. The server constructs the report from a strict
@@ -236,6 +236,50 @@ requires explicit firewall/TLS review. The value is not a daemon environment
 variable and has no effect in host-network mode. Operators must replace or
 merge the Compose file and persist the bind for lifecycle commands; pulling the
 new image alone cannot update host port publishing.
+
+Release `v0.1.5` adds a per-device `management_mode`, defaulting migrated rows
+to `managed`. Monitor-only devices use the distinct read-only
+`oonfeewrt-monitor` ACL and remain polling/inventory/topology targets, but are
+excluded from desired/site rendering, Preview/Apply, optional LLDP
+installation/configuration/removal, runtime wireless-neighbour updates, and other
+package/config/remove operations. Existing LLDP observation remains available.
+Reviewed ACL lifecycle and un-adoption remain available. Managed-Gateway
+admission remains singular; schema 23 adds per-device MAC provenance and
+bounded observation/global-client MAC lookup indexes, then rebuilds the unique
+Gateway index from canonical `functions_json` plus legacy role so inconsistent
+representations cannot bypass the constraint.
+
+RF scan remains available to either mode when capability-proved and separately
+acknowledged. It is a transient active observation with client-disruption risk,
+not a persistent configuration path.
+
+Schema 22 adds named policy sets with stable IDs and atomic, canonical exact-
+MAC membership. Firewall `source_set_id` is mutually exclusive with direct
+source MACs; validation, Master Table, Object Manager Secure drafting, restore,
+and render resolve or reject the reference. Empty/dangling/malformed sets and
+deletion while referenced fail closed. Set edits remain desired-state changes
+and do not authorize a router write without a fresh Preview and Apply.
+
+Set members and active direct/set firewall, blocked-client, or fixed-address
+intent must resolve to a stored `local` observation from the currently adopted
+Managed Gateway. Schema 23 stores source-relative scope/`last_seen` by
+`(device_id, MAC)`; Monitor-only observations neither satisfy nor contaminate
+that proof, including after un-adoption. Missing proof refuses set save/update
+and MAC Object Manager compilation; existing active MAC intent becomes a
+site-level Preview error until a successful managed-Gateway poll, while
+block/fixed-address intent can still be cleared one client at a time. Portable
+restore clears source-relative observations before validating and staging the
+destination pair. Authorization independently rejects observations older than
+30 days or more than five minutes in the future; cleanup prunes at the same
+30-day cutoff even when desired intent retains the merged client row. The
+intent remains stored and Preview fails closed until the Managed Gateway
+observes that MAC locally again.
+The observation MAC lookup and case-insensitive `clients_mac_nocase` index keep
+maximum-size policy expansion bounded.
+
+The full automatic database path from v0.1.4 is schema 20 → 21 → 22 → 23 and
+performs no router call. The Phase 5 flow/DPI analysis is documentation-only;
+v0.1.5 installs and ships no flow package or application identity.
 
 ---
 
@@ -340,6 +384,8 @@ CREATE TABLE devices (
   name         TEXT NOT NULL,
   role         TEXT NOT NULL DEFAULT 'ap',     -- legacy deterministic primary label
   functions_json TEXT NOT NULL DEFAULT '["ap","switch"]', -- authoritative responsibilities (v11)
+  management_mode TEXT NOT NULL DEFAULT 'managed'
+                  CHECK (management_mode IN ('managed','monitor_only')), -- v21
   adopted_at   INTEGER,                  -- unix; NULL = pending
   cred_enc     BLOB,                     -- chacha20poly1305(username:password)
   class        TEXT,                     -- 'A'|'B'|'C' per DEVICE-BUDGET
@@ -348,6 +394,11 @@ CREATE TABLE devices (
   last_seen    INTEGER,
   poll_state   TEXT NOT NULL DEFAULT 'baseline' -- 'baseline'|'focused'|'quiesced'|'backoff'
 );
+CREATE UNIQUE INDEX devices_one_managed_gateway
+  ON devices(management_mode)
+  WHERE adopted_at IS NOT NULL
+    AND management_mode='managed'
+    AND (role='gateway' OR instr(functions_json,'"gateway"')>0); -- rebuilt v23
 
 -- ===== site model (desired state) =====
 CREATE TABLE networks (
@@ -392,8 +443,32 @@ CREATE TABLE zones (
 );
 CREATE TABLE fw_rules (
   id INTEGER PRIMARY KEY, sort INTEGER NOT NULL,
-  rule_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
+  rule_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1 -- may reference source_set_id
 );
+CREATE TABLE policy_sets (              -- reusable exact-MAC identities (v22)
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL
+);
+CREATE UNIQUE INDEX policy_sets_name_nocase
+  ON policy_sets(name COLLATE NOCASE);
+CREATE TABLE policy_set_members (
+  set_id INTEGER NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL,
+  PRIMARY KEY (set_id, mac)
+) WITHOUT ROWID;
+CREATE INDEX policy_set_members_mac_nocase
+  ON policy_set_members(mac COLLATE NOCASE);
+CREATE TABLE client_observations (      -- per-device MAC provenance (v23)
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL CHECK (mac=lower(mac)),
+  scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (device_id, mac)
+) WITHOUT ROWID;
+CREATE INDEX client_observations_mac
+  ON client_observations(mac);
+CREATE INDEX clients_mac_nocase
+  ON clients(mac COLLATE NOCASE);
 CREATE TABLE device_overrides (       -- explicit per-device deviations
   device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
   path TEXT NOT NULL,                 -- e.g. 'radio:radio0:channel'
@@ -428,6 +503,8 @@ CREATE TABLE clients (
   grp TEXT, first_seen INTEGER, last_seen INTEGER,
   fingerprint_json TEXT NOT NULL DEFAULT '{}'   -- oui vendor, dhcp hints, inferred type
 );
+CREATE INDEX clients_mac_nocase
+  ON clients(mac COLLATE NOCASE);       -- bounded legacy/global lookup (v23)
 
 -- ===== telemetry (rollups only — raw ring is RAM, D4) =====
 CREATE TABLE series (

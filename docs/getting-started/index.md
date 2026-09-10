@@ -29,7 +29,7 @@ Choose a host that stays on and can reach every router's management address.
 
 Remote routers need an existing routed management network or VPN. oonfeeWRT does not provide cloud brokering or automatic NAT traversal.
 
-### Managed router
+### OpenWrt router
 
 The documented minimum is OpenWrt 21.02 or newer with:
 
@@ -57,11 +57,25 @@ On a new controller, starting it, opening the dashboard, scanning the LAN, addin
 
 Router-changing actions are explicit:
 
-- **Adoption** installs one scoped `oonfeewrt` rpcd login and `/usr/share/rpcd/acl.d/oonfeewrt.json` after you acknowledge the displayed plan. It installs no package, executable, service, daemon, or firmware.
+- **Adoption** installs one scoped `oonfeewrt` rpcd login and `/usr/share/rpcd/acl.d/oonfeewrt.json` after you acknowledge the displayed plan. Managed devices use the managed ACL group; Monitor only uses the distinct read-only `oonfeewrt-monitor` group. Both modes require this bootstrap. It installs no package, executable, service, daemon, or firmware.
 - **Apply** changes reviewed controller-owned network, wireless, DHCP, and firewall UCI sections only after Preview and safety acknowledgements. An explicit non-Router-managed IPv6 mode on the Gateway management LAN is the one narrower exception: it may patch allowlisted IPv6 options on exact existing LAN/DHCP and supported conventional WAN sections.
 - **RF scan** takes the selected serving radio off-channel temporarily and requires disruption acknowledgement.
 - **Optional LLDP** may install the official OpenWrt `lldpd` package after separate plan and installation approvals.
 - **Un-adoption** reverts controller-owned state and removes the scoped login and ACL after review.
+
+Choose **Monitor only** when the router should contribute polling, inventory,
+telemetry, events, and topology but remain outside desired configuration.
+Monitor-only devices cannot enter Preview or Apply, install/configure/remove
+the optional LLDP capability, receive wireless-neighbor mutations, or run other
+package/config/remove operations. Existing LLDP observation, explicit ACL
+maintenance, and un-adoption remain available. Multiple monitor-only routers
+can sit across routed subnets; the controller host must already reach their SSH
+and HTTP or HTTPS `/ubus` endpoints.
+
+A supported RF scan remains available on Monitor only after its own disruption
+acknowledgement. It is an active, transient observation: the serving radio goes
+off-channel and clients may pause, roam, or disconnect, but no persistent
+configuration change is intended.
 
 Existing human-managed UCI sections remain foreign and are normally read-only.
 The management-LAN IPv6 exception never creates, claims, renames, or deletes a
@@ -78,8 +92,11 @@ overwritten.
 5. Run **Inspect capabilities**. This is a read-only ubus operation.
 6. Optionally download the sanitized compatibility report if you need to share
    bounded hardware-support evidence.
-7. Review and select the device's Gateway, AP, and/or Switch functions.
-8. Review and acknowledge the controller access payload, then Adopt.
+7. Choose **Managed** or **Monitor only**, then review the device's Gateway,
+   AP, and/or Switch functions. A site permits one managed Gateway.
+8. Review and acknowledge the controller access payload, then Adopt. Monitor
+   only installs the scoped identity with the distinct read-only
+   `oonfeewrt-monitor` ACL.
 9. Confirm that the device is online and review unavailable capability sources.
 10. Make desired-state changes only when ready. **Preview** first, read every warning, then **Apply**.
 
@@ -88,9 +105,9 @@ overwritten.
 - **Dashboard:** fleet state, clients, Internet reachability and traffic history, topology summary, warnings, and controller-host speed tests.
 - **Topology:** current and historical links with source and confidence information. v0.1.4 uses fresh multi-hop FDB/LLDP evidence to avoid presenting one managed device as directly attached to several upstream devices; raw intervals remain available in history.
 - **Radios:** radio inventory, channel plans, utilization evidence, and explicit RF scans.
-- **Devices:** health, capabilities, collection overhead, polling, ACL refresh, optional LLDP, and un-adoption. Older adoptions need a separately reviewed ACL refresh only if you want the new router-clock status; ordinary management continues without re-adoption.
+- **Devices:** management mode, health, capabilities, collection overhead, polling, ACL refresh, mode-appropriate optional actions, and un-adoption. Older adoptions need a separately reviewed ACL refresh only if you want router-clock status; ordinary management continues without re-adoption.
 - **Client Devices:** client inventory, filters, and a time-aligned observability workspace.
-- **Policy Engine:** objects, firewall/NAT/route records, whole-zone forwarding, and inspectable desired state.
+- **Policy Engine:** objects, named exact-MAC policy sets, firewall/NAT/route records, whole-zone forwarding, concrete set resolution, and inspectable desired state.
 - **Settings:** networks, DHCP, WLANs, AP groups, roaming, mesh backhauls, wireless uplinks, accounts, diagnostics, and backup/restore.
 - **Logs:** General and Audit events with provenance and coverage information, an active IPv6 no-default-route condition, and fresh router-clock skew warnings.
 
@@ -103,7 +120,9 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
   evidence for one Cudy M3000 v2/Filogic variant, but not adoption, Apply, VLAN,
   WLAN/client operation, resource budgets, topology, RF scans, speed tests,
   un-adoption, or broader Filogic validation.
-- Only one managed Gateway is supported.
+- Only one managed Gateway is supported. Multiple monitor-only routers are
+  allowed when already reachable, but are not managed failover gateways,
+  configuration targets, or a replacement for multi-site routing/VPNs.
 - Internet-uplink evidence models one effective main-table IPv4 default route.
   Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
   `mwan3`, manual WAN selection, and bond-member monitoring are not modeled.
@@ -113,10 +132,10 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
   not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
 - Existing networks upgrade to **Router managed** IPv6 and receive no IPv6
-  router write merely from installing v0.1.4. Prefix delegation and Disabled
+  router write merely from installing v0.1.5. Prefix delegation and Disabled
   remain explicit Preview-and-Apply choices.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
-- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.4.
+- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.5. Flow visibility is documented as a gated feasibility track only.
 
 ## Next steps
 

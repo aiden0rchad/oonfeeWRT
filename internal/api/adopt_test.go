@@ -314,6 +314,47 @@ func TestAdoptCanonicalisesIndependentFunctionsAndLegacyRole(t *testing.T) {
 	}
 }
 
+func TestAdoptValidatesAndCanonicalisesManagementModeBeforeEnroller(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "legacy default", want: "managed"},
+		{name: "managed", mode: " MANAGED ", want: "managed"},
+		{name: "monitor only", mode: " Monitor_Only ", want: "monitor_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, e := harnessWithEnroller(t)
+			w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
+				"host": "192.0.2.1", "username": "root", "functions": []string{"gateway"},
+				"management_mode": tc.mode, "acknowledge_router_changes": true,
+			})
+			if w.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			e.mu.Lock()
+			got := e.adopted[0].ManagementMode
+			e.mu.Unlock()
+			if got != tc.want {
+				t.Fatalf("management_mode=%q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	h, e := harnessWithEnroller(t)
+	w := h.do(http.MethodPost, "/api/v1/devices/adopt", map[string]any{
+		"host": "192.0.2.1", "username": "root", "functions": []string{"gateway"},
+		"management_mode": "multi_site", "acknowledge_router_changes": true,
+	})
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "management mode") {
+		t.Fatalf("invalid mode: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(e.adopted) != 0 {
+		t.Fatal("invalid management mode reached the enroller")
+	}
+}
+
 func TestAdoptRejectsEmptyOrUnknownFunctionsBeforeEnroller(t *testing.T) {
 	for _, functions := range [][]string{{}, {"router"}, {"ap", "mesh"}} {
 		h, e := harnessWithEnroller(t)

@@ -182,10 +182,12 @@ const site = {
   networks: [{ id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true }],
   zones: [{ name: 'lan', forward_to: ['wan'], explicit: true }],
   policies: [],
+  policy_sets: [{ id: 4, name: 'Trusted devices', members: ['02:00:00:00:00:01'] }],
   policy_capabilities: [
     { kind: 'firewall', available: true },
     { kind: 'route', available: true },
     { kind: 'fixed_ip', available: true },
+    { kind: 'policy_set', available: true },
   ],
   problems: [],
   overrides: [],
@@ -346,6 +348,7 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/site': site,
       '/api/v1/accounts': accounts,
       '/api/v1/radios': radios,
+      '/api/v1/discovery': { networks: [], skipped: [], hosts: 0 },
       '/api/v1/roaming/neighbours': { ran: false },
       '/api/v1/site/mesh-health': { links: [], note: 'No configured mesh links.' },
     }
@@ -639,35 +642,61 @@ test('Topology keeps review actions visible while technical detail is collapsed'
 })
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
-  test(`${viewport.width}x${viewport.height} list page headers keep controls in view`, async ({ page }) => {
-    await page.setViewportSize(viewport)
-    const unexpectedRequests = await installControllerFixture(page)
-    await page.goto('/devices')
-    await page.getByRole('button', { name: 'Expand navigation' }).click()
+  for (const theme of ['dark', 'light'] as const) {
+    test(`${viewport.width}x${viewport.height} ${theme} route page headers keep controls in view`, async ({ page }) => {
+      await page.setViewportSize(viewport)
+      const unexpectedRequests = await installControllerFixture(page)
+      await page.goto('/devices')
+      await page.getByRole('button', { name: 'Expand navigation' }).click()
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
 
-    await expect(page.getByRole('heading', { level: 1, name: 'Devices' })).toHaveCount(1)
-    await expect(page.locator('#main-content').getByRole('button', { name: 'Adopt a device' })).toBeVisible()
-    let overflow = await readOverflow(page)
-    expect(overflow.document).toBeLessThanOrEqual(1)
-    expect(overflow.main).toBeLessThanOrEqual(1)
+      await expect(page.getByRole('heading', { level: 1, name: 'Devices' })).toHaveCount(1)
+      await expect(page.locator('#main-content').getByRole('button', { name: 'Adopt a device' })).toBeVisible()
+      let overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
 
-    await page.getByRole('button', { name: 'Client Devices' }).click()
-    await expect(page.getByRole('heading', { level: 1, name: 'Client Devices' })).toHaveCount(1)
-    await expect(page.getByRole('region', { name: 'Client filters' })).toBeVisible()
-    overflow = await readOverflow(page)
-    expect(overflow.document).toBeLessThanOrEqual(1)
-    expect(overflow.main).toBeLessThanOrEqual(1)
+      await page.getByRole('button', { name: 'Client Devices' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Client Devices' })).toHaveCount(1)
+      await expect(page.getByRole('region', { name: 'Client filters' })).toBeVisible()
+      overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
 
-    await page.getByRole('button', { name: 'Logs' }).click()
-    await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toHaveCount(1)
-    const eventView = page.getByRole('group', { name: 'Event view' })
-    await expect(eventView).toBeVisible()
-    await expect(eventView.getByRole('button', { name: 'General' })).toHaveAttribute('aria-pressed', 'true')
-    overflow = await readOverflow(page)
-    expect(overflow.document).toBeLessThanOrEqual(1)
-    expect(overflow.main).toBeLessThanOrEqual(1)
-    expect(unexpectedRequests).toEqual([])
-  })
+      await page.getByRole('button', { name: 'Logs' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toHaveCount(1)
+      const eventView = page.getByRole('group', { name: 'Event view' })
+      await expect(eventView).toBeVisible()
+      await expect(eventView.getByRole('button', { name: 'General' })).toHaveAttribute('aria-pressed', 'true')
+      overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
+
+      for (const route of [
+        { name: 'Dashboard', control: 'Live controller view' },
+        { name: 'Topology', control: 'Current' },
+        { name: 'Radios', heading: 'Radios & Channel Plan', control: 'Refresh' },
+        { name: 'Policy Engine', control: 'Zone Matrix' },
+        { name: 'Settings', control: 'Network' },
+        { name: 'Adopt a device', control: 'Inspect capabilities' },
+      ]) {
+        await page.getByRole('button', { name: route.name, exact: true }).click()
+        const heading = page.getByRole('heading', {
+          level: 1,
+          name: route.heading ?? route.name,
+          exact: true,
+        })
+        await expect(heading).toHaveCount(1)
+        await expect(heading.locator('..').locator('..')).toHaveClass(/page-header/)
+        await expect(page.locator('#main-content').getByText(route.control, { exact: true }).first()).toBeVisible()
+        overflow = await readOverflow(page)
+        expect(overflow.document).toBeLessThanOrEqual(1)
+        expect(overflow.main).toBeLessThanOrEqual(1)
+      }
+      expect(unexpectedRequests).toEqual([])
+    })
+  }
 }
 
 test('390x844 responsive routes keep controls and state in view', async ({ page }) => {
@@ -711,8 +740,23 @@ test('390x844 responsive routes keep controls and state in view', async ({ page 
   await expect(policyTabs).toBeVisible()
   await expectWithinMain(page, policyTabs)
   await page.getByRole('tab', { name: 'Objects' }).click()
+  const namedSet = page.getByRole('region', { name: 'Named client set Trusted devices' })
+  await expect(namedSet).toBeVisible()
+  await expectWithinMain(page, namedSet)
   expect(await page.locator('.policy-object-picker').evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await page.getByLabel('Object type').selectOption('policy_set')
+  const policyObject = page.getByRole('combobox', { name: 'Object', exact: true })
+  await expect(policyObject).toHaveValue('4')
+  await expectWithinMain(page, policyObject)
+  await page.getByRole('button', { name: 'Create named set' }).click()
+  const setDialog = page.getByRole('dialog', { name: 'Create named client set' })
+  await expect(setDialog.getByRole('checkbox', { name: /Fixture phone.*online/i })).toBeVisible()
+  await expect(setDialog.getByLabel('Set name')).toBeVisible()
+  const setDialogBox = await setDialog.boundingBox()
+  expect(setDialogBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+  expect((setDialogBox?.x ?? 0) + (setDialogBox?.width ?? 391)).toBeLessThanOrEqual(390)
+  await setDialog.getByRole('button', { name: 'Cancel' }).click()
   await page.getByRole('checkbox', { name: /^Route\b/ }).check()
   expect(await page.locator('.policy-route-fields').evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)

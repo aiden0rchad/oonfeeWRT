@@ -30,7 +30,7 @@ channel rather than a durable log bus. `wifi-v1` is all-or-null, so a missing
 counter cannot improve a score by silently changing the denominator. At that
 checkpoint the contracts were pending live schema-16 validation. The later
 fresh-start record validates the joined schema-16 surfaces and one explicitly
-acknowledged RF scan; public v0.1.4 now uses schema 20. Historical proof does not
+acknowledged RF scan; public v0.1.5 now uses schema 23. Historical proof does not
 imply that every hardware/source combination has been exercised.
 
 RF scan retention is closed at the stored/API contract: the five-minute
@@ -70,6 +70,14 @@ control and didn't ship.
 **Mitigation:** the apply/confirm/rollback cycle, built in Phase 0, tested by
 deliberately breaking a device. Warn in the UI whenever the management path
 traverses the device being changed. Show a config diff before every apply.
+v0.1.5 also separates Monitor only from Managed: observed devices use a
+distinct read-only ACL and cannot enter desired/site rendering, Preview/Apply,
+optional LLDP installation/configuration/removal, wireless-neighbour mutation,
+or other package/config/remove operations. Existing LLDP observation remains
+available. This fence does not remove the acknowledged scoped-ACL bootstrap or
+un-adoption footprint. A separately acknowledged RF scan remains an active
+observation on a capable monitor-only radio; it may interrupt clients but has
+no intended persistent configuration change.
 
 ---
 
@@ -177,12 +185,19 @@ Also retain the scoped ACL rather than root, review every exact `file.exec`
 command like code, pin device TLS certificates (TOFU, refuse on change), keep a
 full audit log, ship no default password, and write the threat model before v1.0.
 
-The daemon has no native TLS listener. The supplied v0.1.4 Compose file publishes
+The daemon has no native TLS listener. The supplied v0.1.5 Compose file publishes
 to host loopback by default; `OONFEE_HTTP_BIND` is an explicit deployment choice,
 not an authentication control. Prefer one management-interface address. A
 wildcard `0.0.0.0` bind exposes every host IPv4 interface and requires deliberate
 host/network firewalling plus a trusted TLS reverse proxy before any untrusted
 path can reach it. Never expose raw port 8080 to the Internet.
+
+Named policy sets are exact MAC selectors, not authenticated identity. A client
+can randomize or spoof a MAC. Set creation/update therefore requires every
+canonical member to have a stored local observation from the currently adopted
+Managed Gateway; Monitor-only observations neither satisfy nor contaminate that
+proof. Missing members and references fail closed, but high-trust authorization
+still belongs at a stronger network or application boundary.
 
 ACL evolution uses one explicit adopted-device refresh transaction, not silent
 widening during a poll. It is opt-in, identifies the exact rpcd ACL JSON file it

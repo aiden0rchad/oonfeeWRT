@@ -5,7 +5,7 @@ description: Controller roles, step-up authentication, sessions, and the separat
 
 # Permissions and sessions
 
-oonfeeWRT v0.1.4 has local controller accounts with four enforced roles. These
+oonfeeWRT v0.1.5 has local controller accounts with four enforced roles. These
 are not OpenWrt accounts: controller authorization and router access are
 separate boundaries.
 
@@ -31,9 +31,9 @@ general event stream is readable by lower roles.
 | View site desired state and policies | Yes | Yes | Yes | Yes |
 | Run controller-host speed test or cancel one | No | Yes | Yes | Yes |
 | Run an acknowledged RF scan or on-air verification | No | Yes | Yes | Yes |
-| Discover, inspect, adopt, re-probe, rename, or un-adopt a device | No | No | Yes | Yes |
+| Discover, inspect, choose management mode, adopt, re-probe, rename, or un-adopt a device | No | No | Yes | Yes |
 | Download the sanitized compatibility report returned by Inspect | No | No | Yes | Yes |
-| Edit WLANs, networks, zones, policies, groups, meshes, uplinks, or overrides | No | No | Yes | Yes |
+| Edit WLANs, networks, zones, policies, named policy sets, groups, meshes, uplinks, or overrides | No | No | Yes | Yes |
 | Preview and Apply configuration | No | No | Yes | Yes |
 | Generate/download diagnostics | No | No | Yes | Yes |
 | Install or roll back optional LLDP capability | No | No | Yes | Yes |
@@ -78,7 +78,7 @@ letting old authorization continue.
 Sessions exist only in controller memory. A controller restart signs everyone
 out, including a restart performed during restore.
 
-| Control | v0.1.4 behavior |
+| Control | v0.1.5 behavior |
 |---|---|
 | Idle expiry | 12 hours after last use |
 | Absolute expiry | 7 days after creation, even when active |
@@ -138,6 +138,31 @@ After adoption, the controller stores its scoped `oonfeewrt` credential sealed
 in SQLite. The matching keyring and runtime passphrase are required to open it.
 See [Architecture](./architecture.md) and [Safety model](./safety.md).
 
+Managed and Monitor only modes do not change controller RBAC: an Administrator
+or Owner still performs adoption, ACL maintenance, and un-adoption. Monitor
+only installs the distinct read-only `oonfeewrt-monitor` ACL. The mode is
+an additional server-enforced device-authority fence. A monitor-only device can
+be viewed by all roles, but it cannot participate in Preview/Apply or optional
+LLDP install/config/remove, wireless-neighbor, or other package/config/remove
+mutations even when the caller is an Owner. Existing LLDP observation remains
+available.
+
+An RF scan is different: Operator or higher may run it on a capable Managed or
+Monitor only radio after explicitly acknowledging disruption. It is a
+transient active observation that may interrupt clients, not permission to
+persist desired or package configuration.
+
+RBAC also cannot override the MAC-scope proof. Policy-set create/update,
+direct/set **Secure** compilation, enabled MAC firewall rules, and client
+block/fixed-address intent require clients proved local to the managed Gateway.
+That proof must be a stored `local` observation from the currently adopted
+Managed Gateway. Monitor-only observations neither satisfy nor contaminate it,
+including after un-adoption. Missing proof after an upgrade, portable restore,
+retention expiry, or an implausibly future-dated observation makes those
+operations or Preview fail closed regardless of
+account role. The authorized clear path for existing block/fixed-address intent
+remains available one client at a time.
+
 v0.1.3's effective-WAN observation is background collection, not an interactive
 account action. The scoped router credential calls `network.interface dump` and
 the pre-existing ACL grant for `/sbin/ip -4 route show table all`. The command
@@ -154,7 +179,7 @@ or require re-adoption.
 
 ## Deployment implications
 
-The v0.1.4 listener is plain HTTP. Cookies are marked `Secure` only when the
+The v0.1.5 listener is plain HTTP. Cookies are marked `Secure` only when the
 request is TLS or the reverse proxy supplies `X-Forwarded-Proto: https`.
 Therefore:
 

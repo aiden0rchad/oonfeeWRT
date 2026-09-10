@@ -24,19 +24,21 @@ import (
 // real states that a zero would misreport — the first as the epoch, the second
 // as a class the device may not be in.
 type deviceView struct {
-	ID            int64    `json:"id"`
-	MAC           string   `json:"mac"`
-	Name          string   `json:"name"`
-	Host          string   `json:"host"`
-	Role          string   `json:"role"`
-	Functions     []string `json:"functions"`
-	FunctionError string   `json:"function_error,omitempty"`
-	Adopted       bool     `json:"adopted"`
-	AdoptedAt     *int64   `json:"adopted_at"`
-	Class         *string  `json:"class"`
-	FWRelease     string   `json:"firmware"`
-	LastSeen      *int64   `json:"last_seen"`
-	PollState     string   `json:"poll_state"`
+	ID                  int64    `json:"id"`
+	MAC                 string   `json:"mac"`
+	Name                string   `json:"name"`
+	Host                string   `json:"host"`
+	Role                string   `json:"role"`
+	Functions           []string `json:"functions"`
+	FunctionError       string   `json:"function_error,omitempty"`
+	ManagementMode      string   `json:"management_mode"`
+	ManagementModeError string   `json:"management_mode_error,omitempty"`
+	Adopted             bool     `json:"adopted"`
+	AdoptedAt           *int64   `json:"adopted_at"`
+	Class               *string  `json:"class"`
+	FWRelease           string   `json:"firmware"`
+	LastSeen            *int64   `json:"last_seen"`
+	PollState           string   `json:"poll_state"`
 
 	// Status is derived here rather than stored, so it cannot go stale: a device
 	// is only "online" relative to the moment someone asks.
@@ -84,11 +86,16 @@ func (s *Server) viewDevice(d *store.Device, now time.Time) deviceView {
 	if d.Functions != nil && len(functions) == 0 {
 		role = model.RoleOf(d.Role)
 	}
+	managementMode := string(d.EffectiveManagementMode())
+	if managementMode == "" {
+		managementMode = d.ManagementMode
+	}
 	v := deviceView{
 		ID: d.ID, MAC: d.MAC, Name: d.Name, Host: d.Host,
 		Role: string(role), Functions: functions.Strings(),
-		FunctionError: d.FunctionError,
-		Adopted:       d.Adopted(), AdoptedAt: d.AdoptedAt,
+		FunctionError:  d.FunctionError,
+		ManagementMode: managementMode, ManagementModeError: d.ManagementModeError,
+		Adopted: d.Adopted(), AdoptedAt: d.AdoptedAt,
 		FWRelease: d.FWRelease, LastSeen: d.LastSeen, PollState: d.PollState,
 	}
 	if d.Class != "" {
@@ -972,9 +979,12 @@ type dashboard struct {
 }
 
 type dashboardGatewayUplink struct {
-	DeviceID int64  `json:"device_id"`
-	Name     string `json:"name"`
-	State    string `json:"state"` // up, missing, or unknown
+	DeviceID            int64  `json:"device_id"`
+	Name                string `json:"name"`
+	State               string `json:"state"` // up, missing, or unknown
+	ManagementMode      string `json:"management_mode,omitempty"`
+	ManagementModeError string `json:"management_mode_error,omitempty"`
+	FunctionError       string `json:"function_error,omitempty"`
 }
 
 const (
@@ -1152,7 +1162,11 @@ func (s *Server) dashboardGatewayTopology(ctx context.Context, devices []*store.
 		if !device.Adopted() || !model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
 			continue
 		}
-		entry := dashboardGatewayUplink{DeviceID: device.ID, Name: deviceDisplayName(device), State: "unknown"}
+		entry := dashboardGatewayUplink{
+			DeviceID: device.ID, Name: deviceDisplayName(device), State: "unknown",
+			ManagementMode: device.ManagementMode, ManagementModeError: device.ManagementModeError,
+			FunctionError: device.FunctionError,
+		}
 		state, ok := latest[device.ID]
 		fresh := ok && state.ObservedAt <= now.UnixMilli() &&
 			state.ObservedAt >= now.Add(-maxCurrentTopologySourceAge).UnixMilli()
@@ -1172,10 +1186,10 @@ func (s *Server) dashboardGatewayTopology(ctx context.Context, devices []*store.
 				candidate := &dashboardWANGateway{DeviceID: device.ID,
 					Name: deviceDisplayName(device), RouteInterface: edge.ParentPort,
 					lastSeen: edge.LastSeen}
-				if selected == nil || candidate.lastSeen > selected.lastSeen ||
+				if device.Configurable() && (selected == nil || candidate.lastSeen > selected.lastSeen ||
 					(candidate.lastSeen == selected.lastSeen &&
 						(candidate.Name < selected.Name ||
-							(candidate.Name == selected.Name && candidate.DeviceID < selected.DeviceID))) {
+							(candidate.Name == selected.Name && candidate.DeviceID < selected.DeviceID)))) {
 					selected = candidate
 				}
 			} else if err == nil {

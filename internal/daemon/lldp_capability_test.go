@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/adoption"
+	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -25,6 +26,26 @@ func TestLLDPPlanBindingAndPackageDifferenceAreCanonical(t *testing.T) {
 	got := packageDifference([]string{"lldpd", "libcap", "base-files"}, []string{"base-files"})
 	if !slices.Equal(got, []string{"libcap", "lldpd"}) {
 		t.Fatalf("difference=%v", got)
+	}
+}
+
+func TestMonitorOnlyDeviceRejectsLLDPMutationsBeforeRouterContact(t *testing.T) {
+	ctx := context.Background()
+	d := openDaemon(t)
+	at := int64(1)
+	dev := &store.Device{
+		MAC: "02:00:00:00:21:30", Host: "127.0.0.1", Port: 1, Name: "observed-router",
+		Role: "gateway", Functions: []string{"gateway"}, ManagementMode: "monitor_only",
+		AdoptedAt: &at,
+	}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"plan_install", "install", "configure", "remove", "unknown"} {
+		_, err := d.LLDPCapability(ctx, api.LLDPCapabilityRequest{DeviceID: dev.ID, Action: action})
+		if err == nil || !strings.Contains(err.Error(), "monitor-only") {
+			t.Errorf("action %q error=%v, want monitor-only refusal", action, err)
+		}
 	}
 }
 

@@ -145,7 +145,7 @@ func (m *Maintainer) flush(ctx context.Context, at time.Time) []Rollup {
 // DefaultClientTTL keeps a client for 30 days after it was last seen, which is
 // long enough to recognise a laptop returning from a holiday and short enough
 // that randomised MACs do not accumulate forever.
-const DefaultClientTTL = 30 * 24 * time.Hour
+const DefaultClientTTL = store.DefaultClientTTL
 
 // ClientRetention is how long an unseen client is kept.
 func (m *Maintainer) ClientRetention() time.Duration {

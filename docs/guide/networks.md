@@ -41,11 +41,11 @@ capability evidence determine what each Preview can safely render.
 A VLAN ID labels traffic; it does not configure every switch between the
 controller and the client. oonfeeWRT will not silently convert a bridge that is
 not already VLAN-aware. Legacy swconfig port writes remain observe-only in
-v0.1.4 because port topology and safe mutation are hardware-specific.
+v0.1.5 because port topology and safe mutation are hardware-specific.
 
 A board may instead present LAN as one direct interface, such as `eth1`, with
 no independent switch ports. That is not automatically `swconfig` and does not
-mean inspection missed hardware. v0.1.4 does not create tagged VLAN
+mean inspection missed hardware. v0.1.5 does not create tagged VLAN
 attachments on this layout: Preview omits the unsupported attachment and
 leaves existing LAN/VLAN configuration unchanged. Untagged or manually
 prepared behavior still requires a fresh Preview; do not generalize from the
@@ -262,7 +262,7 @@ network in both LuCI and oonfeeWRT.
 |---|---|---|
 | Bridge is not VLAN-aware | The live bridge cannot accept the requested safe rendering | Convert it manually with a tested OpenWrt-specific plan, or use an untagged design; oonfeeWRT will not convert it silently |
 | Legacy swconfig device | Per-port VLAN writes are not safely generalized | Keep port configuration outside oonfeeWRT and use supported observation/site features |
-| Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.4 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
+| Single-interface LAN with no switch ports | The layout was read successfully, but v0.1.5 cannot create a tagged VLAN attachment on it | Keep existing LAN/VLAN configuration unchanged or prepare it manually with an OpenWrt-specific recovery-tested plan, then generate a fresh Preview |
 | Foreign firewall conflict | A human-owned rule/zone affects the requested traffic path | Inspect the exact UCI/nft behavior, then remove or redesign one owner intentionally |
 | Management-LAN IPv6 target is missing or ambiguous | The exact existing LAN interface or its single matching DHCP section cannot be proved | Correct the OpenWrt section shape deliberately; oonfeeWRT will not guess, create, or claim a target |
 | Disabled is blocked by static IPv6 | `ip6addr`, `ip6prefix`, or `ip6gw` exists on a management-LAN or conventional WAN target | Decide whether the static value is still required; remove it manually only with a recovery-tested plan, then Preview again |

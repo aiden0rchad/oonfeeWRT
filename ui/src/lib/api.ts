@@ -187,6 +187,12 @@ export interface Device {
   /** Independently managed device functions. Older servers and rows may omit
    *  this; `role` remains the compatibility fallback. */
   functions?: DeviceFunction[]
+  /** Whether the controller may include this device in desired-state writes.
+   *  Absent on older servers and rows, where managed is the historical mode. */
+  management_mode?: ManagementMode
+  /** Non-empty when the controller cannot prove or enforce the stored
+   *  management boundary. Treat as fail-closed operator action, not a warning. */
+  management_mode_error?: string
   adopted: boolean
   adopted_at: number | null
   class: string | null
@@ -759,6 +765,12 @@ export interface Dashboard {
     device_id: number
     name: string
     state: 'up' | 'missing' | 'unknown'
+    /** Present on controllers that distinguish managed and observation-only routers. */
+    management_mode?: ManagementMode
+    /** Non-empty when this row's stored management boundary is invalid. */
+    management_mode_error?: string
+    /** Non-empty when the stored device-function set is invalid. */
+    function_error?: string
   }>
   focused_devices: number
   quiesced_devices: number
@@ -873,6 +885,7 @@ export interface SpeedTestCollection {
  *  device and a typo used to mean "silently an access point". */
 export type DeviceFunction = 'gateway' | 'ap' | 'switch'
 export type DeviceRole = DeviceFunction
+export type ManagementMode = 'managed' | 'monitor_only'
 
 export interface AdoptResult {
   device_id: number
@@ -883,6 +896,8 @@ export interface AdoptResult {
   firmware: string
   /** The functions accepted at adoption. Absent on a legacy server. */
   functions?: DeviceFunction[]
+  /** Absent on a legacy server, where every adopted device was managed. */
+  management_mode?: ManagementMode
   cert_fp?: string
   features?: string[]
   /** Checks that were REFUSED, not features the hardware lacks. */
@@ -1139,7 +1154,16 @@ export interface FirewallRule {
   destination_cidr?: string
   source_port?: string
   destination_port?: string
+  /** Stable reusable source membership. Mutually exclusive with source_macs. */
+  source_set_id?: number
   source_macs?: string[]
+}
+
+/** A reusable exact-MAC source selected from controller-observed clients. */
+export interface PolicySet {
+  id: number
+  name: string
+  members: string[]
 }
 
 export interface PortForward {
@@ -1200,7 +1224,7 @@ export interface PolicyRow {
 }
 
 export interface PolicyCapability {
-  kind: 'firewall' | 'nat' | 'route' | 'fixed_ip' | 'qos' | 'rate_limit' | 'application' | 'priority'
+  kind: 'firewall' | 'nat' | 'route' | 'fixed_ip' | 'policy_set' | 'qos' | 'rate_limit' | 'application' | 'priority'
   available: boolean
   reason?: string
 }
@@ -1218,8 +1242,8 @@ export interface PolicyClient {
 }
 
 export interface PolicyObjectTarget {
-  kind: 'device' | 'group' | 'network'
-  /** Device MAC, exact group name, numeric network ID, or `wan`. */
+  kind: 'device' | 'group' | 'policy_set' | 'network'
+  /** Device MAC, exact group name, numeric policy-set/network ID, or `wan`. */
   id: string
 }
 
@@ -1384,6 +1408,8 @@ export interface Site {
   policies?: PolicyRow[]
   /** Backend/capability gates shown without implying an unavailable rule shipped. */
   policy_capabilities?: PolicyCapability[]
+  /** Reusable exact-MAC sources for explicit and Object Manager policies. */
+  policy_sets?: PolicySet[]
   problems: string[]
   /** Every per-device deviation, listed. The risk of overrides is not any one
    *  of them; it is a fleet drifting apart until nobody can say what is
@@ -2008,6 +2034,8 @@ export const api = {
      *  controller still has a deterministic legacy fallback. */
     functions?: DeviceFunction[]
     role?: DeviceRole
+    /** Omitted means managed for mixed-version callers and servers. */
+    management_mode?: ManagementMode
     acknowledge_router_changes: true
   }) => post<AdoptResult>('/devices/adopt', req),
   inspectDevice: (req: {
@@ -2052,6 +2080,14 @@ export const api = {
   },
   deletePolicy: (id: number) =>
     del<{ deleted: number; note: string }>(`/site/policies/${id}`),
+  savePolicySet: (policySet: { id?: number; name: string; members: string[] }) => {
+    const { id, ...body } = policySet
+    return post<{ policy_set: PolicySet; note: string }>(
+      id ? `/site/policy-sets/${id}` : '/site/policy-sets', body,
+    )
+  },
+  deletePolicySet: (id: number) =>
+    del<{ deleted: number }>(`/site/policy-sets/${id}`),
   saveClientPolicy: (
     mac: string,
     changes: { blocked?: boolean; fixed_ip?: string; group?: string },

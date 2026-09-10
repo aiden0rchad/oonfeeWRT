@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
@@ -85,6 +87,24 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 	}
 	gatewayOK, gatewayReason := policyGatewayGate(devices, false)
 	firewallOK, firewallReason := policyGatewayGate(devices, true)
+	_, expansionOK := site.PolicySourceMACExpansion()
+	policyValidation := site.ValidatePolicies()
+	macScopeOK, macScopeReason := len(policyValidation) == 0, ""
+	if !macScopeOK {
+		macScopeReason = policyValidation[0].Error()
+	} else {
+		macProblems, err := s.Store.PolicyMACScopeProblems(ctx, site)
+		if err != nil {
+			return policyMasterView{}, err
+		}
+		if len(macProblems) > 0 {
+			macScopeOK, macScopeReason = false, macProblems[0].Error()
+		}
+	}
+	setOK, setReason := policySetIdentityGate(devices)
+	if setOK && len(policyValidation) > 0 {
+		setOK, setReason = false, policyValidation[0].Error()
+	}
 	rows := []policyRowView{}
 
 	for i, zone := range site.EffectiveZonePolicies() {
@@ -111,11 +131,18 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 			ok = false
 			reason = "the selected managed network is proved per Gateway only by Preview; this aggregate table cannot observe current bridge/VLAN readiness"
 		}
+		if policy.Firewall != nil && (policy.Firewall.SourceSetID > 0 || len(policy.Firewall.SourceMACs) > 0) {
+			if !expansionOK {
+				ok, reason = false, fmt.Sprintf("policy source MAC expansion exceeds the site maximum of %d entries", model.MaxExpandedPolicySourceMACs)
+			} else if !macScopeOK {
+				ok, reason = false, macScopeReason
+			}
+		}
 		rows = append(rows, policyRowView{
 			ID: fmt.Sprintf("policy:%d", policy.ID), RecordID: policy.ID,
 			Origin: string(policy.Origin), Kind: string(policy.Kind), Name: policy.Name,
 			Enabled: policy.Enabled, Order: policy.Order, OrderScope: policyOrderScope(policy.Kind),
-			EffectiveScope: policyScope(site, policy), Mutable: true,
+			EffectiveScope: policyScope(site, policy, expansionOK), Mutable: true,
 			Renderable: ok, GatedReason: reasonUnless(ok, reason), Rule: policyRule(policy),
 		})
 	}
@@ -124,6 +151,9 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 		mac := strings.ToLower(client.MAC)
 		if client.Blocked {
 			ok, reason := firewallOK, firewallReason
+			if ok && !macScopeOK {
+				ok, reason = false, macScopeReason
+			}
 			if ok && len(site.ActiveZoneNames()) == 0 {
 				ok, reason = false, "no active managed source zone exists; the foreign lan zone is not rewritten"
 			}
@@ -144,6 +174,8 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 			ok, reason := false, "the selected managed DHCP interface is proved per Gateway only by Preview; this aggregate table cannot observe current bridge/VLAN readiness"
 			if !gatewayOK {
 				reason = gatewayReason
+			} else if !macScopeOK {
+				reason = macScopeReason
 			}
 			rows = append(rows, policyRowView{
 				ID: "client:fixed-ip:" + mac, Origin: "client", Kind: "fixed_ip",
@@ -171,6 +203,7 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 		{Kind: "nat", Available: firewallOK, Reason: reasonUnless(firewallOK, firewallReason)},
 		{Kind: "route", Available: gatewayOK, Reason: reasonUnless(gatewayOK, gatewayReason)},
 		{Kind: "fixed_ip", Available: gatewayOK, Reason: reasonUnless(gatewayOK, gatewayReason)},
+		{Kind: "policy_set", Available: setOK, Reason: reasonUnless(setOK, setReason)},
 		{Kind: "connection_state", Available: true, Reason: "firewall, NAT and client-block changes govern new flows; existing conntrack entries are not flushed and can persist until expiry"},
 		{Kind: "priority", Available: false, Reason: "unavailable: order is display-only; this release rejects overlapping managed rules instead of pretending UCI section names enforce evaluation priority"},
 		{Kind: "qos", Available: false, Reason: "unavailable: this build does not observe or own an SQM/tc backend"},
@@ -182,12 +215,18 @@ func (s *Server) policyMaster(ctx context.Context, site model.Site) (policyMaste
 func policyGatewayGate(devices []*store.Device, firewall4 bool) (bool, string) {
 	var gateways []*store.Device
 	for _, device := range devices {
-		if device.Adopted() && model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
+		if !device.Adopted() || !model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
+			continue
+		}
+		if device.ManagementModeError != "" || device.FunctionError != "" {
+			return false, fmt.Sprintf("Gateway %s has invalid stored configuration state; restore a known-good controller backup or re-adopt it", device.Name)
+		}
+		if device.Configurable() {
 			gateways = append(gateways, device)
 		}
 	}
 	if len(gateways) == 0 {
-		return false, "no adopted device has the Gateway function"
+		return false, "no adopted managed device has the Gateway function"
 	}
 	if !firewall4 {
 		return true, ""
@@ -201,6 +240,26 @@ func policyGatewayGate(devices []*store.Device, firewall4 bool) (bool, string) {
 		if state != capability.Present {
 			return false, fmt.Sprintf("Gateway %s reports firewall4 %s; re-probe after restoring the nft read grant", device.Name, state)
 		}
+	}
+	return true, ""
+}
+
+func policySetIdentityGate(devices []*store.Device) (bool, string) {
+	var gateway bool
+	for _, device := range devices {
+		if !device.Adopted() {
+			continue
+		}
+		functions := model.DeviceFunctionsOf(device.Functions, device.Role)
+		if device.ManagementModeError != "" || device.FunctionError != "" {
+			return false, fmt.Sprintf("device %s has invalid stored configuration state", device.Name)
+		}
+		if device.Configurable() && functions.Routes() {
+			gateway = true
+		}
+	}
+	if !gateway {
+		return false, "named MAC policy sets require an adopted managed Gateway and members observed locally by that Gateway"
 	}
 	return true, ""
 }
@@ -223,13 +282,21 @@ func policyOrderScope(kind model.PolicyKind) string {
 	return "display_only"
 }
 
-func policyScope(site model.Site, p model.Policy) map[string]any {
+func policyScope(site model.Site, p model.Policy, expandSources bool) map[string]any {
 	switch p.Kind {
 	case model.PolicyFirewallRule:
-		return map[string]any{"source_zone": p.Firewall.SourceZone,
-			"destination_zone": p.Firewall.DestinationZone, "source_macs": nonnilStrings(p.Firewall.SourceMACs),
+		sourceMACs := []string{}
+		if expandSources {
+			sourceMACs, _ = site.FirewallSourceMACs(p.Firewall)
+		}
+		scope := map[string]any{"source_zone": p.Firewall.SourceZone,
+			"destination_zone": p.Firewall.DestinationZone, "source_macs": nonnilStrings(sourceMACs),
 			"address_families": []string{"ipv4"}, "connection_scope": "new",
 			"existing_connections": "may_persist_until_conntrack_expiry"}
+		if set, ok := site.PolicySetByID(p.Firewall.SourceSetID); ok {
+			scope["source_set"] = map[string]any{"id": set.ID, "name": set.Name}
+		}
+		return scope
 	case model.PolicyPortForward:
 		return map[string]any{"source_zone": p.PortForward.SourceZone,
 			"destination_zone": p.PortForward.DestinationZone, "destination_ip": p.PortForward.DestinationIP,
@@ -246,6 +313,80 @@ func policyScope(site model.Site, p model.Policy) map[string]any {
 			"address_families": []string{"ipv4"}}
 	}
 	return map[string]any{}
+}
+
+type policySetRequest struct {
+	Name    *string   `json:"name"`
+	Members *[]string `json:"members"`
+}
+
+func (s *Server) handleSavePolicySet(w http.ResponseWriter, r *http.Request) {
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
+	id := 0
+	if raw := r.PathValue("id"); raw != "" {
+		var err error
+		id, err = strconv.Atoi(raw)
+		if err != nil || id <= 0 {
+			writeErr(w, http.StatusBadRequest, "invalid policy set id")
+			return
+		}
+	}
+	var req policySetRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	var missing []string
+	if req.Name == nil {
+		missing = append(missing, "name")
+	}
+	if req.Members == nil {
+		missing = append(missing, "members")
+	}
+	if len(missing) > 0 {
+		writeErr(w, http.StatusBadRequest, "policy set must include "+strings.Join(missing, ", "))
+		return
+	}
+	set := model.PolicySet{ID: id, Name: strings.TrimSpace(*req.Name), Members: *req.Members}
+	if err := s.Store.SavePolicySet(r.Context(), &set); err != nil {
+		if err == store.ErrNotFound {
+			writeErr(w, http.StatusNotFound, "no such policy set")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logSiteChange(r.Context(), "site.policy_set_saved", map[string]any{
+		"policy_set": set.ID, "members": len(set.Members),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"policy_set": set,
+		"note":       "desired reusable membership saved; referencing rules change no device until Preview and Apply",
+	})
+}
+
+func (s *Server) handleDeletePolicySet(w http.ResponseWriter, r *http.Request) {
+	if !s.lockSiteMutation(w, r) {
+		return
+	}
+	defer s.siteMu.Unlock()
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || id <= 0 {
+		writeErr(w, http.StatusBadRequest, "invalid policy set id")
+		return
+	}
+	if err := s.Store.DeletePolicySet(r.Context(), id); err != nil {
+		if err == store.ErrNotFound {
+			writeErr(w, http.StatusNotFound, "no such policy set")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.logSiteChange(r.Context(), "site.policy_set_deleted", map[string]any{"policy_set": id})
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
 }
 
 func policyRule(p model.Policy) any {
@@ -389,6 +530,8 @@ type objectManagerRequest struct {
 	Outcomes []objectOutcome `json:"outcomes"`
 }
 
+const maxObjectManagerResults = 4096
+
 type objectTarget struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
@@ -418,8 +561,17 @@ func (s *Server) handleCompileObjects(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "objects and outcomes must both be non-empty arrays")
 		return
 	}
+	if len(req.Objects) > maxObjectManagerResults/len(req.Outcomes) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("Object Manager requests may produce at most %d draft or gate results", maxObjectManagerResults))
+		return
+	}
 	site, err := s.Store.Site(r.Context())
 	if handleStoreErr(w, err, "site") {
+		return
+	}
+	expandedSources, expansionOK := site.PolicySourceMACExpansion()
+	if !expansionOK {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("policy source MAC expansion exceeds the site maximum of %d entries", model.MaxExpandedPolicySourceMACs))
 		return
 	}
 	var drafts []model.Policy
@@ -445,9 +597,40 @@ func (s *Server) handleCompileObjects(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if reason != "" {
+				if len(gates) >= maxObjectManagerResults-len(drafts) {
+					writeErr(w, http.StatusBadRequest, fmt.Sprintf("Object Manager requests may produce at most %d draft or gate results", maxObjectManagerResults))
+					return
+				}
 				gates = append(gates, objectGate{Object: object, Outcome: outcome.Kind, Reason: reason})
 				continue
 			}
+			if outcome.Kind == "secure" && object.Kind != "network" {
+				check := site
+				check.Policies = append(append([]model.Policy(nil), site.Policies...), compiled...)
+				problems, err := s.Store.PolicyMACScopeProblems(r.Context(), check)
+				if handleStoreErr(w, err, "policy MAC scope") {
+					return
+				}
+				if len(problems) > 0 {
+					if len(gates) >= maxObjectManagerResults-len(drafts) {
+						writeErr(w, http.StatusBadRequest, fmt.Sprintf("Object Manager requests may produce at most %d draft or gate results", maxObjectManagerResults))
+						return
+					}
+					gates = append(gates, objectGate{Object: object, Outcome: outcome.Kind, Reason: problems[0].Error()})
+					continue
+				}
+			}
+			compiledSite := model.Site{PolicySets: site.PolicySets, Policies: compiled}
+			addedSources, ok := compiledSite.PolicySourceMACExpansion()
+			if !ok || addedSources > model.MaxExpandedPolicySourceMACs-expandedSources {
+				writeErr(w, http.StatusBadRequest, fmt.Sprintf("Object Manager drafts would make policy source MAC expansion exceed the site maximum of %d entries", model.MaxExpandedPolicySourceMACs))
+				return
+			}
+			if len(compiled) > maxObjectManagerResults-len(drafts)-len(gates) {
+				writeErr(w, http.StatusBadRequest, fmt.Sprintf("Object Manager requests may produce at most %d draft or gate results", maxObjectManagerResults))
+				return
+			}
+			expandedSources += addedSources
 			drafts = append(drafts, compiled...)
 		}
 	}
@@ -481,6 +664,15 @@ func validateObject(site model.Site, object objectTarget, knownDevice bool) erro
 			}
 		}
 		return fmt.Errorf("Object Manager group %q has no members", object.ID)
+	case "policy_set":
+		id, err := strconv.Atoi(object.ID)
+		if err != nil || id <= 0 {
+			return fmt.Errorf("Object Manager policy set id %q is invalid", object.ID)
+		}
+		if _, ok := site.PolicySetByID(id); !ok {
+			return fmt.Errorf("Object Manager policy set %d does not exist", id)
+		}
+		return nil
 	case "network":
 		if object.ID == "wan" {
 			return nil
@@ -495,7 +687,7 @@ func validateObject(site model.Site, object objectTarget, knownDevice bool) erro
 		}
 		return nil
 	default:
-		return fmt.Errorf("Object Manager object kind %q must be device, group or network", object.Kind)
+		return fmt.Errorf("Object Manager object kind %q must be device, group, policy_set or network", object.Kind)
 	}
 }
 
@@ -509,20 +701,25 @@ func compileObjectOutcome(site model.Site, object objectTarget, outcome objectOu
 		if dest == "" {
 			dest = "wan"
 		}
-		sourceZones, macs, err := objectFirewallScope(site, object)
+		sourceZones, macs, sourceSetID, err := objectFirewallScope(site, object)
 		if err != nil {
 			return nil, "", err
 		}
 		compiled := make([]model.Policy, 0, len(sourceZones))
 		for _, sourceZone := range sourceZones {
-			name := "Secure " + object.Kind + " " + object.ID
+			objectLabel := object.ID
+			if set, ok := site.PolicySetByID(sourceSetID); ok {
+				objectLabel = set.Name
+			}
+			name := "Secure " + object.Kind + " " + objectLabel
 			if len(sourceZones) > 1 {
 				name += " from " + sourceZone
 			}
+			name = boundedPolicyName(name)
 			compiled = append(compiled, model.Policy{Name: name,
 				Kind: model.PolicyFirewallRule, Origin: model.PolicyOriginObjectManager, Enabled: true,
 				Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: sourceZone,
-					DestinationZone: dest, Protocols: []string{"all"}, SourceMACs: macs}})
+					DestinationZone: dest, Protocols: []string{"all"}, SourceSetID: sourceSetID, SourceMACs: macs}})
 		}
 		check := site
 		check.Policies = append(append([]model.Policy(nil), site.Policies...), compiled...)
@@ -559,7 +756,21 @@ func compileObjectOutcome(site model.Site, object objectTarget, outcome objectOu
 	}
 }
 
-func objectFirewallScope(site model.Site, object objectTarget) ([]string, []string, error) {
+func boundedPolicyName(name string) string {
+	const maxBytes = 128
+	if len(name) <= maxBytes {
+		return name
+	}
+	digest := sha256.Sum256([]byte(name))
+	suffix := fmt.Sprintf("~%x", digest[:8])
+	end := maxBytes - len(suffix)
+	for end > 0 && !utf8.ValidString(name[:end]) {
+		end--
+	}
+	return strings.TrimSpace(name[:end]) + suffix
+}
+
+func objectFirewallScope(site model.Site, object objectTarget) ([]string, []string, int, error) {
 	if object.Kind == "network" {
 		id, _ := strconv.Atoi(object.ID)
 		network, _ := site.NetworkByID(id)
@@ -567,7 +778,7 @@ func objectFirewallScope(site model.Site, object objectTarget) ([]string, []stri
 		if zone == "" {
 			zone = network.Name
 		}
-		return []string{zone}, nil, nil
+		return []string{zone}, nil, 0, nil
 	}
 	// Client/group membership does not prove a network attachment. A secure
 	// draft is emitted once per active source zone, preserving exact scope.
@@ -580,13 +791,22 @@ func objectFirewallScope(site model.Site, object objectTarget) ([]string, []stri
 			macs = append(macs, client.MAC)
 		}
 	}
+	setID := 0
+	if object.Kind == "policy_set" {
+		setID, _ = strconv.Atoi(object.ID)
+		set, _ := site.PolicySetByID(setID)
+		macs = append(macs, set.Members...)
+	}
 	macs, err := model.CanonicalMACs(macs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	zones := site.ActiveZoneNames()
 	if len(zones) == 0 {
-		return nil, nil, fmt.Errorf("Object Manager cannot secure %s %q because no active managed source zone exists", object.Kind, object.ID)
+		return nil, nil, 0, fmt.Errorf("Object Manager cannot secure %s %q because no active managed source zone exists", object.Kind, object.ID)
 	}
-	return zones, macs, nil
+	if setID > 0 {
+		return zones, nil, setID, nil
+	}
+	return zones, macs, 0, nil
 }

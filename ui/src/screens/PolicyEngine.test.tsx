@@ -8,6 +8,8 @@ const api = {
   policies: vi.fn(),
   savePolicy: vi.fn(),
   deletePolicy: vi.fn(),
+  savePolicySet: vi.fn(),
+  deletePolicySet: vi.fn(),
   clients: vi.fn(),
   saveClientPolicy: vi.fn(),
   compilePolicyObjects: vi.fn(),
@@ -25,6 +27,7 @@ function site(zones: ReturnType<typeof zone>[]) {
   return {
     name: 'Lab', uuid: '12345678-0000-0000-0000-000000000000',
     wlans: [], meshes: [], uplinks: [], groups: [], networks: [], zones,
+    policy_sets: [],
     problems: [], overrides: [], overridable: [], override_note: '',
   }
 }
@@ -43,7 +46,9 @@ describe('Policy Engine', () => {
     api.site.mockResolvedValue(site([zone('Office', ['wan'], false)]))
     render(<PolicyEngine />)
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Policy Engine' })).toBeTruthy()
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Policy Engine' })
+    expect(heading.closest('.page-header')).toBeTruthy()
+    expect(screen.getByText(/One inspectable desired-state model/)).toBeTruthy()
     const objects = await screen.findByRole('tab', { name: 'Objects' })
     const master = screen.getByRole('tab', { name: 'Master Table' })
     const zones = screen.getByRole('tab', { name: 'Zone Matrix' })
@@ -398,6 +403,171 @@ describe('Policy Engine', () => {
       id: undefined, name: 'Secure network 7', origin: 'object_manager',
     })))
     expect(await screen.findByRole('button', { name: 'Saved to desired state' })).toBeTruthy()
+  })
+
+  it('creates named client sets from observed online and offline inventory and refreshes site state', async () => {
+    const camera = {
+      mac: '00:11:22:33:44:55', name: 'Garage camera', ipv4: '192.168.20.22',
+      first_seen: 1, last_seen: 2, blocked: false, connection: 'wireless',
+      online: false, scope: 'local',
+    }
+    const initial = site([zone('Guest', [])])
+    const created = { id: 4, name: 'Cameras', members: [camera.mac] }
+    api.site
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce({ ...initial, policy_sets: [created] })
+    api.clients.mockResolvedValue({
+      clients: [camera], total: 2, limit: 5000, offset: 0,
+      facets: { presence: [], connection: [], scope: [] }, note: '', scope_note: '',
+    })
+    api.savePolicySet.mockResolvedValue({ policy_set: created, note: 'saved' })
+    render(<PolicyEngine />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Objects' }))
+    expect((await screen.findByRole('alert')).textContent).toMatch(/named-set member.*subset/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Create named set' }))
+    const dialog = screen.getByRole('dialog', { name: 'Create named client set' })
+    fireEvent.change(within(dialog).getByLabelText('Set name'), { target: { value: ' Cameras ' } })
+    const cameraChoice = within(dialog).getByRole('checkbox', { name: /Garage camera.*offline.*retained inventory/i })
+    fireEvent.click(cameraChoice)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save named set' }))
+
+    await waitFor(() => expect(api.savePolicySet).toHaveBeenCalledWith({
+      id: undefined,
+      name: 'Cameras',
+      members: [camera.mac.toLowerCase()],
+    }))
+    expect(await screen.findByText(/Cameras named client set saved as desired state/i)).toBeTruthy()
+    const set = screen.getByRole('region', { name: 'Named client set Cameras' })
+    expect(set.textContent).toMatch(/1 resolved member/i)
+    expect(set.textContent).toMatch(/Garage camera.*offline/i)
+  })
+
+  it('edits and deletes named sets while retaining members outside a partial response', async () => {
+    const visible = {
+      mac: '00:11:22:33:44:66', name: 'Door camera', first_seen: 1, last_seen: 2,
+      blocked: false, connection: 'wireless', online: true, scope: 'local',
+    }
+    const original = {
+      id: 4, name: 'Cameras', members: ['00:11:22:33:44:55'],
+    }
+    const updated = {
+      id: 4, name: 'Security cameras', members: ['00:11:22:33:44:55', visible.mac],
+    }
+    const initial = { ...site([zone('Guest', [])]), policy_sets: [original] }
+    api.site
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce({ ...initial, policy_sets: [updated] })
+      .mockResolvedValueOnce({ ...initial, policy_sets: [] })
+    api.clients.mockResolvedValue({
+      clients: [visible], total: 3, limit: 5000, offset: 0,
+      facets: { presence: [], connection: [], scope: [] }, note: '', scope_note: '',
+    })
+    api.savePolicySet.mockResolvedValue({ policy_set: updated, note: 'saved' })
+    api.deletePolicySet.mockResolvedValue({ deleted: 4 })
+    render(<PolicyEngine />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Objects' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit set' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit named set · Cameras' })
+    const retained = within(dialog).getByRole('checkbox', { name: /existing member.*outside returned inventory/i }) as HTMLInputElement
+    expect(retained.checked).toBe(true)
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Door camera.*online/i }))
+    fireEvent.change(within(dialog).getByLabelText('Set name'), { target: { value: 'Security cameras' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save named set' }))
+
+    await waitFor(() => expect(api.savePolicySet).toHaveBeenCalledWith({
+      id: 4,
+      name: 'Security cameras',
+      members: ['00:11:22:33:44:55', '00:11:22:33:44:66'],
+    }))
+    const set = await screen.findByRole('region', { name: 'Named client set Security cameras' })
+    fireEvent.click(within(set).getByRole('button', { name: 'Delete set' }))
+    expect(within(set).getByText(/refused while a saved policy references this set/i)).toBeTruthy()
+    fireEvent.click(within(set).getByRole('button', { name: 'Delete Security cameras' }))
+    await waitFor(() => expect(api.deletePolicySet).toHaveBeenCalledWith(4))
+    expect(await screen.findByText(/Security cameras named client set deleted/i)).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Named client set Security cameras' })).toBeNull()
+  })
+
+  it('uses named sets as Secure objects and shows their resolved draft scope', async () => {
+    const policySet = {
+      id: 4, name: 'Cameras', members: ['00:11:22:33:44:55', '00:11:22:33:44:66'],
+    }
+    const objectSite = {
+      ...site([zone('Guest', [])]),
+      networks: [{ id: 7, name: 'Guest', vlan: 20, cidr: '192.168.20.1/24', zone: 'Guest', enabled: true }],
+      policy_sets: [policySet], policies: [], policy_capabilities: [{ kind: 'policy_set', available: true }],
+    }
+    const compiled = {
+      id: 0, order: 0, name: 'Secure policy_set Cameras', kind: 'firewall_rule',
+      origin: 'object_manager', enabled: true,
+      firewall: {
+        action: 'reject', source_zone: 'Guest', destination_zone: 'wan', protocols: ['all'],
+        source_set_id: 4,
+      },
+    }
+    api.site.mockResolvedValue(objectSite)
+    api.compilePolicyObjects.mockResolvedValue({
+      drafts: [compiled], gates: [], persisted: false, applied: false, note: 'Inspectable draft.',
+    })
+    render(<PolicyEngine />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Objects' }))
+    fireEvent.change(screen.getByLabelText('Object type'), { target: { value: 'policy_set' } })
+    const object = await screen.findByLabelText('Object')
+    await waitFor(() => expect((object as HTMLSelectElement).value).toBe('4'))
+    fireEvent.click(screen.getByRole('button', { name: 'Add object' }))
+    expect((screen.getByRole('checkbox', { name: /^Route\b/ }) as HTMLInputElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Compile visible drafts' }))
+
+    await waitFor(() => expect(api.compilePolicyObjects).toHaveBeenCalledWith(
+      [{ kind: 'policy_set', id: '4' }],
+      [{ kind: 'secure', destination_zone: 'wan' }],
+    ))
+    const scope = await screen.findByText(/Concrete scope:/)
+    expect(scope.textContent).toMatch(/named set Cameras \(#4\).*resolved MACs 00:11:22:33:44:55, 00:11:22:33:44:66/i)
+    expect(screen.getByLabelText('Concrete rule for Secure policy_set Cameras').textContent).toContain('"source_set_id": 4')
+  })
+
+  it('makes named-set and direct-MAC firewall sources mutually exclusive and names effective members', async () => {
+    const policySet = { id: 4, name: 'Cameras', members: ['00:11:22:33:44:55'] }
+    const row = {
+      id: 'policy:8', record_id: 8, origin: 'manual', kind: 'firewall_rule',
+      name: 'Camera isolation', enabled: true, order: 10, order_scope: 'firewall',
+      effective_scope: {
+        source_zone: 'Guest', destination_zone: 'wan', source_macs: policySet.members,
+        source_set: { id: 4, name: 'Cameras' }, address_families: ['ipv4'],
+      },
+      mutable: true, renderable: true,
+      rule: { action: 'reject', source_zone: 'Guest', destination_zone: 'wan', protocols: ['all'], source_set_id: 4 },
+    }
+    const current = {
+      ...site([zone('Guest', [])]), policy_sets: [policySet], policies: [row], policy_capabilities: [],
+    }
+    api.site.mockResolvedValue(current)
+    api.policies.mockResolvedValue({ rows: [row], capabilities: [] })
+    api.savePolicy.mockImplementation(async (policy) => ({ ...policy, id: 9 }))
+    render(<PolicyEngine />)
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Master Table' }))
+    expect(await screen.findByText(/source set: Cameras \(#4\)/i)).toBeTruthy()
+    expect(screen.getByText(/source macs: 00:11:22:33:44:55/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Create rule' }))
+    const dialog = screen.getByRole('dialog', { name: 'Create policy rule' })
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Set-backed rule' } })
+    fireEvent.change(within(dialog).getByLabelText('Source MACs (comma separated, optional)'), {
+      target: { value: 'aa:bb:cc:dd:ee:ff' },
+    })
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Named client set' }))
+    expect(within(dialog).queryByLabelText('Source MACs (comma separated, optional)')).toBeNull()
+    expect(within(dialog).getByText(/Resolved members: 00:11:22:33:44:55/i)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save desired rule' }))
+
+    await waitFor(() => expect(api.savePolicy).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Set-backed rule',
+      firewall: expect.objectContaining({ source_set_id: 4, source_macs: undefined }),
+    })))
   })
 
   it('removes compiled drafts after source, outcome, or parameter changes so stale output cannot be saved', async () => {

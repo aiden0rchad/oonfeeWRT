@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 20
+const schemaVersion = 23
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -441,6 +441,74 @@ var migrations = map[int][]string{
 		`UPDATE topology_source_states
 		    SET source='luci-rpc.getWirelessDevices'
 		  WHERE source='luci.getWirelessDevices'`,
+	},
+	21: {
+		// A routed OpenWrt device can be observed without joining the one site
+		// whose desired state this controller configures. Every legacy device is
+		// managed; monitor-only must be an explicit adoption choice.
+		`ALTER TABLE devices ADD COLUMN management_mode TEXT NOT NULL DEFAULT 'managed'
+		   CHECK (management_mode IN ('managed','monitor_only'))`,
+		// The daemon checks this before touching a router so it can return a useful
+		// error. The index is the durable backstop for any future writer and for
+		// concurrent calls that do not share that admission lock.
+		`CREATE UNIQUE INDEX IF NOT EXISTS devices_one_managed_gateway
+		   ON devices(role)
+		   WHERE adopted_at IS NOT NULL
+		     AND management_mode='managed'
+		     AND role='gateway'`,
+	},
+	22: {
+		// Reusable policy sets are controller-side identity objects. A firewall
+		// rule stores the stable set ID in rule_json; membership remains normalized
+		// here so one edit updates every referencing rule on its next Preview.
+		`CREATE TABLE IF NOT EXISTS policy_sets (
+		   id INTEGER PRIMARY KEY,
+		   name TEXT NOT NULL
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS policy_sets_name_nocase
+		   ON policy_sets(name COLLATE NOCASE)`,
+		`CREATE TABLE IF NOT EXISTS policy_set_members (
+		   set_id INTEGER NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+		   mac TEXT NOT NULL,
+		   PRIMARY KEY (set_id, mac)
+		 ) WITHOUT ROWID`,
+	},
+	23: {
+		// Treat either authority as a Gateway claim. A crafted role/functions
+		// mismatch must reserve the same unique slot instead of allowing two
+		// managed routing devices into Preview and Apply.
+		`DROP INDEX devices_one_managed_gateway`,
+		`UPDATE devices SET role=CASE
+		   WHEN functions_json IN ('["gateway"]','["gateway","ap"]','["gateway","switch"]','["gateway","ap","switch"]') THEN 'gateway'
+		   WHEN functions_json IN ('["ap"]','["ap","switch"]') THEN 'ap'
+		   WHEN functions_json='["switch"]' THEN 'switch'
+		   ELSE role END`,
+		`CREATE UNIQUE INDEX devices_one_managed_gateway
+		   ON devices(management_mode)
+		   WHERE adopted_at IS NOT NULL
+		     AND management_mode='managed'
+		     AND (role='gateway' OR instr(functions_json,'"gateway"')>0)`,
+		// Policy scope checks compare a canonical observed MAC with historical
+		// inventory that may predate canonical writes. An indexed NOCASE lookup
+		// keeps a maximum-size policy expansion bounded without making recovery
+		// reject harmless case-only legacy duplicates.
+		`CREATE INDEX IF NOT EXISTS clients_mac_nocase
+		   ON clients(mac COLLATE NOCASE)`,
+		`CREATE INDEX IF NOT EXISTS policy_set_members_mac_nocase
+		   ON policy_set_members(mac COLLATE NOCASE)`,
+		// Client inventory is global for presentation, but MAC policy must prove
+		// where an identity was observed. Keep per-device scope separately so a
+		// monitor-only subnet can never lend its "local" label to the managed
+		// Gateway, even after that monitor is un-adopted.
+		`CREATE TABLE IF NOT EXISTS client_observations (
+		   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		   mac TEXT NOT NULL CHECK (mac=lower(mac)),
+		   scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
+		   last_seen INTEGER NOT NULL,
+		   PRIMARY KEY (device_id, mac)
+		 ) WITHOUT ROWID`,
+		`CREATE INDEX IF NOT EXISTS client_observations_mac
+		   ON client_observations(mac)`,
 	},
 }
 
@@ -908,13 +976,19 @@ type Device struct {
 	// FunctionError is non-empty only when functions_json could not be decoded
 	// or validated. Such a row remains visible but is not renderable.
 	FunctionError string
-	AdoptedAt     *int64
-	CredEnc       []byte
-	Class         string
-	CapsJSON      string
-	FWRelease     string
-	LastSeen      *int64
-	PollState     string
+	// ManagementMode is managed or monitor_only. Empty on an in-memory legacy
+	// value means managed; persisted rows are always canonical and non-empty.
+	ManagementMode string
+	// ManagementModeError fails closed: a corrupt mode remains visible and can
+	// still be monitored, but no configuration path may write through it.
+	ManagementModeError string
+	AdoptedAt           *int64
+	CredEnc             []byte
+	Class               string
+	CapsJSON            string
+	FWRelease           string
+	LastSeen            *int64
+	PollState           string
 	// PollInterval is a per-device baseline interval in seconds; 0 uses the
 	// controller default. Only ever loosens the rate — see migration 4.
 	PollInterval int
@@ -922,6 +996,20 @@ type Device struct {
 
 // Adopted reports whether adoption completed.
 func (d Device) Adopted() bool { return d.AdoptedAt != nil }
+
+func (d Device) EffectiveManagementMode() model.ManagementMode {
+	mode, err := model.ParseManagementMode(d.ManagementMode)
+	if err != nil {
+		return ""
+	}
+	return mode
+}
+
+// Configurable is the common write boundary for site provisioning and fleet
+// configuration. Invalid persisted state is deliberately not configurable.
+func (d Device) Configurable() bool {
+	return d.FunctionError == "" && d.EffectiveManagementMode().Configures()
+}
 
 // ModelDevice is the renderer's view of this inventory row. Centralising the
 // conversion prevents a caller from consulting primary Role and accidentally
@@ -960,6 +1048,11 @@ func (db *DB) UpsertDevice(ctx context.Context, d *Device) error {
 	}
 	d.Functions = functions.Strings()
 	d.Role = string(functions.PrimaryRole())
+	managementMode, err := model.ParseManagementMode(d.ManagementMode)
+	if err != nil {
+		return fmt.Errorf("store: device management mode: %w", err)
+	}
+	d.ManagementMode = string(managementMode)
 	functionsJSON, err := json.Marshal(d.Functions)
 	if err != nil {
 		return fmt.Errorf("store: encode device functions: %w", err)
@@ -971,14 +1064,15 @@ func (db *DB) UpsertDevice(ctx context.Context, d *Device) error {
 		d.CapsJSON = "{}"
 	}
 	res, err := db.sql.ExecContext(ctx, `
-INSERT INTO devices (mac, host, port, scheme, cert_fp, host_key_fp, name, role, functions_json,
+INSERT INTO devices (mac, host, port, scheme, cert_fp, host_key_fp, name, role, functions_json, management_mode,
                      adopted_at, cred_enc, class, caps_json, fw_release,
                      last_seen, poll_state)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(mac) DO UPDATE SET
   host=excluded.host, port=excluded.port, scheme=excluded.scheme,
   cert_fp=excluded.cert_fp, name=excluded.name, role=excluded.role,
   functions_json=excluded.functions_json,
+  management_mode=excluded.management_mode,
   adopted_at=excluded.adopted_at, cred_enc=excluded.cred_enc,
   class=excluded.class, caps_json=excluded.caps_json,
   fw_release=excluded.fw_release, last_seen=excluded.last_seen,
@@ -992,7 +1086,7 @@ ON CONFLICT(mac) DO UPDATE SET
   -- rotates, whereas a host key changing means the box was reflashed.
   host_key_fp=COALESCE(devices.host_key_fp, excluded.host_key_fp)`,
 		d.MAC, d.Host, d.Port, d.Scheme, nullString(d.CertFP),
-		nullString(d.HostKeyFP), d.Name, d.Role, string(functionsJSON),
+		nullString(d.HostKeyFP), d.Name, d.Role, string(functionsJSON), d.ManagementMode,
 		d.AdoptedAt, d.CredEnc, nullString(d.Class), d.CapsJSON,
 		nullString(d.FWRelease), d.LastSeen, d.PollState)
 	if err != nil {
@@ -1041,7 +1135,7 @@ func (db *DB) Devices(ctx context.Context) ([]*Device, error) {
 }
 
 const deviceCols = `SELECT id, mac, host, port, scheme, COALESCE(cert_fp,''),
- COALESCE(host_key_fp,''), name, role, adopted_at, cred_enc,
+ COALESCE(host_key_fp,''), name, role, management_mode, adopted_at, cred_enc,
  COALESCE(class,''), caps_json, COALESCE(fw_release,''), last_seen, poll_state,
  COALESCE(poll_interval_s,0), COALESCE(functions_json,'') FROM devices`
 
@@ -1051,7 +1145,7 @@ func scanDevice(s scanner) (*Device, error) {
 	var d Device
 	var functionsJSON string
 	err := s.Scan(&d.ID, &d.MAC, &d.Host, &d.Port, &d.Scheme, &d.CertFP,
-		&d.HostKeyFP, &d.Name, &d.Role, &d.AdoptedAt, &d.CredEnc, &d.Class,
+		&d.HostKeyFP, &d.Name, &d.Role, &d.ManagementMode, &d.AdoptedAt, &d.CredEnc, &d.Class,
 		&d.CapsJSON, &d.FWRelease, &d.LastSeen, &d.PollState, &d.PollInterval,
 		&functionsJSON)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1060,16 +1154,36 @@ func scanDevice(s scanner) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	storedRole, roleErr := model.ParseRole(d.Role)
 	var stored []string
 	decodeErr := json.Unmarshal([]byte(functionsJSON), &stored)
 	functions, validationErr := model.ParseDeviceFunctions(stored, model.RoleOf(d.Role))
-	if decodeErr != nil || stored == nil || validationErr != nil {
+	canonicalFunctions := false
+	if validationErr == nil {
+		encoded, encodeErr := json.Marshal(functions.Strings())
+		canonicalFunctions = encodeErr == nil && functionsJSON == string(encoded)
+	}
+	// Writers persist both authorities canonically. Reject rows that only become
+	// valid after trimming, case-folding, de-duplicating or reordering: the
+	// partial unique index can safely reserve the Gateway slot only for the same
+	// canonical representation that runtime code accepts as configurable.
+	canonicalRole := roleErr == nil && d.Role == string(storedRole)
+	if decodeErr != nil || stored == nil || validationErr != nil || !canonicalRole || !canonicalFunctions {
 		d.Functions = []string{}
 		d.FunctionError = "stored device functions are invalid; restore the controller database from a known-good backup or re-adopt this device"
 		d.Role = string(model.RoleOf(d.Role))
+	} else if storedRole != functions.PrimaryRole() {
+		d.Functions = functions.Strings()
+		d.FunctionError = "stored device role and functions disagree; restore the controller database from a known-good backup or re-adopt this device"
+		d.Role = string(storedRole)
 	} else {
 		d.Functions = functions.Strings()
 		d.Role = string(functions.PrimaryRole())
+	}
+	if mode, err := model.ParseManagementMode(d.ManagementMode); err != nil {
+		d.ManagementModeError = "stored device management mode is invalid; restore the controller database from a known-good backup"
+	} else {
+		d.ManagementMode = string(mode)
 	}
 	return &d, nil
 }

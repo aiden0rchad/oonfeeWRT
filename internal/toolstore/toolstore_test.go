@@ -2,11 +2,13 @@ package toolstore
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/processlock"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
@@ -52,6 +54,12 @@ func TestOpenReadOnlyRequiresPassphraseFileAndMatchingKeyring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if second, err := OpenWritable(ctx, dbPath); !errors.Is(err, processlock.ErrInUse) {
+		if second != nil {
+			second.Close()
+		}
+		t.Fatalf("second writable handle error=%v, want exclusive-access refusal", err)
+	}
 	if _, err := handle.DB.SQL().ExecContext(ctx,
 		`INSERT INTO events(ts,category,severity,event) VALUES(1,'system','info','tool-fixture')`); err != nil {
 		t.Fatal(err)
@@ -73,5 +81,48 @@ func TestOpenReadOnlyRequiresPassphraseFileAndMatchingKeyring(t *testing.T) {
 	if handle, err := OpenReadOnly(ctx, dbPath); err == nil {
 		handle.Close()
 		t.Fatal("tool opened the database with an unrelated passphrase")
+	}
+}
+
+func TestOpenWritableLocksResolvedDatabaseDirectory(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "controller.db")
+	passphrase := []byte("resolved path passphrase")
+	keeper, err := secrets.Create(filepath.Join(dir, secrets.FileName), passphrase,
+		secrets.Params{Time: 1, MemoryKiB: 64, Threads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(ctx, "sqlite", dbPath, keeper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := keeper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	passFile := filepath.Join(dir, "passphrase")
+	if err := os.WriteFile(passFile, passphrase, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(passphraseFileEnv, passFile)
+	aliasDir := t.TempDir()
+	alias := filepath.Join(aliasDir, "controller-link.db")
+	if err := os.Symlink(dbPath, alias); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := processlock.Acquire(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	if handle, err := OpenWritable(ctx, alias); !errors.Is(err, processlock.ErrInUse) {
+		if handle != nil {
+			handle.Close()
+		}
+		t.Fatalf("symlinked writable open error=%v, want real-directory lock refusal", err)
 	}
 }

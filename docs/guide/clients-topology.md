@@ -20,7 +20,7 @@ Filters operate on the complete matching result before pagination:
 - connection evidence (**Wireless**, **Unknown**, or all).
 
 The current table does not claim that an endpoint is wired merely because no
-managed AP reports it, and v0.1.4 has no client text-search or source-coverage
+managed AP reports it, and v0.1.5 has no client text-search or source-coverage
 filter.
 
 The count above the table is the filtered total, not merely the number of rows
@@ -40,6 +40,23 @@ Possible explanations for a missing or partial row include:
 - AP attribution is incomplete;
 - the client uses a randomized MAC and has a second inventory identity;
 - the source is unavailable on this hardware/driver.
+
+### Scope is also a policy safety boundary
+
+**This network** means the controller has evidence that a client is local to
+the managed Gateway. **Upstream** and **Unknown** clients can remain useful for
+inventory and topology. Its observations alone cannot authorize exact-MAC
+firewall sets, direct-MAC Secure rules, block intent, or fixed IPv4 intent.
+
+Schema 23 preserves source-relative client observations by `(device_id, MAC)`.
+MAC policy requires a stored **local** observation from the currently adopted
+Managed Gateway. A Monitor-only AP, Switch, or routed device neither satisfies
+nor contaminates that proof, including after it is un-adopted; its clients stay
+visible for observation. Portable restore deliberately clears source-relative
+observations, and authorization rejects stale or implausibly future-dated
+evidence. If the managed Gateway has not observed the client successfully—
+commonly just after an upgrade or portable restore—use a managed network/zone
+or explicit IPv4 scope, or wait for a successful Gateway poll.
 
 ## Open Client Observability
 

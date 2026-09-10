@@ -20,19 +20,18 @@ routers stay on stock OpenWrt and continue to work with LuCI.
 64-bit Linux or macOS host, or use the container/Compose setup. The controller
 does not need a dedicated machine and is not installed on the managed routers.
 
-## Current release: v0.1.4
+## Current release: v0.1.5
 
-Released September 3, 2026. [Read the complete release notes](docs/releases/v0.1.4.md).
+Released September 10, 2026. [Read the complete release notes](docs/releases/v0.1.5.md).
 
-- Per-network IPv6 policy: **Router managed**, **Prefix delegation**, or
-  **Disabled**.
-- Actionable, page- and filter-independent status for compact IPv6
-  no-default-route conditions, plus optional router-clock status.
-- Correct transitive FDB/LLDP topology projection and substantially less work
-  for unchanged topology data.
-- Configurable Docker host publishing with `OONFEE_HTTP_BIND`; loopback remains
-  the default.
-- Updated SSH dependencies for GO-2026-6354 and GO-2026-6355.
+- **Managed** and **Monitor only** adoption modes: one managed Gateway plus
+  multiple reachable monitor-only routed devices and subnets.
+- Named exact-MAC policy sets, reusable firewall `source_set_id` rules, a
+  set-aware Master Table, and an Object Manager **Secure (IPv4)** draft workflow.
+- Consistent page headers and responsive light/dark layouts across the main
+  controller screens.
+- A documented Phase 5 flow-visibility feasibility boundary. No DPI or flow
+  package is installed or shipped.
 
 ## Preview
 
@@ -57,6 +56,12 @@ Released September 3, 2026. [Read the complete release notes](docs/releases/v0.1
   every Apply.
 - Device adoption, health monitoring, telemetry, logs, RF tools, and explicit
   source-coverage gaps instead of guessed data.
+- A monitor-only device mode for reachable routers that should contribute
+  polling, inventory, telemetry, events, and topology without becoming Preview,
+  Apply, or site-configuration targets.
+- Reusable named policy sets of exact client MAC addresses, with safe CRUD,
+  set-backed firewall sources, concrete resolution in the Master Table, and
+  the normal redacted Preview/acknowledged Apply boundary.
 - A sanitized, versioned compatibility-report download after read-only Inspect,
   with hardware/capability evidence but no address, MAC, credentials, network
   configuration, clients, timestamps, or free-text notes.
@@ -75,9 +80,21 @@ oonfeeWRT does not build or replace OpenWrt, run controller-authored software on
 routers, broker cloud access, or silently install packages.
 
 Adoption can create only one scoped `oonfeewrt` login and one rpcd ACL JSON
-file after you approve the displayed plan. The router administrator credential
-used for that one-time action is not stored. Optional packages and
-configuration changes have separate review and consent flows.
+file after you approve the displayed plan. Managed devices use the managed ACL
+group; monitor-only devices use the distinct read-only `oonfeewrt-monitor` ACL
+group. This bootstrap is required for polling, so monitor only means no
+desired-configuration authority, not zero router writes during adoption. The
+router administrator credential used for that one-time action is not stored.
+Optional packages and configuration changes have separate review and consent
+flows.
+
+A site permits at most one managed Gateway. Additional reachable OpenWrt
+routers may be adopted as monitor only, including across routed management
+subnets, but they are excluded from Preview, Apply, desired/site configuration,
+optional LLDP install/config/remove mutations, wireless-neighbor mutations, and
+other package/config/remove operations. Existing LLDP observation, scoped ACL
+maintenance, and un-adoption remain available.
+oonfeeWRT does not create the routes or VPN needed to reach those devices.
 
 Controller-created configuration is ownership-tagged, and ordinary Apply and
 cleanup remain limited to those owned sections. The narrow exception is an
@@ -96,9 +113,10 @@ oonfeeWRT supports two equivalent ways to run the controller:
 | Standalone binary | `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` | No Docker required; the UI is embedded in the binary |
 | Container / Docker Compose | `linux/amd64`, `linux/arm64` images | Convenient for an existing NAS, mini-PC, SBC, or Docker Desktop host |
 
-A controller host must be able to reach each router's management address.
-Remote sites need an existing routed management network or VPN; oonfeeWRT does
-not provide cloud brokering or automatic NAT traversal.
+A controller host must be able to reach each router's management address over
+SSH plus the selected HTTP or HTTPS `/ubus` endpoint. Remote sites need an
+existing routed management network or VPN; oonfeeWRT does not provide cloud
+brokering or automatic NAT traversal.
 
 The documented minimum is OpenWrt 21.02 or newer with SSH, `rpcd`, `uhttpd`, and
 its `/ubus` handler. OpenWrt 24.10 and 25.12 are the primary current
@@ -146,14 +164,14 @@ umask 077
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
 
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.4' \
+  'OONFEE_VERSION=v0.1.5' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
@@ -163,14 +181,14 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.4` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.5` for `linux/amd64` or `linux/arm64`.
 
-The v0.1.4 Compose file also accepts a Compose-only host bind IP. When browsers
+The v0.1.5 Compose file also accepts a Compose-only host bind IP. When browsers
 must connect from another machine, change `.env` to the controller's specific
 management-LAN address, then recreate the service:
 
 ```dotenv
-OONFEE_VERSION=v0.1.4
+OONFEE_VERSION=v0.1.5
 OONFEE_HTTP_BIND=192.168.1.20
 ```
 
@@ -200,18 +218,21 @@ For checksummed binaries, signature verification, reverse-proxy TLS,
 persistence, upgrades, and rollback, follow the
 [installation guide](docs/INSTALL.md).
 
-### Upgrade from v0.1.3
+### Upgrade from v0.1.4
 
 Export and verify a portable backup before upgrading. For a direct rollback,
 also retain a consistent pre-upgrade database/keyring pair or whole-volume
-snapshot and its matching runtime passphrase. v0.1.4 migrates schema 19 to
-schema 20; v0.1.3 cannot open the migrated data. Replacing only the binary or
-image tag is not a valid rollback.
+snapshot and its matching runtime passphrase. v0.1.5 migrates schema 20 to
+schema 21 for device management mode, schema 22 for reusable policy sets, then
+schema 23 for per-device client provenance, bounded MAC lookup indexes, and a
+rebuilt one-managed-Gateway uniqueness guard based on canonical device
+functions plus the compatibility role. Existing devices remain Managed.
+v0.1.4 cannot open the migrated data. Replacing only the binary or image tag is
+not a valid rollback.
 
-Compose users must download or deliberately merge the v0.1.4 Compose file;
-pulling the new image alone does not add `OONFEE_HTTP_BIND`. Follow the
-[upgrade and rollback guide](docs/installation/upgrades.md) before changing the
-running version.
+Compose users should download or deliberately merge the v0.1.5 Compose file
+and pin the intended image tag or digest. Follow the [upgrade and rollback
+guide](docs/installation/upgrades.md) before changing the running version.
 
 ## Common questions
 
@@ -257,11 +278,14 @@ described in the safety model below.
 
 2. In **Devices**, add the router by address or run the on-demand discovery
    scan.
-3. Review the controller-access payload. Approving it creates the scoped login
+3. Inspect discovered capabilities and source gaps, then choose **Managed** or
+   **Monitor only**. Use monitor only when the router must remain outside site
+   configuration; it will still need the scoped polling credential.
+4. Review the controller-access payload. Approving it creates the scoped login
    and ACL; cancelling changes nothing.
-4. Inspect discovered capabilities and source gaps.
-5. Preview configuration before Apply. Router changes never happen merely
-   because a device was discovered or listed.
+5. Preview configuration before Apply. Monitor-only devices never participate
+   in Preview or Apply, and router changes never happen merely because a device
+   was discovered or listed.
 
 ## Safety model
 
@@ -278,7 +302,36 @@ described in the safety model below.
   still has a rollback record.
 - Restoring a controller never automatically applies restored desired
   configuration. Router writes remain suppressed until an owner reviews and
-  explicitly resumes them.
+  explicitly resumes them. Portable restore also clears source-relative client
+  observations: they are evidence gathered by the source controller, not
+  portable authorization for MAC-targeted writes. A fresh managed-Gateway poll
+  must establish that proof on the destination controller.
+- Monitor-only devices receive the distinct read-only `oonfeewrt-monitor` ACL
+  and are excluded from desired/site configuration, optional LLDP install/
+  config/remove mutations, wireless-neighbor mutations, and other package/
+  config/remove operations after the acknowledged bootstrap. Existing LLDP
+  observation remains available. Backend checks preserve these boundaries even
+  when a request does not originate in the UI; explicit ACL maintenance and
+  un-adoption remain available.
+- A separately acknowledged RF scan remains available on a capable
+  monitor-only radio. It is an active, transient observation: the serving radio
+  goes off-channel and clients may pause, roam, or disconnect, but the scan has
+  no intended persistent configuration change.
+- Reusable policy sets are controller-side intent. Empty/malformed sets and
+  missing or ambiguous references fail closed, and a referenced set cannot be
+  deleted. Membership changes require a new Preview and explicit Apply before
+  they affect the managed Gateway.
+- MAC-based desired state is local-scope only. Policy-set creation/update,
+  enabled direct/set firewall rules, Object Manager **Secure** drafts, and
+  client block or fixed-address intent require a stored **local** observation
+  from the currently adopted managed Gateway. Monitor-only observations neither
+  satisfy nor contaminate that proof. After an upgrade, portable restore, or
+  provenance expiry, active MAC intent blocks Preview until the Gateway observes
+  it again. Portable restore deliberately clears this nonportable evidence;
+  authorization also rejects observations older than 30 days or more than five
+  minutes in the future independently of cleanup.
+  Existing block/fixed-address intent can still be cleared one client at a
+  time. Use network/zone or explicit IP scope instead.
 - The HTTP listener has no native TLS. Keep it on loopback or an isolated
   management network, and use a trusted reverse proxy for remote access.
 
@@ -306,7 +359,8 @@ passphrases.
   C6 v2 on OpenWrt 25.12.5. Read-only inspection is additionally
   reporter-confirmed from v0.1.3 on one Cudy M3000 v2/MT7981 Filogic variant;
   adoption, Apply, VLANs, polling budgets, and other Filogic boards remain
-  unverified. Three-or-more-AP fan-out, real mesh backhaul, wireless uplink, and
+  unverified. Three-or-more-AP fan-out, real mesh backhaul, wireless uplink,
+  literal peer isolation, the full Filogic/class-B resource envelope, and
   MT7621 also remain unverified.
 - A live delegated IPv6 prefix and complete end-to-end IPv6 client path have
   not been proved on release hardware. Prefix delegation still depends on a
@@ -319,7 +373,9 @@ passphrases.
   and can temporarily saturate the WAN. Loaded latency and jitter are not
   measured.
 - Native controller TLS, cloud remote access, multi-WAN management, manual WAN
-  selection, and gateway-run speed tests are not included in v0.1.4.
+  selection, gateway-run speed tests, DPI, and application-flow history are not
+  included in v0.1.5. The flow feasibility page is a gated research plan, not a
+  shipped capability.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
 
@@ -344,6 +400,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.5 release notes](docs/releases/v0.1.5.md)
 - [v0.1.4 release notes](docs/releases/v0.1.4.md)
 - [v0.1.3 release notes](docs/releases/v0.1.3.md)
 - [v0.1.2 release notes](docs/releases/v0.1.2.md)

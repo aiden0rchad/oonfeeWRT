@@ -34,6 +34,18 @@ func (d *Daemon) LLDPCapability(ctx context.Context, req api.LLDPCapabilityReque
 	if !dev.Adopted() {
 		return nil, fmt.Errorf("daemon: %s is not adopted", dev.Name)
 	}
+	if dev.ManagementModeError != "" {
+		return nil, fmt.Errorf("daemon: %s: %s", dev.Name, dev.ManagementModeError)
+	}
+	if !dev.Configurable() {
+		switch req.Action {
+		case "diagnose", "plan_configure", "plan_remove":
+			// These paths inspect existing state without refreshing package indexes
+			// or changing packages, services, configuration, or runtime neighbours.
+		default:
+			return nil, fmt.Errorf("daemon: %s is monitor-only; LLDP configuration and package changes are disabled", dev.Name)
+		}
+	}
 	collector := d.collectorRef()
 	if collector != nil {
 		defer collector.Quiesce(dev.ID)()

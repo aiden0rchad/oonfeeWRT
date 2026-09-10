@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -529,6 +530,15 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 	for _, e := range site.Validate() {
 		problems = append(problems, e.Error())
 	}
+	if len(problems) == 0 {
+		policyProblems, err := s.Store.PolicyMACScopeProblems(r.Context(), site)
+		if handleStoreErr(w, err, "policy MAC scope") {
+			return
+		}
+		for _, problem := range policyProblems {
+			problems = append(problems, problem.Error())
+		}
+	}
 	// Every deviation, listed. The risk of per-device overrides is not any one
 	// of them; it is a fleet that drifts apart device by device until nobody
 	// can say what is deployed. So they are surfaced wherever the site model
@@ -565,6 +575,7 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 		"networks":            nets,
 		"zones":               zones,
 		"policies":            master.Rows,
+		"policy_sets":         site.PolicySets,
 		"policy_capabilities": master.Capabilities,
 		"problems":            problems,
 		"overrides":           deviations,
@@ -715,6 +726,11 @@ func (s *Server) handleSaveGroup(w http.ResponseWriter, r *http.Request) {
 		v.ID = n
 	}
 	g := model.APGroup{ID: v.ID, Name: strings.TrimSpace(v.Name), DeviceIDs: v.DeviceIDs}
+	for _, deviceID := range g.DeviceIDs {
+		if !s.requireConfigurableSiteDevice(w, r, deviceID, "AP group") {
+			return
+		}
+	}
 	if err := s.Store.SaveGroup(r.Context(), &g); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "no such AP group")
@@ -915,6 +931,9 @@ func (s *Server) handleSetOverride(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "wlan_id is required")
 		return
 	}
+	if !s.requireConfigurableSiteDevice(w, r, id, "device override") {
+		return
+	}
 	if err := s.Store.SetOverride(r.Context(), o); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -1018,6 +1037,9 @@ func (s *Server) handleSaveUplink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errs[0].Error())
 		return
 	}
+	if !s.requireConfigurableSiteDevice(w, r, u.DeviceID, "wireless uplink") {
+		return
+	}
 	if err := s.Store.SaveUplink(r.Context(), &u); handleStoreErr(w, err, "uplink") {
 		return
 	}
@@ -1032,6 +1054,32 @@ func (s *Server) handleSaveUplink(w http.ResponseWriter, r *http.Request) {
 			"will break it and the symptom is a network that stops working " +
 			"rather than an error",
 	})
+}
+
+func (s *Server) requireConfigurableSiteDevice(w http.ResponseWriter, r *http.Request,
+	deviceID int64, object string) bool {
+	dev, err := s.Store.DeviceByID(r.Context(), deviceID)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%s device %d does not exist", object, deviceID))
+		return false
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not validate site device")
+		return false
+	}
+	if dev.ManagementModeError != "" {
+		writeErr(w, http.StatusInternalServerError, "stored device management mode is invalid; restore the controller database from a known-good backup")
+		return false
+	}
+	if dev.FunctionError != "" {
+		writeErr(w, http.StatusInternalServerError, dev.FunctionError)
+		return false
+	}
+	if !dev.Configurable() {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("%s cannot target monitor-only device %q", object, dev.Name))
+		return false
+	}
+	return true
 }
 
 // handleDeleteUplink removes an uplink.

@@ -14,7 +14,7 @@ The channel plan lays out known radios, bands, current channels, and evidence
 that can support a placement decision. The per-radio table adds utilization,
 interference, airtime, retry/failure, signal, and a scan-derived channel score
 when those sources are available. The latest scan row shows its outcome and BSS
-count; v0.1.4 does not display the raw BSS inventory.
+count; v0.1.5 does not display the raw BSS inventory.
 
 Treat it as a plan, not an automatic optimizer:
 
@@ -57,7 +57,7 @@ numbers.
 8. Refresh oonfeeWRT and compare client experience and new measurements after
    the change.
 
-oonfeeWRT v0.1.4 does not include spectrum analysis or an automatic channel
+oonfeeWRT v0.1.5 does not include spectrum analysis or an automatic channel
 change loop, and it has no radio-channel editor or Apply path. Its planner is
 read-only; only the separately acknowledged RF scan can disrupt a serving
 radio.
@@ -81,6 +81,12 @@ backhaul radio without a recovery and timing plan.
 The controller persists the latest terminal scan result for each radio. It
 does not build an unlimited scan archive. Record a before/after comparison
 outside the controller when a long-term RF study matters.
+
+RF scan is also available on a Monitor only device when its capability is
+**Present**. Monitor only fences persistent desired/package/configuration
+authority; it does not make this active observation passive. The same separate
+acknowledgement is required, the serving radio can take clients off-channel,
+and the scan has no intended persistent configuration change.
 
 ### Verify the result
 

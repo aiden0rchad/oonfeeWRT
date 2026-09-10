@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,27 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
+
+func TestPolicyRenderRejectsOverBudgetSetExpansionBeforeBuildingRules(t *testing.T) {
+	site := renderPolicySite()
+	members := make([]string, model.MaxPolicySetMembers)
+	for i := range members {
+		members[i] = fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x",
+			byte(i>>32), byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+	}
+	site.PolicySets = []model.PolicySet{{ID: 1, Name: "large", Members: members}}
+	for i := 0; i <= model.MaxExpandedPolicySourceMACs/model.MaxPolicySetMembers; i++ {
+		site.Policies = append(site.Policies, model.Policy{ID: i + 1, Name: fmt.Sprintf("rule-%d", i),
+			Kind: model.PolicyFirewallRule, Origin: model.PolicyOriginManual, Enabled: true,
+			Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: "guest",
+				DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 1}})
+	}
+	sections, _, conflicts := renderPolicies(site, model.Device{Role: model.RoleGateway},
+		policyCaps(), Existing{}, Doc{})
+	if len(sections) != 0 || len(conflicts) != 1 || !strings.Contains(conflicts[0].Reason, "before allocating") {
+		t.Fatalf("sections=%d conflicts=%+v", len(sections), conflicts)
+	}
+}
 
 func policyCaps() *capability.Registry {
 	caps := routerCaps()
@@ -101,6 +123,35 @@ func TestClientBlockUpgradeDeletesStaleIPv4Family(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("stale family=ipv4 was not cleared: %+v", plan.Ops)
+	}
+}
+
+func TestPolicyRenderExpandsCurrentReusableSetMembership(t *testing.T) {
+	site := renderPolicySite()
+	site.PolicySets = []model.PolicySet{{ID: 7, Name: "Cameras", Members: []string{
+		"00:11:22:33:44:66", "00:11:22:33:44:55",
+	}}}
+	site.Policies = []model.Policy{{ID: 1, Order: 100, Name: "secure cameras",
+		Kind: model.PolicyFirewallRule, Origin: model.PolicyOriginObjectManager, Enabled: true,
+		Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 7}}}
+	doc, report, err := Render(site, model.Device{ID: 7, Role: model.RoleGateway}, policyCaps(), gwExisting())
+	if err != nil || report.HasConflicts() {
+		t.Fatalf("render err=%v report=%+v", err, report)
+	}
+	section := policySection(doc, "rule")
+	want := "00:11:22:33:44:55,00:11:22:33:44:66"
+	if got := strings.Join(section.Lists["src_mac"], ","); got != want {
+		t.Fatalf("rendered set members=%q want=%q", got, want)
+	}
+
+	site.PolicySets[0].Members = []string{"00:11:22:33:44:77"}
+	doc, report, err = Render(site, model.Device{ID: 7, Role: model.RoleGateway}, policyCaps(), gwExisting())
+	if err != nil || report.HasConflicts() {
+		t.Fatalf("render after membership change err=%v report=%+v", err, report)
+	}
+	if got := strings.Join(policySection(doc, "rule").Lists["src_mac"], ","); got != "00:11:22:33:44:77" {
+		t.Fatalf("render retained stale set members: %q", got)
 	}
 }
 

@@ -3,7 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { api } from '../lib/api'
 import { live } from '../lib/live'
 import type { RadioChannel, RadiosResponse, RadioView } from '../lib/api'
-import { Banner, Button, Card, Notice, Stat } from '../components/ui'
+import { Banner, Button, Card, Notice, PageHeader, Stat } from '../components/ui'
 
 const metricKinds = [
   'radio_utilization_pct',
@@ -186,15 +186,11 @@ export function Radios() {
   return (
     <>
     <div inert={scanTarget != null} aria-hidden={scanTarget != null} style={{ display: 'grid', gap: 12 }}>
-      <header style={{ display: 'flex', alignItems: 'end', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 20 }}>Radios &amp; Channel Plan</h1>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-            Stable UCI radios, measured channel occupancy, and explicit RF scans.
-          </div>
-        </div>
-        <Button onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Button>
-      </header>
+      <PageHeader
+        title="Radios & Channel Plan"
+        purpose="Stable UCI radios, measured channel occupancy, and explicit RF scans."
+        actions={<Button onClick={() => void load()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh'}</Button>}
+      />
 
       {error && <Banner tone="critical">
         {data == null

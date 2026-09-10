@@ -36,13 +36,13 @@ features:
     details: Export encrypted portable backups, validate them in staging, restore through a controlled restart, and keep router writes suppressed until an owner reviews the result.
 ---
 
-<p class="doc-kicker">Documentation for v0.1.4</p>
+<p class="doc-kicker">Documentation for v0.1.5</p>
 
-::: tip Current release — v0.1.4
-Published September 3, 2026. This release adds explicit per-network IPv6
-policy, actionable IPv6 log conditions, read-only router-clock checks,
-source-aware transitive wired topology, lower topology database load, and a
-configurable Docker host bind. [See what changed](/reference/releases) or
+::: tip Current release — v0.1.5
+Published September 10, 2026. This release adds managed and monitor-only
+adoption, multi-subnet observation, reusable exact-MAC policy sets, and a
+consistent responsive UI. Phase 5 flow visibility remains feasibility work;
+no DPI package is installed. [See what changed](/reference/releases) or
 [follow the schema-safe upgrade guide](/installation/upgrades).
 :::
 
@@ -55,8 +55,10 @@ changes you review and approve.
 
 It is **not firmware**. Nothing is installed on a router when you start the
 controller, discover a device, or add an address. Adoption can create one
-scoped `oonfeewrt` login and one reviewable rpcd ACL after consent. The only
-optional package workflow in v0.1.4 is LLDP, with a separate plan and rollback.
+scoped `oonfeewrt` login and one reviewable rpcd ACL after consent. Managed and
+Monitor only modes install different ACL content; `oonfeewrt-monitor` grants
+observation reads only. The only optional package workflow in v0.1.5 is LLDP,
+with a separate plan and rollback.
 
 <div class="status-strip">
   <span class="status-pill">OpenWrt 21.02+</span>
@@ -97,7 +99,7 @@ optional package workflow in v0.1.4 is LLDP, with a separate plan and rollback.
   </div>
   <div class="capability-card">
     <h3>Discovery and adoption</h3>
-    <p>On-demand IPv4 discovery, add-by-address, read-only pre-adoption inspection, independently selected Gateway/AP/Switch functions, pinned device identity, and a local sanitized compatibility-report download.</p>
+    <p>On-demand IPv4 discovery, add-by-address, read-only inspection, Managed or Monitor only mode, independently selected functions, pinned identity, and a sanitized compatibility-report download.</p>
   </div>
   <div class="capability-card">
     <h3>Devices and clients</h3>
@@ -113,7 +115,7 @@ optional package workflow in v0.1.4 is LLDP, with a separate plan and rollback.
   </div>
   <div class="capability-card">
     <h3>Policy Engine</h3>
-    <p>Zone matrix, explicit firewall rules, port forwards, static routes, fixed client addresses, client groups, and visible compiled drafts before they enter desired state.</p>
+    <p>Zone matrix, explicit firewall rules, port forwards, static routes, fixed client addresses, reusable exact-MAC policy sets, and visible compiled drafts before they enter desired state.</p>
   </div>
   <div class="capability-card">
     <h3>Safe operations</h3>
@@ -155,9 +157,9 @@ router-hosted agent. Remote sites need an existing management route or VPN.
 
 1. **Observe.** Discover or add a device and read what the controller can
    establish without making a router change.
-2. **Adopt deliberately.** Select the device functions and approve the scoped
-   access payload. The administrator credential is used for that action and is
-   not stored.
+2. **Adopt deliberately.** Choose Managed or Monitor only, select the device
+   functions, and approve the scoped access payload. The administrator
+   credential is used for that action and is not stored.
 3. **Describe intent.** Define site networks, WLANs, policy, or overrides in the
    controller. Saving desired state does not silently Apply it.
 4. **Preview.** Review per-device changes, omissions, conflicts, source gaps,
@@ -171,11 +173,24 @@ router-hosted agent. Remote sites need an existing management route or VPN.
 
 ## Current boundaries
 
-oonfeeWRT v0.1.4 deliberately does not claim capabilities it cannot prove.
+oonfeeWRT v0.1.5 deliberately does not claim capabilities it cannot prove.
 
-- One managed Gateway; no controller high availability.
+- One managed Gateway; multiple reachable monitor-only routers are allowed but
+  are not failover gateways or configuration targets. No controller high
+  availability.
+- A supported RF scan remains available on Monitor only after a separate
+  disruption acknowledgement; it is active observation with client-impact
+  risk, not persistent configuration authority.
+- Exact-MAC policy requires a stored local observation from the currently
+  adopted Managed Gateway. Monitor-only observations neither satisfy nor
+  contaminate that source-relative proof. Missing proof—such as before the first
+  successful Gateway poll after upgrade or portable restore—gates MAC set/draft paths and
+  Preview with active MAC intent. Existing block/fixed-address intent can still
+  be cleared per client. Portable restore deliberately clears this nonportable
+  evidence; stale or implausibly future-dated observations are rejected.
 - No native TLS, SSO, cloud broker, mobile app, DPI, application identity,
-  PoE control, switch ACL management, or gateway-run speed test.
+  PoE control, switch ACL management, or gateway-run speed test. The published
+  flow feasibility plan does not ship or install a flow package.
 - IPv4 on-demand discovery probes eligible local subnets no wider than `/22`
   for an unauthenticated `/ubus` endpoint. A bridged container may not see the
   LAN subnets to scan, so add devices by address.

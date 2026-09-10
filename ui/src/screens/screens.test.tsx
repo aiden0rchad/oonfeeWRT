@@ -275,6 +275,8 @@ describe('Adopt', () => {
 
     render(<Adopt onAdopted={vi.fn()} />)
     expectSinglePageHeading('Adopt a device')
+    expect(screen.getByRole('heading', { level: 1, name: 'Adopt a device' })
+      .closest('.page-header')).toBeTruthy()
     await screen.findByText(/found no eligible local addresses/i)
     await screen.findByText(/Starting a new device ecosystem/i)
     const protocol = screen.getByRole('group', { name: 'Protocol' })
@@ -337,6 +339,7 @@ describe('Adopt', () => {
       private_key: key,
       functions: ['ap'],
       role: 'ap',
+      management_mode: 'managed',
       acknowledge_router_changes: true,
     })
     await waitFor(() => expect(screen.getByText(/is now managed/)).toBeTruthy())
@@ -363,6 +366,75 @@ describe('Adopt', () => {
         }) as HTMLInputElement
       ).checked,
     ).toBe(false)
+  })
+
+  it('keeps routed routers observable without adding them to Preview or Apply', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    api.adopt.mockResolvedValue({
+      device_id: 9,
+      mac: 'aa:bb:cc:dd:ee:09',
+      name: 'remote-router',
+      model: 'OpenWrt router',
+      class: 'B',
+      firmware: 'OpenWrt',
+      functions: ['gateway'],
+      management_mode: 'monitor_only',
+      features: [],
+    })
+
+    render(<Adopt onAdopted={vi.fn()} />)
+    await screen.findByText(/found no eligible local addresses/i)
+    const mode = screen.getByRole('group', { name: 'Management mode' })
+    expect((within(mode).getByRole('radio', { name: /^Managed\b/ }) as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(within(mode).getByRole('radio', { name: /^Monitor only\b/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Gateway\b/ }))
+
+    const scope = screen.getByRole('group', { name: 'Warning: Routed monitoring scope' })
+    expect(within(scope).getByText(/directly reach this management address/i)).toBeTruthy()
+    expect(within(scope).getByText(/multi-site and NAT traversal are not provided/i)).toBeTruthy()
+    expect(screen.getByText(/will not become the site's managed routing anchor/i)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '198.51.100.9' } })
+    fireEvent.change(screen.getByLabelText('Device password (for ubus)'), { target: { value: 'router-password' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt' }))
+
+    await waitFor(() => expect(api.adopt).toHaveBeenCalledTimes(1))
+    expect(api.adopt.mock.calls[0][0]).toMatchObject({
+      host: '198.51.100.9',
+      functions: ['gateway', 'ap'],
+      role: 'gateway',
+      management_mode: 'monitor_only',
+    })
+    expect(await screen.findByText(/is now monitored/i)).toBeTruthy()
+    expect(screen.getByText(/excluded from desired-state Preview and Apply/i)).toBeTruthy()
+    expect(screen.getByText('Monitor only')).toBeTruthy()
+  })
+
+  it('blocks a second configuration-managing Gateway while allowing monitoring', async () => {
+    api.devices.mockResolvedValue({ devices: [{
+      id: 1,
+      adopted: true,
+      role: 'gateway',
+      functions: ['gateway'],
+      management_mode: 'managed',
+    }] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+
+    render(<Adopt onAdopted={vi.fn()} />)
+    await screen.findByText(/found no eligible local addresses/i)
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.0.2.2' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Gateway\b/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }))
+
+    const submit = screen.getByRole('button', { name: 'Adopt' }) as HTMLButtonElement
+    expect(screen.getByText(/already has a managed Gateway/i)).toBeTruthy()
+    expect(submit.disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('radio', { name: /^Monitor only\b/ }))
+    expect(screen.queryByText(/already has a managed Gateway/i)).toBeNull()
+    expect(submit.disabled).toBe(false)
   })
 
   it('inspects first, recommends measured combined functions, and preserves the legacy role', async () => {
@@ -1551,6 +1623,8 @@ describe('Settings — mesh editor', () => {
   it('does not warn about an open mesh when editing an encrypted one', async () => {
     render(<Settings devices={[]} />)
     expectSinglePageHeading('Settings')
+    expect(screen.getByRole('heading', { level: 1, name: 'Settings' })
+      .closest('.page-header')).toBeTruthy()
     await waitFor(() => expect(screen.getByText('backhaul')).toBeTruthy())
 
     fireEvent.click(screen.getAllByText('Edit')[0])
@@ -1558,6 +1632,24 @@ describe('Settings — mesh editor', () => {
 
     expect(screen.queryByText(/this mesh is open/i)).toBeNull()
     expect(screen.queryByText(/anyone in radio range/i)).toBeNull()
+  })
+
+  it('keeps monitor-only devices out of desired-state controls', async () => {
+    render(<Settings devices={[
+      {
+        id: 1, name: 'managed-ap', role: 'ap', functions: ['ap'], adopted: true,
+        management_mode: 'managed',
+      },
+      {
+        id: 2, name: 'remote-router', role: 'gateway', functions: ['gateway'], adopted: true,
+        management_mode: 'monitor_only',
+      },
+    ] as never} />)
+
+    expect(await screen.findByLabelText('managed-ap')).toBeTruthy()
+    expect(screen.queryByLabelText('remote-router')).toBeNull()
+    const notice = screen.getByRole('group', { name: 'Information: Monitor-only devices' })
+    expect(within(notice).getByText(/1 monitor-only device is excluded from site editing, Preview and Apply/i)).toBeTruthy()
   })
 
   // And a NEW mesh with no passphrase really will be open, so it says so before
@@ -2331,6 +2423,121 @@ describe('Devices — re-probe panel', () => {
     expect(submit.disabled).toBe(true)
   })
 
+  it('labels monitor-only ACL refresh as restoring observation access without UCI writes', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    api.refreshACL.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      acl_updated: true,
+      controller_verified: true,
+      features: ['router-log'],
+      unobservable: [],
+    })
+    await openPanel()
+
+    expect(screen.getByText(/restores the read-only/i).textContent).toContain('oonfeewrt-monitor')
+    expect(screen.getByText(/grants no UCI writes, Apply access, package changes/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review or refresh read-only observation ACL' }))
+    const acknowledgement = screen.getByRole('checkbox', {
+      name: /replaces the controller's single rpcd ACL JSON file with the read-only.*does not grant UCI write access/i,
+    })
+    fireEvent.click(acknowledgement)
+    fireEvent.click(screen.getByRole('button', { name: 'Restore read-only observation ACL and verify' }))
+
+    await waitFor(() => expect(api.refreshACL).toHaveBeenCalledWith(1, expect.objectContaining({
+      username: 'root',
+      acknowledge_router_changes: true,
+    })))
+    expect(await screen.findByText(/Read-only oonfeewrt-monitor observation ACL restored and verified/i)).toBeTruthy()
+    expect(screen.getByText(/no UCI write access was granted/i)).toBeTruthy()
+  })
+
+  it('keeps monitor-only LLDP diagnostics and read-only plans but offers no mutation action', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      configuration_state: 'package_default',
+    })
+    api.changeLLDPCapability
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'installed', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], diagnostics: 'RUNTIME_INTERFACES\n{}',
+      })
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'configure_planned', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], plan: 'Read exact interface plan.', plan_hash: 'config-plan',
+      })
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'remove_planned', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], plan: 'Read exact rollback plan.', plan_hash: 'remove-plan',
+      })
+    await openPanel()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review read-only LLDP observations' }))
+
+    expect(screen.queryByRole('checkbox', { name: /package index cache/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Install LLDP capability' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove LLDP capability' })).toBeNull()
+    fireEvent.click(screen.getByRole('checkbox', { name: /authorize a read-only inspection/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect LLDP runtime (read only)' }))
+    await waitFor(() => expect(api.changeLLDPCapability).toHaveBeenCalledWith(1, expect.objectContaining({
+      action: 'diagnose', acknowledge_read_only_diagnostics: true,
+    })))
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /authorize reading the current lldpd UCI export/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show exact LLDP interface plan' }))
+    expect(await screen.findByText('Read exact interface plan.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply LLDP interface configuration' })).toBeNull()
+    expect(screen.getByText(/Monitor-only mode cannot write.*or restart the service/i)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show exact rollback plan (read only)' }))
+    expect(await screen.findByText('Read exact rollback plan.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Remove LLDP capability' })).toBeNull()
+    expect(api.changeLLDPCapability.mock.calls.map(([, request]) => request.action)).toEqual([
+      'diagnose', 'plan_configure', 'plan_remove',
+    ])
+  })
+
+  it('does not offer plan_install for a monitor-only device without LLDP', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    await openPanel()
+
+    const disabled = await screen.findByRole('button', { name: 'LLDP installation disabled for monitor-only' }) as HTMLButtonElement
+    expect(disabled.disabled).toBe(true)
+    expect(screen.getByText(/observes existing capabilities and never offers an installation/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /show exact install plan/i })).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it('disables ACL and LLDP surfaces when the management mode is invalid', async () => {
+    api.device.mockResolvedValue({
+      ...detail,
+      management_mode: 'managed',
+      management_mode_error: 'unsupported stored management mode "mystery"',
+    })
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+    })
+    await openPanel()
+
+    const acl = screen.getByRole('button', { name: 'Controller access payload changes blocked' }) as HTMLButtonElement
+    const lldp = await screen.findByRole('button', { name: 'LLDP actions blocked' }) as HTMLButtonElement
+    expect(acl.disabled).toBe(true)
+    expect(lldp.disabled).toBe(true)
+    expect(screen.getByText(/ACL refresh is disabled because the stored management mode is invalid/i)).toBeTruthy()
+    expect(screen.getByText(/LLDP package, service and configuration actions are disabled/i)).toBeTruthy()
+    expect(api.refreshACL).not.toHaveBeenCalled()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
   it('shows an exact LLDP package plan before accepting a separate install acknowledgement', async () => {
     api.changeLLDPCapability
       .mockResolvedValueOnce({
@@ -3042,6 +3249,39 @@ describe('Devices — column preferences', () => {
     }
     // Legacy AP rows historically also carried the switching/VLAN plumbing.
     expect(screen.getByText('AP · Switch')).toBeTruthy()
+    expect(screen.getByText('Managed')).toBeTruthy()
+  })
+
+  it('labels monitor-only inventory without implying configuration management', () => {
+    render(<Devices devices={[{ ...device, management_mode: 'monitor_only' }] as never} />)
+    expect(screen.getByText('Monitor only')).toBeTruthy()
+  })
+
+  it('surfaces an invalid management mode as a critical fail-closed state', async () => {
+    const invalid = {
+      ...device,
+      management_mode: 'managed',
+      management_mode_error: 'unsupported stored management mode "mystery"',
+    }
+    api.device.mockResolvedValue({
+      ...invalid,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
+    })
+    api.deviceSeries.mockResolvedValue({ series: {} })
+    api.overhead.mockRejectedValue(new Error('none'))
+    render(<Devices devices={[invalid] as never} />)
+
+    expect(screen.getByText('Blocked · invalid mode').getAttribute('title')).toContain('mystery')
+    fireEvent.click(screen.getByText('ap-one'))
+    const alert = (await screen.findByText(/fails closed and excludes this device/i)).closest('[role="alert"]')!
+    expect(alert.textContent).toMatch(/Management mode is invalid.*fails closed/i)
+    expect(alert.textContent).toMatch(/excludes this device from desired-state Preview, Apply and direct configuration/i)
+    expect(screen.getByText('Invalid — writes blocked')).toBeTruthy()
   })
 })
 
@@ -3264,7 +3504,7 @@ describe('Settings — wireless uplinks', () => {
       ...base,
       wlans: [wlan({ allow_uplink: true })],
     })
-    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+    render(<Settings devices={[{ id: 7, name: 'no-cable', adopted: true, management_mode: 'managed' } as never]} />)
 
     expect(await screen.findByRole('group', { name: 'Information: Wireless uplinks' })).toBeTruthy()
     expect(screen.getByText('Add uplink')).toBeTruthy()
@@ -3276,7 +3516,7 @@ describe('Settings — wireless uplinks', () => {
       ...base,
       wlans: [wlan({ allow_uplink: true })],
     })
-    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+    render(<Settings devices={[{ id: 7, name: 'no-cable', adopted: true, management_mode: 'managed' } as never]} />)
 
     const notice = await screen.findByRole('group', { name: 'Information: Wireless uplinks' })
     expect(notice.getAttribute('data-compact')).toBe('true')
@@ -3301,7 +3541,7 @@ describe('Settings — wireless uplinks', () => {
       wlans: [wlan({ allow_uplink: true })],
       uplinks: [{ id: 1, device_id: 7, wlan_id: 1, band: '5g', enabled: true }],
     })
-    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+    render(<Settings devices={[{ id: 7, name: 'no-cable', adopted: true, management_mode: 'managed' } as never]} />)
 
     expect(await screen.findByRole('group', { name: 'Information: Wireless uplinks' })).toBeTruthy()
     expect(screen.getByText(/joins fixture-roam on 5g/)).toBeTruthy()
@@ -3321,7 +3561,7 @@ describe('Settings — wireless uplinks', () => {
       deleted: 1,
       note: 'applying this removes the station interface — acknowledge it',
     })
-    render(<Settings devices={[{ id: 7, name: 'no-cable' } as never]} />)
+    render(<Settings devices={[{ id: 7, name: 'no-cable', adopted: true, management_mode: 'managed' } as never]} />)
 
     await waitFor(() => expect(screen.getByText('Remove')).toBeTruthy())
     fireEvent.click(screen.getByText('Remove'))
@@ -5329,6 +5569,9 @@ describe('Dashboard', () => {
     const { Dashboard } = await import('./Dashboard')
     render(<Dashboard data={data as never} />)
     expectSinglePageHeading('Dashboard')
+    expect(screen.getByRole('heading', { level: 1, name: 'Dashboard' })
+      .closest('.page-header')).toBeTruthy()
+    expect(screen.getByText('Live controller view').closest('.page-header-actions')).toBeTruthy()
 
     expect(screen.getByText('Devices in focus')).toBeTruthy()
     expect(screen.queryByText('Focused polls')).toBeNull()
@@ -5567,6 +5810,60 @@ describe('Dashboard', () => {
 
     expect(screen.getByText('Route active')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('Backup')
+  })
+
+  it('never promotes monitor-only route evidence into the primary site gateway', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      gateway_uplinks: [
+        { device_id: 7, name: 'Observer A', state: 'up', management_mode: 'monitor_only' },
+        { device_id: 8, name: 'Observer B', state: 'missing', management_mode: 'monitor_only' },
+      ],
+      wan: undefined,
+    } as never} />)
+
+    expect(screen.getByText('Route unknown')).toBeTruthy()
+    expect(screen.queryByText('Route active')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    const observations = screen.getByRole('group', { name: 'Monitor-only router route observations' })
+    expect(observations.textContent).toMatch(/Observer A · route observed/i)
+    expect(observations.textContent).toMatch(/Observer B · no route observed/i)
+    expect(observations.textContent).toMatch(/never become the primary site gateway/i)
+    const path = screen.getByRole('group', { name: 'Observed gateway path' })
+    expect(path.textContent).toMatch(/GatewayUnavailable/)
+    expect(path.textContent).not.toContain('Observer A')
+  })
+
+  it('fails closed on an invalid gateway management mode instead of reporting a route outage', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      gateway_uplinks: [
+        {
+          device_id: 9,
+          name: 'Broken boundary',
+          state: 'missing',
+          management_mode: 'managed',
+          management_mode_error: 'unsupported stored management mode "mystery"',
+        },
+        {
+          device_id: 10,
+          name: 'Broken functions',
+          state: 'missing',
+          management_mode: 'managed',
+          function_error: 'device functions contain unknown value "router"',
+        },
+      ],
+      wan: undefined,
+    } as never} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toMatch(/Invalid gateway configuration on Broken boundary, Broken functions/i)
+    expect(alert.textContent).toMatch(/device functions contain unknown value/i)
+    expect(alert.textContent).toMatch(/fails closed.*does not treat these rows as the primary site gateway/i)
+    expect(alert.textContent).not.toMatch(/No active WAN\/default route was observed/i)
+    expect(screen.getByText('Route unknown')).toBeTruthy()
   })
 
   it('uses the explicit Run action as plan-bound acknowledgement and keeps exact impact in a popover', async () => {

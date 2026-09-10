@@ -1,10 +1,8 @@
-// Package deploy embeds the files the controller installs on a device.
-//
-// There is exactly one, and that is the point: `deploy/acl/oonfeewrt.json` is
-// the entire device-side footprint. Adoption writes it and un-adoption removes
-// it, and nothing else the controller does leaves anything behind. Keeping it
-// embedded rather than read from disk means a running binary cannot be pointed
-// at a different ACL than the one it was built and tested with.
+// Package deploy embeds the ACL variant the controller installs on a device.
+// Each device receives exactly one ACL file: managed devices receive the
+// configuration-capable policy, while monitor-only devices receive a policy
+// with the same observation scope and no write grants. Adoption writes the
+// chosen content and un-adoption removes the one file.
 //
 // Review this file like code. It is the blast radius (IMPLEMENTATION §10).
 package deploy
@@ -18,3 +16,9 @@ import (
 //
 //go:embed acl/oonfeewrt.json
 var ACL []byte
+
+// MonitorACL is the read-only rpcd access-control file installed for a
+// monitor-only device at the same path as ACL.
+//
+//go:embed acl/oonfeewrt-monitor.json
+var MonitorACL []byte

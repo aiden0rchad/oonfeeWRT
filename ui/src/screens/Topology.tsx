@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../lib/api'
 import type { TopologyEdge, TopologyNode, TopologySnapshot } from '../lib/api'
-import { Banner, Button, Card, Notice, Stat, Status } from '../components/ui'
+import { Banner, Button, Card, Notice, PageHeader, Stat, Status } from '../components/ui'
 import { DeviceDetailPanel } from './Devices'
 
 type Mode = 'current' | 'history'
@@ -453,14 +453,11 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 20 }}>Topology</h1>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
-            Infrastructure links with source provenance and historical intervals.
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <PageHeader
+        title="Topology"
+        purpose="Infrastructure links with source provenance and historical intervals."
+        actions={(
+          <>
           <Button aria-pressed={mode === 'current'} onClick={() => setMode('current')} kind={mode === 'current' ? 'primary' : 'default'}>
             Current
           </Button>
@@ -491,8 +488,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
             </label>
           )}
           <Button onClick={() => void load()} disabled={loading}>Refresh</Button>
-        </div>
-      </header>
+          </>
+        )}
+      />
 
       {mode === 'history' && rangeChoice === 'custom' && (
         <fieldset style={{ display: 'flex', alignItems: 'end', gap: 8, flexWrap: 'wrap', margin: 0, padding: 10, border: '1px solid var(--border)', borderRadius: 8 }}>

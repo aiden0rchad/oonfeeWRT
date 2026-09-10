@@ -31,6 +31,11 @@ const DefaultUser = "oonfeewrt"
 // exist in the ACL file we install.
 var ACLGroups = []string{"oonfeewrt"}
 
+// MonitorACLGroups grant the observation surface without any router
+// configuration methods. The login still lists the group in rpcd's read and
+// write fields, but the group itself has no write grants.
+var MonitorACLGroups = []string{"oonfeewrt-monitor"}
+
 // Adopter performs adoption and un-adoption.
 type Adopter struct {
 	// ACL is the contents of deploy/acl/oonfeewrt.json.

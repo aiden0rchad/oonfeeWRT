@@ -18,6 +18,41 @@ func TestLegacyOverlongPollIntervalIsClampedToFreshnessContract(t *testing.T) {
 	}
 }
 
+func TestMonitorOnlyGatewayRemainsAFullPollingTarget(t *testing.T) {
+	target := (&Daemon{}).target(&store.Device{
+		ID: 21, MAC: "02:00:00:00:21:21", Name: "observed-router",
+		Role: "gateway", Functions: []string{"gateway"}, ManagementMode: "monitor_only",
+	})
+	if target.DeviceID != 21 || !target.Gateway {
+		t.Fatalf("monitor-only polling target=%+v", target)
+	}
+}
+
+func TestClassifyHostIPv4FailsClosedAcrossEveryAddressOrder(t *testing.T) {
+	snapshot := collector.Snapshot{Networks: []collector.Network{
+		{Name: "lan", CIDR: "192.168.1.1/24"},
+		{Name: "wan", CIDR: "198.51.100.2/24", Upstream: true},
+	}}
+	for _, addresses := range [][]string{
+		{"192.168.1.50", "198.51.100.50"},
+		{"198.51.100.50", "192.168.1.50"},
+	} {
+		ip, scope := classifyHostIPv4(snapshot, addresses)
+		if ip != "198.51.100.50" || scope != store.ScopeUpstream {
+			t.Fatalf("addresses=%v classified as ip=%q scope=%q", addresses, ip, scope)
+		}
+	}
+	for _, addresses := range [][]string{
+		{"192.168.1.50", "203.0.113.50"},
+		{"203.0.113.50", "192.168.1.50"},
+	} {
+		ip, scope := classifyHostIPv4(snapshot, addresses)
+		if ip != "203.0.113.50" || scope != store.ScopeUnknown {
+			t.Fatalf("ambiguous addresses=%v classified as ip=%q scope=%q", addresses, ip, scope)
+		}
+	}
+}
+
 func TestLogOnlySnapshotDurablyAdvancesCoverageWithoutFullPollState(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)

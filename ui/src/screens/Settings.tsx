@@ -20,7 +20,7 @@ import type {
   WLAN,
 } from '../lib/api'
 import {
-  Banner, Button, Card, DataGrid, Field, Notice, Prop, SlideOver, Toggle, Unknown,
+  Banner, Button, Card, DataGrid, Field, Notice, PageHeader, Prop, SlideOver, Toggle, Unknown,
 } from '../components/ui'
 import { ago } from '../components/Chart'
 import { Account } from './Account'
@@ -151,16 +151,16 @@ export function Settings({
   ]
 
   return <div className="settings-page">
-    <div className="settings-heading">
-      <h1>Settings</h1>
-      <span>{tab === 'network'
+    <PageHeader
+      title="Settings"
+      purpose={tab === 'network'
         ? 'Desired network state and controller operations.'
         : tab === 'diagnostics'
           ? 'Redacted, stored-only support bundles.'
           : tab === 'backups'
             ? 'Encrypted controller backup, preview, and restore.'
-          : 'Controller-local identity and access.'}</span>
-    </div>
+          : 'Controller-local identity and access.'}
+    />
     <div className="settings-tabs" role="tablist" aria-label="Settings sections">
       {tabs.map((item) => <button
         key={item.id}
@@ -481,6 +481,9 @@ function NetworkSettings({
   }
 
   const pending = preview?.devices.reduce((n, d) => n + d.changes.length, 0) ?? 0
+  const monitorOnlyCount = devices.filter((device) =>
+    device.adopted && device.management_mode === 'monitor_only',
+  ).length
   const operationNeedsAttention = Boolean(
     recoveringOperation || !operation ||
     operation.state === 'queued' || operation.state === 'running' || operation.state === 'unknown',
@@ -518,6 +521,18 @@ function NetworkSettings({
   return (
     <div style={{ display: 'grid', gap: 14, maxWidth: 900 }}>
       {err && <div role="alert"><Banner tone="critical">{err}</Banner></div>}
+      {monitorOnlyCount > 0 && (
+        <Notice
+          tone="accent"
+          popoverDetails
+          compact
+          component="Monitor-only devices"
+          summary={`${monitorOnlyCount} monitor-only device${monitorOnlyCount === 1 ? ' is' : 's are'} excluded from site editing, Preview and Apply.`}
+          closedLabel="More information about monitor-only devices"
+          openLabel="Hide monitor-only device information"
+          details="These devices still contribute health, inventory and topology evidence. Their management addresses must be directly reachable; multi-site and NAT traversal are not provided."
+        />
+      )}
       {site.problems.length > 0 && (
         <div role="alert">
           <Notice
@@ -540,11 +555,21 @@ function NetworkSettings({
           <Prop label="AP groups">{site.groups.length}</Prop>
           <Prop label="Wireless networks">{site.wlans.length}</Prop>
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
-          The site identifier <code>{site.uuid.slice(0, 8)}…</code> seeds the
-          802.11r mobility domain, so every AP derives the same value with no
-          coordination. It never changes — that is what keeps fast roaming
-          working across the fleet.
+        <div className="settings-compact-notice" style={{ marginTop: 8 }}>
+          <Notice
+            tone="accent"
+            popoverDetails
+            compact
+            component="Site identity"
+            summary="The stable site identity keeps 802.11r roaming consistent across the fleet."
+            closedLabel="More information about the site identity"
+            openLabel="Hide site identity information"
+            details={<span>
+              Site identifier <code>{site.uuid.slice(0, 8)}…</code> seeds the
+              802.11r mobility domain, so every AP derives the same value without
+              coordination. It does not change.
+            </span>}
+          />
         </div>
       </Card>
 
@@ -1278,7 +1303,7 @@ function Groups({
   const [membershipErrors, setMembershipErrors] = useState<Record<number, string>>({})
   const desiredMemberships = useRef(new Map<number, number[]>())
   const membershipQueues = useRef(new Map<number, Promise<void>>())
-  const adopted = devices.filter((d) => d.adopted)
+  const adopted = devices.filter(isManagedDevice)
 
   function toggle(g: APGroup, deviceID: number) {
     const current = desiredMemberships.current.get(g.id) ?? g.device_ids
@@ -1457,7 +1482,7 @@ function Deviations({
   const [deviceID, setDeviceID] = useState<number | null>(null)
   const [pending, setPending] = useState<Record<string, string>>({})
   const [changeError, setChangeError] = useState('')
-  const adopted = devices.filter((d) => d.adopted)
+  const adopted = devices.filter(isManagedDevice)
   const target = deviceID ?? adopted[0]?.id ?? null
 
   if (site.wlans.length === 0 || adopted.length === 0) return null
@@ -3416,7 +3441,7 @@ function Uplinks({
 
           <UplinkAdd
             devices={devices.filter(
-              (d) => !site.uplinks.some((u) => u.device_id === d.id),
+              (d) => isManagedDevice(d) && !site.uplinks.some((u) => u.device_id === d.id),
             )}
             wlans={bridgeable}
             busy={busy}
@@ -3500,6 +3525,10 @@ function UplinkAdd({
       </Button>
     </div>
   )
+}
+
+function isManagedDevice(device: Device): boolean {
+  return device.adopted && (device.management_mode ?? 'managed') === 'managed'
 }
 
 /** A labelled <select>. Field renders an <input> and cannot take children. */

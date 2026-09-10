@@ -63,6 +63,30 @@ an assignment-length input bounded to `/48`–`/64`; they still require Preview
 and Apply. Source and UI tests cover the policy, but ISP prefix delegation
 and the resulting client path have not been proved on release hardware.
 
+`v0.1.5` separates **Managed** and **Monitor only** authority. One managed
+Gateway owns site intent; multiple already-reachable monitor-only routers can
+contribute polling, inventory, telemetry, events, and topology across routed
+subnets. They use the distinct read-only `oonfeewrt-monitor` ACL and are fenced
+from Preview/Apply, optional LLDP install/config/remove mutations,
+wireless-neighbor mutation, and other package/config/remove paths. Existing
+LLDP observation remains available.
+Capability-proved RF scan remains available after a separate disruption
+acknowledgement as a transient active observation, not persistent authority.
+The release also adds reusable exact-MAC policy sets, stable firewall
+`source_set_id` references, set-aware Object Manager Secure drafts, and
+concrete Master Table resolution. Policy-set members, direct or set-backed
+Secure drafts, and client block/fixed-address intent require proved local scope
+at the currently adopted Managed Gateway. Schema 23 stores source-relative
+`client_observations` by `(device_id, MAC)`, so Monitor-only observations neither
+satisfy nor contaminate that proof, including after un-adoption. Upgrades start
+without the new provenance, and portable restore deliberately clears it rather
+than importing source-controller write authority. Stale or implausibly future-
+dated evidence is rejected independently of cleanup; active MAC intent blocks
+Preview until every referenced client is
+re-observed locally. Existing block/fixed-address intent can still be cleared
+one client at a time. These paths are source-tested; they do not add new
+physical-router proof.
+
 ---
 
 ## Network 10.5 current baseline — Observability, Safe Ops and policy
@@ -265,6 +289,7 @@ to 32 radios, 128 interfaces/radio and 512 frequencies.
 | IGMP proxy | `igmpproxy` | 🟢 |
 | **Zone-based firewall** (Internal/DMZ/Guest/External matrix) | firewall4 zones + forwardings | 🟢 maps almost 1:1 |
 | Firewall rules with IP/port/zone matching | firewall4 rules + nftables sets | 🟢 |
+| Reusable client policy sets | controller named exact-MAC sets expanded into firewall4 rule source MACs | 🟢 shipped in v0.1.5: CRUD, stable references, Master Table resolution, and Object Manager Secure drafts; each member must have a stored `local` observation from the currently adopted Managed Gateway. Monitor-only observations neither satisfy nor contaminate that source-relative proof; exact MACs are selectors, not authentication |
 | Port forwarding | `config redirect` | 🟢 |
 | Traffic rules (block category/app/domain) | domain sets in dnsmasq/nftables; app-matching needs DPI | 🟡 |
 | Traffic routes (policy-based routing per client/network) | `ip rule` + routing tables, `mwan3` | 🟢 |
@@ -357,7 +382,7 @@ logging with application identification.
 | UniFi element | OpenWrt source | Verdict |
 |---|---|---|
 | Flow table: Source, Destination, Service, Risk, Direction, In/Out zone, Action, timestamp — at "1-100 of 10000+" scale | conntrack events (`conntrackd`/netlink) + nflog for blocked | 🟡 high volume; needs a real ingest path and aggressive retention policy |
-| **Application/Service identification** (SSL/TLS, Discord, QUIC, GitHub, YouTube) | `netifyd` (nDPI) on the gateway **[verify package availability]**, or `ntopng` | 🟡 the single biggest build item on this screen |
+| **Application/Service identification** (SSL/TLS, Discord, QUIC, GitHub, YouTube) | optional `netifyd` (nDPI) pilot on the gateway, subject to architecture/feed verification and explicit install/rollback | 🟡 package availability was confirmed for the documented 25.12 target architectures during v0.1.5 feasibility work, but no package, ingestion path, or application-identification feature ships |
 | Risk scoring (Low/Suspicious/Concerning) | 🔴 as shipped (Proofpoint feeds). Substitute: blocklist membership + geo + port heuristics + Suricata verdict. Document the heuristic |
 | Flows on Map (geo visualization) | GeoLite2 + map component | 🟢 once you have flows |
 | Top Destinations / Clients / Apps summary cards | aggregation over flows | 🟡 |
@@ -367,6 +392,12 @@ logging with application identification.
 **Recommendation:** Flows is the screen most at odds with the wrapper
 constraint, and it should be the last thing you build — or the first thing you
 cut.
+
+The v0.1.5 decision record is
+[Flow visibility feasibility](reference/flows-feasibility.md). It distinguishes
+`nlbwmon` accounting from `netifyd` DPI and requires package, storage,
+performance, privacy, egress, rollback, and truthful-claim gates before any
+hardware pilot. Documentation of that plan is not a shipped Flows screen.
 
 Tier check: the whole screen depends on a DPI daemon being available *in the
 official feed* for the user's target, running on their gateway, with CPU to

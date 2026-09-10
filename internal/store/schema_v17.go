@@ -35,5 +35,14 @@ func verifyCurrentSchema(ctx context.Context, q schemaInspector) error {
 	if err := verifySchemaV19(ctx, q); err != nil {
 		return err
 	}
-	return verifySchemaV20(ctx, q)
+	if err := verifySchemaV20(ctx, q); err != nil {
+		return err
+	}
+	if err := verifySchemaV21(ctx, q); err != nil {
+		return err
+	}
+	if err := verifySchemaV22(ctx, q); err != nil {
+		return err
+	}
+	return verifySchemaV23(ctx, q)
 }

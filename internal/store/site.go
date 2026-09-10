@@ -72,6 +72,9 @@ func (db *DB) populateSiteOn(ctx context.Context, q siteReader, s model.Site,
 	if s.Zones, err = db.zonePoliciesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
+	if s.PolicySets, err = db.policySetsOn(ctx, q); err != nil {
+		return model.Site{}, err
+	}
 	if s.Policies, err = db.policiesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}

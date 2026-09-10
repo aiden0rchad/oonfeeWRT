@@ -43,6 +43,7 @@ const reference = [
   { text: 'Capability and support matrix', link: '/reference/capabilities' },
   { text: 'Troubleshooting', link: '/reference/troubleshooting' },
   { text: 'FAQ', link: '/reference/faq' },
+  { text: 'Flow visibility feasibility', link: '/reference/flows-feasibility' },
   { text: 'Engineering reference', link: '/reference/engineering' },
   { text: 'Release notes', link: '/reference/releases' },
 ]
@@ -51,7 +52,7 @@ export default defineConfig({
   lang: 'en-US',
   title: 'oonfeeWRT',
   titleTemplate: ':title | oonfeeWRT Docs',
-  description: 'Documentation for oonfeeWRT v0.1.4: install, configure, operate, and understand the OpenWrt controller.',
+  description: 'Documentation for oonfeeWRT v0.1.5: install, monitor, configure, operate, and understand the OpenWrt controller.',
   base: '/oonfeeWRT/',
   cleanUrls: true,
   srcExclude: ['project/**', 'releases/current.md'],
@@ -62,8 +63,8 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#f5f6f8', media: '(prefers-color-scheme: light)' }],
     ['meta', { name: 'theme-color', content: '#0f1114', media: '(prefers-color-scheme: dark)' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.4 Documentation' }],
-    ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with safe Apply, explicit IPv6 policy, evidence-backed topology, and recovery.' }],
+    ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.5 Documentation' }],
+    ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with monitor-only devices, safe Apply, reusable policy sets, evidence-backed topology, and recovery.' }],
     ['meta', { property: 'og:image', content: 'https://aiden0rchad.github.io/oonfeeWRT/social-card.svg' }],
   ],
   markdown: {
@@ -82,10 +83,10 @@ export default defineConfig({
       { text: 'Operations', link: '/operations/accounts' },
       { text: 'Reference', link: '/reference/requirements' },
       {
-        text: 'v0.1.4',
+        text: 'v0.1.5',
         items: [
           { text: 'Release notes', link: '/reference/releases' },
-          { text: 'Download v0.1.4', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4' },
+          { text: 'Download v0.1.5', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5' },
         ],
       },
     ],

@@ -60,7 +60,7 @@ func (d *Daemon) buildPreview(ctx context.Context) (*previewState, error) {
 	}
 	out := &api.PreviewResult{SiteName: site.Name, Devices: []api.DevicePreview{}}
 	state := &previewState{
-		result: out, site: site, devices: applyOrder(devices),
+		result: out, site: site, devices: applyOrder(configurableDevices(devices)),
 		siteFingerprint: siteFingerprint, planFingerprints: map[int64]string{},
 	}
 
@@ -68,6 +68,15 @@ func (d *Daemon) buildPreview(ctx context.Context) (*previewState, error) {
 	// here instead of the same confusing failure once per device.
 	for _, e := range site.Validate() {
 		out.SiteErrors = append(out.SiteErrors, e.Error())
+	}
+	if len(out.SiteErrors) == 0 {
+		problems, err := d.Store.PolicyMACScopeProblems(ctx, site)
+		if err != nil {
+			return nil, err
+		}
+		for _, problem := range problems {
+			out.SiteErrors = append(out.SiteErrors, problem.Error())
+		}
 	}
 	if len(out.SiteErrors) == 0 {
 		for _, dev := range state.devices {
@@ -134,6 +143,13 @@ func (d *Daemon) previewDeviceBound(ctx context.Context, site model.Site,
 	if dev.FunctionError != "" {
 		p.Error = dev.FunctionError
 		return finish(nil, fmt.Errorf("%s", dev.FunctionError))
+	}
+	if !dev.Configurable() {
+		p.Error = "this device is monitor-only and cannot receive site configuration"
+		if dev.ManagementModeError != "" {
+			p.Error = dev.ManagementModeError
+		}
+		return finish(nil, fmt.Errorf("%s", p.Error))
 	}
 
 	caps, err := deviceCaps(dev)
@@ -417,6 +433,14 @@ func (d *Daemon) applyDeviceBoundOperation(ctx context.Context, site model.Site,
 	dev *store.Device, ackTraversal bool, expectedSite, expectedFleet, expectedPlan,
 	operationID string, operationOrdinal int) (out api.DeviceApply, retErr error) {
 	out = api.DeviceApply{DeviceID: dev.ID, Name: dev.Name}
+	if !dev.Configurable() {
+		retErr = fmt.Errorf("%s is monitor-only and cannot receive site configuration", dev.Name)
+		if dev.ManagementModeError != "" {
+			retErr = fmt.Errorf("%s: %s", dev.Name, dev.ManagementModeError)
+		}
+		out.Outcome, out.Reason = "error", retErr.Error()
+		return out, retErr
+	}
 	writeBoundary := false
 	defer func() {
 		if operationID == "" {
@@ -516,6 +540,9 @@ func (d *Daemon) applyDeviceBoundOperation(ctx context.Context, site model.Site,
 		if fresh.FunctionError != "" {
 			return fmt.Errorf("%s: %s", fresh.Name, fresh.FunctionError)
 		}
+		if !fresh.Configurable() {
+			return fmt.Errorf("%s is monitor-only and cannot receive site configuration", fresh.Name)
+		}
 		dev = fresh
 		out.Name = fresh.Name
 		caps, err := deviceCaps(fresh)
@@ -560,6 +587,17 @@ func (d *Daemon) applyDeviceBoundOperation(ctx context.Context, site model.Site,
 				"proceed — the change is applied with a rollback armed either way, "+
 				"but you should know you are editing the road before driving "+
 				"down it", dev.Name)
+		}
+		// Client provenance is observed state, not desired state, and can change
+		// while a device plan is being read. Re-check it at the last controller
+		// boundary before any router write so an upstream reclassification cannot
+		// ride a preview that was safe only when planning began.
+		problems, err := d.Store.PolicyMACScopeProblems(applyCtx, site)
+		if err != nil {
+			return err
+		}
+		if len(problems) > 0 {
+			return fmt.Errorf("site policy is no longer safely renderable: %w", problems[0])
 		}
 		out.Changes = len(plan.Plan.Ops)
 		if operationID != "" && out.Changes > 0 {
@@ -801,6 +839,19 @@ func applyOrder(devices []*store.Device) []*store.Device {
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+func configurableDevices(devices []*store.Device) []*store.Device {
+	out := make([]*store.Device, 0, len(devices))
+	for _, dev := range devices {
+		// Only an explicit, valid monitor-only mode is omitted. Corrupt state
+		// remains in the plan so previewDeviceBound reports it and blocks the
+		// fleet instead of silently applying around a formerly managed device.
+		if dev.Configurable() || dev.FunctionError != "" || dev.ManagementModeError != "" {
+			out = append(out, dev)
+		}
+	}
 	return out
 }
 

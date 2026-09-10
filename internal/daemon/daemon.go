@@ -25,6 +25,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/processlock"
 	"github.com/aiden0rchad/oonfeewrt/internal/restoreswap"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -47,6 +48,7 @@ type Daemon struct {
 	controllerLog          *rotatingLog
 	controllerLogOnce      sync.Once
 	controllerLogErr       error
+	processLock            *processlock.Lock
 	Store                  *store.DB
 	Keys                   *secrets.Keeper
 	restoreOwnerInstanceID string
@@ -187,6 +189,16 @@ func open(ctx context.Context, cfg Config, log *slog.Logger,
 	if err := os.Chmod(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("daemon: secure data directory: %w", err)
 	}
+	instanceLock, err := processlock.Acquire(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: exclusive controller access: %w", err)
+	}
+	keepInstanceLock := false
+	defer func() {
+		if !keepInstanceLock {
+			_ = instanceLock.Close()
+		}
+	}()
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -210,7 +222,7 @@ func open(ctx context.Context, cfg Config, log *slog.Logger,
 		ln.Close()
 		return nil, err
 	}
-	d := &Daemon{Config: cfg, Log: log, controllerLog: controllerLog, ln: ln, resolver: net.DefaultResolver,
+	d := &Daemon{Config: cfg, Log: log, controllerLog: controllerLog, processLock: instanceLock, ln: ln, resolver: net.DefaultResolver,
 		startedAt: time.Now(),
 		Samples:   telemetry.New(telemetry.Options{}), lifetimeCtx: ctx,
 		restoreOwnerInstanceID: instanceID, restoreRestart: make(chan RestartRequest, 1)}
@@ -330,6 +342,7 @@ func open(ctx context.Context, cfg Config, log *slog.Logger,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 	}
 	keepControllerLog = true
+	keepInstanceLock = true
 	return d, nil
 }
 
@@ -415,6 +428,7 @@ func (d *Daemon) shutdownForRestore() error {
 func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	var errs []error
 	lifecycleDrained := true
+	ownershipDrained := true
 	appliesDrained := true
 	jobsDrained := true
 	operationsDrained := true
@@ -441,6 +455,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	if apiSrv != nil && !apiSrv.CloseJobs(d.Config.ShutdownGrace) {
 		jobsDrained = false
 		lifecycleDrained = false
+		ownershipDrained = false
 		errs = append(errs, fmt.Errorf("daemon: controller background jobs did not stop after %s; database and controller log left open rather than closing underneath them",
 			d.Config.ShutdownGrace))
 	}
@@ -453,6 +468,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	}
 	if err := d.stopNeighbourReconciler(hctx); err != nil {
 		lifecycleDrained = false
+		ownershipDrained = false
 		errs = append(errs, fmt.Errorf("daemon: neighbour reconciler did not stop: %w", err))
 	}
 	if c := d.collectorRef(); c != nil {
@@ -460,6 +476,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	}
 	if err := d.stopCascadeEvents(hctx); err != nil {
 		lifecycleDrained = false
+		ownershipDrained = false
 		errs = append(errs, fmt.Errorf("daemon: flush grouped topology events: %w", err))
 	}
 
@@ -469,6 +486,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	//    restart — a visible notch in every graph of a fleet that gets updated.
 	if err := d.stopMaintainer(); err != nil {
 		lifecycleDrained = false
+		ownershipDrained = false
 		errs = append(errs, err)
 	}
 
@@ -482,6 +500,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 		if !d.applies.wait(d.Config.ApplyDrain) {
 			appliesDrained = false
 			lifecycleDrained = false
+			ownershipDrained = false
 			errs = append(errs, fmt.Errorf("daemon: %d apply(s) still running after "+
 				"%s — a device may revert an unconfirmed change; check its config "+
 				"before assuming the change landed",
@@ -495,6 +514,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 			if !apiSrv.WaitForOperations(d.Config.ApplyDrain) {
 				operationsDrained = false
 				lifecycleDrained = false
+				ownershipDrained = false
 				errs = append(errs, fmt.Errorf("daemon: controller operations %v still running after %s; database and controller log left open rather than closing underneath them",
 					apiSrv.ActiveOperations(), d.Config.ApplyDrain))
 			}
@@ -512,6 +532,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 			if !apiSrv.WaitForDrain(d.Config.ApplyDrain) {
 				requestsDrained = false
 				lifecycleDrained = false
+				ownershipDrained = false
 				errs = append(errs, fmt.Errorf("daemon: %d accepted API request(s) still running after %s; database left open rather than closing underneath them",
 					apiSrv.ActiveRequests(), d.Config.ApplyDrain))
 			}
@@ -520,6 +541,7 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	if lifecycleDrained && d.shutdownOps.afterRequestDrain != nil {
 		if err := d.shutdownOps.afterRequestDrain(); err != nil {
 			lifecycleDrained = false
+			ownershipDrained = false
 			errs = append(errs, fmt.Errorf("daemon: restore drain boundary: %w", err))
 		}
 	}
@@ -576,6 +598,14 @@ func (d *Daemon) shutdownLifecycle(promoteRestore bool) error {
 	if lifecycleDrained && appliesDrained && requestsDrained && jobsDrained && operationsDrained {
 		errs = append(errs, d.closeControllerLog())
 	}
+	// A forced HTTP close is still terminal once every accepted operation and
+	// background worker has drained. Release exclusive ownership in that case
+	// even though the HTTP timeout remains an error and the conservative
+	// shutdown path leaves the idle database handle open for inspection.
+	if ownershipDrained && appliesDrained && requestsDrained && jobsDrained && operationsDrained &&
+		(closedPair || !lifecycleDrained) {
+		errs = append(errs, d.processLock.Close())
+	}
 	return errors.Join(errs...)
 }
 
@@ -624,14 +654,26 @@ func (d *Daemon) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	storeClosed, keysClosed := d.Store == nil, d.Keys == nil
 	if jobsDrained && operationsDrained && d.Store != nil {
-		errs = append(errs, d.Store.Close())
+		if err := d.Store.Close(); err != nil {
+			errs = append(errs, err)
+		} else {
+			storeClosed = true
+		}
 	}
 	if jobsDrained && operationsDrained && d.Keys != nil {
-		errs = append(errs, d.Keys.Close())
+		if err := d.Keys.Close(); err != nil {
+			errs = append(errs, err)
+		} else {
+			keysClosed = true
+		}
 	}
 	if jobsDrained && operationsDrained {
 		errs = append(errs, d.closeControllerLog())
+		if storeClosed && keysClosed {
+			errs = append(errs, d.processLock.Close())
+		}
 	}
 	return errors.Join(errs...)
 }

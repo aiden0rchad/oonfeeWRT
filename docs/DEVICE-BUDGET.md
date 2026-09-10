@@ -8,6 +8,13 @@ This document sets hard budgets, explains where the cost actually comes from
 (it is not where most people assume), and lists the design rules that hit the
 budget.
 
+**v0.1.5 boundary:** Phase 5 produced a
+[flow-visibility feasibility review](reference/flows-feasibility.md), not a
+runtime feature. The release installs no `nlbwmon`, `netifyd`, or DPI package
+and claims no application identity or flow history. Any future pilot remains
+default-off and must pass the per-device storage, performance, privacy, and
+rollback gates documented there.
+
 ---
 
 ## 1. Target hardware classes

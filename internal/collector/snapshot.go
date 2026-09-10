@@ -451,19 +451,32 @@ func (s *Snapshot) Scope(ip string) string {
 	if addr == nil {
 		return ScopeUnknown
 	}
+	bestPrefix := -1
+	bestScope := ScopeUnknown
 	for _, n := range s.Networks {
 		_, subnet, err := net.ParseCIDR(n.CIDR)
 		if err != nil || subnet == nil {
 			continue
 		}
-		if subnet.Contains(addr) {
-			if n.Upstream {
-				return ScopeUpstream
-			}
-			return ScopeLocal
+		prefix, bits := subnet.Mask.Size()
+		if bits == 0 || !subnet.Contains(addr) || prefix < bestPrefix {
+			continue
+		}
+		scope := ScopeLocal
+		if n.Upstream {
+			scope = ScopeUpstream
+		}
+		if prefix > bestPrefix {
+			bestPrefix, bestScope = prefix, scope
+			continue
+		}
+		// Equal-specificity disagreement is not evidence of locality. Prefer
+		// the known upstream route regardless of netifd candidate order.
+		if scope == ScopeUpstream {
+			bestScope = ScopeUpstream
 		}
 	}
-	return ScopeUnknown
+	return bestScope
 }
 
 // Scope values, mirroring store's. Duplicated rather than imported because the

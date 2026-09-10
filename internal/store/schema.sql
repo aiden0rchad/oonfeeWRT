@@ -1,5 +1,6 @@
--- oonfeeWRT controller schema. Authoritative copy lives in
--- docs/IMPLEMENTATION.md §3; this file is what actually runs.
+-- oonfeeWRT controller schema. This executable baseline, the versioned
+-- migrations, and their attestations are authoritative. The schema overview in
+-- docs/IMPLEMENTATION.md §3 is intentionally abridged.
 --
 -- Forward-only migrations: never edit a shipped statement, add a new migration
 -- instead. schema_version records how far we have come.
@@ -49,7 +50,8 @@ CREATE TABLE IF NOT EXISTS devices (
   fw_release   TEXT,
   last_seen    INTEGER,
   poll_state   TEXT NOT NULL DEFAULT 'baseline', -- 'baseline'|'focused'|'quiesced'|'backoff'
-  poll_interval_s INTEGER NOT NULL DEFAULT 0     -- per-device baseline; 0 = controller default (migration v4)
+  poll_interval_s INTEGER NOT NULL DEFAULT 0,    -- per-device baseline; 0 = controller default (migration v4)
+  management_mode TEXT NOT NULL DEFAULT 'managed' CHECK (management_mode IN ('managed','monitor_only'))
 );
 
 -- ===== site model (desired state) =====
@@ -108,6 +110,19 @@ CREATE TABLE IF NOT EXISTS fw_rules (
   id INTEGER PRIMARY KEY, sort INTEGER NOT NULL,
   rule_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS policy_sets (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS policy_sets_name_nocase
+  ON policy_sets(name COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS policy_set_members (
+  set_id INTEGER NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL,
+  PRIMARY KEY (set_id, mac)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS policy_set_members_mac_nocase
+  ON policy_set_members(mac COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS device_overrides (
   device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
   path TEXT NOT NULL,
@@ -193,6 +208,17 @@ CREATE TABLE IF NOT EXISTS clients (
   scope TEXT,                          -- local|upstream, NULL = undetermined (migration v3)
   fingerprint_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE INDEX IF NOT EXISTS clients_mac_nocase
+  ON clients(mac COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS client_observations (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL CHECK (mac=lower(mac)),
+  scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (device_id, mac)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS client_observations_mac
+  ON client_observations(mac);
 
 -- ===== telemetry (rollups only — the raw ring lives in RAM, decision D4) =====
 CREATE TABLE IF NOT EXISTS series (

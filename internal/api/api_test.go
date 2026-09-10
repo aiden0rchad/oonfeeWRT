@@ -2636,6 +2636,58 @@ func TestUplinkIsRefusedBeforeItIsStored(t *testing.T) {
 	}
 }
 
+func TestMonitorOnlyDeviceCannotEnterDesiredSiteConfiguration(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	ctx := context.Background()
+	at := int64(1)
+	dev := &store.Device{
+		MAC: "02:00:00:00:21:40", Host: "198.51.100.1", Name: "observed-ap",
+		Role: "ap", Functions: []string{"ap"}, ManagementMode: "monitor_only", AdoptedAt: &at,
+	}
+	if err := h.db.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	n := &model.Network{Name: "lan", VLAN: 1, CIDR: "192.168.1.1/24", Enabled: true}
+	if err := h.db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	g := &model.APGroup{Name: "all"}
+	if err := h.db.SaveGroup(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	w := &model.WLAN{SSID: "roam", NetworkID: n.ID, GroupID: g.ID,
+		Bands: []model.Band{model.Band5G}, Enabled: true,
+		Options: model.WLANOptions{AllowUplink: true}}
+	if err := h.db.SaveWLAN(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	requests := []struct {
+		name string
+		path string
+		body map[string]any
+	}{
+		{"AP group", "/api/v1/site/groups", map[string]any{
+			"name": "observed", "device_ids": []int64{dev.ID},
+		}},
+		{"device override", fmt.Sprintf("/api/v1/site/devices/%d/override", dev.ID), map[string]any{
+			"wlan_id": w.ID, "key": "hidden", "value": "1",
+		}},
+		{"wireless uplink", "/api/v1/site/uplinks", map[string]any{
+			"device_id": dev.ID, "wlan_id": w.ID, "band": "5g", "enabled": true,
+		}},
+	}
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			res := h.do(http.MethodPost, request.path, request.body)
+			if res.Code != http.StatusBadRequest || !strings.Contains(res.Body.String(), "monitor-only") {
+				t.Fatalf("status=%d body=%s, want monitor-only refusal", res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
 // Both hazards are on the responses, every time, rather than only in
 // documentation. The controller cannot see the far end of a cable, and these
 // are the two things it cannot check for the operator.

@@ -318,7 +318,7 @@ func (d *Daemon) beginNeighbourReconcileOperation() (func(), bool) {
 func (d *Daemon) readNeighbourState(ctx context.Context, dev *store.Device,
 	managed map[string]bool, obs map[roaming.Target]*bssObservation) *api.NeighbourDevice {
 
-	if !dev.Adopted() || !deviceFunctions(dev).Wireless() {
+	if !dev.Adopted() || !dev.Configurable() || !deviceFunctions(dev).Wireless() {
 		return nil
 	}
 	row := &api.NeighbourDevice{DeviceID: dev.ID, Name: dev.Name}
@@ -426,6 +426,10 @@ func (d *Daemon) pushNeighbours(ctx context.Context, devices []*store.Device,
 		}
 	}
 	if dev == nil {
+		return
+	}
+	if !dev.Configurable() {
+		row.Skipped = "this device is monitor-only; neighbour state was not changed"
 		return
 	}
 

@@ -5,7 +5,7 @@ description: What oonfeeWRT stores, for how long, and what must be backed up tog
 
 # Data and retention
 
-oonfeeWRT v0.1.4 keeps configuration, evidence, and audit history locally. It
+oonfeeWRT v0.1.5 keeps configuration, evidence, and audit history locally. It
 does not require a cloud account or external database.
 
 ## Storage locations
@@ -17,7 +17,7 @@ Important contents include:
 
 | Path | Contents | Persistence |
 |---|---|---|
-| `oonfeewrt.db` | SQLite database: accounts, site intent, device inventory, sealed credential records, rollups, events, audit history, operations | Persistent |
+| `oonfeewrt.db` | SQLite database: accounts, site intent, policy sets, device inventory and management mode, sealed credential records, rollups, events, audit history, operations | Persistent |
 | `keyring.json` | Wrapped random data key used to seal credentials | Persistent and inseparable from the database |
 | `diagnostics/` | Temporary generated diagnostics ZIPs | Terminal artifact expires after 15 minutes |
 | `backups/` | Temporary portable export jobs and downloads | Terminal artifact expires after 15 minutes |
@@ -63,6 +63,27 @@ Series queries choose resolution from the requested range. Requests beginning
 more than 14 days ago, or spanning more than seven days, use hourly data. This
 keeps responses bounded and avoids implying that old five-minute points still
 exist.
+
+## Client inventory and MAC provenance
+
+The normal client-retention cutoff is 30 days after `last_seen`. Schema 23 also
+stores each source-relative observation in `client_observations` as device ID,
+MAC, scope, and `last_seen`. Authorization independently rejects evidence older
+than that cutoff or more than five minutes in the future. Cleanup prunes rows at
+the same cutoff even when desired intent retains the merged global client row.
+
+Expiry does not delete policy-set membership or client block/fixed-address
+intent. It removes the evidence needed to enforce that exact MAC safely, so
+active MAC intent remains stored but Preview fails closed until the currently
+adopted Managed Gateway observes the MAC locally again. A Monitor-only
+observation remains useful for inventory but neither satisfies nor contaminates
+that proof.
+
+Portable restore keeps the merged client inventory and desired intent but
+deliberately clears every source-relative observation from the prepared
+destination database. Provenance gathered by the source controller is not
+portable authorization. A fresh Managed Gateway poll must re-establish local
+evidence before MAC-targeted Preview can pass.
 
 ## Event and topology retention
 
@@ -158,12 +179,20 @@ On the first v0.1.1 start, older completed/failed speed-test rows beyond the
 newest three are permanently pruned. Back up v0.1.0 data before upgrading if
 that history matters.
 
-v0.1.4 migrates schema 19 to schema 20. The migration adds an index for closed
-topology-history lookup and normalizes old development-era topology source
-keys; it does not delete user configuration, credentials, secrets, or topology
-intervals. The v0.1.3 daemon cannot open schema-20 state, so rollback requires
-the matching pre-upgrade schema-19 database, keyring, passphrase, and old
-binary/image together.
+v0.1.5 migrates schema 20 to schema 23 in order. Schema 21 adds device
+`management_mode` and assigns every existing device `managed`, preserving the
+v0.1.4 behavior. Schema 22 adds named policy sets, their exact-MAC membership,
+and stable firewall-rule set references. Schema 23 adds source-relative
+`client_observations`, its MAC lookup, and a case-insensitive global-client MAC
+index for bounded policy checks. It drops the legacy Gateway index before
+canonicalizing the compatibility role, then rebuilds the database guard that
+permits only one managed Gateway from `functions_json` plus `role`. Startup
+migration configures no router and does not infer provenance from merged global
+client rows or delete user configuration, credentials, secrets, telemetry, or
+topology intervals.
+The v0.1.4 daemon cannot open schema-23 state, so rollback
+requires the matching pre-upgrade schema-20 database, keyring, passphrase, and
+old binary/image together.
 
 ## Diagnostics content and limits
 
@@ -235,6 +264,22 @@ makes no network call, requires current schema, rejects symlinks, and rejects a
 non-empty `-wal` or `-journal` sidecar. See [CLI reference](../reference/cli.md).
 
 ## Deletion and un-adoption
+
+Deleting a policy set is refused while any enabled or disabled firewall rule
+references it. Updating set membership is atomic controller state and affects
+referencing rules only after a new Preview and Apply. The set stores exact MAC
+identifiers, so portable backups and database copies containing policy sets
+remain sensitive even when they contain no client names or live addresses.
+Schema 23 retains source-relative client scope (`local`, `upstream`, or
+`unknown`) and `last_seen` in `client_observations`, keyed by device and MAC.
+MAC-policy validation requires a stored `local` observation from the currently
+adopted Managed Gateway. Monitor-only observations neither satisfy nor
+contaminate that proof, including after un-adoption. An upgrade leaves the new
+table empty, and portable restore deliberately clears its contents rather than
+reusing source-controller evidence as destination write authority. Provenance
+remains unproved until the next successful managed-Gateway poll; active MAC
+desired state blocks Preview in the meantime. Clearing existing
+block/fixed-address intent one client at a time remains permitted.
 
 Removing a device deletes its controller inventory and eventually sweeps metric
 series that no longer have a device. Un-adoption is not merely database

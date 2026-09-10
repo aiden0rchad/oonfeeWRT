@@ -8,7 +8,7 @@ sessions.
 Network-10.5 current-baseline section in `PARITY-MATRIX.md` and the Current
 reference section in `UI-SPEC.md` before UI work. The milestone table below is
 the historical build order, not a live queue. For released behavior, start with
-`releases/v0.1.4.md`, `reference/capabilities.md`, and the dated banner at the
+`releases/v0.1.5.md`, `reference/capabilities.md`, and the dated banner at the
 top of `project/status.md`; the numbered status sections preserve evidence from
 their own checkpoints and must not be read as a current-version override.
 
@@ -132,6 +132,32 @@ already-landed contracts while finishing a milestone:
   exact management-LAN/DHCP and supported conventional `wan`/`wan6` sections,
   never create, claim, rename, or delete those foreign sections. Router-clock
   reads and source-aware transitive topology must remain evidence-gated;
+- v0.1.5 migrates schema 20 → 21 → 22 → 23. Schema 21 adds Managed versus
+  Monitor only authority, preserving existing devices as Managed. Monitor-only
+  devices use the distinct read-only `oonfeewrt-monitor` ACL; they remain
+  polling/topology targets, including existing LLDP observation, but are fenced
+  from Preview/Apply, optional LLDP install/config/remove, neighbour, and other
+  package/config/remove mutations, except for reviewed ACL lifecycle and
+  un-adoption. Keep capability-proved, separately acknowledged RF scan
+  available as a transient active observation on both modes. Schema 22 adds
+  named exact-MAC policy sets and stable firewall
+  `source_set_id`; resolve current members at validation/render and refuse
+  dangling/mixed references or referenced-set deletion. Require proved local
+  managed-Gateway scope for MAC intent using source-relative
+  `client_observations`; Monitor-only observations neither satisfy nor
+  contaminate that proof. Missing proof after an upgrade/portable restore must gate
+  policy-set creation/update and MAC compilation and make active MAC intent
+  block Preview until a
+  successful managed-Gateway poll, while preserving one-client
+  block/fixed-address clearing. Portable restore must clear this nonportable
+  evidence. Authorization must reject evidence older than the normal client-
+  retention cutoff or implausibly future-dated independently of cleanup; prune
+  at that cutoff even if desired intent retains the merged client row. Schema 23 adds
+  that provenance table/index plus the case-insensitive global-client MAC index
+  used by bounded policy checks. Drop the legacy Gateway index before
+  canonicalizing the compatibility role, then rebuild the one-managed-Gateway
+  uniqueness index from `functions_json` plus `role` so neither representation
+  can bypass it;
 - keep Phase-4 bounds visible: OpenWrt logs 24h + 50k/device + 100k global,
   controller/audit 100k, event pages 1..1000 and producer coverage stale after
   3m; topology 31d/10k with current sources stale after 31m and historical
@@ -206,7 +232,8 @@ inventory was captured, so do not claim it was unchanged. No RF scan ran.
 Unchecked/cancelled leaves the router unchanged and source gaps visible. Later
 fresh-start work reached schema 17 and includes the separately acknowledged C6
 RF scan in FS-052; the controlled live-lab checkpoint later reached schema 19.
-The public v0.1.4 release uses schema 20. Keep those evidence epochs separate.
+The public v0.1.5 release uses schema 23. Its source/release checks add no new
+physical-router proof. Keep all earlier evidence epochs separate.
 
 ## What NOT to delegate
 

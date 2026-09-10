@@ -80,6 +80,9 @@ describe('Topology', () => {
     render(<Topology />)
 
     expect(await screen.findByText('VLAN evidence is unavailable; no VLAN path filter is shown.')).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Topology' })
+      .closest('.page-header')).toBeTruthy()
+    expect(screen.getByText(/Infrastructure links with source provenance/)).toBeTruthy()
     expect(screen.queryByRole('group', { name: 'VLAN filter' })).toBeNull()
   })
 

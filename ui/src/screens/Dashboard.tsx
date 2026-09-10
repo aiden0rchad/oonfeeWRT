@@ -10,7 +10,7 @@ import type {
   TopologySnapshot,
 } from '../lib/api'
 import { eventLabel, ipv6RACondition } from '../lib/eventCondition'
-import { Banner, Button, Card, Notice, Stat, Status, Unknown } from '../components/ui'
+import { Banner, Button, Card, Notice, PageHeader, Stat, Status, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
 
 function formatRate(value: number, unit?: string) {
@@ -815,9 +815,11 @@ function WANHistoryTable({ wan }: { wan: DashboardWAN }) {
 function InternetHealth({ data }: { data: DashboardData }) {
   const [view, setView] = useState<'chart' | 'table'>('chart')
   const wan = data.wan
-  const missing = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'missing')
-  const up = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'up')
-  const routeState = wan?.gateway || up.length > 0 ? 'up' : missing.length > 0 ? 'missing' : 'unknown'
+  const routeState = wan?.gateway ? 'up' : 'unknown'
+  const monitorOnlyUplinks = (data.gateway_uplinks ?? []).filter(
+    (gateway) => !gateway.management_mode_error && !gateway.function_error &&
+      gateway.management_mode === 'monitor_only',
+  )
   const reachable = wan?.metrics.reachable
   const reachableValue = reachable?.value
 
@@ -826,7 +828,7 @@ function InternetHealth({ data }: { data: DashboardData }) {
       title="Internet health"
       actions={(
         <span className="dashboard-health-state" data-state={routeState}>
-          {routeState === 'up' ? 'Route active' : routeState === 'missing' ? 'No route' : 'Route unknown'}
+          {routeState === 'up' ? 'Route active' : 'Route unknown'}
         </span>
       )}
     >
@@ -834,7 +836,7 @@ function InternetHealth({ data }: { data: DashboardData }) {
         <div className="dashboard-wan-path" role="group" aria-label="Observed gateway path">
           <div className="dashboard-wan-path-node">
             <span>Gateway</span>
-            <strong>{wan?.gateway?.name ?? up[0]?.name ?? missing[0]?.name ?? 'Unavailable'}</strong>
+            <strong>{wan?.gateway?.name ?? 'Unavailable'}</strong>
           </div>
           <span className="dashboard-wan-path-link" aria-hidden>→</span>
           <div className="dashboard-wan-path-node">
@@ -852,6 +854,20 @@ function InternetHealth({ data }: { data: DashboardData }) {
             </strong>
           </div>
         </div>
+
+        {monitorOnlyUplinks.length > 0 && (
+          <div role="group" aria-label="Monitor-only router route observations" style={{ display: 'grid', gap: 5 }}>
+            <strong style={{ fontSize: 12 }}>Monitor-only route observations</strong>
+            <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+              These routers contribute evidence only. They never become the primary site gateway shown above.
+            </div>
+            {monitorOnlyUplinks.map((gateway) => (
+              <div key={gateway.device_id} style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                {gateway.name} · {gateway.state === 'up' ? 'route observed' : gateway.state === 'missing' ? 'no route observed' : 'route unknown'}
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="dashboard-wan-toolbar">
           <div>
@@ -1061,7 +1077,16 @@ export function Dashboard({
   )
   const invalidAlerts = (alertPayload ?? []).length - alerts.length
   const wirelessUnknownOn = data.wireless_clients_unknown_on ?? []
-  const missingWAN = (data.gateway_uplinks ?? []).filter((gateway) => gateway.state === 'missing')
+  const missingWAN = (data.gateway_uplinks ?? []).filter(
+    (gateway) => !gateway.management_mode_error && !gateway.function_error &&
+      gateway.management_mode !== 'monitor_only' && gateway.state === 'missing',
+  )
+  const invalidGatewayConfiguration = (data.gateway_uplinks ?? []).filter(
+    (gateway) => !!gateway.management_mode_error || !!gateway.function_error,
+  )
+  const invalidGatewayReasons = invalidGatewayConfiguration.flatMap((gateway) =>
+    [gateway.management_mode_error, gateway.function_error].filter((reason): reason is string => !!reason),
+  )
 
   // What "Devices on the LAN" leaves out, named under the number itself.
   //
@@ -1075,13 +1100,22 @@ export function Dashboard({
 
   return (
     <div className="dashboard-page">
-      <div className="dashboard-page-heading">
-        <div>
-          <h1>Dashboard</h1>
-          <div>Internet health, fleet status and recent controller activity.</div>
+      <PageHeader
+        title="Dashboard"
+        purpose="Internet health, fleet status and recent controller activity."
+        actions={<span className="dashboard-freshness">Live controller view</span>}
+      />
+      {invalidGatewayConfiguration.length > 0 && (
+        <div role="alert">
+          <Banner tone="critical">
+            Invalid gateway configuration on{' '}
+            <strong>{invalidGatewayConfiguration.map((gateway) => gateway.name).join(', ')}</strong>:{' '}
+            {invalidGatewayReasons.join('; ')}.
+            {' '}The controller fails closed and does not treat these rows as the primary site gateway
+            or include them in desired-state operations.
+          </Banner>
         </div>
-        <span className="dashboard-freshness">Live controller view</span>
-      </div>
+      )}
       {missingWAN.length > 0 && (
         <div role="alert">
           <Banner tone="critical">

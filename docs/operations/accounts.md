@@ -20,7 +20,7 @@ Roles are hierarchical: each higher role includes the lower role's permissions.
 |---|---|---|
 | **Read-only** (`viewer` internally) | Read-only monitoring | Read dashboards, devices, clients, topology, radios, policy/site state, General events, and own account/sessions. May request focused polling while viewing a device. |
 | **Operator** | Day-to-day transient operations | Read-only access plus acknowledged RF scans, on-air verification, and controller-host speed-test start/cancel. |
-| **Administrator** | Device and network management | Operator access plus discovery/inspection, adoption/un-adoption, ACL refresh, optional LLDP, reprobe, desired-state editing, Preview/Apply, policy and client intent, polling settings, and diagnostics bundles. |
+| **Administrator** | Device and network management | Operator access plus discovery/inspection, management-mode selection, adoption/un-adoption, ACL refresh, optional LLDP for managed devices, reprobe, desired-state and named-policy-set editing, Preview/Apply, policy and client intent, polling settings, and diagnostics bundles. |
 | **Owner** | Controller custody | Administrator access plus controller-account administration and encrypted backup/restore, including the post-restore write gate. |
 
 Audit events are more sensitive than ordinary General events. The API applies additional authorization after it knows an event's scope.

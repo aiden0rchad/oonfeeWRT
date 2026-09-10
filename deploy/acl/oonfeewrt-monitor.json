@@ -1,0 +1,58 @@
+{
+	"oonfeewrt-monitor": {
+		"description": "oonfeeWRT monitor-only controller — read device state without granting UCI, package, service, or runtime-neighbour writes. Two rpcd path rules govern the file map below: rpcd authorises the requested path and then its symlink-resolved target, and '*' crosses '/'. Prefer ubus objects over file grants wherever both expose the same evidence.",
+
+		"read": {
+			"ubus": {
+				"session": [ "access", "destroy" ],
+				"uci": [ "configs", "get", "changes" ],
+				"system": [ "board", "info" ],
+				"service": [ "list" ],
+				"file": [ "read", "list", "exec" ],
+				"iwinfo": [ "devices", "info", "assoclist", "freqlist", "txpowerlist", "countrylist", "survey", "scan" ],
+				"network": [ "get_proto_handlers" ],
+				"network.interface": [ "dump", "status" ],
+				"network.interface.*": [ "status" ],
+				"network.device": [ "status" ],
+				"luci-rpc": [ "getBoardJSON", "getHostHints", "getNetworkDevices", "getWirelessDevices", "getDHCPLeases" ],
+				"luci": [ "getFeatures", "getLocaltime", "getUnixtime" ],
+				"log": [ "read" ],
+				"hostapd.*": [ "get_status", "get_clients", "get_features", "list_bans", "rrm_nr_get_own", "rrm_nr_list" ]
+			},
+			"uci": [ "network", "wireless", "firewall", "dhcp", "system", "luci", "uhttpd", "dropbear" ],
+			"file": {
+				"/proc/stat": [ "read" ],
+				"/proc/meminfo": [ "read" ],
+				"/proc/loadavg": [ "read" ],
+				"/proc/sys/kernel/random/boot_id": [ "read" ],
+				"/var/etc/dnsmasq.conf.*": [ "read" ],
+				"/tmp/etc/dnsmasq.conf.*": [ "read" ],
+				"/sys/class/net/*/brport/isolated": [ "read" ],
+				"/sys/devices/*/brport/isolated": [ "read" ],
+				"/tmp/.uci": [ "list" ],
+				"/usr/sbin/nft --terse --json list ruleset": [ "exec" ],
+				"/sbin/ip -[46] -j neigh show": [ "exec" ],
+				"/sbin/ip -[46] neigh show": [ "exec" ],
+				"/sbin/ip -[46] -j route show table all": [ "exec" ],
+				"/sbin/ip -[46] route show table all": [ "exec" ],
+				"/sbin/ip -[46] -j addr show": [ "exec" ],
+				"/sbin/ip -[46] addr show": [ "exec" ],
+				"/usr/sbin/iw dev": [ "exec" ],
+				"/usr/sbin/iw dev * station dump": [ "exec" ],
+				"/usr/sbin/iw dev * survey dump": [ "exec" ],
+				"/usr/sbin/ethtool -S *": [ "exec" ],
+				"/usr/sbin/bridge -j fdb show": [ "exec" ],
+				"/usr/sbin/brctl showmacs *": [ "exec" ],
+				"/usr/sbin/brctl showstp *": [ "exec" ],
+				"/sbin/swconfig list": [ "exec" ],
+				"/sbin/swconfig dev * show": [ "exec" ],
+				"/usr/sbin/lldpcli -f json show neighbors hidden": [ "exec" ],
+				"/bin/ping -q -c 3 -W 1 1.1.1.1": [ "exec" ],
+				"/usr/bin/apk list --installed": [ "exec" ],
+				"/bin/opkg list-installed": [ "exec" ],
+				"/bin/df -k /overlay": [ "exec" ],
+				"/usr/sbin/nlbw -c json -g *": [ "exec" ]
+			}
+		}
+	}
+}

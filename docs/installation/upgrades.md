@@ -2,7 +2,7 @@
 
 oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safety depends on preserving a matching database/keyring/passphrase set before replacing a binary or image.
 
-> **Outcome:** The controller runs v0.1.4 with its existing state intact, and you retain a verified schema-19 recovery point for any rollback to v0.1.3.
+> **Outcome:** The controller runs v0.1.5 with its existing state intact, and you retain a verified schema-20 recovery point for any rollback to v0.1.4.
 
 ## Before you begin
 
@@ -12,19 +12,29 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
 - Schedule a clean stop; do not upgrade during Apply, backup, restore, diagnostics generation, RF scan, or optional-package work.
 - Preserve enough downtime to verify the new process before resuming changes.
 
-**Router write impact:** Replacing the binary/image and migrating the database do not themselves contact or configure routers. After startup, read-only polling resumes and, when the write gate is open, automatic 802.11k neighbour reconciliation may update runtime hostapd neighbour lists. A restore, unlike an ordinary upgrade, activates a persistent router-write safety gate.
+**Router write impact:** Replacing the binary/image and migrating the database do not themselves contact or configure routers. After startup, read-only polling resumes and, for managed devices only when the write gate is open, automatic 802.11k neighbour reconciliation may update runtime hostapd neighbour lists. Monitor-only devices are excluded. A restore, unlike an ordinary upgrade, activates a persistent router-write safety gate.
 
-## Version facts for v0.1.4
+## Version facts for v0.1.5
 
-- v0.1.4 uses controller database schema 20. Stable v0.1.1 through v0.1.3 use
-  schema 19, which v0.1.4 migrates automatically at startup.
-- The migration adds a closed-topology history index and normalizes the old
-  development-era `luci.getNetworkDevices` and `luci.getWirelessDevices`
-  source names to their actual `luci-rpc` names. If both spellings exist for a
-  device, only the newest source-state observation is retained. User
-  configuration, credentials, secrets, and topology intervals are preserved.
-- v0.1.3 cannot open schema 20. A v0.1.4 → v0.1.3 rollback requires restoring
-  the matching pre-upgrade schema-19 database, keyring, and passphrase.
+- v0.1.5 uses controller database schema 23. v0.1.4 uses schema 20, which
+  v0.1.5 migrates automatically at startup in three ordered steps.
+- Schema 20 → 21 adds `management_mode`; every existing device becomes
+  **Managed**, preserving v0.1.4 behavior. No router is silently converted to
+  Monitor only.
+- Schema 21 → 22 adds named policy sets, exact-MAC membership, and stable
+  firewall `source_set_id` references. Existing policy rules are preserved and
+  no set is invented.
+- Schema 22 → 23 adds source-relative `client_observations`, its MAC lookup,
+  and the case-insensitive global-client MAC index used by bounded policy
+  checks. It drops the legacy Gateway index before canonicalizing the
+  compatibility role, then rebuilds the one-managed-Gateway uniqueness guard
+  from `functions_json` plus `role`, preventing either representation from
+  bypassing the site limit. It does not infer provenance from merged global
+  client rows.
+- v0.1.4 cannot open schema 23. A v0.1.5 → v0.1.4 rollback requires restoring
+  the matching pre-upgrade schema-20 database, keyring, and passphrase.
+- Startup migration does not contact or configure routers, install a package,
+  change ownership, or create an Apply plan.
 - Existing networks decode as **Router managed**, so startup does not change
   their IPv6 settings. Prefix delegation or Disable still requires Preview and
   Apply.
@@ -32,8 +42,8 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
   status uses newly allowlisted read-only LuCI methods; already-adopted routers
   need a separately reviewed controller-access refresh only if that clock
   status is wanted. Re-adoption is not required.
-- Historical v0.1.0-rc.1 uses schema 17. v0.1.4 can migrate supported schema-17
-  state through schemas 18 and 19 to schema 20. Returning to the RC requires
+- Historical v0.1.0-rc.1 uses schema 17. v0.1.5 can migrate supported schema-17
+  state through schemas 18–23. Returning to the RC requires
   restoring the untouched schema-17 backup, not merely replacing the executable
   or image.
 
@@ -41,8 +51,8 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
 
 Always use **Settings → Backup & Restore** to export an encrypted `.oowrtbak`,
 download it before it expires, record its separate export passphrase, and
-verify that the job completed. For the simplest direct rollback to v0.1.3,
-also retain one of the raw schema-19 recovery units below before v0.1.4 opens
+verify that the job completed. For the simplest direct rollback to v0.1.4,
+also retain one of the raw schema-20 recovery units below before v0.1.5 opens
 the live data. The public recovery helper verifies raw databases but does not
 extract `.oowrtbak` files.
 
@@ -78,14 +88,14 @@ For a Compose named volume, stop the service and use trusted volume-snapshot
 tooling to preserve the whole volume if you want a direct in-place rollback.
 Record the exact Compose project/volume identity and retain the matching
 passphrase file. A portable `.oowrtbak` remains the preferred off-host backup,
-but restoring it to v0.1.3 uses the separate clean-instance path below rather
+but restoring it to v0.1.4 uses the separate clean-instance path below rather
 than an in-place file extraction.
 
 Never copy only the main SQLite file while WAL is active. It may omit committed state.
 
 ## 2A. Upgrade a standalone binary
 
-1. Download, checksum-verify, and extract v0.1.4 using [Install the binary](binary.md).
+1. Download, checksum-verify, and extract v0.1.5 using [Install the binary](binary.md).
 2. Stop the old daemon using the same process manager or foreground terminal that started it. Give it time to finish a graceful shutdown.
 3. Replace the executable:
 
@@ -107,25 +117,25 @@ Do not point a new process at a copied database while leaving the old process ru
 
 ## 2B. Upgrade Docker Compose
 
-The v0.1.3 Compose file does not contain `OONFEE_HTTP_BIND`. Download the new
-file beside the existing one, compare it, and reapply only intentional local
+Download the exact v0.1.5 Compose file beside the existing one, compare it,
+and reapply only intentional local
 changes. Do not replace `.env`, `passphrase`, or the named volume:
 
 ```sh
 curl --fail --location \
-  --output docker-compose.yml.v0.1.4 \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
-diff -u docker-compose.yml docker-compose.yml.v0.1.4
-OONFEE_VERSION=v0.1.4 docker compose -f docker-compose.yml.v0.1.4 config --quiet
+  --output docker-compose.yml.v0.1.5 \
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
+diff -u docker-compose.yml docker-compose.yml.v0.1.5
+OONFEE_VERSION=v0.1.5 docker compose -f docker-compose.yml.v0.1.5 config --quiet
 ```
 
-After reviewing the diff, replace `docker-compose.yml` with the v0.1.4 file or
+After reviewing the diff, replace `docker-compose.yml` with the v0.1.5 file or
 merge its changes deliberately. Update the existing `.env` without removing
 other intentional deployment values. Pin both the release and the publish
 address you intend to retain across future lifecycle commands:
 
 ```dotenv
-OONFEE_VERSION=v0.1.4
+OONFEE_VERSION=v0.1.5
 OONFEE_HTTP_BIND=127.0.0.1
 ```
 
@@ -167,7 +177,10 @@ In the browser:
 
 1. Sign in again; sessions are process-local and do not survive restart.
 2. Confirm the expected devices, site settings, accounts, and event history.
-3. Confirm devices resume read-only polling.
+3. Confirm devices resume read-only polling and every pre-upgrade device is
+   labeled **Managed**. Do not change one to Monitor only merely as an upgrade
+   check. When ownership requires a different mode, use the reviewed
+   un-adopt/re-adopt workflow and inspect the replacement ACL plan.
 4. On a PPPoE or multi-default-candidate Gateway, allow one network/topology
    cycle (up to approximately 15 minutes), then verify the Dashboard path and
    device WAN chart use the installed main-table route's kernel device.
@@ -183,43 +196,63 @@ In the browser:
    does not change router time or NTP settings.
 8. For a wired multi-hop layout, confirm the live topology does not show a
    managed downstream device attached directly to multiple upstream devices.
-9. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
-10. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
+9. Open **Policy Engine → Object Manager** and confirm named client sets are
+   initially empty unless they were created in a v0.1.5 candidate. Creating a
+   test set changes controller desired state; do not do it as a health check.
+10. Generate Preview and verify Monitor-only devices are absent from the target
+    fleet and set-backed rules show their exact resolved MAC members. Schema 23
+    starts source-relative provenance with the next successful managed-Gateway
+    poll, so upgraded or restored installations can temporarily fail active MAC
+    intent closed until every referenced MAC has a stored local Gateway
+    observation. Monitor-only observations neither satisfy nor contaminate that
+    proof. Clear existing block/fixed-address intent per client if needed, or use
+    network/zone or explicit IPv4 scope instead.
+11. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
+12. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
 
-## Roll back v0.1.4 to v0.1.3
+## Roll back v0.1.5 to v0.1.4
 
-Do not point v0.1.3 at a database that v0.1.4 migrated to schema 20. Rollback is
+Do not point v0.1.4 at a database that v0.1.5 migrated to schema 23. Rollback is
 a matched data restore:
 
-1. Stop v0.1.4 cleanly.
-2. Retain the schema-20 database/keyring pair separately for diagnosis or a
-   later return to v0.1.4.
-3. Restore the verified pre-upgrade schema-19 database and matching
+1. Stop v0.1.5 cleanly.
+2. Retain the schema-23 database/keyring pair separately for diagnosis or a
+   later return to v0.1.5.
+3. Restore the verified pre-upgrade schema-20 database and matching
    `keyring.json`.
 4. Restore/use the passphrase that belongs to that pair.
-5. Install the v0.1.3 binary or set the exact v0.1.3 image tag, then start it.
+5. Install the v0.1.4 binary or set the exact v0.1.4 image tag, then start it.
 6. Verify accounts, devices, event history, and polling before making changes.
 
-This rollback removes v0.1.4 IPv6 policy, clock observation, topology fixes,
-Docker bind option, and security update. It does not undo router settings that
-were deliberately applied while v0.1.4 was running; review those separately.
+This rollback removes monitor-only mode, reusable policy sets, and the v0.1.5
+UI changes. The restored schema-20 state predates any v0.1.5 set/membership
+edits and treats its devices under the v0.1.4 one-managed-Gateway model. It does
+not undo router settings deliberately applied while v0.1.5 was running; review
+those separately.
 
-If the portable `.oowrtbak` is your only schema-19 recovery point, do not aim
-v0.1.3 at the schema-20 volume. Start v0.1.3 against a new empty data directory
+If the portable `.oowrtbak` is your only schema-20 recovery point, do not aim
+v0.1.4 at the schema-23 volume. Start v0.1.4 against a new empty data directory
 or volume, create its temporary owner, and use **Settings → Backup & Restore**
 to restore the pre-upgrade artifact with its export passphrase. Confirmation
 also uses that clean instance's runtime passphrase. Verify the restored state
-before discarding either the old schema-20 data or the recovery artifact.
+before discarding either the old schema-23 data or the recovery artifact.
+
+## Older rollback targets
+
+The v0.1.3 daemon uses schema 19 and cannot open schema 20 or 23. Reaching
+v0.1.3 requires its own matching pre-v0.1.4 schema-19 database, keyring, and
+passphrase; do not use the v0.1.4 recovery point described above. A portable
+schema-19 backup must be restored through clean v0.1.3 state.
 
 The v0.1.1 startup pruning of older speed-test rows cannot be reversed unless
 those rows exist in a pre-v0.1.1 backup.
 
 ## Roll back to v0.1.0-rc.1
 
-Do not point the RC daemon at a schema-19 or schema-20 database. Rollback is a data restore:
+Do not point the RC daemon at a schema-19, schema-20, or schema-23 database. Rollback is a data restore:
 
 1. Stop the stable controller.
-2. Retain its current schema-20 database/keyring pair separately.
+2. Retain its current schema-23 database/keyring pair separately.
 3. Restore the untouched schema-17 database and matching `keyring.json` captured before migration.
 4. Use the prior runtime passphrase file.
 5. Install the v0.1.0-rc.1 binary or image.

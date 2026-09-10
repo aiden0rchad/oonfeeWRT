@@ -53,14 +53,23 @@ const (
 	ScopeLocal    = "local"
 	ScopeUpstream = "upstream"
 	ScopeUnknown  = "unknown"
+
+	// DefaultClientTTL is both the inventory-retention window and the maximum
+	// age of client provenance trusted by MAC-policy authorization. Cleanup is
+	// best effort; the authorization query independently enforces this bound.
+	DefaultClientTTL = 30 * 24 * time.Hour
+	// MaxClientObservationFutureSkew bounds small wall-clock corrections without
+	// allowing a future timestamp to remain authoritative indefinitely.
+	MaxClientObservationFutureSkew = 5 * time.Minute
 )
 
 // SeenClient is what one poll learned about one host.
 type SeenClient struct {
-	MAC   string
-	Name  string
-	IPv4  string
-	Scope string
+	DeviceID int64
+	MAC      string
+	Name     string
+	IPv4     string
+	Scope    string
 }
 
 // UpsertClients records the hosts a poll saw, in one transaction.
@@ -100,6 +109,20 @@ ON CONFLICT(mac) DO UPDATE SET
 		return err
 	}
 	defer stmt.Close()
+	sourceStmt, err := tx.PrepareContext(ctx, `
+INSERT INTO client_observations (device_id, mac, scope, last_seen)
+VALUES (?,lower(?),?,?)
+ON CONFLICT(device_id,mac) DO UPDATE SET
+  scope = CASE
+    WHEN excluded.scope != 'local' THEN excluded.scope
+    WHEN excluded.last_seen > client_observations.last_seen THEN excluded.scope
+    ELSE client_observations.scope
+  END,
+  last_seen = MAX(client_observations.last_seen, excluded.last_seen)`)
+	if err != nil {
+		return err
+	}
+	defer sourceStmt.Close()
 
 	for _, c := range seen {
 		if c.MAC == "" {
@@ -108,6 +131,15 @@ ON CONFLICT(mac) DO UPDATE SET
 		if _, err := stmt.ExecContext(ctx, c.MAC, c.Name, c.IPv4, c.Scope,
 			now, now, ScopeUnknown, ScopeLocal, ScopeUpstream); err != nil {
 			return fmt.Errorf("store: upsert client %s: %w", c.MAC, err)
+		}
+		if c.DeviceID > 0 {
+			scope := c.Scope
+			if scope != ScopeLocal && scope != ScopeUpstream {
+				scope = ScopeUnknown
+			}
+			if _, err := sourceStmt.ExecContext(ctx, c.DeviceID, c.MAC, scope, now); err != nil {
+				return fmt.Errorf("store: record client source for %s: %w", c.MAC, err)
+			}
 		}
 	}
 	return tx.Commit()
@@ -550,15 +582,31 @@ SELECT COALESCE(NULLIF(scope,''), ?) AS s,
 func (db *DB) PruneClients(ctx context.Context, before time.Time) (int64, error) {
 	db.siteMu.Lock()
 	defer db.siteMu.Unlock()
-	res, err := db.sql.ExecContext(ctx,
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: begin client prune: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM client_observations WHERE last_seen < ?`, before.Unix()); err != nil {
+		return 0, fmt.Errorf("store: prune client observation provenance: %w", err)
+	}
+	res, err := tx.ExecContext(ctx,
 		`DELETE FROM clients WHERE last_seen IS NOT NULL AND last_seen < ?
 		   AND blocked = 0 AND (note IS NULL OR note = '')
 		   AND (fixed_ip IS NULL OR fixed_ip = '')
-		   AND (grp IS NULL OR grp = '')`, before.Unix())
+		   AND (grp IS NULL OR grp = '')
+		   AND NOT EXISTS (
+		     SELECT 1 FROM policy_set_members
+		      WHERE policy_set_members.mac=clients.mac COLLATE NOCASE
+		   )`, before.Unix())
 	if err != nil {
 		return 0, fmt.Errorf("store: prune clients: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("store: commit client prune: %w", err)
+	}
 	return n, nil
 }
 

@@ -11,6 +11,7 @@ import type {
   ReprobeResult,
   Series,
   DeviceFunction,
+  ManagementMode,
   LLDPCapabilityResult,
 } from '../lib/api'
 import { Card, DataGrid, SlideOver, Status, Prop, Unknown, Banner, Button, Notice, PageHeader, useColumnPrefs } from '../components/ui'
@@ -74,6 +75,17 @@ export function Devices({
       header: 'Functions',
       render: (d) => functionNames(deviceFunctions(d)),
       sortBy: (d) => deviceFunctions(d).join(','),
+    },
+    {
+      key: 'management',
+      header: 'Management',
+      width: 120,
+      render: (d) => d.management_mode_error ? (
+        <span title={d.management_mode_error} style={{ color: 'var(--critical)', fontWeight: 600 }}>
+          Blocked · invalid mode
+        </span>
+      ) : managementModeName(d.management_mode),
+      sortBy: (d) => d.management_mode_error ? `!${d.management_mode_error}` : d.management_mode ?? 'managed',
     },
     {
       key: 'host',
@@ -339,6 +351,15 @@ export function DeviceDetailPanel({
 
   return (
     <SlideOver title={detail.name || detail.mac} onClose={onClose}>
+      {detail.management_mode_error && (
+        <div role="alert">
+          <Banner tone="critical">
+            Management mode is invalid: {detail.management_mode_error}. The controller fails closed and
+            excludes this device from desired-state Preview, Apply and direct configuration until the stored
+            mode is repaired.
+          </Banner>
+        </div>
+      )}
       {/* Above the content, not instead of it. What is on screen is the last
           reading that succeeded; this says the newest attempt did not. */}
       {err && (
@@ -369,6 +390,9 @@ export function DeviceDetailPanel({
           {functionNames(deviceFunctions(detail))}
           {!detail.functions && <span title="derived from this older row's legacy role"> · legacy</span>}
         </Prop>
+        <Prop label="Management mode">
+          {detail.management_mode_error ? 'Invalid — writes blocked' : managementModeName(detail.management_mode)}
+        </Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
               and would show the tier this panel had before it subscribed. */}
@@ -392,6 +416,15 @@ export function DeviceDetailPanel({
           </>
         )}
       </div>
+
+      {detail.management_mode === 'monitor_only' && (
+        <Notice
+          tone="accent"
+          component="Monitor-only device"
+          summary="This device contributes health, inventory and topology evidence but is excluded from desired-state Preview and Apply."
+          details="Monitoring requires the controller to reach this management address directly. Multi-site and NAT traversal are not provided, and direct configuration attempts fail closed."
+        />
+      )}
 
       {stats && stats.aps.length > 0 && (
         <div>
@@ -620,8 +653,18 @@ export function DeviceDetailPanel({
         </div>
       )}
 
-      <ACLRefresh deviceID={id} onUpdated={refresh} />
-      <LLDPCapability deviceID={id} onUpdated={refresh} />
+      <ACLRefresh
+        deviceID={id}
+        managementMode={detail.management_mode}
+        managementModeError={detail.management_mode_error}
+        onUpdated={refresh}
+      />
+      <LLDPCapability
+        deviceID={id}
+        managementMode={detail.management_mode}
+        managementModeError={detail.management_mode_error}
+        onUpdated={refresh}
+      />
       <Reprobe deviceID={id} onProbed={refresh} />
 
       <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
@@ -681,6 +724,10 @@ function functionNames(functions: DeviceFunction[]): string {
     switch: 'Switch',
   }
   return functions.map((item) => labels[item]).join(' · ')
+}
+
+function managementModeName(mode?: ManagementMode): string {
+  return mode === 'monitor_only' ? 'Monitor only' : 'Managed'
 }
 
 /**
@@ -1006,7 +1053,12 @@ function ChartBlock({
 
 export { duration, Button }
 
-function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () => void }) {
+function ACLRefresh({ deviceID, managementMode, managementModeError, onUpdated }: {
+  deviceID: number
+  managementMode?: ManagementMode
+  managementModeError?: string
+  onUpdated: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [username, setUsername] = useState('root')
   const [password, setPassword] = useState('')
@@ -1015,9 +1067,10 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const monitorOnly = managementMode === 'monitor_only'
 
   const run = async () => {
-    if (!acknowledged) return
+    if (!acknowledged || managementModeError) return
     setBusy(true)
     setError('')
     setMessage('')
@@ -1028,9 +1081,9 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
         private_key: privateKey || undefined,
         acknowledge_router_changes: true,
       })
-      setMessage(
-        `oonfeeWRT controller access payload installed or refreshed and verified. ${result.features.length} capabilities are observable.`,
-      )
+      setMessage(monitorOnly
+        ? `Read-only oonfeewrt-monitor observation ACL restored and verified. ${result.features.length} capabilities are observable; no UCI write access was granted.`
+        : `oonfeeWRT controller access payload installed or refreshed and verified. ${result.features.length} capabilities are observable.`)
       onUpdated()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -1045,6 +1098,7 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
       <Button
+        disabled={!!managementModeError}
         onClick={() => {
           if (open) {
             setPassword('')
@@ -1054,17 +1108,43 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
           setAcknowledged(false)
         }}
       >
-        {open ? 'Cancel payload review' : 'Review or refresh controller access payload'}
+        {managementModeError
+          ? 'Controller access payload changes blocked'
+          : open
+            ? 'Cancel payload review'
+            : monitorOnly
+              ? 'Review or refresh read-only observation ACL'
+              : 'Review or refresh controller access payload'}
       </Button>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
-        This default-off action installs the payload if missing or replaces its one rpcd ACL JSON file on the router:{' '}
-        <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It adds controller access to supported observations and
-        permits later acknowledged Apply operations for controller-owned network, wireless, firewall and DHCP sections,
-        plus managed 802.11k neighbour-list updates. It cannot disconnect or steer clients and installs no package,
-        binary, daemon, service, or firmware. Leave it off or cancel to keep the router unchanged; blocked observations
-        remain explicit gaps.
-      </div>
-      {open && (
+      {managementModeError ? (
+        <div role="alert" style={{ marginTop: 8 }}>
+          <Banner tone="critical">
+            ACL refresh is disabled because the stored management mode is invalid: {managementModeError}.
+            The controller will not choose a permission payload until that boundary is repaired.
+          </Banner>
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          {monitorOnly ? (
+            <>
+              This default-off action restores the read-only <code>oonfeewrt-monitor</code> observation ACL in{' '}
+              <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It can replace that one rpcd ACL file and verify
+              supported observations, but grants no UCI writes, Apply access, package changes, client steering,
+              or controller configuration ownership.
+            </>
+          ) : (
+            <>
+              This default-off action installs the payload if missing or replaces its one rpcd ACL JSON file on the router:{' '}
+              <code>/usr/share/rpcd/acl.d/oonfeewrt.json</code>. It adds controller access to supported observations and
+              permits later acknowledged Apply operations for controller-owned network, wireless, firewall and DHCP sections,
+              plus managed 802.11k neighbour-list updates. It cannot disconnect or steer clients and installs no package,
+              binary, daemon, service, or firmware. Leave it off or cancel to keep the router unchanged; blocked observations
+              remain explicit gaps.
+            </>
+          )}
+        </div>
+      )}
+      {open && !managementModeError && (
         <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
             Device administrator username
@@ -1106,11 +1186,16 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
               disabled={busy}
               onChange={(event) => setAcknowledged(event.target.checked)}
             />
-            I understand that accepting installs the payload if missing or replaces the controller&apos;s single rpcd
-            ACL JSON file and grants the read and write access described above.
+            {monitorOnly
+              ? <>I understand that accepting replaces the controller&apos;s single rpcd ACL JSON file with the read-only <code>oonfeewrt-monitor</code> observation scope. It does not grant UCI write access.</>
+              : <>I understand that accepting installs the payload if missing or replaces the controller&apos;s single rpcd ACL JSON file and grants the read and write access described above.</>}
           </label>
           <Button disabled={busy || username.trim() === '' || !acknowledged} onClick={() => void run()}>
-            {busy ? 'Installing or refreshing payload…' : 'Install or refresh controller access payload and verify'}
+            {busy
+              ? 'Installing or refreshing payload…'
+              : monitorOnly
+                ? 'Restore read-only observation ACL and verify'
+                : 'Install or refresh controller access payload and verify'}
           </Button>
         </div>
       )}
@@ -1128,7 +1213,12 @@ function ACLRefresh({ deviceID, onUpdated }: { deviceID: number; onUpdated: () =
   )
 }
 
-function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: () => void }) {
+function LLDPCapability({ deviceID, managementMode, managementModeError, onUpdated }: {
+  deviceID: number
+  managementMode?: ManagementMode
+  managementModeError?: string
+  onUpdated: () => void
+}) {
   const [status, setStatus] = useState<LLDPCapabilityResult | null>(null)
   const [open, setOpen] = useState(false)
   const [username, setUsername] = useState('root')
@@ -1156,6 +1246,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   useEffect(load, [load])
   const installed = status != null && status.state !== 'not_installed'
   const planningRemoval = installed
+  const readOnly = managementMode === 'monitor_only'
 
   const credentials = () => ({
     username,
@@ -1164,7 +1255,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   })
 
   const resolvePlan = async () => {
-    if (!planningRemoval && !indexAck) return
+    if (managementModeError || (!planningRemoval && (readOnly || !indexAck))) return
     setBusy(true)
     setError('')
     setPlan(null)
@@ -1187,7 +1278,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   }
 
   const applyPlan = async () => {
-    if (!plan?.plan_hash || !changeAck) return
+    if (readOnly || managementModeError || !plan?.plan_hash || !changeAck) return
     setBusy(true)
     setError('')
     try {
@@ -1215,7 +1306,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   }
 
   const diagnose = async () => {
-    if (!diagnosticAck) return
+    if (managementModeError || !diagnosticAck) return
     setBusy(true)
     setError('')
     try {
@@ -1236,7 +1327,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   }
 
   const resolveConfigPlan = async () => {
-    if (!configReadAck) return
+    if (managementModeError || !configReadAck) return
     setBusy(true)
     setError('')
     setConfigPlan(null)
@@ -1259,7 +1350,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
   }
 
   const applyConfigPlan = async () => {
-    if (!configPlan?.plan_hash || !configChangeAck) return
+    if (readOnly || managementModeError || !configPlan?.plan_hash || !configChangeAck) return
     setBusy(true)
     setError('')
     try {
@@ -1286,23 +1377,50 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
 
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      {managementModeError && (
+        <div role="alert" style={{ marginBottom: 8 }}>
+          <Banner tone="critical">
+            LLDP package, service and configuration actions are disabled because the stored management mode is
+            invalid: {managementModeError}. The controller fails closed until that boundary is repaired.
+          </Banner>
+        </div>
+      )}
       <Notice
         tone={installed ? 'accent' : 'warning'}
         component="Optional LLDP topology capability"
-        summary={installed
-          ? 'LLDP wired-neighbour discovery is available. Review its controller-recorded package and service baseline before changing or removing it.'
-          : 'Adds measured wired-neighbour discovery by installing OpenWrt lldpd. No router change occurs until an exact plan is accepted.'}
+        summary={managementModeError
+          ? 'LLDP state remains visible, but actions are blocked because the controller cannot prove this device management boundary.'
+          : readOnly
+            ? installed
+              ? 'LLDP wired-neighbour observation is available. Monitor-only mode permits diagnostics and read-only plans, never package, service or UCI changes.'
+              : 'LLDP is not installed. Monitor-only mode observes existing capabilities and never offers an installation.'
+            : installed
+              ? 'LLDP wired-neighbour discovery is available. Review its controller-recorded package and service baseline before changing or removing it.'
+              : 'Adds measured wired-neighbour discovery by installing OpenWrt lldpd. No router change occurs until an exact plan is accepted.'}
         defaultOpen={open}
         closedLabel="What this installs and rolls back"
         openLabel="Hide capability details"
         details={(
           <>
-            <p style={{ margin: 0 }}>
-              Installing adds the official OpenWrt <code>lldpd</code> package and dependencies shown in the exact
-              package-manager plan, then enables and starts <code>lldpd</code>. It installs no controller binary or firmware.
-              Removal uses the durable baseline, removes the exact controller-added package set, keeps every pre-existing
-              package, and restores the prior <code>lldpd</code> service state.
-            </p>
+            {managementModeError ? (
+              <p style={{ margin: 0 }}>
+                The stored management boundary is invalid. Existing LLDP state remains visible, but diagnostics,
+                plans and every package, service or configuration action are blocked until it is repaired.
+              </p>
+            ) : readOnly ? (
+              <p style={{ margin: 0 }}>
+                This device is observation-only. The controller may inspect an existing <code>lldpd</code> runtime and,
+                when useful, read the exact UCI configuration or rollback plan. It never offers plan_install, install,
+                configure or remove, and cannot apply either read-only plan.
+              </p>
+            ) : (
+              <p style={{ margin: 0 }}>
+                Installing adds the official OpenWrt <code>lldpd</code> package and dependencies shown in the exact
+                package-manager plan, then enables and starts <code>lldpd</code>. It installs no controller binary or firmware.
+                Removal uses the durable baseline, removes the exact controller-added package set, keeps every pre-existing
+                package, and restores the prior <code>lldpd</code> service state.
+              </p>
+            )}
             {installed && (
               <p style={{ margin: '8px 0 0' }}>
                 Controller record: {status?.state}. Controller-added packages:{' '}
@@ -1313,6 +1431,7 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
         )}
         actions={<Button
           aria-pressed={open}
+          disabled={!!managementModeError || (readOnly && !installed)}
           onClick={() => {
             setOpen(!open)
             setPlan(null)
@@ -1328,10 +1447,20 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
             }
           }}
         >
-          {open ? 'Cancel LLDP capability review' : installed ? 'Review LLDP rollback' : 'Review LLDP installation'}
+          {managementModeError
+            ? 'LLDP actions blocked'
+            : readOnly
+              ? installed
+                ? open ? 'Cancel LLDP observation review' : 'Review read-only LLDP observations'
+                : 'LLDP installation disabled for monitor-only'
+              : open
+                ? 'Cancel LLDP capability review'
+                : installed
+                  ? 'Review LLDP rollback'
+                  : 'Review LLDP installation'}
         </Button>}
       />
-      {open && (
+      {open && !managementModeError && (
         <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <label style={{ display: 'grid', gap: 3, fontSize: 11 }}>
             Device administrator username
@@ -1357,8 +1486,9 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
             />
           </label>
           <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            Credentials remain only in this open review and may be reused for its plan/apply pair. They are never stored
-            and are cleared when the review closes or after a router change.
+            {readOnly
+              ? 'Credentials remain only in this open review and authorize read-only diagnostics or plans. They are never stored.'
+              : 'Credentials remain only in this open review and may be reused for its plan/apply pair. They are never stored and are cleared when the review closes or after a router change.'}
           </div>
           {installed && (
             <>
@@ -1438,34 +1568,42 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
                   >
                     {configPlan.plan}
                   </pre>
-                  <label
-                    style={{
-                      display: 'flex',
-                      gap: 8,
-                      alignItems: 'start',
-                      fontSize: 11,
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={configChangeAck}
-                      disabled={busy}
-                      onChange={(event) => setConfigChangeAck(event.target.checked)}
-                    />
-                    <span style={{ minWidth: 0, lineHeight: 1.45 }}>
-                      I reviewed this exact plan and authorize replacing only <code>lldpd.config.interface</code>,
-                      committing only <code>/etc/config/lldpd</code>, and restarting only <code>lldpd</code>. The exact
-                      current UCI export is retained for drift-checked rollback.
-                    </span>
-                  </label>
-                  <Button disabled={busy || !configChangeAck} onClick={() => void applyConfigPlan()}>
-                    {busy ? 'Applying LLDP interface plan…' : 'Apply LLDP interface configuration'}
-                  </Button>
+                  {readOnly ? (
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                      Read-only plan only. Monitor-only mode cannot write <code>/etc/config/lldpd</code> or restart the service.
+                    </div>
+                  ) : (
+                    <>
+                      <label
+                        style={{
+                          display: 'flex',
+                          gap: 8,
+                          alignItems: 'start',
+                          fontSize: 11,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={configChangeAck}
+                          disabled={busy}
+                          onChange={(event) => setConfigChangeAck(event.target.checked)}
+                        />
+                        <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                          I reviewed this exact plan and authorize replacing only <code>lldpd.config.interface</code>,
+                          committing only <code>/etc/config/lldpd</code>, and restarting only <code>lldpd</code>. The exact
+                          current UCI export is retained for drift-checked rollback.
+                        </span>
+                      </label>
+                      <Button disabled={busy || !configChangeAck} onClick={() => void applyConfigPlan()}>
+                        {busy ? 'Applying LLDP interface plan…' : 'Apply LLDP interface configuration'}
+                      </Button>
+                    </>
+                  )}
                 </>
               )}
             </>
           )}
-          {!planningRemoval && (
+          {!planningRemoval && !readOnly && (
             <label
               style={{
                 display: 'flex',
@@ -1486,16 +1624,18 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
               </span>
             </label>
           )}
-          <Button
-            disabled={busy || username.trim() === '' || (!planningRemoval && !indexAck)}
-            onClick={() => void resolvePlan()}
-          >
-            {busy
-              ? 'Resolving package plan…'
-              : planningRemoval
-                ? 'Show exact rollback plan'
-                : 'Refresh index and show exact install plan'}
-          </Button>
+          {(planningRemoval || !readOnly) && (
+            <Button
+              disabled={busy || username.trim() === '' || (!planningRemoval && !indexAck)}
+              onClick={() => void resolvePlan()}
+            >
+              {busy
+                ? 'Resolving package plan…'
+                : planningRemoval
+                  ? readOnly ? 'Show exact rollback plan (read only)' : 'Show exact rollback plan'
+                  : 'Refresh index and show exact install plan'}
+            </Button>
+          )}
           {plan?.plan && (
             <>
               <div style={{ fontSize: 11, fontWeight: 600 }}>
@@ -1513,30 +1653,39 @@ function LLDPCapability({ deviceID, onUpdated }: { deviceID: number; onUpdated: 
               >
                 {plan.plan}
               </pre>
-              <label
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'start',
-                  fontSize: 11,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={changeAck}
-                  disabled={busy}
-                  onChange={(event) => setChangeAck(event.target.checked)}
-                />
-                <span style={{ minWidth: 0, lineHeight: 1.45 }}>
-                  I reviewed this exact plan and authorize{' '}
-                  {planningRemoval
-                    ? 'removing only the controller-owned LLDP capability and restoring the recorded service baseline.'
-                    : 'installing these packages, refreshing the router package index once more immediately beforehand to revalidate this plan, and enabling and starting the lldpd service.'}
-                </span>
-              </label>
-              <Button disabled={busy || !changeAck} onClick={() => void applyPlan()}>
-                {busy ? 'Applying…' : planningRemoval ? 'Remove LLDP capability' : 'Install LLDP capability'}
-              </Button>
+              {readOnly ? (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  Read-only rollback plan only. Monitor-only mode cannot remove packages, change service state,
+                  or apply this plan.
+                </div>
+              ) : (
+                <>
+                  <label
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'start',
+                      fontSize: 11,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={changeAck}
+                      disabled={busy}
+                      onChange={(event) => setChangeAck(event.target.checked)}
+                    />
+                    <span style={{ minWidth: 0, lineHeight: 1.45 }}>
+                      I reviewed this exact plan and authorize{' '}
+                      {planningRemoval
+                        ? 'removing only the controller-owned LLDP capability and restoring the recorded service baseline.'
+                        : 'installing these packages, refreshing the router package index once more immediately beforehand to revalidate this plan, and enabling and starting the lldpd service.'}
+                    </span>
+                  </label>
+                  <Button disabled={busy || !changeAck} onClick={() => void applyPlan()}>
+                    {busy ? 'Applying…' : planningRemoval ? 'Remove LLDP capability' : 'Install LLDP capability'}
+                  </Button>
+                </>
+              )}
             </>
           )}
         </div>

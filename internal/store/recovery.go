@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // These ceilings are intentionally far above a practical controller site but
@@ -17,7 +18,10 @@ const (
 	recoveryMaxNetworks      = 256
 	recoveryMaxZones         = 1024
 	recoveryMaxPolicies      = 4096
+	recoveryMaxPolicySets    = 4096
+	recoveryMaxSetMembers    = 65536
 	recoveryMaxPolicyClients = 16384
+	recoveryMaxClientSources = 262144
 	recoveryMaxGroups        = 1024
 	recoveryMaxGroupMembers  = 65536
 	recoveryMaxWLANs         = 4096
@@ -57,12 +61,15 @@ type recoveryBound struct {
 
 var recoveryBounds = []recoveryBound{
 	{"controller accounts", "admins", "", bytesOf("id", "username", "pass_hash", "created_at", "last_login", "role", "enabled", "deleted_at"), recoveryMaxAdmins, recoveryMaxStateBytes, recoveryMaxAdminRowBytes},
-	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "management_mode", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"site", "site", "", bytesOf("id", "uuid", "name"), 1, recoveryMaxRowBytes, recoveryMaxRowBytes},
 	{"networks", "networks", "", bytesOf("id", "name", "vlan", "cidr", "zone", "dhcp_json", "ipv6_json", "enabled"), recoveryMaxNetworks, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"zone policies", "zones", "", bytesOf("name", "policy_json"), recoveryMaxZones, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"policies", "fw_rules", "", bytesOf("id", "sort", "rule_json", "enabled"), recoveryMaxPolicies, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"policy sets", "policy_sets", "", bytesOf("id", "name"), recoveryMaxPolicySets, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"policy set members", "policy_set_members", "", bytesOf("set_id", "mac"), recoveryMaxSetMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"client policies", "clients", "WHERE blocked<>0 OR COALESCE(fixed_ip,'')<>'' OR COALESCE(grp,'')<>''", bytesOf("mac", "fixed_ip", "blocked", "grp"), recoveryMaxPolicyClients, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"client observation provenance", "client_observations", "", bytesOf("device_id", "mac", "scope", "last_seen"), recoveryMaxClientSources, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP groups", "ap_groups", "", bytesOf("id", "name"), recoveryMaxGroups, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP group members", "ap_group_members", "", bytesOf("group_id", "device_id"), recoveryMaxGroupMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"WLANs", "wlans", "", bytesOf("id", "ssid", "network_id", "group_id", "bands", "security_json", "security_key_enc", "roaming_json", "options_json", "enabled"), recoveryMaxWLANs, recoveryMaxStateBytes, recoveryMaxRowBytes},
@@ -165,6 +172,12 @@ func (db *DB) InspectRecovery(ctx context.Context,
 	if len(site.Validate()) != 0 {
 		return counts, errors.New("stored site validation failed")
 	}
+	if err := validateRecoveryPolicySetMembers(ctx, tx); err != nil {
+		return counts, err
+	}
+	if err := validateRecoveryClientObservations(ctx, tx, time.Now()); err != nil {
+		return counts, err
+	}
 	counts.WLANs, counts.Meshes = len(site.WLANs), len(site.Meshes)
 
 	if err := validateRecoveryDevices(ctx, tx, verifyCredential, &counts); err != nil {
@@ -177,6 +190,39 @@ func (db *DB) InspectRecovery(ctx context.Context,
 		return counts, err
 	}
 	return counts, nil
+}
+
+func validateRecoveryClientObservations(ctx context.Context, q siteReader, now time.Time) error {
+	var invalid bool
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS (
+  SELECT 1 FROM client_observations WHERE last_seen>?
+)`, now.Add(MaxClientObservationFutureSkew).Unix()).Scan(&invalid); err != nil {
+		return recoveryQueryError(ctx, "client observation provenance could not be verified")
+	}
+	if invalid {
+		return errors.New("client observation provenance validation failed")
+	}
+	return nil
+}
+
+// SavePolicySet only admits MACs that have been observed in the client
+// inventory. Keep that trust-boundary invariant when validating a recovery
+// database: policy_set_members deliberately has no client foreign key because
+// client retention and set retention have different lifetimes.
+func validateRecoveryPolicySetMembers(ctx context.Context, q siteReader) error {
+	var missing bool
+	if err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT lower(mac) FROM policy_set_members
+  EXCEPT
+  SELECT lower(mac) FROM clients
+)`).Scan(&missing); err != nil {
+		return recoveryQueryError(ctx, "policy set membership could not be verified")
+	}
+	if missing {
+		return errors.New("policy set membership validation failed")
+	}
+	return nil
 }
 
 func validateRecoveryCatalogBounds(ctx context.Context, q siteReader) error {
@@ -313,6 +359,9 @@ func validateRecoveryDevices(ctx context.Context, q siteReader,
 		}
 		counts.Devices++
 		if device.FunctionError != "" {
+			return errors.New("device inventory validation failed")
+		}
+		if device.ManagementModeError != "" {
 			return errors.New("device inventory validation failed")
 		}
 		if device.Adopted() && len(device.CredEnc) == 0 {

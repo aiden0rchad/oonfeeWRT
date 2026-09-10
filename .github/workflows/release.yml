@@ -48,7 +48,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache-dependency-path: |
+            ui/package-lock.json
+            docs/package-lock.json
       - name: Use pinned npm client
         run: npm install --global npm@11.6.4
       - name: Verify Go modules
@@ -74,6 +76,11 @@ jobs:
         run: |
           npm --prefix ui run build
           ./tools/budget_check.sh
+      - name: Install, audit, and build documentation
+        run: |
+          npm --prefix docs ci --no-audit
+          ./tools/osv-audit.sh docs/package-lock.json
+          npm --prefix docs run build
       - name: Scan Go dependencies
         run: |
           GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/vuln/cmd/govulncheck@v1.7.0

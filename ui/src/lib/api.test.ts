@@ -414,6 +414,27 @@ describe('device adoption API contract', () => {
 })
 
 describe('unified policy API contract', () => {
+  it('creates, updates and deletes reusable policy sets at their named resources', async () => {
+    vi.mocked(fetch).mockImplementation(async () => ok({
+      policy_set: { id: 4, name: 'Cameras', members: ['00:11:22:33:44:55'] },
+      note: 'saved',
+    }))
+
+    await api.savePolicySet({ name: 'Cameras', members: ['00:11:22:33:44:55'] })
+    await api.savePolicySet({ id: 4, name: 'Cameras', members: ['00:11:22:33:44:66'] })
+    await api.deletePolicySet(4)
+
+    expect(vi.mocked(fetch).mock.calls.map(([path, init]) => [
+      path,
+      init?.method,
+      init?.body && JSON.parse(String(init.body)),
+    ])).toEqual([
+      ['/api/v1/site/policy-sets', 'POST', { name: 'Cameras', members: ['00:11:22:33:44:55'] }],
+      ['/api/v1/site/policy-sets/4', 'POST', { name: 'Cameras', members: ['00:11:22:33:44:66'] }],
+      ['/api/v1/site/policy-sets/4', 'DELETE', undefined],
+    ])
+  })
+
   it('creates and updates concrete policy records without sending an id in the body', async () => {
     const policy = {
       order: 200,
