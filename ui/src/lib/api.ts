@@ -769,6 +769,8 @@ export interface Dashboard {
     management_mode?: ManagementMode
     /** Non-empty when this row's stored management boundary is invalid. */
     management_mode_error?: string
+    /** Non-empty when the stored device-function set is invalid. */
+    function_error?: string
   }>
   focused_devices: number
   quiesced_devices: number

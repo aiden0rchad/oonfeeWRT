@@ -817,7 +817,8 @@ function InternetHealth({ data }: { data: DashboardData }) {
   const wan = data.wan
   const routeState = wan?.gateway ? 'up' : 'unknown'
   const monitorOnlyUplinks = (data.gateway_uplinks ?? []).filter(
-    (gateway) => !gateway.management_mode_error && gateway.management_mode === 'monitor_only',
+    (gateway) => !gateway.management_mode_error && !gateway.function_error &&
+      gateway.management_mode === 'monitor_only',
   )
   const reachable = wan?.metrics.reachable
   const reachableValue = reachable?.value
@@ -1077,11 +1078,14 @@ export function Dashboard({
   const invalidAlerts = (alertPayload ?? []).length - alerts.length
   const wirelessUnknownOn = data.wireless_clients_unknown_on ?? []
   const missingWAN = (data.gateway_uplinks ?? []).filter(
-    (gateway) => !gateway.management_mode_error &&
+    (gateway) => !gateway.management_mode_error && !gateway.function_error &&
       gateway.management_mode !== 'monitor_only' && gateway.state === 'missing',
   )
-  const invalidGatewayModes = (data.gateway_uplinks ?? []).filter(
-    (gateway) => !!gateway.management_mode_error,
+  const invalidGatewayConfiguration = (data.gateway_uplinks ?? []).filter(
+    (gateway) => !!gateway.management_mode_error || !!gateway.function_error,
+  )
+  const invalidGatewayReasons = invalidGatewayConfiguration.flatMap((gateway) =>
+    [gateway.management_mode_error, gateway.function_error].filter((reason): reason is string => !!reason),
   )
 
   // What "Devices on the LAN" leaves out, named under the number itself.
@@ -1101,12 +1105,12 @@ export function Dashboard({
         purpose="Internet health, fleet status and recent controller activity."
         actions={<span className="dashboard-freshness">Live controller view</span>}
       />
-      {invalidGatewayModes.length > 0 && (
+      {invalidGatewayConfiguration.length > 0 && (
         <div role="alert">
           <Banner tone="critical">
-            Invalid gateway management mode on{' '}
-            <strong>{invalidGatewayModes.map((gateway) => gateway.name).join(', ')}</strong>:{' '}
-            {invalidGatewayModes.map((gateway) => gateway.management_mode_error).join('; ')}.
+            Invalid gateway configuration on{' '}
+            <strong>{invalidGatewayConfiguration.map((gateway) => gateway.name).join(', ')}</strong>:{' '}
+            {invalidGatewayReasons.join('; ')}.
             {' '}The controller fails closed and does not treat these rows as the primary site gateway
             or include them in desired-state operations.
           </Banner>

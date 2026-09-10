@@ -2423,6 +2423,121 @@ describe('Devices — re-probe panel', () => {
     expect(submit.disabled).toBe(true)
   })
 
+  it('labels monitor-only ACL refresh as restoring observation access without UCI writes', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    api.refreshACL.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      acl_updated: true,
+      controller_verified: true,
+      features: ['router-log'],
+      unobservable: [],
+    })
+    await openPanel()
+
+    expect(screen.getByText(/restores the read-only/i).textContent).toContain('oonfeewrt-monitor')
+    expect(screen.getByText(/grants no UCI writes, Apply access, package changes/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Review or refresh read-only observation ACL' }))
+    const acknowledgement = screen.getByRole('checkbox', {
+      name: /replaces the controller's single rpcd ACL JSON file with the read-only.*does not grant UCI write access/i,
+    })
+    fireEvent.click(acknowledgement)
+    fireEvent.click(screen.getByRole('button', { name: 'Restore read-only observation ACL and verify' }))
+
+    await waitFor(() => expect(api.refreshACL).toHaveBeenCalledWith(1, expect.objectContaining({
+      username: 'root',
+      acknowledge_router_changes: true,
+    })))
+    expect(await screen.findByText(/Read-only oonfeewrt-monitor observation ACL restored and verified/i)).toBeTruthy()
+    expect(screen.getByText(/no UCI write access was granted/i)).toBeTruthy()
+  })
+
+  it('keeps monitor-only LLDP diagnostics and read-only plans but offers no mutation action', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      package_manager: 'apk',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+      configuration_state: 'package_default',
+    })
+    api.changeLLDPCapability
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'installed', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], diagnostics: 'RUNTIME_INTERFACES\n{}',
+      })
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'configure_planned', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], plan: 'Read exact interface plan.', plan_hash: 'config-plan',
+      })
+      .mockResolvedValueOnce({
+        device_id: 1, name: 'ap-1', state: 'remove_planned', requested_packages: ['lldpd'],
+        added_packages: ['lldpd'], plan: 'Read exact rollback plan.', plan_hash: 'remove-plan',
+      })
+    await openPanel()
+    fireEvent.click(await screen.findByRole('button', { name: 'Review read-only LLDP observations' }))
+
+    expect(screen.queryByRole('checkbox', { name: /package index cache/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Install LLDP capability' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove LLDP capability' })).toBeNull()
+    fireEvent.click(screen.getByRole('checkbox', { name: /authorize a read-only inspection/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect LLDP runtime (read only)' }))
+    await waitFor(() => expect(api.changeLLDPCapability).toHaveBeenCalledWith(1, expect.objectContaining({
+      action: 'diagnose', acknowledge_read_only_diagnostics: true,
+    })))
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /authorize reading the current lldpd UCI export/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show exact LLDP interface plan' }))
+    expect(await screen.findByText('Read exact interface plan.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply LLDP interface configuration' })).toBeNull()
+    expect(screen.getByText(/Monitor-only mode cannot write.*or restart the service/i)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show exact rollback plan (read only)' }))
+    expect(await screen.findByText('Read exact rollback plan.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Remove LLDP capability' })).toBeNull()
+    expect(api.changeLLDPCapability.mock.calls.map(([, request]) => request.action)).toEqual([
+      'diagnose', 'plan_configure', 'plan_remove',
+    ])
+  })
+
+  it('does not offer plan_install for a monitor-only device without LLDP', async () => {
+    api.device.mockResolvedValue({ ...detail, management_mode: 'monitor_only' })
+    await openPanel()
+
+    const disabled = await screen.findByRole('button', { name: 'LLDP installation disabled for monitor-only' }) as HTMLButtonElement
+    expect(disabled.disabled).toBe(true)
+    expect(screen.getByText(/observes existing capabilities and never offers an installation/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /show exact install plan/i })).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it('disables ACL and LLDP surfaces when the management mode is invalid', async () => {
+    api.device.mockResolvedValue({
+      ...detail,
+      management_mode: 'managed',
+      management_mode_error: 'unsupported stored management mode "mystery"',
+    })
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      requested_packages: ['lldpd'],
+      added_packages: ['lldpd'],
+    })
+    await openPanel()
+
+    const acl = screen.getByRole('button', { name: 'Controller access payload changes blocked' }) as HTMLButtonElement
+    const lldp = await screen.findByRole('button', { name: 'LLDP actions blocked' }) as HTMLButtonElement
+    expect(acl.disabled).toBe(true)
+    expect(lldp.disabled).toBe(true)
+    expect(screen.getByText(/ACL refresh is disabled because the stored management mode is invalid/i)).toBeTruthy()
+    expect(screen.getByText(/LLDP package, service and configuration actions are disabled/i)).toBeTruthy()
+    expect(api.refreshACL).not.toHaveBeenCalled()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
   it('shows an exact LLDP package plan before accepting a separate install acknowledgement', async () => {
     api.changeLLDPCapability
       .mockResolvedValueOnce({
@@ -3163,7 +3278,7 @@ describe('Devices — column preferences', () => {
 
     expect(screen.getByText('Blocked · invalid mode').getAttribute('title')).toContain('mystery')
     fireEvent.click(screen.getByText('ap-one'))
-    const alert = await screen.findByRole('alert')
+    const alert = (await screen.findByText(/fails closed and excludes this device/i)).closest('[role="alert"]')!
     expect(alert.textContent).toMatch(/Management mode is invalid.*fails closed/i)
     expect(alert.textContent).toMatch(/excludes this device from desired-state Preview, Apply and direct configuration/i)
     expect(screen.getByText('Invalid — writes blocked')).toBeTruthy()
@@ -5724,18 +5839,28 @@ describe('Dashboard', () => {
     const { Dashboard } = await import('./Dashboard')
     render(<Dashboard data={{
       ...data,
-      gateway_uplinks: [{
-        device_id: 9,
-        name: 'Broken boundary',
-        state: 'missing',
-        management_mode: 'managed',
-        management_mode_error: 'unsupported stored management mode "mystery"',
-      }],
+      gateway_uplinks: [
+        {
+          device_id: 9,
+          name: 'Broken boundary',
+          state: 'missing',
+          management_mode: 'managed',
+          management_mode_error: 'unsupported stored management mode "mystery"',
+        },
+        {
+          device_id: 10,
+          name: 'Broken functions',
+          state: 'missing',
+          management_mode: 'managed',
+          function_error: 'device functions contain unknown value "router"',
+        },
+      ],
       wan: undefined,
     } as never} />)
 
     const alert = screen.getByRole('alert')
-    expect(alert.textContent).toMatch(/Invalid gateway management mode on Broken boundary/i)
+    expect(alert.textContent).toMatch(/Invalid gateway configuration on Broken boundary, Broken functions/i)
+    expect(alert.textContent).toMatch(/device functions contain unknown value/i)
     expect(alert.textContent).toMatch(/fails closed.*does not treat these rows as the primary site gateway/i)
     expect(alert.textContent).not.toMatch(/No active WAN\/default route was observed/i)
     expect(screen.getByText('Route unknown')).toBeTruthy()
