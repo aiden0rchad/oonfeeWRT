@@ -20,6 +20,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
+	"github.com/aiden0rchad/oonfeewrt/internal/roaming"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
@@ -130,6 +131,22 @@ func seedRoamingWLAN(t *testing.T, d *Daemon, ssid string, kv bool) {
 	}
 	if err := d.Store.SaveWLAN(ctx, w); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMonitorOnlyDeviceCannotEnterNeighbourWritePlan(t *testing.T) {
+	at := int64(1)
+	dev := &store.Device{
+		ID: 21, Name: "observed-ap", Role: "ap", Functions: []string{"ap"},
+		ManagementMode: "monitor_only", AdoptedAt: &at,
+	}
+	obs := map[roaming.Target]*bssObservation{}
+	if row := (&Daemon{}).readNeighbourState(context.Background(), dev,
+		map[string]bool{"Managed": true}, obs); row != nil {
+		t.Fatalf("monitor-only device entered neighbour reconciliation: %+v", row)
+	}
+	if len(obs) != 0 {
+		t.Fatalf("monitor-only device produced neighbour targets: %+v", obs)
 	}
 }
 
