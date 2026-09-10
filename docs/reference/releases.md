@@ -36,8 +36,10 @@ Gateway. Schema 23 records source-relative scope and `last_seen` in
 `client_observations`, keyed by device and MAC. Monitor-only observations neither
 satisfy nor contaminate that proof, including after un-adoption. The same gate
 applies to direct or set-backed MAC Secure drafts and blocked/fixed-address
-intent. Upgrades and restores may lack this provenance until the next successful
-managed-Gateway poll; active MAC desired state blocks Preview until every
+intent. Upgrades start without this provenance, and portable restore deliberately
+clears it instead of importing source-controller write authority. Evidence older
+than 30 days or more than five minutes in the future is rejected independently
+of cleanup. Active MAC desired state blocks Preview until every
 referenced client is re-observed locally. Existing blocked/fixed-address intent
 can still be cleared one client at a time. Set edits change desired state only
 and require a new Preview and acknowledged Apply.

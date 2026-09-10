@@ -78,9 +78,11 @@ concrete Master Table resolution. Policy-set members, direct or set-backed
 Secure drafts, and client block/fixed-address intent require proved local scope
 at the currently adopted Managed Gateway. Schema 23 stores source-relative
 `client_observations` by `(device_id, MAC)`, so Monitor-only observations neither
-satisfy nor contaminate that proof, including after un-adoption. Upgrades or
-restores may lack the new provenance until the next successful managed-Gateway
-poll; active MAC intent then blocks Preview until every referenced client is
+satisfy nor contaminate that proof, including after un-adoption. Upgrades start
+without the new provenance, and portable restore deliberately clears it rather
+than importing source-controller write authority. Stale or implausibly future-
+dated evidence is rejected independently of cleanup; active MAC intent blocks
+Preview until every referenced client is
 re-observed locally. Existing block/fixed-address intent can still be cleared
 one client at a time. These paths are source-tested; they do not add new
 physical-router proof.

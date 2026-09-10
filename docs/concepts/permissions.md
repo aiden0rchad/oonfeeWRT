@@ -157,8 +157,9 @@ direct/set **Secure** compilation, enabled MAC firewall rules, and client
 block/fixed-address intent require clients proved local to the managed Gateway.
 That proof must be a stored `local` observation from the currently adopted
 Managed Gateway. Monitor-only observations neither satisfy nor contaminate it,
-including after un-adoption. Missing proof after an upgrade, restore, or
-retention expiry makes those operations or Preview fail closed regardless of
+including after un-adoption. Missing proof after an upgrade, portable restore,
+retention expiry, or an implausibly future-dated observation makes those
+operations or Preview fail closed regardless of
 account role. The authorized clear path for existing block/fixed-address intent
 remains available one client at a time.
 

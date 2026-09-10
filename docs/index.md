@@ -184,9 +184,10 @@ oonfeeWRT v0.1.5 deliberately does not claim capabilities it cannot prove.
 - Exact-MAC policy requires a stored local observation from the currently
   adopted Managed Gateway. Monitor-only observations neither satisfy nor
   contaminate that source-relative proof. Missing proof—such as before the first
-  successful Gateway poll after upgrade or restore—gates MAC set/draft paths and
+  successful Gateway poll after upgrade or portable restore—gates MAC set/draft paths and
   Preview with active MAC intent. Existing block/fixed-address intent can still
-  be cleared per client.
+  be cleared per client. Portable restore deliberately clears this nonportable
+  evidence; stale or implausibly future-dated observations are rejected.
 - No native TLS, SSO, cloud broker, mobile app, DPI, application identity,
   PoE control, switch ACL management, or gateway-run speed test. The published
   flow feasibility plan does not ship or install a flow package.

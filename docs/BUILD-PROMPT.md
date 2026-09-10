@@ -145,12 +145,14 @@ already-landed contracts while finishing a milestone:
   dangling/mixed references or referenced-set deletion. Require proved local
   managed-Gateway scope for MAC intent using source-relative
   `client_observations`; Monitor-only observations neither satisfy nor
-  contaminate that proof. Missing proof after an upgrade/restore must gate
+  contaminate that proof. Missing proof after an upgrade/portable restore must gate
   policy-set creation/update and MAC compilation and make active MAC intent
   block Preview until a
   successful managed-Gateway poll, while preserving one-client
-  block/fixed-address clearing. Prune provenance at the normal client-retention
-  cutoff even if desired intent retains the merged client row. Schema 23 adds
+  block/fixed-address clearing. Portable restore must clear this nonportable
+  evidence. Authorization must reject evidence older than the normal client-
+  retention cutoff or implausibly future-dated independently of cleanup; prune
+  at that cutoff even if desired intent retains the merged client row. Schema 23 adds
   that provenance table/index plus the case-insensitive global-client MAC index
   used by bounded policy checks. Drop the legacy Gateway index before
   canonicalizing the compatibility role, then rebuild the one-managed-Gateway

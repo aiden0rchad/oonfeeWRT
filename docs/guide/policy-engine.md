@@ -104,9 +104,12 @@ only when the currently adopted Managed Gateway has stored it as `local`.
 
 Monitor-only AP, Switch, and routed-device observations remain visible but
 neither satisfy nor contaminate that proof—even after the observation device is
-un-adopted. An upgrade or restore may initially contain no schema-23 provenance;
-the normal 30-day client-retention cutoff also prunes provenance even when
-desired intent retains the merged client row. The intent remains stored, but
+un-adopted. An upgrade starts without schema-23 provenance; portable restore
+deliberately clears it because source-controller evidence is not destination
+write authority. Authorization rejects observations older than 30 days or more
+than five minutes in the future even if asynchronous cleanup has not run. The
+same 30-day cutoff prunes provenance while desired intent may retain the merged
+client row. The intent remains stored, but
 policy-set create/update, named-set Object Manager actions, direct-MAC
 **Secure** drafts, and active MAC Preview then fail closed until a successful
 managed-Gateway poll re-observes each MAC. You can still clear a

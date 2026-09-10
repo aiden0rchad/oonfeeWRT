@@ -52,9 +52,11 @@ Schema 23 preserves source-relative client observations by `(device_id, MAC)`.
 MAC policy requires a stored **local** observation from the currently adopted
 Managed Gateway. A Monitor-only AP, Switch, or routed device neither satisfies
 nor contaminates that proof, including after it is un-adopted; its clients stay
-visible for observation. If the managed Gateway has not observed the client
-successfully—commonly just after an upgrade or restore—use a managed
-network/zone or explicit IPv4 scope, or wait for a successful Gateway poll.
+visible for observation. Portable restore deliberately clears source-relative
+observations, and authorization rejects stale or implausibly future-dated
+evidence. If the managed Gateway has not observed the client successfully—
+commonly just after an upgrade or portable restore—use a managed network/zone
+or explicit IPv4 scope, or wait for a successful Gateway poll.
 
 ## Open Client Observability
 

@@ -68,8 +68,9 @@ exist.
 
 The normal client-retention cutoff is 30 days after `last_seen`. Schema 23 also
 stores each source-relative observation in `client_observations` as device ID,
-MAC, scope, and `last_seen`. Those provenance rows are pruned at the same cutoff
-even when desired intent causes the merged global client row to be retained.
+MAC, scope, and `last_seen`. Authorization independently rejects evidence older
+than that cutoff or more than five minutes in the future. Cleanup prunes rows at
+the same cutoff even when desired intent retains the merged global client row.
 
 Expiry does not delete policy-set membership or client block/fixed-address
 intent. It removes the evidence needed to enforce that exact MAC safely, so
@@ -77,6 +78,12 @@ active MAC intent remains stored but Preview fails closed until the currently
 adopted Managed Gateway observes the MAC locally again. A Monitor-only
 observation remains useful for inventory but neither satisfies nor contaminates
 that proof.
+
+Portable restore keeps the merged client inventory and desired intent but
+deliberately clears every source-relative observation from the prepared
+destination database. Provenance gathered by the source controller is not
+portable authorization. A fresh Managed Gateway poll must re-establish local
+evidence before MAC-targeted Preview can pass.
 
 ## Event and topology retention
 
@@ -267,9 +274,11 @@ Schema 23 retains source-relative client scope (`local`, `upstream`, or
 `unknown`) and `last_seen` in `client_observations`, keyed by device and MAC.
 MAC-policy validation requires a stored `local` observation from the currently
 adopted Managed Gateway. Monitor-only observations neither satisfy nor
-contaminate that proof, including after un-adoption. An upgrade or restore can
-therefore leave provenance unproved until the next successful managed-Gateway
-poll; active MAC desired state blocks Preview in the meantime. Clearing existing
+contaminate that proof, including after un-adoption. An upgrade leaves the new
+table empty, and portable restore deliberately clears its contents rather than
+reusing source-controller evidence as destination write authority. Provenance
+remains unproved until the next successful managed-Gateway poll; active MAC
+desired state blocks Preview in the meantime. Clearing existing
 block/fixed-address intent one client at a time remains permitted.
 
 Removing a device deletes its controller inventory and eventually sweeps metric

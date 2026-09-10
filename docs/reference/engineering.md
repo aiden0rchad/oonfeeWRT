@@ -223,8 +223,10 @@ MAC)`, with scope and `last_seen`. Its MAC lookup and the case-insensitive
 set member, direct or set-backed MAC Secure draft, and blocked/fixed-address
 intent must have a stored `local` observation from the currently adopted
 Managed Gateway. Monitor-only observations neither satisfy nor contaminate
-that proof, including after un-adoption. Upgrades and restores can have no such
-rows until the next successful managed-Gateway poll; active MAC intent must
+that proof, including after un-adoption. Upgrades create no such rows, and
+portable restore deliberately clears them because source-controller evidence
+cannot authorize destination-controller writes. Until the next successful
+managed-Gateway poll, active MAC intent must
 then become a Preview error until every referenced client is re-observed
 locally. The one-client clear path for existing block/fixed-address intent must
 remain available. Pruning removes observation provenance at the normal

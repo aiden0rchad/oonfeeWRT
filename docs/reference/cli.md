@@ -175,9 +175,11 @@ There is no CLI override for the local managed-Gateway MAC-scope proof: any
 policy-set member, direct or set-backed MAC Secure draft, and client block or
 fixed-address intent requires a stored `local` observation from the currently
 adopted Managed Gateway. Monitor-only observations neither satisfy nor contaminate that
-source-relative proof, including after un-adoption. After an upgrade or restore,
-active MAC intent can fail Preview until the next successful managed-Gateway
-poll recreates any missing observation. Existing blocked/fixed-address intent
+source-relative proof, including after un-adoption. After an upgrade or portable
+restore, active MAC intent can fail Preview until the next successful managed-
+Gateway poll recreates missing observations; portable restore deliberately
+clears them. Evidence outside the 30-day age and five-minute future-skew window
+is rejected independently of cleanup. Existing blocked/fixed-address intent
 can still be cleared one client at a time.
 
 The Phase 5 flow-visibility page is a feasibility record. v0.1.5 adds no

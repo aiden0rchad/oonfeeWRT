@@ -302,7 +302,10 @@ described in the safety model below.
   still has a rollback record.
 - Restoring a controller never automatically applies restored desired
   configuration. Router writes remain suppressed until an owner reviews and
-  explicitly resumes them.
+  explicitly resumes them. Portable restore also clears source-relative client
+  observations: they are evidence gathered by the source controller, not
+  portable authorization for MAC-targeted writes. A fresh managed-Gateway poll
+  must establish that proof on the destination controller.
 - Monitor-only devices receive the distinct read-only `oonfeewrt-monitor` ACL
   and are excluded from desired/site configuration, optional LLDP install/
   config/remove mutations, wireless-neighbor mutations, and other package/
@@ -322,8 +325,11 @@ described in the safety model below.
   enabled direct/set firewall rules, Object Manager **Secure** drafts, and
   client block or fixed-address intent require a stored **local** observation
   from the currently adopted managed Gateway. Monitor-only observations neither
-  satisfy nor contaminate that proof. After an upgrade, restore, or provenance
-  expiry, active MAC intent blocks Preview until the Gateway observes it again.
+  satisfy nor contaminate that proof. After an upgrade, portable restore, or
+  provenance expiry, active MAC intent blocks Preview until the Gateway observes
+  it again. Portable restore deliberately clears this nonportable evidence;
+  authorization also rejects observations older than 30 days or more than five
+  minutes in the future independently of cleanup.
   Existing block/fixed-address intent can still be cleared one client at a
   time. Use network/zone or explicit IP scope instead.
 - The HTTP listener has no native TLS. Keep it on loopback or an isolated

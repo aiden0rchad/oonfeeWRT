@@ -118,8 +118,10 @@ they neither satisfy nor contaminate the managed-Gateway proof, including after
 un-adoption. Policy-set create/update, direct or set-backed MAC Secure drafts,
 and blocked/fixed-address intent fail closed without that proof. Active MAC
 intent blocks Preview until every referenced client is re-observed locally;
-this commonly matters just after an upgrade or restore, before the next
-successful managed-Gateway client poll. Source-relative observations also age
+this commonly matters just after an upgrade or portable restore, before the next
+successful managed-Gateway client poll. Portable restore deliberately clears
+all source-relative observations because source-controller evidence is not
+destination-controller write authority. Source-relative observations also age
 out at the normal 30-day client-retention cutoff even when desired intent keeps
 the merged client row; the intent remains stored, but Preview blocks until the
 Gateway observes the MAC locally again. Existing blocked/fixed-address intent

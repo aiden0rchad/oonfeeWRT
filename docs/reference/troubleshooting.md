@@ -322,10 +322,14 @@ intent blocks Preview until every referenced client has that local proof.
 
 Complete a successful client poll on the Managed Gateway if the picker is
 missing an expected client or Preview reports missing source evidence. Upgrades
-and restores may initially lack schema-23 observations until that poll
-succeeds. The normal 30-day client-retention cutoff also prunes provenance even
-when desired intent keeps the merged client row; that intent stays stored but
-blocks Preview until the Gateway observes the MAC locally again.
+initially lack schema-23 observations, and portable restore deliberately clears
+them rather than treating evidence gathered by another controller instance as
+write authority. A successful Managed Gateway poll re-establishes the proof.
+Authorization rejects observations older than the normal 30-day client-
+retention cutoff or more than five minutes in the future even before cleanup.
+Cleanup also prunes provenance at the 30-day cutoff when desired intent keeps
+the merged client row; that intent stays stored but blocks Preview until the
+Gateway observes the MAC locally again.
 For a referenced set, find every set-backed row in the Master Table and move or
 remove those rules before deletion. After any membership edit, generate a fresh
 Preview and verify the exact resolved MACs; saving the set alone does not alter

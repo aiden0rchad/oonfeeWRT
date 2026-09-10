@@ -270,9 +270,10 @@ read its capability report.
 - [ ] Every exact MAC used by a policy set, Secure draft, block, or fixed-address
       policy has a stored `local` observation from the currently adopted Managed
       Gateway. Monitor-only observations neither satisfy nor contaminate this
-      proof, including after un-adoption. After an upgrade or restore, allow a
-      successful managed-Gateway poll to recreate missing source-relative
-      observations before Preview.
+      proof, including after un-adoption. After an upgrade or portable restore,
+      allow a successful managed-Gateway poll to recreate missing source-relative
+      observations before Preview. Portable restore clears prior observations;
+      stale or implausibly future-dated evidence is never authorization.
 - [ ] Router runs supported OpenWrt with `rpcd` and the `uhttpd` ubus handler.
 - [ ] A gateway provides the stock `/sbin/ip`; the standard adoption payload
       will grant its exact read-only route command to the scoped login.

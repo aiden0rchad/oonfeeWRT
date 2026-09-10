@@ -267,10 +267,13 @@ Managed Gateway. Schema 23 stores source-relative scope/`last_seen` by
 that proof, including after un-adoption. Missing proof refuses set save/update
 and MAC Object Manager compilation; existing active MAC intent becomes a
 site-level Preview error until a successful managed-Gateway poll, while
-block/fixed-address intent can still be cleared one client at a time.
-Provenance is pruned at the normal 30-day client-retention cutoff even when
-desired intent retains the merged client row; the intent remains stored and
-Preview fails closed until the Managed Gateway observes that MAC locally again.
+block/fixed-address intent can still be cleared one client at a time. Portable
+restore clears source-relative observations before validating and staging the
+destination pair. Authorization independently rejects observations older than
+30 days or more than five minutes in the future; cleanup prunes at the same
+30-day cutoff even when desired intent retains the merged client row. The
+intent remains stored and Preview fails closed until the Managed Gateway
+observes that MAC locally again.
 The observation MAC lookup and case-insensitive `clients_mac_nocase` index keep
 maximum-size policy expansion bounded.
 
@@ -453,15 +456,19 @@ CREATE TABLE policy_set_members (
   mac TEXT NOT NULL,
   PRIMARY KEY (set_id, mac)
 ) WITHOUT ROWID;
+CREATE INDEX policy_set_members_mac_nocase
+  ON policy_set_members(mac COLLATE NOCASE);
 CREATE TABLE client_observations (      -- per-device MAC provenance (v23)
   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-  mac TEXT NOT NULL,
+  mac TEXT NOT NULL CHECK (mac=lower(mac)),
   scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
   last_seen INTEGER NOT NULL,
   PRIMARY KEY (device_id, mac)
 ) WITHOUT ROWID;
 CREATE INDEX client_observations_mac
   ON client_observations(mac);
+CREATE INDEX clients_mac_nocase
+  ON clients(mac COLLATE NOCASE);
 CREATE TABLE device_overrides (       -- explicit per-device deviations
   device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
   path TEXT NOT NULL,                 -- e.g. 'radio:radio0:channel'

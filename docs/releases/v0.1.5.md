@@ -107,10 +107,14 @@ Every member must exist in observed inventory and have a stored **This network**
 (`local`) observation from the currently adopted Managed Gateway. Schema 23
 stores source-relative scope and `last_seen` by `(device_id, MAC)`.
 Monitor-only observations neither satisfy nor contaminate that proof, including
-after un-adoption. After an upgrade, restore, or normal provenance-retention
-expiry, policy-set create/update, direct-MAC and set-backed **Secure**
+after un-adoption. After an upgrade, portable restore, or normal provenance-
+retention expiry, policy-set create/update, direct-MAC and set-backed **Secure**
 compilation, and Preview with active MAC firewall/block/fixed-address intent
 fail closed until a successful managed-Gateway poll re-observes each MAC.
+Portable restore deliberately clears source-relative observations from the
+prepared destination database; evidence gathered by the source controller is
+not portable write authority. Authorization rejects observations older than 30
+days or more than five minutes in the future independently of cleanup.
 Blocked/fixed-address intent can still be cleared one client at a time. Use a
 network/zone or explicit IPv4 scope when policy crosses a device boundary.
 
