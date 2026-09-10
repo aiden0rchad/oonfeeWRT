@@ -138,8 +138,13 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 			mac, existing.Name)
 	}
 
+	acl, groups, err := adoptionAccess(managementMode)
+	if err != nil {
+		return nil, err
+	}
 	a := &adoption.Adopter{
-		ACL: deploy.ACL,
+		ACL:    acl,
+		Groups: append([]string(nil), groups...),
 		VerifyController: func(verifyCtx context.Context, controller *ubus.Client) error {
 			verifiedMAC, err := deviceMAC(verifyCtx, controller)
 			if err != nil {
@@ -260,6 +265,17 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		})
 	}
 	return out, nil
+}
+
+func adoptionAccess(mode model.ManagementMode) ([]byte, []string, error) {
+	switch mode {
+	case model.ManagementModeManaged:
+		return deploy.ACL, append([]string(nil), adoption.ACLGroups...), nil
+	case model.ManagementModeMonitorOnly:
+		return deploy.MonitorACL, append([]string(nil), adoption.MonitorACLGroups...), nil
+	default:
+		return nil, nil, fmt.Errorf("daemon: management mode %q has no controller ACL", mode)
+	}
 }
 
 func sshBootstrapFailure(err error) error {

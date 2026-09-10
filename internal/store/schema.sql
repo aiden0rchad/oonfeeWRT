@@ -1,5 +1,6 @@
--- oonfeeWRT controller schema. Authoritative copy lives in
--- docs/IMPLEMENTATION.md §3; this file is what actually runs.
+-- oonfeeWRT controller schema. This executable baseline, the versioned
+-- migrations, and their attestations are authoritative. The schema overview in
+-- docs/IMPLEMENTATION.md §3 is intentionally abridged.
 --
 -- Forward-only migrations: never edit a shipped statement, add a new migration
 -- instead. schema_version records how far we have come.
@@ -120,6 +121,8 @@ CREATE TABLE IF NOT EXISTS policy_set_members (
   mac TEXT NOT NULL,
   PRIMARY KEY (set_id, mac)
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS policy_set_members_mac_nocase
+  ON policy_set_members(mac COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS device_overrides (
   device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
   path TEXT NOT NULL,
@@ -205,6 +208,17 @@ CREATE TABLE IF NOT EXISTS clients (
   scope TEXT,                          -- local|upstream, NULL = undetermined (migration v3)
   fingerprint_json TEXT NOT NULL DEFAULT '{}'
 );
+CREATE INDEX IF NOT EXISTS clients_mac_nocase
+  ON clients(mac COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS client_observations (
+  device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL CHECK (mac=lower(mac)),
+  scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (device_id, mac)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS client_observations_mac
+  ON client_observations(mac);
 
 -- ===== telemetry (rollups only — the raw ring lives in RAM, decision D4) =====
 CREATE TABLE IF NOT EXISTS series (

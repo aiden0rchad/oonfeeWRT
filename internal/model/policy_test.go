@@ -1,9 +1,62 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestPolicySourceMACExpansionBudget(t *testing.T) {
+	site := policySite()
+	members := make([]string, MaxPolicySetMembers)
+	for i := range members {
+		members[i] = fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x",
+			byte(i>>32), byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+	}
+	site.PolicySets = []PolicySet{{ID: 1, Name: "large", Members: members}}
+	for i := 0; i < MaxExpandedPolicySourceMACs/MaxPolicySetMembers; i++ {
+		site.Policies = append(site.Policies, Policy{ID: i + 1, Name: fmt.Sprintf("rule-%d", i),
+			Kind: PolicyFirewallRule, Origin: PolicyOriginManual, Enabled: i%2 == 0,
+			Firewall: &FirewallRule{Action: FirewallReject, SourceZone: "guest",
+				DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 1}})
+	}
+	if errs := site.ValidatePolicies(); len(errs) != 0 {
+		t.Fatalf("exact expansion limit rejected: %v", errs)
+	}
+	site.Policies = append(site.Policies, Policy{ID: len(site.Policies) + 1, Name: "one-too-many",
+		Kind: PolicyFirewallRule, Origin: PolicyOriginManual, Enabled: false,
+		Firewall: &FirewallRule{Action: FirewallReject, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 1}})
+	errText := ""
+	for _, err := range site.ValidatePolicies() {
+		errText += err.Error()
+	}
+	if !strings.Contains(errText, "expansion exceeds") {
+		t.Fatalf("over-limit reusable expansion accepted: %s", errText)
+	}
+}
+
+func TestPolicySetStoredMemberBudget(t *testing.T) {
+	members := make([]string, MaxPolicySetMembers)
+	for i := range members {
+		members[i] = fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x",
+			byte(i>>32), byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+	}
+	site := policySite()
+	for i := 0; i < MaxPolicySetMembersTotal/MaxPolicySetMembers; i++ {
+		site.PolicySets = append(site.PolicySets, PolicySet{
+			ID: i + 1, Name: fmt.Sprintf("set-%d", i), Members: append([]string(nil), members...),
+		})
+	}
+	if errs := site.ValidatePolicies(); len(errs) != 0 {
+		t.Fatalf("exact stored-member limit rejected: %v", errs)
+	}
+	site.PolicySets = append(site.PolicySets, PolicySet{ID: len(site.PolicySets) + 1,
+		Name: "over", Members: []string{"02:ff:ff:ff:ff:ff"}})
+	if errs := site.ValidatePolicies(); len(errs) == 0 || !strings.Contains(errs[len(errs)-1].Error(), "stored members") {
+		t.Fatalf("over-limit stored policy sets accepted: %v", errs)
+	}
+}
 
 func policySite() Site {
 	return Site{Networks: []Network{

@@ -465,20 +465,34 @@ func (d *Daemon) recordClients(ctx context.Context, s collector.Snapshot) {
 		if own[h.MAC] {
 			continue
 		}
-		c := store.SeenClient{MAC: h.MAC, Name: h.Name, Scope: store.ScopeUnknown}
-		if len(h.IPv4) > 0 {
-			c.IPv4 = h.IPv4[0]
-			// Scoped here, at ingest, rather than in the API handler: the
-			// snapshot is the only place that has both the host and the
-			// device's own subnets, and this package's rule is that handlers
-			// read what was already worked out.
-			c.Scope = s.Scope(c.IPv4)
-		}
+		ipv4, scope := classifyHostIPv4(s, h.IPv4)
+		c := store.SeenClient{DeviceID: s.DeviceID, MAC: h.MAC, Name: h.Name,
+			IPv4: ipv4, Scope: scope}
 		seen = append(seen, c)
 	}
 	if err := d.Store.UpsertClients(ctx, seen, s.At.Unix()); err != nil {
 		d.Log.Error("could not record clients", "device", s.MAC, "err", err)
 	}
+}
+
+// classifyHostIPv4 considers every address reported for one MAC. Upstream
+// evidence outranks unknown, which outranks local, so DHCP/hint ordering cannot
+// authorize a policy for an identity also seen on the router's upstream side.
+func classifyHostIPv4(snapshot collector.Snapshot, addresses []string) (string, string) {
+	selected, scope, rank := "", store.ScopeUnknown, 0
+	for _, address := range addresses {
+		candidate := snapshot.Scope(address)
+		candidateRank := 2
+		if candidate == collector.ScopeLocal {
+			candidateRank = 1
+		} else if candidate == collector.ScopeUpstream {
+			candidateRank = 3
+		}
+		if candidateRank > rank {
+			selected, scope, rank = address, candidate, candidateRank
+		}
+	}
+	return selected, scope
 }
 
 // liveClients reports the associated-station count from the most recent poll.

@@ -143,6 +143,41 @@ func TestPreviewReportsSiteErrorsWithoutTouchingDevices(t *testing.T) {
 	}
 }
 
+func TestPreviewReportsCorruptManagementModeWithoutTouchingDevice(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "corrupt management mode"), quietLogger())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+	at := int64(1)
+	dev := &store.Device{
+		MAC: "aa:bb:cc:dd:ee:21", Host: "127.0.0.1", Port: 1, Name: "uncertain-router",
+		Role: "gateway", Functions: []string{"gateway"}, AdoptedAt: &at,
+	}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx, `PRAGMA ignore_check_constraints=ON`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx,
+		`UPDATE devices SET management_mode='corrupt' WHERE id=?`, dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Store.SQL().ExecContext(ctx, `PRAGMA ignore_check_constraints=OFF`); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	if len(res.Devices) != 1 || !strings.Contains(res.Devices[0].Error, "management mode is invalid") {
+		t.Fatalf("preview did not surface corrupt mode: %+v", res.Devices)
+	}
+}
+
 // An unreachable device becomes a row that says so, not a failure that hides
 // the rest of the fleet.
 func TestPreviewReportsAnUnreachableDeviceAsARow(t *testing.T) {
@@ -230,6 +265,76 @@ func TestMonitorOnlyDeviceIsExcludedFromPreviewAndRefusedByDirectApply(t *testin
 	result, err := d.applyDeviceBound(ctx, model.Site{}, dev, false, "", "", "")
 	if err == nil || result.Outcome != "error" || !strings.Contains(result.Reason, "monitor-only") {
 		t.Fatalf("direct apply=(%+v,%v), want pre-write refusal", result, err)
+	}
+}
+
+func TestApplyRechecksClientProvenanceAfterQueueBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	d := openDaemon(t)
+	addr := startMock(t)
+	ap := seedAP(t, d, "02:00:00:00:23:41", "policy-ap", addr, capability.Present)
+	if err := d.Store.SetCapabilities(ctx, ap.ID, bindingCaps("Generic MAC80211"),
+		string(capability.ClassA)); err != nil {
+		t.Fatal(err)
+	}
+	bindingSaveWLAN(t, d, []int64{ap.ID}, "scope-bound", "test-passphrase", model.PMFDisabled)
+	at := int64(1)
+	gateway := &store.Device{
+		MAC: "02:00:00:00:23:42", Host: "192.0.2.1", Name: "managed-gateway",
+		Role: "gateway", Functions: []string{"gateway"}, ManagementMode: "managed", AdoptedAt: &at,
+	}
+	if err := d.Store.UpsertDevice(ctx, gateway); err != nil {
+		t.Fatal(err)
+	}
+	const clientMAC = "02:00:00:00:23:43"
+	now := time.Now().Unix()
+	if err := d.Store.UpsertClients(ctx, []store.SeenClient{{
+		DeviceID: gateway.ID, MAC: clientMAC, Scope: store.ScopeLocal,
+	}}, now); err != nil {
+		t.Fatal(err)
+	}
+	blocked := true
+	if _, err := d.Store.SaveClientPolicy(ctx, clientMAC, &blocked, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	site, err := d.Store.Site(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := bindingConfigFingerprint(t, d, ap.ID)
+	release, err := d.deviceOps.acquire(ctx, ap.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct {
+		result api.DeviceApply
+		err    error
+	}, 1)
+	go func() {
+		result, err := d.applyDeviceBound(ctx, site, ap, false, "", "", "")
+		done <- struct {
+			result api.DeviceApply
+			err    error
+		}{result, err}
+	}()
+	waitForGateUsers(t, &d.deviceOps, ap.ID, 2)
+	if err := d.Store.UpsertClients(ctx, []store.SeenClient{{
+		DeviceID: gateway.ID, MAC: clientMAC, Scope: store.ScopeUpstream,
+	}}, now+1); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case got := <-done:
+		if got.err == nil || !strings.Contains(got.err.Error(), "no longer safely renderable") ||
+			got.result.Outcome != "error" {
+			t.Fatalf("apply after provenance change=(%+v,%v)", got.result, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued apply did not finish")
+	}
+	if after := bindingConfigFingerprint(t, d, ap.ID); after != before {
+		t.Fatal("provenance change was detected only after a router write")
 	}
 }
 

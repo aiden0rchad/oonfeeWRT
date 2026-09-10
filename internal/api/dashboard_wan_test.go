@@ -213,6 +213,13 @@ func TestDashboardWANUsesManagedGatewayWhileListingMonitorOnlyUplinks(t *testing
 	if len(dashboard.GatewayUplinks) != 2 {
 		t.Fatalf("gateway uplinks=%+v, want managed and monitor-only routers", dashboard.GatewayUplinks)
 	}
+	modes := map[string]string{}
+	for _, uplink := range dashboard.GatewayUplinks {
+		modes[uplink.Name] = uplink.ManagementMode
+	}
+	if modes["managed-gateway"] != "managed" || modes["newer-observed-gateway"] != "monitor_only" {
+		t.Fatalf("gateway management modes=%v", modes)
+	}
 	wan := dashboard.WAN
 	if wan.Gateway == nil || wan.Gateway.DeviceID != managed.ID ||
 		wan.Gateway.RouteInterface != "wan-managed" {

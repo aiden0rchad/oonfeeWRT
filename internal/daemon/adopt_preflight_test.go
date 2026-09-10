@@ -1,17 +1,35 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/deploy"
+	"github.com/aiden0rchad/oonfeewrt/internal/adoption"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
+
+func TestAdoptionAccessIsExplicitAndModeScoped(t *testing.T) {
+	managedACL, managedGroups, err := adoptionAccess(model.ManagementModeManaged)
+	if err != nil || !bytes.Equal(managedACL, deploy.ACL) || !slices.Equal(managedGroups, adoption.ACLGroups) {
+		t.Fatalf("managed access acl=%t groups=%v err=%v", bytes.Equal(managedACL, deploy.ACL), managedGroups, err)
+	}
+	monitorACL, monitorGroups, err := adoptionAccess(model.ManagementModeMonitorOnly)
+	if err != nil || !bytes.Equal(monitorACL, deploy.MonitorACL) || !slices.Equal(monitorGroups, adoption.MonitorACLGroups) {
+		t.Fatalf("monitor access acl=%t groups=%v err=%v", bytes.Equal(monitorACL, deploy.MonitorACL), monitorGroups, err)
+	}
+	if _, _, err := adoptionAccess(model.ManagementMode("corrupt")); err == nil {
+		t.Fatal("unknown management mode defaulted to a writable ACL")
+	}
+}
 
 func TestConcurrentGatewayAdoptionsAdmitOnlyOneBootstrap(t *testing.T) {
 	ctx := context.Background()

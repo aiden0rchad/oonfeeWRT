@@ -979,9 +979,12 @@ type dashboard struct {
 }
 
 type dashboardGatewayUplink struct {
-	DeviceID int64  `json:"device_id"`
-	Name     string `json:"name"`
-	State    string `json:"state"` // up, missing, or unknown
+	DeviceID            int64  `json:"device_id"`
+	Name                string `json:"name"`
+	State               string `json:"state"` // up, missing, or unknown
+	ManagementMode      string `json:"management_mode,omitempty"`
+	ManagementModeError string `json:"management_mode_error,omitempty"`
+	FunctionError       string `json:"function_error,omitempty"`
 }
 
 const (
@@ -1159,7 +1162,11 @@ func (s *Server) dashboardGatewayTopology(ctx context.Context, devices []*store.
 		if !device.Adopted() || !model.DeviceFunctionsOf(device.Functions, device.Role).Routes() {
 			continue
 		}
-		entry := dashboardGatewayUplink{DeviceID: device.ID, Name: deviceDisplayName(device), State: "unknown"}
+		entry := dashboardGatewayUplink{
+			DeviceID: device.ID, Name: deviceDisplayName(device), State: "unknown",
+			ManagementMode: device.ManagementMode, ManagementModeError: device.ManagementModeError,
+			FunctionError: device.FunctionError,
+		}
 		state, ok := latest[device.ID]
 		fresh := ok && state.ObservedAt <= now.UnixMilli() &&
 			state.ObservedAt >= now.Add(-maxCurrentTopologySourceAge).UnixMilli()

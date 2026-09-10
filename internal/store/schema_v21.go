@@ -29,11 +29,6 @@ func verifySchemaV21(ctx context.Context, q schemaInspector) error {
 	}); err != nil {
 		return fmt.Errorf("store: schema v21 attestation: %w", err)
 	}
-	if err := verifyIndex(ctx, q, "devices", "devices_one_managed_gateway",
-		[]string{"role"}, 1, 1,
-		"adopted_at is not null and management_mode='managed' and role='gateway'"); err != nil {
-		return fmt.Errorf("store: schema v21 attestation: %w", err)
-	}
 	var tableSQL string
 	if err := q.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='devices'`).

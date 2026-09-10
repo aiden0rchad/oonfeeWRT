@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 22
+const schemaVersion = 23
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -472,6 +472,43 @@ var migrations = map[int][]string{
 		   mac TEXT NOT NULL,
 		   PRIMARY KEY (set_id, mac)
 		 ) WITHOUT ROWID`,
+	},
+	23: {
+		// Treat either authority as a Gateway claim. A crafted role/functions
+		// mismatch must reserve the same unique slot instead of allowing two
+		// managed routing devices into Preview and Apply.
+		`DROP INDEX devices_one_managed_gateway`,
+		`UPDATE devices SET role=CASE
+		   WHEN functions_json IN ('["gateway"]','["gateway","ap"]','["gateway","switch"]','["gateway","ap","switch"]') THEN 'gateway'
+		   WHEN functions_json IN ('["ap"]','["ap","switch"]') THEN 'ap'
+		   WHEN functions_json='["switch"]' THEN 'switch'
+		   ELSE role END`,
+		`CREATE UNIQUE INDEX devices_one_managed_gateway
+		   ON devices(management_mode)
+		   WHERE adopted_at IS NOT NULL
+		     AND management_mode='managed'
+		     AND (role='gateway' OR instr(functions_json,'"gateway"')>0)`,
+		// Policy scope checks compare a canonical observed MAC with historical
+		// inventory that may predate canonical writes. An indexed NOCASE lookup
+		// keeps a maximum-size policy expansion bounded without making recovery
+		// reject harmless case-only legacy duplicates.
+		`CREATE INDEX IF NOT EXISTS clients_mac_nocase
+		   ON clients(mac COLLATE NOCASE)`,
+		`CREATE INDEX IF NOT EXISTS policy_set_members_mac_nocase
+		   ON policy_set_members(mac COLLATE NOCASE)`,
+		// Client inventory is global for presentation, but MAC policy must prove
+		// where an identity was observed. Keep per-device scope separately so a
+		// monitor-only subnet can never lend its "local" label to the managed
+		// Gateway, even after that monitor is un-adopted.
+		`CREATE TABLE IF NOT EXISTS client_observations (
+		   device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		   mac TEXT NOT NULL CHECK (mac=lower(mac)),
+		   scope TEXT NOT NULL CHECK (scope IN ('local','upstream','unknown')),
+		   last_seen INTEGER NOT NULL,
+		   PRIMARY KEY (device_id, mac)
+		 ) WITHOUT ROWID`,
+		`CREATE INDEX IF NOT EXISTS client_observations_mac
+		   ON client_observations(mac)`,
 	},
 }
 
@@ -971,7 +1008,7 @@ func (d Device) EffectiveManagementMode() model.ManagementMode {
 // Configurable is the common write boundary for site provisioning and fleet
 // configuration. Invalid persisted state is deliberately not configurable.
 func (d Device) Configurable() bool {
-	return d.EffectiveManagementMode().Configures()
+	return d.FunctionError == "" && d.EffectiveManagementMode().Configures()
 }
 
 // ModelDevice is the renderer's view of this inventory row. Centralising the
@@ -1117,13 +1154,28 @@ func scanDevice(s scanner) (*Device, error) {
 	if err != nil {
 		return nil, err
 	}
+	storedRole, roleErr := model.ParseRole(d.Role)
 	var stored []string
 	decodeErr := json.Unmarshal([]byte(functionsJSON), &stored)
 	functions, validationErr := model.ParseDeviceFunctions(stored, model.RoleOf(d.Role))
-	if decodeErr != nil || stored == nil || validationErr != nil {
+	canonicalFunctions := false
+	if validationErr == nil {
+		encoded, encodeErr := json.Marshal(functions.Strings())
+		canonicalFunctions = encodeErr == nil && functionsJSON == string(encoded)
+	}
+	// Writers persist both authorities canonically. Reject rows that only become
+	// valid after trimming, case-folding, de-duplicating or reordering: the
+	// partial unique index can safely reserve the Gateway slot only for the same
+	// canonical representation that runtime code accepts as configurable.
+	canonicalRole := roleErr == nil && d.Role == string(storedRole)
+	if decodeErr != nil || stored == nil || validationErr != nil || !canonicalRole || !canonicalFunctions {
 		d.Functions = []string{}
 		d.FunctionError = "stored device functions are invalid; restore the controller database from a known-good backup or re-adopt this device"
 		d.Role = string(model.RoleOf(d.Role))
+	} else if storedRole != functions.PrimaryRole() {
+		d.Functions = functions.Strings()
+		d.FunctionError = "stored device role and functions disagree; restore the controller database from a known-good backup or re-adopt this device"
+		d.Role = string(storedRole)
 	} else {
 		d.Functions = functions.Strings()
 		d.Role = string(functions.PrimaryRole())

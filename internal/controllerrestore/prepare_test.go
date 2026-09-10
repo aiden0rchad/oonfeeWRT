@@ -193,6 +193,60 @@ func TestPrepareBuildsExactValidatedPairAndCleans(t *testing.T) {
 	fixture.assertNoResidue(t)
 }
 
+func TestPrepareClearsNonportableClientObservationProvenance(t *testing.T) {
+	fixture := newPrepareFixture(t, store.CurrentSchemaVersion(), func(t *testing.T, db *store.DB) {
+		ctx := context.Background()
+		device := &store.Device{
+			MAC: "02:00:00:00:23:90", Host: "192.0.2.90", Name: "restore-source",
+			Role: "gateway", Functions: []string{"gateway"},
+		}
+		if err := db.UpsertDevice(ctx, device); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertClients(ctx, []store.SeenClient{{
+			DeviceID: device.ID, MAC: "02:00:00:00:23:91", Scope: store.ScopeLocal,
+		}}, time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	prepared, err := Prepare(context.Background(), fixture.artifact, fixture.dataDir,
+		fixture.live, testExportPassphrase, testDestinationRuntimePassphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopTransfer := errors.New("inspection complete")
+	transferred, err := prepared.Transfer(context.Background(), func(pair PreparedPair) error {
+		keeper, openErr := secrets.Open(pair.KeyringPath, testDestinationRuntimePassphrase)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer keeper.Close()
+		db, openErr := store.OpenReadOnly(context.Background(), "sqlite", pair.DatabasePath, keeper)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer db.Close()
+		var observations, clients int
+		if queryErr := db.SQL().QueryRow(`SELECT COUNT(*) FROM client_observations`).Scan(&observations); queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		if queryErr := db.SQL().QueryRow(`SELECT COUNT(*) FROM clients WHERE mac='02:00:00:00:23:91'`).Scan(&clients); queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		if observations != 0 || clients != 1 {
+			t.Fatalf("prepared restore observations=%d clients=%d, want 0 and 1", observations, clients)
+		}
+		return stopTransfer
+	})
+	if transferred || !errors.Is(err, stopTransfer) {
+		t.Fatalf("inspection transfer=(%t,%v)", transferred, err)
+	}
+	if err := prepared.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.assertNoResidue(t)
+}
+
 func TestPrepareRejectsWrongRuntimeAndExportPassphrasesBeforeRetention(t *testing.T) {
 	fixture := newPrepareFixture(t, store.CurrentSchemaVersion(), nil)
 	if prepared, err := Prepare(context.Background(), fixture.artifact, fixture.dataDir,

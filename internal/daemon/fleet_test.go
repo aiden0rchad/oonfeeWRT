@@ -28,6 +28,31 @@ func TestMonitorOnlyGatewayRemainsAFullPollingTarget(t *testing.T) {
 	}
 }
 
+func TestClassifyHostIPv4FailsClosedAcrossEveryAddressOrder(t *testing.T) {
+	snapshot := collector.Snapshot{Networks: []collector.Network{
+		{Name: "lan", CIDR: "192.168.1.1/24"},
+		{Name: "wan", CIDR: "198.51.100.2/24", Upstream: true},
+	}}
+	for _, addresses := range [][]string{
+		{"192.168.1.50", "198.51.100.50"},
+		{"198.51.100.50", "192.168.1.50"},
+	} {
+		ip, scope := classifyHostIPv4(snapshot, addresses)
+		if ip != "198.51.100.50" || scope != store.ScopeUpstream {
+			t.Fatalf("addresses=%v classified as ip=%q scope=%q", addresses, ip, scope)
+		}
+	}
+	for _, addresses := range [][]string{
+		{"192.168.1.50", "203.0.113.50"},
+		{"203.0.113.50", "192.168.1.50"},
+	} {
+		ip, scope := classifyHostIPv4(snapshot, addresses)
+		if ip != "203.0.113.50" || scope != store.ScopeUnknown {
+			t.Fatalf("ambiguous addresses=%v classified as ip=%q scope=%q", addresses, ip, scope)
+		}
+	}
+}
+
 func TestLogOnlySnapshotDurablyAdvancesCoverageWithoutFullPollState(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)

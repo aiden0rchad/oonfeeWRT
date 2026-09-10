@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // These ceilings are intentionally far above a practical controller site but
@@ -20,6 +21,7 @@ const (
 	recoveryMaxPolicySets    = 4096
 	recoveryMaxSetMembers    = 65536
 	recoveryMaxPolicyClients = 16384
+	recoveryMaxClientSources = 262144
 	recoveryMaxGroups        = 1024
 	recoveryMaxGroupMembers  = 65536
 	recoveryMaxWLANs         = 4096
@@ -67,6 +69,7 @@ var recoveryBounds = []recoveryBound{
 	{"policy sets", "policy_sets", "", bytesOf("id", "name"), recoveryMaxPolicySets, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"policy set members", "policy_set_members", "", bytesOf("set_id", "mac"), recoveryMaxSetMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"client policies", "clients", "WHERE blocked<>0 OR COALESCE(fixed_ip,'')<>'' OR COALESCE(grp,'')<>''", bytesOf("mac", "fixed_ip", "blocked", "grp"), recoveryMaxPolicyClients, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"client observation provenance", "client_observations", "", bytesOf("device_id", "mac", "scope", "last_seen"), recoveryMaxClientSources, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP groups", "ap_groups", "", bytesOf("id", "name"), recoveryMaxGroups, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP group members", "ap_group_members", "", bytesOf("group_id", "device_id"), recoveryMaxGroupMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"WLANs", "wlans", "", bytesOf("id", "ssid", "network_id", "group_id", "bands", "security_json", "security_key_enc", "roaming_json", "options_json", "enabled"), recoveryMaxWLANs, recoveryMaxStateBytes, recoveryMaxRowBytes},
@@ -172,16 +175,8 @@ func (db *DB) InspectRecovery(ctx context.Context,
 	if err := validateRecoveryPolicySetMembers(ctx, tx); err != nil {
 		return counts, err
 	}
-	policySetMACs := make([]string, 0)
-	for _, set := range site.PolicySets {
-		policySetMACs = append(policySetMACs, set.Members...)
-	}
-	problems, err := db.policyMACScopeProblemsOn(ctx, tx, site, policySetMACs...)
-	if err != nil {
-		return counts, recoveryQueryError(ctx, "policy MAC scope could not be verified")
-	}
-	if len(problems) != 0 {
-		return counts, errors.New("stored policy MAC scope validation failed")
+	if err := validateRecoveryClientObservations(ctx, tx, time.Now()); err != nil {
+		return counts, err
 	}
 	counts.WLANs, counts.Meshes = len(site.WLANs), len(site.Meshes)
 
@@ -195,6 +190,19 @@ func (db *DB) InspectRecovery(ctx context.Context,
 		return counts, err
 	}
 	return counts, nil
+}
+
+func validateRecoveryClientObservations(ctx context.Context, q siteReader, now time.Time) error {
+	var invalid bool
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS (
+  SELECT 1 FROM client_observations WHERE last_seen>?
+)`, now.Add(MaxClientObservationFutureSkew).Unix()).Scan(&invalid); err != nil {
+		return recoveryQueryError(ctx, "client observation provenance could not be verified")
+	}
+	if invalid {
+		return errors.New("client observation provenance validation failed")
+	}
+	return nil
 }
 
 // SavePolicySet only admits MACs that have been observed in the client

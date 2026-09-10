@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
@@ -64,7 +65,7 @@ func TestInspectRecoveryMatchesLocalPolicySetMembersCaseInsensitively(t *testing
 	}
 }
 
-func TestInspectRecoveryRejectsNonLocalPolicySetMember(t *testing.T) {
+func TestInspectRecoveryAcceptsPolicyIntentPendingFreshGatewayProvenance(t *testing.T) {
 	db := recoveryPolicyFixture(t)
 	if _, err := db.SQL().Exec(`INSERT INTO clients (mac,scope) VALUES ('02:00:00:00:23:0b','upstream')`); err != nil {
 		t.Fatal(err)
@@ -76,38 +77,37 @@ func TestInspectRecoveryRejectsNonLocalPolicySetMember(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := inspectRecoveryFixture(db)
-	if err == nil || !strings.Contains(err.Error(), "stored policy MAC scope validation failed") {
-		t.Fatalf("recovery error=%v, want non-local policy MAC rejection", err)
+	if err := inspectRecoveryFixture(db); err != nil {
+		t.Fatalf("context-dependent intent was not restorable before the next Gateway poll: %v", err)
 	}
-	if strings.Contains(err.Error(), "02:00:00:00:23:0b") {
-		t.Fatalf("recovery error exposed a client identifier: %v", err)
+	site, err := db.Site(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems, err := db.PolicyMACScopeProblems(context.Background(), site,
+		"02:00:00:00:23:0b")
+	if err != nil || len(problems) == 0 {
+		t.Fatalf("unproved restored intent did not remain fail-closed: problems=%v err=%v", problems, err)
 	}
 }
 
-func TestInspectRecoveryRejectsPolicyMACsWithRoutedMonitorDevice(t *testing.T) {
+func TestInspectRecoveryRejectsFutureClientObservationProvenance(t *testing.T) {
 	db := recoveryPolicyFixture(t)
-	if _, err := db.SQL().Exec(`INSERT INTO clients (mac,scope) VALUES ('02:00:00:00:23:0c','local')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.SQL().Exec(`INSERT INTO policy_sets (id,name) VALUES (1,'Local clients')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.SQL().Exec(`INSERT INTO policy_set_members (set_id,mac) VALUES (1,'02:00:00:00:23:0c')`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.SQL().Exec(`
-INSERT INTO devices (mac,host,name,role,functions_json,management_mode,adopted_at)
-VALUES ('02:00:00:00:23:0d','192.0.2.13','observed-router','gateway','["gateway"]','monitor_only',1)`); err != nil {
+INSERT INTO devices (id,mac,host,name,role,functions_json,management_mode,adopted_at)
+VALUES (23,'02:00:00:00:23:23','192.0.2.23','future-source','ap','["ap"]','monitor_only',NULL);
+INSERT INTO client_observations (device_id,mac,scope,last_seen)
+VALUES (23,'02:00:00:00:23:24','local',?)`,
+		time.Now().Add(MaxClientObservationFutureSkew+time.Hour).Unix()); err != nil {
 		t.Fatal(err)
 	}
 
 	err := inspectRecoveryFixture(db)
-	if err == nil || !strings.Contains(err.Error(), "stored policy MAC scope validation failed") {
-		t.Fatalf("recovery error=%v, want routed monitor policy-MAC rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "client observation provenance validation failed") {
+		t.Fatalf("recovery error=%v, want future provenance rejection", err)
 	}
-	if strings.Contains(err.Error(), "observed-router") {
-		t.Fatalf("recovery error exposed a device identifier: %v", err)
+	if strings.Contains(err.Error(), "future-source") || strings.Contains(err.Error(), "02:00:00:00:23:24") {
+		t.Fatalf("recovery error exposed provenance identifiers: %v", err)
 	}
 }
 
@@ -125,6 +125,31 @@ VALUES ('02:00:00:00:23:02','192.0.2.2','mismatched-router','ap','["gateway"]','
 	}
 	if strings.Contains(err.Error(), "mismatched-router") {
 		t.Fatalf("recovery error exposed a device identifier: %v", err)
+	}
+}
+
+func TestInspectRecoveryRejectsNoncanonicalGatewayMetadata(t *testing.T) {
+	db := recoveryPolicyFixture(t)
+	if _, err := db.SQL().Exec(`
+INSERT INTO devices (mac,host,name,role,functions_json,management_mode,adopted_at)
+VALUES ('02:00:00:00:23:03','192.0.2.3','a-noncanonical-router','Gateway','["Gateway"]','managed',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().Exec(`
+INSERT INTO devices (mac,host,name,role,functions_json,management_mode,adopted_at)
+VALUES ('02:00:00:00:23:04','192.0.2.4','z-canonical-router','gateway','["gateway"]','managed',1)`); err != nil {
+		t.Fatalf("canonical Gateway insert was blocked by a noncanonical row: %v", err)
+	}
+
+	device, err := db.DeviceByMAC(context.Background(), "02:00:00:00:23:03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.FunctionError == "" || device.Configurable() {
+		t.Fatalf("noncanonical Gateway loaded as configurable: %+v", device)
+	}
+	if err := inspectRecoveryFixture(db); err == nil || !strings.Contains(err.Error(), "device inventory validation failed") {
+		t.Fatalf("recovery error=%v, want noncanonical metadata rejection", err)
 	}
 }
 

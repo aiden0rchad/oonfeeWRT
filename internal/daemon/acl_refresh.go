@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aiden0rchad/oonfeewrt/deploy"
 	"github.com/aiden0rchad/oonfeewrt/internal/adoption"
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
@@ -33,6 +32,13 @@ func (d *Daemon) RefreshACL(ctx context.Context, req api.RefreshACLRequest) (*ap
 	}
 	if !dev.Adopted() {
 		return nil, fmt.Errorf("daemon: %s is not adopted, so its controller ACL cannot be refreshed", dev.Name)
+	}
+	if dev.ManagementModeError != "" {
+		return nil, fmt.Errorf("daemon: %s: %s", dev.Name, dev.ManagementModeError)
+	}
+	acl, _, err := adoptionAccess(dev.EffectiveManagementMode())
+	if err != nil {
+		return nil, err
 	}
 	collector := d.collectorRef()
 	if collector != nil {
@@ -74,7 +80,7 @@ func (d *Daemon) RefreshACL(ctx context.Context, req api.RefreshACLRequest) (*ap
 			}
 		}
 	}
-	if err := boot.InstallACL(ctx, adoption.DefaultACLPath, deploy.ACL); err != nil {
+	if err := boot.InstallACL(ctx, adoption.DefaultACLPath, acl); err != nil {
 		return nil, fmt.Errorf("daemon: refresh controller ACL: %w", err)
 	}
 	if collector != nil {

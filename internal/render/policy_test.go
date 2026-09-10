@@ -1,6 +1,7 @@
 package render
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,27 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/model"
 )
+
+func TestPolicyRenderRejectsOverBudgetSetExpansionBeforeBuildingRules(t *testing.T) {
+	site := renderPolicySite()
+	members := make([]string, model.MaxPolicySetMembers)
+	for i := range members {
+		members[i] = fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x",
+			byte(i>>32), byte(i>>24), byte(i>>16), byte(i>>8), byte(i))
+	}
+	site.PolicySets = []model.PolicySet{{ID: 1, Name: "large", Members: members}}
+	for i := 0; i <= model.MaxExpandedPolicySourceMACs/model.MaxPolicySetMembers; i++ {
+		site.Policies = append(site.Policies, model.Policy{ID: i + 1, Name: fmt.Sprintf("rule-%d", i),
+			Kind: model.PolicyFirewallRule, Origin: model.PolicyOriginManual, Enabled: true,
+			Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: "guest",
+				DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 1}})
+	}
+	sections, _, conflicts := renderPolicies(site, model.Device{Role: model.RoleGateway},
+		policyCaps(), Existing{}, Doc{})
+	if len(sections) != 0 || len(conflicts) != 1 || !strings.Contains(conflicts[0].Reason, "before allocating") {
+		t.Fatalf("sections=%d conflicts=%+v", len(sections), conflicts)
+	}
+}
 
 func policyCaps() *capability.Registry {
 	caps := routerCaps()

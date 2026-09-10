@@ -210,6 +210,12 @@ func prepare(ctx context.Context, artifactPath, dataDir string, live *secrets.Ke
 			retErr = errors.Join(retErr, cleanupError("disposable database handle", db.Close()))
 		}
 	}()
+	if err := db.ClearPortableRestoreClientProvenance(ctx); err != nil {
+		if contextErr := canceledError(err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, errors.New("restore preparation: portable client provenance could not be reset")
+	}
 	counts, err := recovery.Validate(ctx, db, keeper)
 	if err != nil {
 		if contextErr := canceledError(err); contextErr != nil {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
+	"github.com/aiden0rchad/oonfeewrt/internal/processlock"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
@@ -491,6 +492,23 @@ func TestKeyringLifecycleAcrossRestarts(t *testing.T) {
 	}
 	if !errors.Is(err, secrets.ErrBadPassphrase) {
 		t.Fatalf("got %v, want ErrBadPassphrase", err)
+	}
+}
+
+func TestOpenRefusesSecondProcessForTheSameDataDirectory(t *testing.T) {
+	cfg := testConfig(t, "exclusive process")
+	first, err := Open(context.Background(), cfg, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	secondCfg := cfg
+	secondCfg.Listen = "127.0.0.1:0"
+	if second, err := Open(context.Background(), secondCfg, quietLogger()); !errors.Is(err, processlock.ErrInUse) {
+		if second != nil {
+			second.Close()
+		}
+		t.Fatalf("second daemon error=%v, want exclusive-access refusal", err)
 	}
 }
 

@@ -12,11 +12,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/aiden0rchad/oonfeewrt/internal/applyengine"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/reconcile"
+	"github.com/aiden0rchad/oonfeewrt/internal/store"
 	"github.com/aiden0rchad/oonfeewrt/internal/toolstore"
 	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 
@@ -24,6 +26,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: applyone <db> <device-host>")
+		os.Exit(2)
+	}
 	ctx := context.Background()
 	handle, err := toolstore.OpenWritable(ctx, os.Args[1])
 	must(err)
@@ -39,6 +45,12 @@ func main() {
 	for _, d := range devs {
 		if d.Host != host {
 			continue
+		}
+		must(validateApplyFleet(devs, d))
+		problems, err := db.PolicyMACScopeProblems(ctx, site)
+		must(err)
+		if len(problems) > 0 {
+			must(fmt.Errorf("applyone: site policy is not safely renderable: %w", problems[0]))
 		}
 		var caps capability.Registry
 		must(json.Unmarshal([]byte(d.CapsJSON), &caps))
@@ -98,6 +110,24 @@ func main() {
 			return nil
 		}
 
+		currentSite, err := db.Site(ctx)
+		must(err)
+		currentDevices, err := db.Devices(ctx)
+		must(err)
+		fresh := deviceByID(currentDevices, d.ID)
+		must(validateApplyFleet(currentDevices, fresh))
+		if fresh == nil || fresh.MAC != d.MAC || !reflect.DeepEqual(currentSite, site) ||
+			!reflect.DeepEqual(*fresh, *d) {
+			must(fmt.Errorf("applyone: controller state changed while planning; run the command again"))
+		}
+		d = fresh
+		// Planning can take long enough for the collector to reclassify a client.
+		// Re-prove MAC scope at the last boundary before reconcile may write.
+		problems, err = db.PolicyMACScopeProblems(ctx, currentSite)
+		must(err)
+		if len(problems) > 0 {
+			must(fmt.Errorf("applyone: site policy is no longer safely renderable: %w", problems[0]))
+		}
 		start := time.Now()
 		res, err := r.Apply(ctx, c, d.ID, plan, health)
 		fmt.Printf("\noutcome=%s stranded=%v after %s\n  reason: %s\n",
@@ -116,6 +146,49 @@ func main() {
 	}
 	fmt.Println("no adopted device with host", host)
 	os.Exit(1)
+}
+
+func deviceByID(devices []*store.Device, id int64) *store.Device {
+	for _, device := range devices {
+		if device != nil && device.ID == id {
+			return device
+		}
+	}
+	return nil
+}
+
+func validateApplyFleet(devices []*store.Device, target *store.Device) error {
+	if err := validateApplyTarget(target); err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if device == nil || !device.Adopted() {
+			continue
+		}
+		if device.ManagementModeError != "" || device.FunctionError != "" {
+			return fmt.Errorf("applyone: adopted fleet contains invalid device metadata; use the controller Preview and repair or re-adopt the affected device")
+		}
+	}
+	return nil
+}
+
+func validateApplyTarget(device *store.Device) error {
+	if device == nil {
+		return fmt.Errorf("applyone: device is unavailable")
+	}
+	if !device.Adopted() {
+		return fmt.Errorf("applyone: device %q is not adopted", device.Name)
+	}
+	if device.ManagementModeError != "" {
+		return fmt.Errorf("applyone: device %q has invalid management mode: %s", device.Name, device.ManagementModeError)
+	}
+	if device.FunctionError != "" {
+		return fmt.Errorf("applyone: device %q has invalid function state: %s", device.Name, device.FunctionError)
+	}
+	if !device.Configurable() {
+		return fmt.Errorf("applyone: device %q is monitor-only; direct apply is disabled", device.Name)
+	}
+	return nil
 }
 
 func keys(m map[string]bool) []string {

@@ -2,9 +2,40 @@ package deploy
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 )
+
+func TestMonitorACLMatchesObservationScopeAndHasNoWriteGrant(t *testing.T) {
+	var managed, monitor map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(ACL, &managed); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(MonitorACL, &monitor); err != nil {
+		t.Fatal(err)
+	}
+	if len(monitor) != 1 {
+		t.Fatalf("monitor ACL groups=%d, want exactly one", len(monitor))
+	}
+	monitorGroup, ok := monitor["oonfeewrt-monitor"]
+	if !ok {
+		t.Fatal("monitor ACL does not define oonfeewrt-monitor")
+	}
+	if _, ok := monitorGroup["write"]; ok {
+		t.Fatal("monitor ACL grants a write section")
+	}
+	var managedRead, monitorRead any
+	if err := json.Unmarshal(managed["oonfeewrt"]["read"], &managedRead); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(monitorGroup["read"], &monitorRead); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(monitorRead, managedRead) {
+		t.Fatal("monitor ACL observation scope differs from the managed ACL")
+	}
+}
 
 func TestProductionACLHasOnlyUsedWriteScope(t *testing.T) {
 	var acl map[string]struct {

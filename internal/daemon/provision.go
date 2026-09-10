@@ -70,6 +70,15 @@ func (d *Daemon) buildPreview(ctx context.Context) (*previewState, error) {
 		out.SiteErrors = append(out.SiteErrors, e.Error())
 	}
 	if len(out.SiteErrors) == 0 {
+		problems, err := d.Store.PolicyMACScopeProblems(ctx, site)
+		if err != nil {
+			return nil, err
+		}
+		for _, problem := range problems {
+			out.SiteErrors = append(out.SiteErrors, problem.Error())
+		}
+	}
+	if len(out.SiteErrors) == 0 {
 		for _, dev := range state.devices {
 			if !dev.Adopted() {
 				continue
@@ -579,6 +588,17 @@ func (d *Daemon) applyDeviceBoundOperation(ctx context.Context, site model.Site,
 				"but you should know you are editing the road before driving "+
 				"down it", dev.Name)
 		}
+		// Client provenance is observed state, not desired state, and can change
+		// while a device plan is being read. Re-check it at the last controller
+		// boundary before any router write so an upstream reclassification cannot
+		// ride a preview that was safe only when planning began.
+		problems, err := d.Store.PolicyMACScopeProblems(applyCtx, site)
+		if err != nil {
+			return err
+		}
+		if len(problems) > 0 {
+			return fmt.Errorf("site policy is no longer safely renderable: %w", problems[0])
+		}
 		out.Changes = len(plan.Plan.Ops)
 		if operationID != "" && out.Changes > 0 {
 			if err := d.Store.MarkApplyOperationDeviceApplying(applyCtx,
@@ -825,7 +845,10 @@ func applyOrder(devices []*store.Device) []*store.Device {
 func configurableDevices(devices []*store.Device) []*store.Device {
 	out := make([]*store.Device, 0, len(devices))
 	for _, dev := range devices {
-		if dev.Configurable() {
+		// Only an explicit, valid monitor-only mode is omitted. Corrupt state
+		// remains in the plan so previewDeviceBound reports it and blocks the
+		// fleet instead of silently applying around a formerly managed device.
+		if dev.Configurable() || dev.FunctionError != "" || dev.ManagementModeError != "" {
 			out = append(out, dev)
 		}
 	}

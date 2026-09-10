@@ -41,7 +41,7 @@ func TestMonitorOnlyDeviceRejectsLLDPMutationsBeforeRouterContact(t *testing.T) 
 	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"install", "configure", "remove"} {
+	for _, action := range []string{"plan_install", "install", "configure", "remove", "unknown"} {
 		_, err := d.LLDPCapability(ctx, api.LLDPCapabilityRequest{DeviceID: dev.ID, Action: action})
 		if err == nil || !strings.Contains(err.Error(), "monitor-only") {
 			t.Errorf("action %q error=%v, want monitor-only refusal", action, err)

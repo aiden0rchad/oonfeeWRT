@@ -150,6 +150,12 @@ func inspect(ctx context.Context, artifactPath, scratchParent string,
 	if ops.afterOpen != nil {
 		ops.afterOpen()
 	}
+	if err := db.ClearPortableRestoreClientProvenance(ctx); err != nil {
+		if contextErr := canceledError(err); contextErr != nil {
+			return preview, contextErr
+		}
+		return preview, errors.New("restore preview: portable client provenance could not be reset")
+	}
 	counts, err := recovery.Validate(ctx, db, keeper)
 	if err != nil {
 		if contextErr := canceledError(err); contextErr != nil {

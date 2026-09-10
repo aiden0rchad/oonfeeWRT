@@ -33,6 +33,12 @@ func renderPolicies(site model.Site, dev model.Device, caps *capability.Registry
 	if !dev.EffectiveFunctions().Routes() {
 		return nil, nil, nil
 	}
+	if _, ok := site.PolicySourceMACExpansion(); !ok {
+		return nil, nil, []Conflict{{
+			Config: "firewall", Section: "policy-source-macs",
+			Reason: fmt.Sprintf("policy source MAC expansion exceeds the site maximum of %d entries; rendering is blocked before allocating the expanded rules", model.MaxExpandedPolicySourceMACs),
+		}}
+	}
 
 	zones := map[string]bool{"wan": true}
 	dhcpNetworks := map[string]bool{}

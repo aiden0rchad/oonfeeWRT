@@ -1431,6 +1431,42 @@ func TestScopeWithoutNetworksIsUnknownNotLocal(t *testing.T) {
 	}
 }
 
+func TestScopeUsesLongestPrefixAndFailsClosedOnEqualOverlap(t *testing.T) {
+	tests := []struct {
+		name     string
+		networks []Network
+		want     string
+	}{
+		{"specific upstream after broad local", []Network{
+			{Name: "lan", CIDR: "192.168.0.1/16"},
+			{Name: "wan", CIDR: "192.168.1.2/24", Upstream: true},
+		}, ScopeUpstream},
+		{"specific upstream before broad local", []Network{
+			{Name: "wan", CIDR: "192.168.1.2/24", Upstream: true},
+			{Name: "lan", CIDR: "192.168.0.1/16"},
+		}, ScopeUpstream},
+		{"specific local beats broad upstream", []Network{
+			{Name: "wan", CIDR: "192.168.0.2/16", Upstream: true},
+			{Name: "lan", CIDR: "192.168.1.1/24"},
+		}, ScopeLocal},
+		{"equal prefix upstream after local", []Network{
+			{Name: "lan", CIDR: "192.168.1.1/24"},
+			{Name: "wan", CIDR: "192.168.1.2/24", Upstream: true},
+		}, ScopeUpstream},
+		{"equal prefix upstream before local", []Network{
+			{Name: "wan", CIDR: "192.168.1.2/24", Upstream: true},
+			{Name: "lan", CIDR: "192.168.1.1/24"},
+		}, ScopeUpstream},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := (&Snapshot{Networks: test.networks}).Scope("192.168.1.55"); got != test.want {
+				t.Fatalf("scope=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDecodeNetworksReadsSubnetsAndTheDefaultRoute(t *testing.T) {
 	// Trimmed from a real network.interface.dump off the reference device.
 	raw := []byte(`{"interface":[

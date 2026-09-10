@@ -104,7 +104,11 @@ type PolicySet struct {
 	Members []string `json:"members"`
 }
 
-const MaxPolicySetMembers = 1024
+const (
+	MaxPolicySetMembers         = 1024
+	MaxPolicySetMembersTotal    = 65536
+	MaxExpandedPolicySourceMACs = 65536
+)
 
 // PolicySetByID resolves a stable policy-set reference.
 func (s Site) PolicySetByID(id int) (PolicySet, bool) {
@@ -130,6 +134,32 @@ func (s Site) FirewallSourceMACs(rule *FirewallRule) ([]string, bool) {
 		return nil, false
 	}
 	return append([]string(nil), set.Members...), true
+}
+
+// PolicySourceMACExpansion returns the total source-MAC entries materialized
+// by all saved rules, including disabled rules and repeated set references.
+// The boolean fails closed before callers allocate an oversized response or
+// render plan.
+func (s Site) PolicySourceMACExpansion() (int, bool) {
+	sets := make(map[int]int, len(s.PolicySets))
+	for _, set := range s.PolicySets {
+		sets[set.ID] = len(set.Members)
+	}
+	total := 0
+	for _, policy := range s.Policies {
+		if policy.Firewall == nil {
+			continue
+		}
+		count := len(policy.Firewall.SourceMACs)
+		if policy.Firewall.SourceSetID > 0 {
+			count = sets[policy.Firewall.SourceSetID]
+		}
+		if count > MaxExpandedPolicySourceMACs-total {
+			return total, false
+		}
+		total += count
+	}
+	return total, true
 }
 
 // HasExplicitFirewallIntent gates the stronger runtime/foreign-policy proof.
@@ -194,6 +224,13 @@ func CanonicalMACs(in []string) ([]string, error) {
 // hardware. Capability gaps are reported by render/API gates, not repaired here.
 func (s Site) ValidatePolicies() []error {
 	errs := s.validatePolicySets()
+	if _, ok := s.PolicySourceMACExpansion(); !ok {
+		errs = append(errs, errf("policy source MAC expansion exceeds the site maximum of %d entries", MaxExpandedPolicySourceMACs))
+	}
+	setMembers := make(map[int][]string, len(s.PolicySets))
+	for i := range s.PolicySets {
+		setMembers[s.PolicySets[i].ID] = s.PolicySets[i].Members
+	}
 	activeZones := map[string]bool{"wan": true}
 	for _, name := range s.ActiveZoneNames() {
 		activeZones[name] = true
@@ -307,24 +344,43 @@ func (s Site) ValidatePolicies() []error {
 		}
 		seenIP[addr.String()] = mac
 	}
+	blocked := map[string]bool{}
+	var firstBlocked string
 	for _, client := range s.PolicyClients {
 		if !client.Blocked {
 			continue
 		}
 		macs, err := CanonicalMACs([]string{client.MAC})
-		if err != nil {
+		if err == nil {
+			blocked[macs[0]] = true
+			if firstBlocked == "" || macs[0] < firstBlocked {
+				firstBlocked = macs[0]
+			}
+		}
+	}
+	for _, p := range s.Policies {
+		if len(blocked) == 0 || !p.Enabled || p.Kind != PolicyFirewallRule || p.Firewall == nil ||
+			p.Firewall.Action != FirewallAccept || p.Firewall.DestinationZone == "" ||
+			p.Firewall.SourceZone == "wan" || !activeZones[p.Firewall.SourceZone] {
 			continue
 		}
-		for _, p := range s.Policies {
-			if !p.Enabled || p.Kind != PolicyFirewallRule || p.Firewall == nil ||
-				p.Firewall.Action != FirewallAccept || p.Firewall.DestinationZone == "" ||
-				p.Firewall.SourceZone == "wan" || !activeZones[p.Firewall.SourceZone] {
-				continue
+		sourceMACs := p.Firewall.SourceMACs
+		ok := true
+		if p.Firewall.SourceSetID > 0 {
+			sourceMACs, ok = setMembers[p.Firewall.SourceSetID]
+		}
+		overlap := firstBlocked
+		if ok && len(sourceMACs) > 0 {
+			overlap = ""
+			for _, mac := range sourceMACs {
+				if blocked[mac] {
+					overlap = mac
+					break
+				}
 			}
-			sourceMACs, ok := s.FirewallSourceMACs(p.Firewall)
-			if !ok || len(sourceMACs) == 0 || stringIn(sourceMACs, macs[0]) {
-				errs = append(errs, errf("policy %q can accept forwarded traffic for blocked client %s; managed rule order is deliberately not inferred from UCI section names", p.Name, macs[0]))
-			}
+		}
+		if !ok || overlap != "" {
+			errs = append(errs, errf("policy %q can accept forwarded traffic for blocked client %s; managed rule order is deliberately not inferred from UCI section names", p.Name, overlap))
 		}
 	}
 	return errs
@@ -334,6 +390,8 @@ func (s Site) validatePolicySets() []error {
 	seenIDs := map[int]bool{}
 	seenNames := map[string]string{}
 	var errs []error
+	totalMembers := 0
+	totalOverLimit := false
 	for i := range s.PolicySets {
 		set := &s.PolicySets[i]
 		if set.ID <= 0 {
@@ -363,6 +421,14 @@ func (s Site) validatePolicySets() []error {
 		} else if len(members) > MaxPolicySetMembers {
 			errs = append(errs, errf("policy set %q has %d members; maximum is %d", set.Name, len(members), MaxPolicySetMembers))
 		}
+		if len(members) > MaxPolicySetMembersTotal-totalMembers {
+			totalOverLimit = true
+		} else {
+			totalMembers += len(members)
+		}
+	}
+	if totalOverLimit {
+		errs = append(errs, errf("policy sets contain more than the site maximum of %d stored members", MaxPolicySetMembersTotal))
 	}
 	return errs
 }
