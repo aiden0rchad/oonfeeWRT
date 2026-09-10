@@ -32,22 +32,24 @@ type previewState struct {
 }
 
 type stableDevice struct {
-	ID            int64
-	MAC           string
-	Host          string
-	Port          int
-	Scheme        string
-	CertFP        string
-	HostKeyFP     string
-	Name          string
-	Role          string
-	Functions     []string
-	FunctionError string
-	AdoptedAt     *int64
-	Credential    []byte
-	Class         string
-	Capabilities  string
-	Firmware      string
+	ID                  int64
+	MAC                 string
+	Host                string
+	Port                int
+	Scheme              string
+	CertFP              string
+	HostKeyFP           string
+	Name                string
+	Role                string
+	Functions           []string
+	FunctionError       string
+	ManagementMode      string
+	ManagementModeError string
+	AdoptedAt           *int64
+	Credential          []byte
+	Class               string
+	Capabilities        string
+	Firmware            string
 }
 
 type ownedConfig struct {
@@ -83,6 +85,7 @@ func stableDeviceState(dev *store.Device) stableDevice {
 		Scheme: dev.Scheme, CertFP: dev.CertFP, HostKeyFP: dev.HostKeyFP,
 		Name: dev.Name, Role: dev.Role, Functions: append([]string(nil), dev.Functions...),
 		FunctionError: dev.FunctionError, AdoptedAt: dev.AdoptedAt,
+		ManagementMode: dev.ManagementMode, ManagementModeError: dev.ManagementModeError,
 		Credential: append([]byte(nil), dev.CredEnc...), Class: dev.Class,
 		Capabilities: dev.CapsJSON, Firmware: dev.FWRelease,
 	}
@@ -119,7 +122,7 @@ func siteStateFingerprint(site model.Site) (string, error) {
 
 func fleetStateFingerprint(devices []*store.Device) (string, error) {
 	state := make([]stableDevice, 0, len(devices))
-	for _, dev := range applyOrder(devices) {
+	for _, dev := range applyOrder(configurableDevices(devices)) {
 		if dev.Adopted() {
 			state = append(state, stableDeviceState(dev))
 		}

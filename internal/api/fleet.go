@@ -24,19 +24,21 @@ import (
 // real states that a zero would misreport — the first as the epoch, the second
 // as a class the device may not be in.
 type deviceView struct {
-	ID            int64    `json:"id"`
-	MAC           string   `json:"mac"`
-	Name          string   `json:"name"`
-	Host          string   `json:"host"`
-	Role          string   `json:"role"`
-	Functions     []string `json:"functions"`
-	FunctionError string   `json:"function_error,omitempty"`
-	Adopted       bool     `json:"adopted"`
-	AdoptedAt     *int64   `json:"adopted_at"`
-	Class         *string  `json:"class"`
-	FWRelease     string   `json:"firmware"`
-	LastSeen      *int64   `json:"last_seen"`
-	PollState     string   `json:"poll_state"`
+	ID                  int64    `json:"id"`
+	MAC                 string   `json:"mac"`
+	Name                string   `json:"name"`
+	Host                string   `json:"host"`
+	Role                string   `json:"role"`
+	Functions           []string `json:"functions"`
+	FunctionError       string   `json:"function_error,omitempty"`
+	ManagementMode      string   `json:"management_mode"`
+	ManagementModeError string   `json:"management_mode_error,omitempty"`
+	Adopted             bool     `json:"adopted"`
+	AdoptedAt           *int64   `json:"adopted_at"`
+	Class               *string  `json:"class"`
+	FWRelease           string   `json:"firmware"`
+	LastSeen            *int64   `json:"last_seen"`
+	PollState           string   `json:"poll_state"`
 
 	// Status is derived here rather than stored, so it cannot go stale: a device
 	// is only "online" relative to the moment someone asks.
@@ -84,11 +86,16 @@ func (s *Server) viewDevice(d *store.Device, now time.Time) deviceView {
 	if d.Functions != nil && len(functions) == 0 {
 		role = model.RoleOf(d.Role)
 	}
+	managementMode := string(d.EffectiveManagementMode())
+	if managementMode == "" {
+		managementMode = d.ManagementMode
+	}
 	v := deviceView{
 		ID: d.ID, MAC: d.MAC, Name: d.Name, Host: d.Host,
 		Role: string(role), Functions: functions.Strings(),
-		FunctionError: d.FunctionError,
-		Adopted:       d.Adopted(), AdoptedAt: d.AdoptedAt,
+		FunctionError:  d.FunctionError,
+		ManagementMode: managementMode, ManagementModeError: d.ManagementModeError,
+		Adopted: d.Adopted(), AdoptedAt: d.AdoptedAt,
 		FWRelease: d.FWRelease, LastSeen: d.LastSeen, PollState: d.PollState,
 	}
 	if d.Class != "" {

@@ -154,8 +154,9 @@ type AdoptRequest struct {
 	Port                     int      `json:"port,omitempty"`
 	Scheme                   string   `json:"scheme,omitempty"` // "http" (default) or "https"
 	Name                     string   `json:"name,omitempty"`
-	Role                     string   `json:"role,omitempty"`      // gateway|ap|switch
-	Functions                []string `json:"functions,omitempty"` // independently selected responsibilities
+	Role                     string   `json:"role,omitempty"`            // gateway|ap|switch
+	Functions                []string `json:"functions,omitempty"`       // independently selected responsibilities
+	ManagementMode           string   `json:"management_mode,omitempty"` // managed (default) | monitor_only
 	Username                 string   `json:"username"`
 	Password                 string   `json:"password"`
 	AcknowledgeRouterChanges bool     `json:"acknowledge_router_changes"`
@@ -175,6 +176,7 @@ type adoptRequestWire struct {
 	Name                     string          `json:"name,omitempty"`
 	Role                     string          `json:"role,omitempty"`
 	Functions                json.RawMessage `json:"functions,omitempty"`
+	ManagementMode           string          `json:"management_mode,omitempty"`
 	Username                 string          `json:"username"`
 	Password                 string          `json:"password"`
 	PrivateKey               string          `json:"private_key,omitempty"`
@@ -190,12 +192,15 @@ type AdoptResult struct {
 	Name      string   `json:"name"`
 	Role      string   `json:"role"`
 	Functions []string `json:"functions"`
-	Model     string   `json:"model"`
-	Class     string   `json:"class"`
-	Firmware  string   `json:"firmware"`
-	CertFP    string   `json:"cert_fp,omitempty"`
-	HostKeyFP string   `json:"host_key_fp,omitempty"`
-	Features  []string `json:"features"`
+	// ManagementMode is managed or monitor_only. A monitor-only device is
+	// polled normally but excluded from site configuration Preview and Apply.
+	ManagementMode string   `json:"management_mode"`
+	Model          string   `json:"model"`
+	Class          string   `json:"class"`
+	Firmware       string   `json:"firmware"`
+	CertFP         string   `json:"cert_fp,omitempty"`
+	HostKeyFP      string   `json:"host_key_fp,omitempty"`
+	Features       []string `json:"features"`
 	// Unobservable names the capabilities the probe could not determine — a
 	// refused check, not a missing feature. Surfaced because a wider ACL is the
 	// only thing that would change them, and the operator is the only one who
@@ -328,7 +333,8 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 	req := AdoptRequest{
 		Host: wire.Host, Port: wire.Port, Scheme: wire.Scheme, Name: wire.Name,
 		Role: wire.Role, Username: wire.Username, Password: wire.Password,
-		PrivateKey: wire.PrivateKey, AcknowledgeRouterChanges: wire.AcknowledgeRouterChanges,
+		ManagementMode: wire.ManagementMode,
+		PrivateKey:     wire.PrivateKey, AcknowledgeRouterChanges: wire.AcknowledgeRouterChanges,
 	}
 	if !req.AcknowledgeRouterChanges {
 		writeErr(w, http.StatusBadRequest, "acknowledge_router_changes must be true to authorize adoption's documented router changes")
@@ -370,6 +376,12 @@ func (s *Server) handleAdopt(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Functions = functions.Strings()
 	req.Role = string(functions.PrimaryRole())
+	managementMode, err := model.ParseManagementMode(req.ManagementMode)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.ManagementMode = string(managementMode)
 	release, ok := s.beginOperation(w, operationAdopt)
 	if !ok {
 		return

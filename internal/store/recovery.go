@@ -57,7 +57,7 @@ type recoveryBound struct {
 
 var recoveryBounds = []recoveryBound{
 	{"controller accounts", "admins", "", bytesOf("id", "username", "pass_hash", "created_at", "last_login", "role", "enabled", "deleted_at"), recoveryMaxAdmins, recoveryMaxStateBytes, recoveryMaxAdminRowBytes},
-	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "management_mode", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"site", "site", "", bytesOf("id", "uuid", "name"), 1, recoveryMaxRowBytes, recoveryMaxRowBytes},
 	{"networks", "networks", "", bytesOf("id", "name", "vlan", "cidr", "zone", "dhcp_json", "ipv6_json", "enabled"), recoveryMaxNetworks, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"zone policies", "zones", "", bytesOf("name", "policy_json"), recoveryMaxZones, recoveryMaxStateBytes, recoveryMaxRowBytes},
@@ -313,6 +313,9 @@ func validateRecoveryDevices(ctx context.Context, q siteReader,
 		}
 		counts.Devices++
 		if device.FunctionError != "" {
+			return errors.New("device inventory validation failed")
+		}
+		if device.ManagementModeError != "" {
 			return errors.New("device inventory validation failed")
 		}
 		if device.Adopted() && len(device.CredEnc) == 0 {

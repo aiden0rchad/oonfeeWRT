@@ -54,6 +54,11 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	}
 	req.Role = string(functions.PrimaryRole())
 	req.Functions = functions.Strings()
+	managementMode, err := model.ParseManagementMode(req.ManagementMode)
+	if err != nil {
+		return nil, err
+	}
+	req.ManagementMode = string(managementMode)
 
 	https := req.Scheme == "https"
 	endpoint, err := d.resolveWorkflowEndpoint(ctx, req.Host)
@@ -80,7 +85,8 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	// from the device. Refusing after opening SSH and minting a session would
 	// be a write-shaped conversation with a router we were never going to
 	// adopt.
-	releaseAdoption, err := d.beginAdoption(ctx, endpoint.inventoryHost(https), functions)
+	releaseAdoption, err := d.beginAdoption(ctx, endpoint.inventoryHost(https), functions,
+		managementMode)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +183,8 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	dev := &store.Device{
 		MAC: mac, Host: inventoryHost, Port: effectiveDevicePort(req.Port, https), Name: name,
 		Role: req.Role, Functions: req.Functions,
-		CertFP: res.CertFP, HostKeyFP: res.HostKeyFP,
+		ManagementMode: req.ManagementMode,
+		CertFP:         res.CertFP, HostKeyFP: res.HostKeyFP,
 		AdoptedAt: &now, CredEnc: blob,
 		Class: string(res.Caps.Class), CapsJSON: string(caps),
 		FWRelease: res.Caps.Board.Release,
@@ -201,7 +208,8 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 		Detail: map[string]any{
 			"mac": mac, "host": inventoryHost, "model": res.Caps.Board.Model,
 			"class": string(res.Caps.Class), "login": res.Credential.Username,
-			"functions": req.Functions,
+			"functions":       req.Functions,
+			"management_mode": req.ManagementMode,
 		},
 	})
 	d.Log.Info("adopted device", "mac", mac, "host", inventoryHost,
@@ -210,7 +218,8 @@ func (d *Daemon) Adopt(ctx context.Context, req api.AdoptRequest) (*api.AdoptRes
 	out := &api.AdoptResult{
 		DeviceID: dev.ID, MAC: mac, Name: name,
 		Role: dev.Role, Functions: append([]string(nil), dev.Functions...),
-		Model: res.Caps.Board.Model, Class: string(res.Caps.Class),
+		ManagementMode: dev.ManagementMode,
+		Model:          res.Caps.Board.Model, Class: string(res.Caps.Class),
 		Firmware: res.Caps.Board.Release, CertFP: res.CertFP,
 		// The pin that was just recorded, so an operator standing at the device
 		// can compare it against `ssh-keygen -lf` on the host key there. The

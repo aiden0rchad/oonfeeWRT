@@ -55,8 +55,8 @@ VALUES (123,'system','info','legacy','{}')`); err != nil {
 }
 
 func TestCurrentSchemaIsADowngradeBoundaryWithoutRepeatingSecretMigration(t *testing.T) {
-	if schemaVersion != 20 || secretSchemaVersion != 14 {
-		t.Fatalf("schema epochs=(%d,%d), want (20,14)", schemaVersion, secretSchemaVersion)
+	if schemaVersion != 21 || secretSchemaVersion != 14 {
+		t.Fatalf("schema epochs=(%d,%d), want (21,14)", schemaVersion, secretSchemaVersion)
 	}
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "newer.db")

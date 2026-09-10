@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,8 @@ func TestConcurrentGatewayAdoptionsAdmitOnlyOneBootstrap(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		release, err := d.beginAdoption(ctx, "192.0.2.1", functions)
+		release, err := d.beginAdoption(ctx, "192.0.2.1", functions,
+			model.ManagementModeManaged)
 		if err != nil {
 			results <- err
 			return
@@ -52,7 +54,8 @@ func TestConcurrentGatewayAdoptionsAdmitOnlyOneBootstrap(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		close(secondStarted)
-		release, err := d.beginAdoption(ctx, "192.0.2.2", functions)
+		release, err := d.beginAdoption(ctx, "192.0.2.2", functions,
+			model.ManagementModeManaged)
 		if err == nil {
 			bootstrapCalls.Add(1)
 			release()
@@ -85,7 +88,7 @@ func TestFirstAdoptionMayBeAPOnly(t *testing.T) {
 	}
 	defer d.Close()
 	release, err := d.beginAdoption(context.Background(), "192.0.2.2",
-		model.DeviceFunctions{model.FunctionAP})
+		model.DeviceFunctions{model.FunctionAP}, model.ManagementModeManaged)
 	if err != nil {
 		t.Fatalf("AP-only first adoption was refused: %v", err)
 	}
@@ -119,9 +122,57 @@ func TestCorruptGatewayRowStillReservesTheGatewaySlot(t *testing.T) {
 		t.Fatal("fixture did not load as corrupt")
 	}
 	release, err := d.beginAdoption(ctx, "192.0.2.4",
-		model.DeviceFunctions{model.FunctionGateway})
+		model.DeviceFunctions{model.FunctionGateway}, model.ManagementModeManaged)
 	if err == nil {
 		release()
 		t.Fatal("corrupt existing gateway allowed a second gateway admission")
 	}
+}
+
+func TestMonitorOnlyGatewaysDoNotConsumeManagedGatewaySlot(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "monitor-only-gateways"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	at := time.Now().Unix()
+	for i, host := range []string{"192.0.2.1", "198.51.100.1"} {
+		dev := &store.Device{
+			MAC: fmt.Sprintf("aa:bb:cc:dd:21:%02d", i), Host: host,
+			Name: fmt.Sprintf("observed-router-%d", i), Role: "gateway",
+			Functions: []string{"gateway"}, ManagementMode: "monitor_only", AdoptedAt: &at,
+		}
+		if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, err := d.beginAdoption(ctx, "203.0.113.1",
+		model.DeviceFunctions{model.FunctionGateway}, model.ManagementModeManaged)
+	if err != nil {
+		t.Fatalf("monitor-only routers reserved the managed gateway slot: %v", err)
+	}
+	release()
+}
+
+func TestMonitorOnlyGatewayMayJoinExistingManagedGateway(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "monitor-after-managed"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	at := time.Now().Unix()
+	if err := d.Store.UpsertDevice(ctx, &store.Device{
+		MAC: "aa:bb:cc:dd:21:10", Host: "192.0.2.1", Name: "managed-router",
+		Role: "gateway", Functions: []string{"gateway"}, AdoptedAt: &at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release, err := d.beginAdoption(ctx, "198.51.100.1",
+		model.DeviceFunctions{model.FunctionGateway}, model.ManagementModeMonitorOnly)
+	if err != nil {
+		t.Fatalf("monitor-only router was refused: %v", err)
+	}
+	release()
 }

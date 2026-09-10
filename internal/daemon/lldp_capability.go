@@ -34,6 +34,9 @@ func (d *Daemon) LLDPCapability(ctx context.Context, req api.LLDPCapabilityReque
 	if !dev.Adopted() {
 		return nil, fmt.Errorf("daemon: %s is not adopted", dev.Name)
 	}
+	if !dev.Configurable() && (req.Action == "configure" || req.Action == "install" || req.Action == "remove") {
+		return nil, fmt.Errorf("daemon: %s is monitor-only; LLDP configuration and package changes are disabled", dev.Name)
+	}
 	collector := d.collectorRef()
 	if collector != nil {
 		defer collector.Quiesce(dev.ID)()

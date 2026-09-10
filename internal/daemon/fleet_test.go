@@ -18,6 +18,16 @@ func TestLegacyOverlongPollIntervalIsClampedToFreshnessContract(t *testing.T) {
 	}
 }
 
+func TestMonitorOnlyGatewayRemainsAFullPollingTarget(t *testing.T) {
+	target := (&Daemon{}).target(&store.Device{
+		ID: 21, MAC: "02:00:00:00:21:21", Name: "observed-router",
+		Role: "gateway", Functions: []string{"gateway"}, ManagementMode: "monitor_only",
+	})
+	if target.DeviceID != 21 || !target.Gateway {
+		t.Fatalf("monitor-only polling target=%+v", target)
+	}
+}
+
 func TestLogOnlySnapshotDurablyAdvancesCoverageWithoutFullPollState(t *testing.T) {
 	ctx := context.Background()
 	d := openDaemon(t)

@@ -195,6 +195,44 @@ func TestPreviewBlocksCorruptGatewayFunctionsBeforeDeviceContact(t *testing.T) {
 	}
 }
 
+func TestMonitorOnlyDeviceIsExcludedFromPreviewAndRefusedByDirectApply(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, testConfig(t, "monitor-only-preview"), quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	at := int64(1)
+	dev := &store.Device{
+		MAC: "02:00:00:00:21:20", Host: "127.0.0.1", Port: 1,
+		Name: "observed-router", Role: "gateway", Functions: []string{"gateway"},
+		ManagementMode: "monitor_only", AdoptedAt: &at, CapsJSON: `{"Class":"A"}`,
+	}
+	if err := d.Store.UpsertDevice(ctx, dev); err != nil {
+		t.Fatal(err)
+	}
+
+	preview, err := d.Preview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Devices) != 0 {
+		t.Fatalf("monitor-only device entered site preview: %+v", preview.Devices)
+	}
+	if preview.PreviewToken == "" {
+		t.Fatal("managed-fleet preview did not produce a token")
+	}
+
+	direct := d.previewDevice(ctx, model.Site{}, dev)
+	if direct.Error == "" || !strings.Contains(direct.Error, "monitor-only") {
+		t.Fatalf("direct preview did not fail closed: %+v", direct)
+	}
+	result, err := d.applyDeviceBound(ctx, model.Site{}, dev, false, "", "", "")
+	if err == nil || result.Outcome != "error" || !strings.Contains(result.Reason, "monitor-only") {
+		t.Fatalf("direct apply=(%+v,%v), want pre-write refusal", result, err)
+	}
+}
+
 // A change to network or firewall config needs an explicit acknowledgment.
 //
 // Those configs carry the path the controller reaches the device through. The

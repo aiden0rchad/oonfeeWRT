@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS devices (
   fw_release   TEXT,
   last_seen    INTEGER,
   poll_state   TEXT NOT NULL DEFAULT 'baseline', -- 'baseline'|'focused'|'quiesced'|'backoff'
-  poll_interval_s INTEGER NOT NULL DEFAULT 0     -- per-device baseline; 0 = controller default (migration v4)
+  poll_interval_s INTEGER NOT NULL DEFAULT 0,    -- per-device baseline; 0 = controller default (migration v4)
+  management_mode TEXT NOT NULL DEFAULT 'managed' CHECK (management_mode IN ('managed','monitor_only'))
 );
 
 -- ===== site model (desired state) =====
