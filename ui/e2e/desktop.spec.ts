@@ -182,10 +182,12 @@ const site = {
   networks: [{ id: 1, name: 'lan', vlan: 1, cidr: '192.168.1.1/24', zone: 'lan', enabled: true }],
   zones: [{ name: 'lan', forward_to: ['wan'], explicit: true }],
   policies: [],
+  policy_sets: [{ id: 4, name: 'Trusted devices', members: ['02:00:00:00:00:01'] }],
   policy_capabilities: [
     { kind: 'firewall', available: true },
     { kind: 'route', available: true },
     { kind: 'fixed_ip', available: true },
+    { kind: 'policy_set', available: true },
   ],
   problems: [],
   overrides: [],
@@ -738,8 +740,23 @@ test('390x844 responsive routes keep controls and state in view', async ({ page 
   await expect(policyTabs).toBeVisible()
   await expectWithinMain(page, policyTabs)
   await page.getByRole('tab', { name: 'Objects' }).click()
+  const namedSet = page.getByRole('region', { name: 'Named client set Trusted devices' })
+  await expect(namedSet).toBeVisible()
+  await expectWithinMain(page, namedSet)
   expect(await page.locator('.policy-object-picker').evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+  await page.getByLabel('Object type').selectOption('policy_set')
+  const policyObject = page.getByRole('combobox', { name: 'Object', exact: true })
+  await expect(policyObject).toHaveValue('4')
+  await expectWithinMain(page, policyObject)
+  await page.getByRole('button', { name: 'Create named set' }).click()
+  const setDialog = page.getByRole('dialog', { name: 'Create named client set' })
+  await expect(setDialog.getByRole('checkbox', { name: /Fixture phone.*online/i })).toBeVisible()
+  await expect(setDialog.getByLabel('Set name')).toBeVisible()
+  const setDialogBox = await setDialog.boundingBox()
+  expect(setDialogBox?.x ?? -1).toBeGreaterThanOrEqual(0)
+  expect((setDialogBox?.x ?? 0) + (setDialogBox?.width ?? 391)).toBeLessThanOrEqual(390)
+  await setDialog.getByRole('button', { name: 'Cancel' }).click()
   await page.getByRole('checkbox', { name: /^Route\b/ }).check()
   expect(await page.locator('.policy-route-fields').evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)

@@ -11,6 +11,7 @@ import type {
   PolicyObjectOutcome,
   PolicyObjectTarget,
   PolicyRow,
+  PolicySet,
   PortForward,
   Site,
   SiteNetwork,
@@ -115,12 +116,11 @@ export function PolicyEngine({ onReviewChanges }: { onReviewChanges?: () => void
 
   const refreshPolicies = useCallback(async (success?: string) => {
     const [master, refreshedSite] = await Promise.all([api.policies(), api.site()])
-    setSite((current) => current && ({
-      ...current,
+    setSite({
+      ...refreshedSite,
       policies: master.rows,
       policy_capabilities: master.capabilities,
-      problems: refreshedSite.problems,
-    }))
+    })
     if (success) setSaved(success)
   }, [])
 
@@ -754,7 +754,13 @@ function PolicyEditor({
             <Banner tone="warning">
               This explicit firewall rule is IPv4-only. IPv6 traffic is unaffected.
             </Banner>
-            <FirewallFields value={draft.firewall} zones={zones} disabled={busy} onChange={(firewall) => setDraft({ ...draft, firewall })} />
+            <FirewallFields
+              value={draft.firewall}
+              zones={zones}
+              policySets={site.policy_sets ?? []}
+              disabled={busy}
+              onChange={(firewall) => setDraft({ ...draft, firewall })}
+            />
           </>
         )}
         {draft.kind === 'port_forward' && draft.port_forward && (
@@ -795,12 +801,15 @@ function PolicyEditor({
   )
 }
 
-function FirewallFields({ value, zones, disabled, onChange }: {
+function FirewallFields({ value, zones, policySets, disabled, onChange }: {
   value: FirewallRule
   zones: string[]
+  policySets: PolicySet[]
   disabled: boolean
   onChange: (value: FirewallRule) => void
 }) {
+  const sourceMode = value.source_set_id ? 'policy_set' : 'direct'
+  const selectedSet = policySets.find((policySet) => policySet.id === value.source_set_id)
   return (
     <fieldset style={fieldsetStyle}>
       <legend style={legendStyle}>IPv4 firewall match and verdict</legend>
@@ -829,7 +838,78 @@ function FirewallFields({ value, zones, disabled, onChange }: {
       <Field label="Destination IPv4 CIDR (optional)" placeholder="10.0.0.0/8" disabled={disabled} value={value.destination_cidr ?? ''} onChange={(event) => onChange({ ...value, destination_cidr: event.target.value })} />
       <Field label="Source port or range (optional)" placeholder="1024-65535" disabled={disabled} value={value.source_port ?? ''} onChange={(event) => onChange({ ...value, source_port: event.target.value })} />
       <Field label="Destination port or range (optional)" placeholder="443 or 8000-8080" disabled={disabled} value={value.destination_port ?? ''} onChange={(event) => onChange({ ...value, destination_port: event.target.value })} />
-      <Field label="Source MACs (comma separated, optional)" placeholder="aa:bb:cc:dd:ee:ff" disabled={disabled} value={(value.source_macs ?? []).join(', ')} onChange={(event) => onChange({ ...value, source_macs: splitList(event.target.value) })} />
+      <fieldset style={fieldsetStyle}>
+        <legend style={legendStyle}>Source client match (optional)</legend>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+          <label style={checkStyle}>
+            <input
+              type="radio"
+              name="firewall-source-mode"
+              value="direct"
+              checked={sourceMode === 'direct'}
+              disabled={disabled}
+              onChange={() => onChange({ ...value, source_set_id: undefined })}
+            />
+            Direct MAC addresses
+          </label>
+          <label style={checkStyle}>
+            <input
+              type="radio"
+              name="firewall-source-mode"
+              value="policy_set"
+              checked={sourceMode === 'policy_set'}
+              disabled={disabled || policySets.length === 0}
+              onChange={() => onChange({
+                ...value,
+                source_set_id: policySets[0]?.id,
+                source_macs: undefined,
+              })}
+            />
+            Named client set
+          </label>
+        </div>
+        {sourceMode === 'direct' ? (
+          <Field
+            label="Source MACs (comma separated, optional)"
+            placeholder="aa:bb:cc:dd:ee:ff"
+            disabled={disabled}
+            value={(value.source_macs ?? []).join(', ')}
+            onChange={(event) => onChange({
+              ...value,
+              source_set_id: undefined,
+              source_macs: splitList(event.target.value),
+            })}
+          />
+        ) : (
+          <>
+            <SelectField
+              label="Named client set"
+              value={String(value.source_set_id ?? '')}
+              disabled={disabled}
+              onChange={(id) => onChange({
+                ...value,
+                source_set_id: numberValue(id),
+                source_macs: undefined,
+              })}
+            >
+              {policySets.map((policySet) => (
+                <option key={policySet.id} value={policySet.id}>
+                  {policySet.name} · {policySet.members.length} member{policySet.members.length === 1 ? '' : 's'}
+                </option>
+              ))}
+            </SelectField>
+            {selectedSet && (
+              <div style={hintStyle}>
+                Resolved members: {selectedSet.members.join(', ')}. Preview resolves the set again,
+                so later membership changes update every referencing rule.
+              </div>
+            )}
+          </>
+        )}
+        {policySets.length === 0 && (
+          <div style={hintStyle}>Create a named client set on the Objects tab to reuse observed MAC membership.</div>
+        )}
+      </fieldset>
     </fieldset>
   )
 }
@@ -919,6 +999,8 @@ function ObjectsPanel({
   const [selectedClient, setSelectedClient] = useState<string | null>(null)
   const [clientChoice, setClientChoice] = useState('')
   const [sourceRevision, setSourceRevision] = useState(0)
+  const policySets = useMemo(() => site.policy_sets ?? [], [site.policy_sets])
+  const hasPolicySetObject = objects.some((object) => object.kind === 'policy_set')
 
   const compileInput = JSON.stringify({
     objects,
@@ -929,6 +1011,7 @@ function ObjectsPanel({
     routeMetric,
     rateKbps,
     sourceRevision,
+    policySets,
   })
   const compiledResult = compiledFor === compileInput ? result : null
 
@@ -985,13 +1068,26 @@ function ObjectsPanel({
       }))
     }
     if (objectKind === 'group') return groups.map((group) => ({ id: group, label: group }))
+    if (objectKind === 'policy_set') {
+      return policySets.map((policySet) => ({
+        id: String(policySet.id),
+        label: `${policySet.name} · ${policySet.members.length} member${policySet.members.length === 1 ? '' : 's'}`,
+      }))
+    }
     return [
       { id: 'wan', label: WAN_LABEL },
       ...site.networks
         .filter((network) => network.enabled && network.vlan > 1)
         .map((network) => ({ id: String(network.id), label: `${network.name} · VLAN ${network.vlan}` })),
     ]
-  }, [clients, groups, objectKind, site.networks])
+  }, [clients, groups, objectKind, policySets, site.networks])
+
+  useEffect(() => {
+    const available = new Set(policySets.map((policySet) => String(policySet.id)))
+    setObjects((current) => current.filter(
+      (object) => object.kind !== 'policy_set' || available.has(object.id),
+    ))
+  }, [policySets])
 
   useEffect(() => {
     if (!objectOptions.some((option) => option.id === objectID)) {
@@ -1004,6 +1100,7 @@ function ObjectsPanel({
     const target = { kind: objectKind, id: objectID }
     if (!objects.some((object) => object.kind === target.kind && object.id === target.id)) {
       setObjects([...objects, target])
+      if (target.kind === 'policy_set') setOutcomes(['secure'])
     }
   }
 
@@ -1070,11 +1167,22 @@ function ObjectsPanel({
         <div role="alert">
           <Banner tone="warning">
             Client inventory is incomplete: {clientsCoverage.returned} of {clientsCoverage.total} clients
-            were returned. Device, group and client-policy choices below show only that subset;
-            absence from these lists does not mean a client or group does not exist.
+            were returned. Device, group, named-set member and client-policy choices below show only
+            that subset; absence from these lists does not mean a client or group does not exist.
           </Banner>
         </div>
       )}
+      <PolicySetManager
+        policySets={policySets}
+        clients={clients ?? []}
+        clientsLoaded={clients !== null}
+        clientsCoverage={clientsCoverage}
+        clientsError={clientsError}
+        onChanged={async (success) => {
+          setSourceRevision((current) => current + 1)
+          await onPoliciesChanged(success)
+        }}
+      />
       <Card title="Object Manager">
         <div style={{ display: 'grid', gap: 14 }}>
           <div>
@@ -1083,17 +1191,20 @@ function ObjectsPanel({
               <SelectField label="Object type" value={objectKind} disabled={compiling} onChange={(value) => setObjectKind(value as PolicyObjectTarget['kind'])}>
                 <option value="device">Client device</option>
                 <option value="group">Client group</option>
+                <option value="policy_set">Named client set</option>
                 <option value="network">Network</option>
               </SelectField>
               <SelectField
-                label={clientsCoverage && objectKind !== 'network' ? 'Object (partial client inventory)' : 'Object'}
+                label={clientsCoverage && (objectKind === 'device' || objectKind === 'group')
+                  ? 'Object (partial client inventory)'
+                  : 'Object'}
                 value={objectID}
                 disabled={compiling || objectOptions.length === 0}
                 onChange={setObjectID}
               >
                 {objectOptions.length === 0 && (
                   <option value="">
-                    {clientsCoverage && objectKind !== 'network'
+                    {clientsCoverage && (objectKind === 'device' || objectKind === 'group')
                       ? 'No objects in returned subset'
                       : 'No objects available'}
                   </option>
@@ -1109,11 +1220,14 @@ function ObjectsPanel({
                   : 'No client groups yet. Assign a desired group in Client policy below.'}
               </div>
             )}
+            {objectKind === 'policy_set' && policySets.length === 0 && (
+              <div style={hintStyle}>No named client sets yet. Create one above from observed clients.</div>
+            )}
             <div aria-label="Selected policy objects" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
               {objects.length === 0 && <span style={hintStyle}>No objects selected.</span>}
               {objects.map((object) => (
                 <span key={`${object.kind}:${object.id}`} style={chipStyle}>
-                  {object.kind}: {objectLabel(object, objectOptions, clients ?? [], site.networks)}
+                  {kindLabel(object.kind)}: {objectLabel(object, objectOptions, clients ?? [], site.networks, policySets)}
                   <button
                     type="button"
                     aria-label={`Remove ${object.kind} ${object.id}`}
@@ -1138,24 +1252,30 @@ function ObjectsPanel({
               />
               <OutcomeToggle
                 title="Route"
-                detail="Compile a static network route; device/group policy routing is explicitly gated."
+                detail={hasPolicySetObject
+                  ? 'Named client sets support Secure only; remove them to request Route.'
+                  : 'Compile a static network route; device/group policy routing is explicitly gated.'}
                 checked={outcomes.includes('route')}
-                disabled={compiling}
+                disabled={compiling || hasPolicySetObject}
                 onChange={(checked) => setOutcomes(toggleOutcome(outcomes, 'route', checked))}
               />
               <OutcomeToggle
                 title="QoS"
-                detail="Request a visible gate; unavailable until an observed SQM/tc backend exists."
+                detail={hasPolicySetObject
+                  ? 'Named client sets support Secure only; remove them to request QoS.'
+                  : 'Request a visible gate; unavailable until an observed SQM/tc backend exists.'}
                 checked={outcomes.includes('qos')}
-                disabled={compiling}
+                disabled={compiling || hasPolicySetObject}
                 unavailable
                 onChange={(checked) => setOutcomes(toggleOutcome(outcomes, 'qos', checked))}
               />
               <OutcomeToggle
                 title="Application (DPI)"
-                detail="Request a visible gate; unavailable until application identity is separately observed."
+                detail={hasPolicySetObject
+                  ? 'Named client sets support Secure only; remove them to request application policy.'
+                  : 'Request a visible gate; unavailable until application identity is separately observed.'}
                 checked={outcomes.includes('application')}
-                disabled={compiling}
+                disabled={compiling || hasPolicySetObject}
                 unavailable
                 onChange={(checked) => setOutcomes(toggleOutcome(outcomes, 'application', checked))}
               />
@@ -1222,6 +1342,10 @@ function ObjectsPanel({
                 {policy.kind === 'firewall_rule' && policy.firewall && (
                   <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
                     Concrete scope: <strong>IPv4 only</strong> · <strong>{policy.firewall.source_zone}</strong>
+                    {policy.firewall.source_set_id ? (
+                      <> · named set <strong>{policySetName(policySets, policy.firewall.source_set_id)}</strong>
+                        {' '}· resolved MACs {policySetMembers(policySets, policy.firewall.source_set_id)}</>
+                    ) : null}
                     {policy.firewall.source_macs?.length ? ` · MAC ${policy.firewall.source_macs.join(', ')}` : ''}
                     {' '}→ <strong>{policy.firewall.destination_zone || 'gateway input'}</strong>
                     {' '}· {policy.firewall.action}. It affects new routed flows; existing conntrack
@@ -1301,6 +1425,299 @@ function ObjectsPanel({
         />
       )}
     </div>
+  )
+}
+
+function PolicySetManager({
+  policySets,
+  clients,
+  clientsLoaded,
+  clientsCoverage,
+  clientsError,
+  onChanged,
+}: {
+  policySets: PolicySet[]
+  clients: Client[]
+  clientsLoaded: boolean
+  clientsCoverage: { returned: number; total: number } | null
+  clientsError: string
+  onChanged: (success: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState<PolicySet | 'new' | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
+  const [deleting, setDeleting] = useState<number | null>(null)
+  const [error, setError] = useState('')
+
+  async function remove(policySet: PolicySet) {
+    setDeleting(policySet.id)
+    setError('')
+    try {
+      await api.deletePolicySet(policySet.id)
+      await onChanged(`${policySet.name} named client set deleted from desired state.`)
+      setConfirmDelete(null)
+    } catch (requestError) {
+      setError(message(requestError))
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  return (
+    <>
+      <Card
+        title="Named client sets"
+        actions={(
+          <Button
+            kind="primary"
+            disabled={!clientsLoaded || clients.length === 0}
+            onClick={() => {
+              setEditing('new')
+              setError('')
+            }}
+          >
+            Create named set
+          </Button>
+        )}
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+            Store a client list once, then reuse it in explicit firewall rules or Secure drafts.
+            Membership is limited to controller-observed clients. Known offline clients remain selectable;
+            a missing client is not automatically removed.
+          </div>
+          {clientsCoverage && (
+            <div style={hintStyle}>
+              This request returned only {clientsCoverage.returned} of {clientsCoverage.total} observed clients.
+              New selections are bounded to that subset; existing members outside it remain visible and retained.
+            </div>
+          )}
+          {clientsError && (
+            <div style={hintStyle}>
+              Client inventory is unavailable, so new membership cannot be selected. Existing set membership
+              remains visible and can be retained or removed.
+            </div>
+          )}
+          {error && <div role="alert"><Banner tone="critical">{error}</Banner></div>}
+          {policySets.length === 0 ? (
+            <div style={hintStyle}>
+              {clientsLoaded && clients.length === 0
+                ? 'No named sets. Observe at least one client before creating one.'
+                : 'No named client sets yet.'}
+            </div>
+          ) : (
+            <div className="policy-set-grid">
+              {policySets.map((policySet) => (
+                <section key={policySet.id} aria-label={`Named client set ${policySet.name}`} style={draftCardStyle}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'start' }}>
+                    <div>
+                      <strong style={{ fontSize: 13 }}>{policySet.name}</strong>
+                      <div style={hintStyle}>Set #{policySet.id} · {policySet.members.length} resolved member{policySet.members.length === 1 ? '' : 's'}</div>
+                    </div>
+                    <Pill colour="var(--accent-text)">Reusable</Pill>
+                  </div>
+                  <ul className="policy-set-members" aria-label={`${policySet.name} resolved members`}>
+                    {policySet.members.map((mac) => {
+                      const client = findClient(clients, mac)
+                      return (
+                        <li key={mac}>
+                          <code>{mac}</code>
+                          {' · '}{client?.name || 'Unnamed client'}
+                          {client ? ` · ${client.online ? 'online' : 'offline'}` : ' · retained outside returned inventory'}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <Button disabled={deleting !== null} onClick={() => {
+                      setEditing(policySet)
+                      setConfirmDelete(null)
+                      setError('')
+                    }}>Edit set</Button>
+                    {confirmDelete !== policySet.id ? (
+                      <Button disabled={deleting !== null} onClick={() => {
+                        setConfirmDelete(policySet.id)
+                        setError('')
+                      }}>Delete set</Button>
+                    ) : (
+                      <>
+                        <Button disabled={deleting !== null} onClick={() => remove(policySet)}>
+                          {deleting === policySet.id ? 'Deleting…' : `Delete ${policySet.name}`}
+                        </Button>
+                        <Button disabled={deleting !== null} onClick={() => setConfirmDelete(null)}>Keep set</Button>
+                      </>
+                    )}
+                  </div>
+                  {confirmDelete === policySet.id && (
+                    <div style={hintStyle}>
+                      Deletion is refused while a saved policy references this set. Router state is unchanged
+                      until a later Preview and Apply.
+                    </div>
+                  )}
+                </section>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
+      {editing && (
+        <PolicySetEditor
+          initial={editing === 'new' ? null : editing}
+          clients={clients}
+          clientsLoaded={clientsLoaded}
+          clientsCoverage={clientsCoverage}
+          onClose={() => setEditing(null)}
+          onSaved={async (policySet) => {
+            await onChanged(`${policySet.name} named client set saved as desired state.`)
+            setEditing(null)
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+function PolicySetEditor({
+  initial,
+  clients,
+  clientsLoaded,
+  clientsCoverage,
+  onClose,
+  onSaved,
+}: {
+  initial: PolicySet | null
+  clients: Client[]
+  clientsLoaded: boolean
+  clientsCoverage: { returned: number; total: number } | null
+  onClose: () => void
+  onSaved: (policySet: PolicySet) => Promise<void>
+}) {
+  const [policySetID, setPolicySetID] = useState(initial?.id)
+  const [name, setName] = useState(initial?.name ?? '')
+  const [members, setMembers] = useState<Set<string>>(
+    () => new Set((initial?.members ?? []).map((mac) => mac.toLowerCase())),
+  )
+  const [filter, setFilter] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const choices = useMemo(() => {
+    const byMAC = new Map<string, Client | null>(
+      clients.map((client) => [client.mac.toLowerCase(), client]),
+    )
+    for (const mac of initial?.members ?? []) {
+      if (!byMAC.has(mac.toLowerCase())) byMAC.set(mac.toLowerCase(), null)
+    }
+    const query = filter.trim().toLowerCase()
+    return [...byMAC.entries()]
+      .filter(([mac, client]) => !query || mac.includes(query) || client?.name.toLowerCase().includes(query))
+      .sort(([macA, clientA], [macB, clientB]) =>
+        (clientA?.name || macA).localeCompare(clientB?.name || macB))
+  }, [clients, filter, initial?.members])
+
+  function toggleMember(mac: string, checked: boolean) {
+    setMembers((current) => {
+      const next = new Set(current)
+      if (checked) next.add(mac.toLowerCase())
+      else next.delete(mac.toLowerCase())
+      return next
+    })
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault()
+    setError('')
+    if (!name.trim()) {
+      setError('Name is required.')
+      return
+    }
+    if (members.size === 0) {
+      setError('Select at least one observed client.')
+      return
+    }
+    if (members.size > 1024) {
+      setError('A named client set can contain at most 1024 members.')
+      return
+    }
+    setBusy(true)
+    try {
+      const response = await api.savePolicySet({
+        id: policySetID,
+        name: name.trim(),
+        members: [...members].sort(),
+      })
+      setPolicySetID(response.policy_set.id)
+      await onSaved(response.policy_set)
+    } catch (requestError) {
+      setError(message(requestError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <SlideOver title={initial ? `Edit named set · ${initial.name}` : 'Create named client set'} onClose={() => !busy && onClose()}>
+      <form onSubmit={save} style={{ display: 'grid', gap: 13 }}>
+        {error && <div role="alert"><Banner tone="critical">{error}</Banner></div>}
+        <Field
+          label="Set name"
+          required
+          maxLength={128}
+          disabled={busy}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+        <div style={hintStyle}>
+          Membership comes from observed inventory, including offline clients retained by the controller.
+          {clientsCoverage && ` Only ${clientsCoverage.returned} of ${clientsCoverage.total} clients are in this response; existing out-of-subset members are labelled and retained.`}
+        </div>
+        <Field
+          label="Filter observed clients"
+          placeholder="Name or MAC"
+          disabled={busy}
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        <fieldset style={fieldsetStyle}>
+          <legend style={legendStyle}>Members · {members.size} selected</legend>
+          {!clientsLoaded && choices.length === 0 && <div style={hintStyle}>Loading observed clients…</div>}
+          {clientsLoaded && choices.length === 0 && (
+            <div style={hintStyle}>{filter ? 'No observed clients match this filter.' : 'No observed clients are available.'}</div>
+          )}
+          <div className="policy-set-member-picker">
+            {choices.map(([mac, client]) => {
+              const checked = members.has(mac)
+              const availability = client
+                ? client.online ? 'online' : 'offline · retained inventory'
+                : 'existing member · outside returned inventory'
+              return (
+                <label key={mac} style={{ ...checkStyle, alignItems: 'start' }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={busy || (!checked && members.size >= 1024)}
+                    onChange={(event) => toggleMember(mac, event.target.checked)}
+                  />
+                  <span>
+                    <strong>{client?.name || 'Unnamed client'}</strong>
+                    <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11 }}>
+                      {mac} · {availability}
+                    </span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </fieldset>
+        <Banner tone="accent">
+          Save updates controller desired state only. Referencing rules resolve current membership during Preview.
+        </Banner>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <Button kind="primary" type="submit" disabled={busy}>
+            {busy ? 'Saving…' : 'Save named set'}
+          </Button>
+          <Button disabled={busy} onClick={onClose}>Cancel</Button>
+        </div>
+      </form>
+    </SlideOver>
   )
 }
 
@@ -1555,7 +1972,10 @@ function cleanPolicy(policy: Policy): Omit<Policy, 'id'> & { id?: number } {
         destination_cidr: firewall.destination_cidr?.trim() || undefined,
         source_port: firewall.source_port?.trim() || undefined,
         destination_port: firewall.destination_port?.trim() || undefined,
-        source_macs: firewall.source_macs?.length ? firewall.source_macs : undefined,
+        source_set_id: firewall.source_set_id || undefined,
+        source_macs: firewall.source_set_id
+          ? undefined
+          : firewall.source_macs?.length ? firewall.source_macs : undefined,
       },
     }
   }
@@ -1588,6 +2008,9 @@ function validatePolicyDraft(policy: Policy): string {
     if ((policy.firewall.source_port || policy.firewall.destination_port) &&
       !policy.firewall.protocols.some((protocol) => protocol === 'tcp' || protocol === 'udp')) {
       return 'Port matches require TCP or UDP.'
+    }
+    if (policy.firewall.source_set_id && policy.firewall.source_macs?.length) {
+      return 'Choose either a named client set or direct source MACs, not both.'
     }
   }
   if (policy.kind === 'port_forward') {
@@ -1657,6 +2080,7 @@ function kindLabel(value: string) {
     nat: 'NAT',
     route: 'Routes',
     fixed_ip_capability: 'Fixed IP',
+    policy_set: 'Named client set',
     qos: 'QoS',
     rate_limit: 'Rate limit',
     application: 'Application / DPI',
@@ -1686,7 +2110,7 @@ function scopeText(row: PolicyRow) {
     return `${mac}: new IPv4 + IPv6 flows routed from managed zones to every destination, including foreign management LAN; excludes DHCP/DNS/router input and same-L2; existing conntrack sessions may continue until expiry`
   }
   const values = Object.entries(row.effective_scope).map(([key, value]) => {
-    const rendered = Array.isArray(value) ? value.join(', ') : String(value ?? '—')
+    const rendered = scopeValue(value)
     return `${key.replaceAll('_', ' ')}: ${rendered || '—'}`
   })
   const rendered = values.join(' · ') || 'Site'
@@ -1695,6 +2119,18 @@ function scopeText(row: PolicyRow) {
     return `address families: ipv4 · ${rendered}`
   }
   return rendered
+}
+
+function scopeValue(value: unknown): string {
+  if (Array.isArray(value)) return value.join(', ')
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    if (typeof record.name === 'string' && typeof record.id === 'number') {
+      return `${record.name} (#${record.id})`
+    }
+    return JSON.stringify(record)
+  }
+  return String(value ?? '—')
 }
 
 function stringScope(row: PolicyRow, key: string) {
@@ -1707,6 +2143,7 @@ function objectLabel(
   currentOptions: Array<{ id: string; label: string }>,
   clients: Client[],
   networks: SiteNetwork[],
+  policySets: PolicySet[],
 ) {
   if (object.kind === 'device') {
     const client = clients.find((candidate) => candidate.mac.toLowerCase() === object.id.toLowerCase())
@@ -1717,7 +2154,22 @@ function objectLabel(
     const network = networks.find((candidate) => String(candidate.id) === object.id)
     return network?.name ?? object.id
   }
+  if (object.kind === 'policy_set') return policySetName(policySets, numberValue(object.id))
   return currentOptions.find((option) => option.id === object.id)?.label ?? object.id
+}
+
+function findClient(clients: Client[], mac: string) {
+  return clients.find((client) => client.mac.toLowerCase() === mac.toLowerCase())
+}
+
+function policySetName(policySets: PolicySet[], id: number) {
+  const policySet = policySets.find((candidate) => candidate.id === id)
+  return policySet ? `${policySet.name} (#${policySet.id})` : `missing set #${id}`
+}
+
+function policySetMembers(policySets: PolicySet[], id: number) {
+  const policySet = policySets.find((candidate) => candidate.id === id)
+  return policySet?.members.join(', ') || 'unavailable'
 }
 
 const headerCell = {

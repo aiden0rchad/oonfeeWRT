@@ -3141,6 +3141,33 @@ describe('Devices — column preferences', () => {
     render(<Devices devices={[{ ...device, management_mode: 'monitor_only' }] as never} />)
     expect(screen.getByText('Monitor only')).toBeTruthy()
   })
+
+  it('surfaces an invalid management mode as a critical fail-closed state', async () => {
+    const invalid = {
+      ...device,
+      management_mode: 'managed',
+      management_mode_error: 'unsupported stored management mode "mystery"',
+    }
+    api.device.mockResolvedValue({
+      ...invalid,
+      capabilities: null,
+      interfaces: [],
+      radios: [],
+      stations: [],
+      broadcast_known: false,
+      owned_sections_known: true,
+    })
+    api.deviceSeries.mockResolvedValue({ series: {} })
+    api.overhead.mockRejectedValue(new Error('none'))
+    render(<Devices devices={[invalid] as never} />)
+
+    expect(screen.getByText('Blocked · invalid mode').getAttribute('title')).toContain('mystery')
+    fireEvent.click(screen.getByText('ap-one'))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/Management mode is invalid.*fails closed/i)
+    expect(alert.textContent).toMatch(/excludes this device from desired-state Preview, Apply and direct configuration/i)
+    expect(screen.getByText('Invalid — writes blocked')).toBeTruthy()
+  })
 })
 
 describe('Settings — wireless uplinks', () => {
@@ -5668,6 +5695,50 @@ describe('Dashboard', () => {
 
     expect(screen.getByText('Route active')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('Backup')
+  })
+
+  it('never promotes monitor-only route evidence into the primary site gateway', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      gateway_uplinks: [
+        { device_id: 7, name: 'Observer A', state: 'up', management_mode: 'monitor_only' },
+        { device_id: 8, name: 'Observer B', state: 'missing', management_mode: 'monitor_only' },
+      ],
+      wan: undefined,
+    } as never} />)
+
+    expect(screen.getByText('Route unknown')).toBeTruthy()
+    expect(screen.queryByText('Route active')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    const observations = screen.getByRole('group', { name: 'Monitor-only router route observations' })
+    expect(observations.textContent).toMatch(/Observer A · route observed/i)
+    expect(observations.textContent).toMatch(/Observer B · no route observed/i)
+    expect(observations.textContent).toMatch(/never become the primary site gateway/i)
+    const path = screen.getByRole('group', { name: 'Observed gateway path' })
+    expect(path.textContent).toMatch(/GatewayUnavailable/)
+    expect(path.textContent).not.toContain('Observer A')
+  })
+
+  it('fails closed on an invalid gateway management mode instead of reporting a route outage', async () => {
+    const { Dashboard } = await import('./Dashboard')
+    render(<Dashboard data={{
+      ...data,
+      gateway_uplinks: [{
+        device_id: 9,
+        name: 'Broken boundary',
+        state: 'missing',
+        management_mode: 'managed',
+        management_mode_error: 'unsupported stored management mode "mystery"',
+      }],
+      wan: undefined,
+    } as never} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toMatch(/Invalid gateway management mode on Broken boundary/i)
+    expect(alert.textContent).toMatch(/fails closed.*does not treat these rows as the primary site gateway/i)
+    expect(alert.textContent).not.toMatch(/No active WAN\/default route was observed/i)
+    expect(screen.getByText('Route unknown')).toBeTruthy()
   })
 
   it('uses the explicit Run action as plan-bound acknowledgement and keeps exact impact in a popover', async () => {

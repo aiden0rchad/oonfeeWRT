@@ -80,8 +80,12 @@ export function Devices({
       key: 'management',
       header: 'Management',
       width: 120,
-      render: (d) => managementModeName(d.management_mode),
-      sortBy: (d) => d.management_mode ?? 'managed',
+      render: (d) => d.management_mode_error ? (
+        <span title={d.management_mode_error} style={{ color: 'var(--critical)', fontWeight: 600 }}>
+          Blocked · invalid mode
+        </span>
+      ) : managementModeName(d.management_mode),
+      sortBy: (d) => d.management_mode_error ? `!${d.management_mode_error}` : d.management_mode ?? 'managed',
     },
     {
       key: 'host',
@@ -347,6 +351,15 @@ export function DeviceDetailPanel({
 
   return (
     <SlideOver title={detail.name || detail.mac} onClose={onClose}>
+      {detail.management_mode_error && (
+        <div role="alert">
+          <Banner tone="critical">
+            Management mode is invalid: {detail.management_mode_error}. The controller fails closed and
+            excludes this device from desired-state Preview, Apply and direct configuration until the stored
+            mode is repaired.
+          </Banner>
+        </div>
+      )}
       {/* Above the content, not instead of it. What is on screen is the last
           reading that succeeded; this says the newest attempt did not. */}
       {err && (
@@ -377,7 +390,9 @@ export function DeviceDetailPanel({
           {functionNames(deviceFunctions(detail))}
           {!detail.functions && <span title="derived from this older row's legacy role"> · legacy</span>}
         </Prop>
-        <Prop label="Management mode">{managementModeName(detail.management_mode)}</Prop>
+        <Prop label="Management mode">
+          {detail.management_mode_error ? 'Invalid — writes blocked' : managementModeName(detail.management_mode)}
+        </Prop>
         <Prop label="Poll rate">
           {/* The live frame wins: `detail` comes from a REST refresh every 30 s
               and would show the tier this panel had before it subscribed. */}

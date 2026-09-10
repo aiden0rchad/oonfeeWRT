@@ -943,6 +943,30 @@ a {
   grid-template-columns: minmax(240px, 1fr) auto;
 }
 
+.policy-set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 10px;
+}
+
+.policy-set-members {
+  max-height: 180px;
+  margin: 0;
+  padding-left: 18px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.policy-set-member-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 8px 14px;
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  padding: 2px;
+}
+
 .policy-tabs {
   max-width: 100%;
   overflow-x: auto;
