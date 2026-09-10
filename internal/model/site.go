@@ -351,6 +351,7 @@ type Site struct {
 	// Policies are ordered firewall/NAT/routing records. PolicyClients carries
 	// only desired client actions; observed client state is deliberately absent.
 	Policies      []Policy
+	PolicySets    []PolicySet
 	PolicyClients []PolicyClient
 	WLANs         []WLAN
 	// Meshes are 802.11s backhauls. Separate from WLANs because a mesh point is

@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 21
+const schemaVersion = 22
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -456,6 +456,22 @@ var migrations = map[int][]string{
 		   WHERE adopted_at IS NOT NULL
 		     AND management_mode='managed'
 		     AND role='gateway'`,
+	},
+	22: {
+		// Reusable policy sets are controller-side identity objects. A firewall
+		// rule stores the stable set ID in rule_json; membership remains normalized
+		// here so one edit updates every referencing rule on its next Preview.
+		`CREATE TABLE IF NOT EXISTS policy_sets (
+		   id INTEGER PRIMARY KEY,
+		   name TEXT NOT NULL
+		 )`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS policy_sets_name_nocase
+		   ON policy_sets(name COLLATE NOCASE)`,
+		`CREATE TABLE IF NOT EXISTS policy_set_members (
+		   set_id INTEGER NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+		   mac TEXT NOT NULL,
+		   PRIMARY KEY (set_id, mac)
+		 ) WITHOUT ROWID`,
 	},
 }
 

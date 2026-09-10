@@ -62,6 +62,7 @@ type FirewallRule struct {
 	DestinationCIDR string         `json:"destination_cidr,omitempty"`
 	SourcePort      string         `json:"source_port,omitempty"`
 	DestinationPort string         `json:"destination_port,omitempty"`
+	SourceSetID     int            `json:"source_set_id,omitempty"`
 	SourceMACs      []string       `json:"source_macs,omitempty"`
 }
 
@@ -92,6 +93,43 @@ type PolicyClient struct {
 	Group   string `json:"group,omitempty"`
 	Blocked bool   `json:"blocked"`
 	FixedIP string `json:"fixed_ip,omitempty"`
+}
+
+// PolicySet is a reusable, named set of client MAC addresses. Firewall rules
+// reference its stable ID so editing membership updates every referencing rule
+// on the next Preview instead of copying a stale list into each rule.
+type PolicySet struct {
+	ID      int      `json:"id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+}
+
+const MaxPolicySetMembers = 1024
+
+// PolicySetByID resolves a stable policy-set reference.
+func (s Site) PolicySetByID(id int) (PolicySet, bool) {
+	for _, set := range s.PolicySets {
+		if set.ID == id {
+			return set, true
+		}
+	}
+	return PolicySet{}, false
+}
+
+// FirewallSourceMACs returns the effective source-MAC set for a rule. The
+// boolean is false only for a dangling source_set_id; callers must fail closed.
+func (s Site) FirewallSourceMACs(rule *FirewallRule) ([]string, bool) {
+	if rule == nil {
+		return nil, false
+	}
+	if rule.SourceSetID == 0 {
+		return append([]string(nil), rule.SourceMACs...), true
+	}
+	set, ok := s.PolicySetByID(rule.SourceSetID)
+	if !ok {
+		return nil, false
+	}
+	return append([]string(nil), set.Members...), true
 }
 
 // HasExplicitFirewallIntent gates the stronger runtime/foreign-policy proof.
@@ -155,12 +193,12 @@ func CanonicalMACs(in []string) ([]string, error) {
 // ValidatePolicies validates the cross-feature policy model without consulting
 // hardware. Capability gaps are reported by render/API gates, not repaired here.
 func (s Site) ValidatePolicies() []error {
+	errs := s.validatePolicySets()
 	activeZones := map[string]bool{"wan": true}
 	for _, name := range s.ActiveZoneNames() {
 		activeZones[name] = true
 	}
 	seenIDs := map[int]bool{}
-	var errs []error
 	for i := range s.Policies {
 		p := &s.Policies[i]
 		if p.ID < 0 || p.Order < 0 {
@@ -195,6 +233,16 @@ func (s Site) ValidatePolicies() []error {
 				continue
 			}
 			errs = append(errs, validateFirewallRule(p.Name, p.Firewall, activeZones)...)
+			if p.Firewall.SourceSetID < 0 {
+				errs = append(errs, errf("policy %q source_set_id cannot be negative", p.Name))
+			} else if p.Firewall.SourceSetID > 0 {
+				if len(p.Firewall.SourceMACs) > 0 {
+					errs = append(errs, errf("policy %q cannot combine source_set_id with source_macs", p.Name))
+				}
+				if _, ok := s.PolicySetByID(p.Firewall.SourceSetID); !ok {
+					errs = append(errs, errf("policy %q references unknown policy set %d", p.Name, p.Firewall.SourceSetID))
+				}
+			}
 		case PolicyPortForward:
 			if p.PortForward == nil {
 				errs = append(errs, errf("policy %q kind port_forward requires port_forward", p.Name))
@@ -273,9 +321,47 @@ func (s Site) ValidatePolicies() []error {
 				p.Firewall.SourceZone == "wan" || !activeZones[p.Firewall.SourceZone] {
 				continue
 			}
-			if len(p.Firewall.SourceMACs) == 0 || stringIn(p.Firewall.SourceMACs, macs[0]) {
+			sourceMACs, ok := s.FirewallSourceMACs(p.Firewall)
+			if !ok || len(sourceMACs) == 0 || stringIn(sourceMACs, macs[0]) {
 				errs = append(errs, errf("policy %q can accept forwarded traffic for blocked client %s; managed rule order is deliberately not inferred from UCI section names", p.Name, macs[0]))
 			}
+		}
+	}
+	return errs
+}
+
+func (s Site) validatePolicySets() []error {
+	seenIDs := map[int]bool{}
+	seenNames := map[string]string{}
+	var errs []error
+	for i := range s.PolicySets {
+		set := &s.PolicySets[i]
+		if set.ID <= 0 {
+			errs = append(errs, errf("policy set %q has an invalid id", set.Name))
+		}
+		if seenIDs[set.ID] {
+			errs = append(errs, errf("policy set id %d is defined more than once", set.ID))
+		}
+		seenIDs[set.ID] = true
+		if strings.TrimSpace(set.Name) == "" || set.Name != strings.TrimSpace(set.Name) ||
+			len(set.Name) > 128 || strings.IndexFunc(set.Name, unicode.IsControl) >= 0 {
+			errs = append(errs, errf("policy set %d needs an exact nonblank name of at most 128 bytes without control characters", set.ID))
+		}
+		folded := strings.ToLower(set.Name)
+		if previous := seenNames[folded]; previous != "" {
+			errs = append(errs, errf("policy sets %q and %q have the same case-insensitive name", previous, set.Name))
+		}
+		seenNames[folded] = set.Name
+		members, err := CanonicalMACs(set.Members)
+		if err != nil {
+			errs = append(errs, errf("policy set %q: %v", set.Name, err))
+			continue
+		}
+		set.Members = members
+		if len(members) == 0 {
+			errs = append(errs, errf("policy set %q needs at least one member", set.Name))
+		} else if len(members) > MaxPolicySetMembers {
+			errs = append(errs, errf("policy set %q has %d members; maximum is %d", set.Name, len(members), MaxPolicySetMembers))
 		}
 	}
 	return errs

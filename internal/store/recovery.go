@@ -17,6 +17,8 @@ const (
 	recoveryMaxNetworks      = 256
 	recoveryMaxZones         = 1024
 	recoveryMaxPolicies      = 4096
+	recoveryMaxPolicySets    = 4096
+	recoveryMaxSetMembers    = 65536
 	recoveryMaxPolicyClients = 16384
 	recoveryMaxGroups        = 1024
 	recoveryMaxGroupMembers  = 65536
@@ -62,6 +64,8 @@ var recoveryBounds = []recoveryBound{
 	{"networks", "networks", "", bytesOf("id", "name", "vlan", "cidr", "zone", "dhcp_json", "ipv6_json", "enabled"), recoveryMaxNetworks, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"zone policies", "zones", "", bytesOf("name", "policy_json"), recoveryMaxZones, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"policies", "fw_rules", "", bytesOf("id", "sort", "rule_json", "enabled"), recoveryMaxPolicies, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"policy sets", "policy_sets", "", bytesOf("id", "name"), recoveryMaxPolicySets, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"policy set members", "policy_set_members", "", bytesOf("set_id", "mac"), recoveryMaxSetMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"client policies", "clients", "WHERE blocked<>0 OR COALESCE(fixed_ip,'')<>'' OR COALESCE(grp,'')<>''", bytesOf("mac", "fixed_ip", "blocked", "grp"), recoveryMaxPolicyClients, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP groups", "ap_groups", "", bytesOf("id", "name"), recoveryMaxGroups, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"AP group members", "ap_group_members", "", bytesOf("group_id", "device_id"), recoveryMaxGroupMembers, recoveryMaxStateBytes, recoveryMaxRowBytes},

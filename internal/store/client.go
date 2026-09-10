@@ -554,7 +554,11 @@ func (db *DB) PruneClients(ctx context.Context, before time.Time) (int64, error)
 		`DELETE FROM clients WHERE last_seen IS NOT NULL AND last_seen < ?
 		   AND blocked = 0 AND (note IS NULL OR note = '')
 		   AND (fixed_ip IS NULL OR fixed_ip = '')
-		   AND (grp IS NULL OR grp = '')`, before.Unix())
+		   AND (grp IS NULL OR grp = '')
+		   AND NOT EXISTS (
+		     SELECT 1 FROM policy_set_members
+		      WHERE lower(policy_set_members.mac)=lower(clients.mac)
+		   )`, before.Unix())
 	if err != nil {
 		return 0, fmt.Errorf("store: prune clients: %w", err)
 	}

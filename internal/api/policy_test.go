@@ -291,3 +291,99 @@ func TestPolicyMasterGatesUnobservableBackends(t *testing.T) {
 		}
 	}
 }
+
+func TestReusablePolicySetCRUDCompileAndEffectiveScope(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	_, iot := seedAPIZones(t, h)
+	iot.Enabled = false
+	if err := h.db.SaveNetwork(context.Background(), iot); err != nil {
+		t.Fatal(err)
+	}
+	seedPolicyGateway(t, h, capability.Present)
+	if err := h.db.UpsertClients(context.Background(), []store.SeenClient{
+		{MAC: "00:11:22:33:44:55", Scope: store.ScopeLocal},
+		{MAC: "00:11:22:33:44:66", Scope: store.ScopeLocal},
+	}, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	created := h.do(http.MethodPost, "/api/v1/site/policy-sets", map[string]any{
+		"name": "Cameras", "members": []string{"00-11-22-33-44-66", "00:11:22:33:44:55"},
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create set=%d %s", created.Code, created.Body.String())
+	}
+	set := h.json(created)["policy_set"].(map[string]any)
+	setID := int(set["id"].(float64))
+	if setID == 0 || set["members"].([]any)[0] != "00:11:22:33:44:55" {
+		t.Fatalf("created set=%v", set)
+	}
+
+	compiled := h.do(http.MethodPost, "/api/v1/site/object-manager/compile", map[string]any{
+		"objects":  []any{map[string]any{"kind": "policy_set", "id": strconv.Itoa(setID)}},
+		"outcomes": []any{map[string]any{"kind": "secure", "destination_zone": "wan"}},
+	})
+	if compiled.Code != http.StatusOK {
+		t.Fatalf("compile set=%d %s", compiled.Code, compiled.Body.String())
+	}
+	drafts := h.json(compiled)["drafts"].([]any)
+	if len(drafts) != 1 {
+		t.Fatalf("compiled drafts=%v", drafts)
+	}
+	draft := drafts[0].(map[string]any)
+	firewall := draft["firewall"].(map[string]any)
+	if firewall["source_set_id"] != float64(setID) {
+		t.Fatalf("compiled firewall=%v", firewall)
+	}
+
+	delete(draft, "id")
+	draft["order"] = 100
+	saved := h.do(http.MethodPost, "/api/v1/site/policies", draft)
+	if saved.Code != http.StatusOK {
+		t.Fatalf("save compiled policy=%d %s", saved.Code, saved.Body.String())
+	}
+	policyID := int(h.json(saved)["id"].(float64))
+
+	master := h.json(h.do(http.MethodGet, "/api/v1/site/policies", nil))
+	found := false
+	for _, raw := range master["rows"].([]any) {
+		row := raw.(map[string]any)
+		if row["id"] != fmt.Sprintf("policy:%d", policyID) {
+			continue
+		}
+		found = true
+		scope := row["effective_scope"].(map[string]any)
+		if scope["source_set"].(map[string]any)["name"] != "Cameras" || len(scope["source_macs"].([]any)) != 2 {
+			t.Fatalf("effective set scope=%v", scope)
+		}
+	}
+	if !found {
+		t.Fatal("saved set-backed policy missing from master")
+	}
+
+	updated := h.do(http.MethodPost, fmt.Sprintf("/api/v1/site/policy-sets/%d", setID), map[string]any{
+		"name": "Cameras", "members": []string{"00:11:22:33:44:66"},
+	})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update set=%d %s", updated.Code, updated.Body.String())
+	}
+	master = h.json(h.do(http.MethodGet, "/api/v1/site/policies", nil))
+	for _, raw := range master["rows"].([]any) {
+		row := raw.(map[string]any)
+		if row["id"] == fmt.Sprintf("policy:%d", policyID) && len(row["effective_scope"].(map[string]any)["source_macs"].([]any)) != 1 {
+			t.Fatalf("master retained stale set membership: %v", row)
+		}
+	}
+
+	blocked := h.do(http.MethodDelete, fmt.Sprintf("/api/v1/site/policy-sets/%d", setID), nil)
+	if blocked.Code != http.StatusBadRequest || !strings.Contains(blocked.Body.String(), "still references") {
+		t.Fatalf("referenced set delete=%d %s", blocked.Code, blocked.Body.String())
+	}
+	if res := h.do(http.MethodDelete, fmt.Sprintf("/api/v1/site/policies/%d", policyID), nil); res.Code != http.StatusOK {
+		t.Fatalf("delete policy=%d %s", res.Code, res.Body.String())
+	}
+	if res := h.do(http.MethodDelete, fmt.Sprintf("/api/v1/site/policy-sets/%d", setID), nil); res.Code != http.StatusOK {
+		t.Fatalf("delete set=%d %s", res.Code, res.Body.String())
+	}
+}

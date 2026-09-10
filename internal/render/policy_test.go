@@ -104,6 +104,35 @@ func TestClientBlockUpgradeDeletesStaleIPv4Family(t *testing.T) {
 	}
 }
 
+func TestPolicyRenderExpandsCurrentReusableSetMembership(t *testing.T) {
+	site := renderPolicySite()
+	site.PolicySets = []model.PolicySet{{ID: 7, Name: "Cameras", Members: []string{
+		"00:11:22:33:44:66", "00:11:22:33:44:55",
+	}}}
+	site.Policies = []model.Policy{{ID: 1, Order: 100, Name: "secure cameras",
+		Kind: model.PolicyFirewallRule, Origin: model.PolicyOriginObjectManager, Enabled: true,
+		Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 7}}}
+	doc, report, err := Render(site, model.Device{ID: 7, Role: model.RoleGateway}, policyCaps(), gwExisting())
+	if err != nil || report.HasConflicts() {
+		t.Fatalf("render err=%v report=%+v", err, report)
+	}
+	section := policySection(doc, "rule")
+	want := "00:11:22:33:44:55,00:11:22:33:44:66"
+	if got := strings.Join(section.Lists["src_mac"], ","); got != want {
+		t.Fatalf("rendered set members=%q want=%q", got, want)
+	}
+
+	site.PolicySets[0].Members = []string{"00:11:22:33:44:77"}
+	doc, report, err = Render(site, model.Device{ID: 7, Role: model.RoleGateway}, policyCaps(), gwExisting())
+	if err != nil || report.HasConflicts() {
+		t.Fatalf("render after membership change err=%v report=%+v", err, report)
+	}
+	if got := strings.Join(policySection(doc, "rule").Lists["src_mac"], ","); got != "00:11:22:33:44:77" {
+		t.Fatalf("render retained stale set members: %q", got)
+	}
+}
+
 func TestPolicyRenderClearsRealRouteAndHostDisableOptions(t *testing.T) {
 	site := renderPolicySite()
 	site.Policies = []model.Policy{{ID: 3, Order: 100, Name: "lab", Kind: model.PolicyStaticRoute,

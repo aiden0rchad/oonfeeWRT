@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS fw_rules (
   id INTEGER PRIMARY KEY, sort INTEGER NOT NULL,
   rule_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS policy_sets (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS policy_sets_name_nocase
+  ON policy_sets(name COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS policy_set_members (
+  set_id INTEGER NOT NULL REFERENCES policy_sets(id) ON DELETE CASCADE,
+  mac TEXT NOT NULL,
+  PRIMARY KEY (set_id, mac)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS device_overrides (
   device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
   path TEXT NOT NULL,

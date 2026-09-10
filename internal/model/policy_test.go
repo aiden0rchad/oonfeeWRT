@@ -151,3 +151,69 @@ func TestClientGroupIsBoundedPlainText(t *testing.T) {
 		})
 	}
 }
+
+func TestPolicySetIsCanonicalAndReusableByFirewallRules(t *testing.T) {
+	site := policySite()
+	site.PolicySets = []PolicySet{{ID: 7, Name: "Cameras", Members: []string{
+		"AA-BB-CC-DD-EE-FF", "00:11:22:33:44:55", "aa:bb:cc:dd:ee:ff",
+	}}}
+	site.Policies = []Policy{{Name: "secure cameras", Kind: PolicyFirewallRule,
+		Origin: PolicyOriginObjectManager, Enabled: true,
+		Firewall: &FirewallRule{Action: FirewallReject, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 7}}}
+	if errs := site.ValidatePolicies(); len(errs) != 0 {
+		t.Fatalf("valid reusable set rejected: %v", errs)
+	}
+	want := "00:11:22:33:44:55,aa:bb:cc:dd:ee:ff"
+	if got := strings.Join(site.PolicySets[0].Members, ","); got != want {
+		t.Fatalf("canonical members=%q want=%q", got, want)
+	}
+	if got, ok := site.FirewallSourceMACs(site.Policies[0].Firewall); !ok || strings.Join(got, ",") != want {
+		t.Fatalf("effective members=%v ok=%v", got, ok)
+	}
+}
+
+func TestPolicySetValidationFailsClosed(t *testing.T) {
+	tests := map[string]Site{
+		"empty set": {
+			PolicySets: []PolicySet{{ID: 1, Name: "empty"}},
+		},
+		"duplicate name": {
+			PolicySets: []PolicySet{
+				{ID: 1, Name: "Cameras", Members: []string{"00:11:22:33:44:55"}},
+				{ID: 2, Name: "cameras", Members: []string{"00:11:22:33:44:66"}},
+			},
+		},
+		"unknown reference": {
+			Policies: []Policy{{Name: "bad", Kind: PolicyFirewallRule, Origin: PolicyOriginManual,
+				Enabled: true, Firewall: &FirewallRule{Action: FirewallDrop, SourceZone: "wan",
+					Protocols: []string{"all"}, SourceSetID: 99}}},
+		},
+		"mixed source forms": {
+			PolicySets: []PolicySet{{ID: 1, Name: "Cameras", Members: []string{"00:11:22:33:44:55"}}},
+			Policies: []Policy{{Name: "bad", Kind: PolicyFirewallRule, Origin: PolicyOriginManual,
+				Enabled: true, Firewall: &FirewallRule{Action: FirewallDrop, SourceZone: "wan",
+					Protocols: []string{"all"}, SourceSetID: 1, SourceMACs: []string{"00:11:22:33:44:66"}}}},
+		},
+	}
+	for name, site := range tests {
+		t.Run(name, func(t *testing.T) {
+			if errs := site.ValidatePolicies(); len(errs) == 0 {
+				t.Fatal("unsafe reusable set state accepted")
+			}
+		})
+	}
+}
+
+func TestPolicySetBackedAcceptCannotDefeatClientBlock(t *testing.T) {
+	site := policySite()
+	site.PolicySets = []PolicySet{{ID: 1, Name: "Allowed", Members: []string{"00:11:22:33:44:55"}}}
+	site.PolicyClients = []PolicyClient{{MAC: "00:11:22:33:44:55", Blocked: true}}
+	site.Policies = []Policy{{Name: "allow set", Kind: PolicyFirewallRule,
+		Origin: PolicyOriginManual, Enabled: true,
+		Firewall: &FirewallRule{Action: FirewallAccept, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: 1}}}
+	if errs := site.ValidatePolicies(); len(errs) == 0 || !strings.Contains(errs[len(errs)-1].Error(), "blocked client") {
+		t.Fatalf("set-backed allow defeated client block: %v", errs)
+	}
+}

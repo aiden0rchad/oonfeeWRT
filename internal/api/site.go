@@ -565,6 +565,7 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 		"networks":            nets,
 		"zones":               zones,
 		"policies":            master.Rows,
+		"policy_sets":         site.PolicySets,
 		"policy_capabilities": master.Capabilities,
 		"problems":            problems,
 		"overrides":           deviations,

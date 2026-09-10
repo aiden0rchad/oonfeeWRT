@@ -197,3 +197,63 @@ func TestSchema15PolicyBoundaryPreservesExistingIntent(t *testing.T) {
 		t.Fatalf("migrated version=%d policies=%+v err=%v", version, site.Policies, err)
 	}
 }
+
+func TestPolicySetRoundTripUpdatesReferencesAndRefusesOrphans(t *testing.T) {
+	db := open(t)
+	seedZoneNetworks(t, db)
+	ctx := context.Background()
+	if err := db.UpsertClients(ctx, []SeenClient{
+		{MAC: "00:11:22:33:44:55", Scope: ScopeLocal},
+		{MAC: "00:11:22:33:44:66", Scope: ScopeLocal},
+	}, 1); err != nil {
+		t.Fatal(err)
+	}
+	set := &model.PolicySet{Name: "Cameras", Members: []string{
+		"00-11-22-33-44-66", "00:11:22:33:44:55", "00:11:22:33:44:55",
+	}}
+	if err := db.SavePolicySet(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if set.ID == 0 || strings.Join(set.Members, ",") != "00:11:22:33:44:55,00:11:22:33:44:66" {
+		t.Fatalf("saved set=%+v", set)
+	}
+	if pruned, err := db.PruneClients(ctx, time.Unix(2, 0)); err != nil || pruned != 0 {
+		t.Fatalf("policy set members pruned=%d err=%v", pruned, err)
+	}
+	policy := &model.Policy{Name: "secure cameras", Kind: model.PolicyFirewallRule,
+		Origin: model.PolicyOriginObjectManager, Enabled: true,
+		Firewall: &model.FirewallRule{Action: model.FirewallReject, SourceZone: "guest",
+			DestinationZone: "wan", Protocols: []string{"all"}, SourceSetID: set.ID}}
+	if err := db.SavePolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	set.Members = []string{"00:11:22:33:44:66"}
+	if err := db.SavePolicySet(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	site, err := db.Site(ctx)
+	if err != nil || len(site.PolicySets) != 1 || strings.Join(site.PolicySets[0].Members, ",") != "00:11:22:33:44:66" {
+		t.Fatalf("round trip sets=%+v err=%v", site.PolicySets, err)
+	}
+	if err := db.DeletePolicySet(ctx, set.ID); err == nil || !strings.Contains(err.Error(), "still references") {
+		t.Fatalf("referenced set delete=%v", err)
+	}
+	if err := db.DeletePolicy(ctx, policy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeletePolicySet(ctx, set.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeletePolicySet(ctx, set.ID); err != ErrNotFound {
+		t.Fatalf("second set delete=%v want ErrNotFound", err)
+	}
+}
+
+func TestPolicySetRejectsUnknownInventoryMember(t *testing.T) {
+	db := open(t)
+	set := &model.PolicySet{Name: "Unknown", Members: []string{"00:11:22:33:44:55"}}
+	if err := db.SavePolicySet(context.Background(), set); err == nil || !strings.Contains(err.Error(), "observed client inventory") {
+		t.Fatalf("unknown inventory member save=%v", err)
+	}
+}

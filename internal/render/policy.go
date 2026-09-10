@@ -82,7 +82,14 @@ func renderPolicies(site model.Site, dev model.Device, caps *capability.Registry
 		name := fmt.Sprintf("%s_policy_%s_%010d_%d", NamePrefix, policySectionKind(p.Kind), p.Order, p.ID)
 		switch p.Kind {
 		case model.PolicyFirewallRule:
-			rule := p.Firewall
+			rule := *p.Firewall
+			sourceMACs, ok := site.FirewallSourceMACs(&rule)
+			if !ok || len(sourceMACs) == 0 && rule.SourceSetID > 0 {
+				conflicts = append(conflicts, Conflict{Config: "firewall", Section: "policy-" + safe(p.Name),
+					Reason: fmt.Sprintf("policy %q references a missing or empty reusable source set; applying without its members would broaden the rule, so the whole device is blocked", p.Name)})
+				continue
+			}
+			rule.SourceMACs = sourceMACs
 			if !policyZonesRendered(rule.SourceZone, rule.DestinationZone, zones) {
 				conflicts = append(conflicts, missingPolicyZoneConflict(p.Name))
 				continue
