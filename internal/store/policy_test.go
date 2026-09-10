@@ -615,7 +615,11 @@ SELECT ?,lower(mac),'local',? FROM clients`, gateway.ID, now); err != nil {
 	for i := range macs {
 		macs[i] = fmt.Sprintf("02:aa:bb:cc:%02x:%02x", byte(i>>8), byte(i))
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Pure-Go SQLite under the race detector can take more than 30 seconds on
+	// a shared hosted runner at the full 65,536-MAC product limit. Keep the
+	// maximum-size proof bounded without turning runner contention into a
+	// product failure.
+	checkCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	problems, err := db.PolicyMACScopeProblems(checkCtx, model.Site{}, macs...)
 	if err != nil || len(problems) != 0 {
