@@ -43,6 +43,7 @@ const reference = [
   { text: 'Capability and support matrix', link: '/reference/capabilities' },
   { text: 'Troubleshooting', link: '/reference/troubleshooting' },
   { text: 'FAQ', link: '/reference/faq' },
+  { text: 'Flow visibility feasibility', link: '/reference/flows-feasibility' },
   { text: 'Engineering reference', link: '/reference/engineering' },
   { text: 'Release notes', link: '/reference/releases' },
 ]
