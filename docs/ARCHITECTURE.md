@@ -37,7 +37,7 @@ restore. The completed `v0.1.0` tag workflow and
 GitHub Release, not this historical checkpoint, are the publication authority
 and own the isolated restore/container evidence.
 
-**Current v0.1.4 patch boundary:** v0.1.2 added a versioned, server-built
+**v0.1.2–v0.1.4 patch boundary:** v0.1.2 added a versioned, server-built
 compatibility report to a successful read-only Inspect result. That document is
 a bounded allowlist rather than a copy of the probe or form state: it carries
 hardware, firmware, radio, port, feature-state and supported-function evidence,
@@ -79,6 +79,38 @@ BusyBox VLAN provenance is neutral unavailable metadata. Same-geometry partial
 observations retain prior semantic payload, the closed-history query is
 indexed, and current/history API work is serialized while browser requests are
 cancelled when abandoned.
+
+**Current v0.1.5 patch boundary:** device authority is now explicit and
+orthogonal to Gateway/AP/Switch function. Existing rows migrate to `managed`.
+Multiple `monitor_only` routers can remain polling/topology targets across
+already-routed subnets, but use the distinct read-only `oonfeewrt-monitor` ACL
+and cannot enter desired/site rendering, Preview/Apply, optional LLDP
+installation/configuration/removal, wireless-neighbour mutation, or other
+package/config/remove mutations. Existing LLDP observation remains available.
+ACL refresh and un-adoption remain explicit lifecycle actions. Only one managed
+Gateway is permitted.
+
+RF scan remains available to both modes after capability proof and a separate
+disruption acknowledgement. It is an active, transient observation that may
+take a serving radio off-channel, not persistent configuration authority.
+
+Named policy sets add stable IDs, case-insensitively unique names, and
+canonical exact-MAC members. A firewall rule may use direct source MACs or one
+`source_set_id`; validation and rendering resolve current members and fail
+closed on missing, empty, mixed, or referenced-deletion state. MAC intent also
+requires a stored local observation from the currently adopted Managed Gateway.
+Schema 23 keeps source-relative `(device_id, MAC)` observations; Monitor-only
+observations neither satisfy nor contaminate that proof, including after
+un-adoption. Missing proof gates set creation/update and MAC compilation and
+makes active MAC intent block Preview until a successful Gateway poll. Existing
+block/fixed-address intent can still be cleared one client at a time. The
+automatic schema path is 20 → 21 → 22 → 23, with schema 23 adding provenance
+and bounded MAC lookup indexes, then rebuilding the unique managed-Gateway
+index from canonical `functions_json` plus legacy role. Upgrade startup makes
+no router request.
+
+Phase 5 flow visibility remains feasibility work. No DPI/flow package,
+ingestion path, or application identity is shipped by v0.1.5.
 
 ---
 
@@ -137,7 +169,7 @@ controller-authored code on the router, the design is wrong.
                     │  │  Store: SQLite + TSDB rollups  │  │
                     │  └────────────────────────────────┘  │
                     └───────────────┬──────────────────────┘
-                 HTTPS  /ubus JSON-RPC  (poll + call)
+              HTTP or HTTPS /ubus JSON-RPC (poll + call)
         ┌───────────────┬───────────┴────────┬───────────────┐
         ▼               ▼                    ▼               ▼
    OpenWrt GW      OpenWrt AP           OpenWrt AP      OpenWrt switch
@@ -523,7 +555,7 @@ passphrase. The passphrase is never retained.
 Restore accepts a bounded raw artifact over TLS or direct loopback. Disposable
 private staging authenticates the fixed artifact, proves manifest schema equals
 the actual source database schema, rejects unsupported future schema, migrates a
-scratch copy to exactly schema 20, and validates integrity, secrets and a usable
+scratch copy to exactly schema 23, and validates integrity, secrets and a usable
 owner. The preview returns only authenticated manifest/schema/count information.
 Confirmation is bound to its artifact and `plan_id`; it requires recent password
 reauthentication, the export passphrase again, the current destination runtime

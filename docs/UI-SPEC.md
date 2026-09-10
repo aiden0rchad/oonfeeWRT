@@ -85,7 +85,7 @@ restore execution, public-provider speed-test run or router restore. The
 completed `v0.1.0` tag workflow and GitHub Release are the
 publication authority and own the final isolated release evidence.
 
-**Current v0.1.2–v0.1.4 UI patch boundary:** after a successful authenticated
+**Current v0.1.2–v0.1.5 UI patch boundary:** after a successful authenticated
 read-only Inspect, the adoption review can download the server-built,
 privacy-bounded compatibility DTO as
 `oonfeewrt-compatibility-report.json`. The action appears only when that bounded
@@ -134,6 +134,31 @@ paths are labelled inferred. Missing BusyBox VLAN provenance is neutral
 unavailable metadata, surfaced through the Unknown VLAN count rather than an
 edge warning. The browser serializes current/history requests, cancels
 abandoned fetches, and resets a VLAN filter that no longer exists.
+
+v0.1.5 makes management authority visible during adoption and in device
+inventory. **Managed** remains eligible for supported reviewed configuration;
+**Monitor only** states that it uses a distinct read-only ACL and remains
+observable, including existing LLDP evidence, while Preview/Apply, optional
+LLDP installation/configuration/removal, wireless-neighbour mutation, and other
+package/config/remove actions are unavailable. A capability-proved RF scan
+remains available only after its separate disruption acknowledgement and must
+identify the off-channel/client-disconnection risk. The UI is explanatory, not
+the security boundary.
+
+Policy Engine now manages named client sets from observed exact MACs. A rule
+editor chooses either direct MACs or one named set and shows current resolved
+members. Object Manager accepts a set only for Secure (IPv4), and Master Table
+shows concrete scope. Upstream/Unknown clients and clients without a stored
+local observation from the currently adopted Managed Gateway gate MAC policy.
+Monitor-only observations neither satisfy nor contaminate that source-relative
+proof. The UI must still let an operator clear existing block/fixed-address
+intent one client at a time. Partial client inventory, referenced-set deletion,
+changed compile inputs, and stale Preview state must remain visible blockers.
+
+Dashboard, Devices, Topology, Radios, Policy Engine, Settings, and adoption use
+the shared PageHeader/action hierarchy. Desktop and mobile browser coverage now
+runs in light and dark themes; tokens, focus, status-without-color, and
+responsive no-overflow behavior remain release gates.
 
 ---
 
@@ -717,7 +742,7 @@ members, a manifest and checksums. Stored evidence gaps do not fail the whole
 bundle.
 
 **Settings → Backup & Restore.** Implemented for `owner`; current restore
-previews migrate supported artifacts to schema 20. The historical schema-19
+previews migrate supported artifacts to schema 23. The historical schema-19
 owner screen passed route/render smoke, but its workflow actions are not
 claimed by that smoke.
 The existing export UI remains available and explains that its native

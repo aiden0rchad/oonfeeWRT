@@ -1,11 +1,11 @@
 ---
 title: CLI and environment reference
-description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.4.
+description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.5.
 ---
 
 # CLI and environment reference
 
-This reference applies to the stable **v0.1.4** release, published September 3,
+This reference applies to the stable **v0.1.5** release, published September 10,
 2026, and its `oonfeewrtd` and `oonfeewrt-recoverycheck` executables.
 
 ## `oonfeewrtd`
@@ -24,7 +24,7 @@ oonfeewrtd [flags]
 | `-log-level <level>` | `info` | One of `debug`, `info`, `warn`, `error` |
 | `-healthcheck` | false | Probe the configured listener's `/healthz` and exit without opening controller data |
 | `-version` | false | Print the embedded version and exit without opening controller data |
-| `-h`, `-help` | — | Print standard flag help; v0.1.4 then exits non-zero (a known CLI quirk) |
+| `-h`, `-help` | — | Print standard flag help; v0.1.5 then exits non-zero (a known CLI quirk) |
 
 Flags are parsed after environment configuration, so an explicit flag overrides
 a valid corresponding environment value. Environment loading/validation happens
@@ -78,10 +78,10 @@ starting with an empty keyring.
 oonfeewrtd -version
 ```
 
-For release v0.1.4 the output must be:
+For release v0.1.5 the output must be:
 
 ```text
-v0.1.4
+v0.1.5
 ```
 
 ### Interactive local start
@@ -148,7 +148,7 @@ application behavior; neither adds a daemon flag or environment variable.
   contains fields outside the share-safe allowlist.
 - Effective-WAN evidence is collected automatically for adopted gateways on the
   network/topology cycle. Existing v0.1.2 adoptions need no CLI migration, ACL
-  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.4.
+  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.5.
 
 v0.1.4 adds per-network IPv6 policy, router-time observation, topology
 projection fixes, and filter- and page-independent current state/action UI for
@@ -164,16 +164,41 @@ exception to the normal owned-section write rule: behind Preview and Apply they
 may patch only allowlisted options on exact existing LAN/DHCP and supported
 conventional `wan`/`wan6` sections, never create, claim, rename, or delete them.
 
+v0.1.5 management mode and policy sets are API/UI behavior, not daemon flags.
+Existing devices migrate to Managed. Selecting Monitor only during adoption
+installs the distinct read-only `oonfeewrt-monitor` ACL after review; changing
+an adopted device's mode requires the reviewed un-adopt/re-adopt workflow, and
+the daemon has no reclassification flag. Named exact-MAC policy sets are
+maintained in Policy Engine and can be referenced by firewall rules; changing a
+set does not bypass Preview or Apply.
+There is no CLI override for the local managed-Gateway MAC-scope proof: any
+policy-set member, direct or set-backed MAC Secure draft, and client block or
+fixed-address intent requires a stored `local` observation from the currently
+adopted Managed Gateway. Monitor-only observations neither satisfy nor contaminate that
+source-relative proof, including after un-adoption. After an upgrade or restore,
+active MAC intent can fail Preview until the next successful managed-Gateway
+poll recreates any missing observation. Existing blocked/fixed-address intent
+can still be cleared one client at a time.
+
+The Phase 5 flow-visibility page is a feasibility record. v0.1.5 adds no
+`nlbwmon`, `netifyd`, DPI, or flow-collector daemon flag and installs no such
+package.
+
 `OONFEE_HTTP_BIND` belongs to the supplied Docker Compose file and selects the
 host-side publish address. It is not read by `oonfeewrtd` and does not replace
 the container's `OONFEE_LISTEN=:8080`.
 
-v0.1.4 uses database schema 20. Its forward migration from schema 19 is
-automatic and does not itself configure routers, but a v0.1.3 executable cannot
-open the migrated database. Before first startup, preserve and verify the
-matching schema-19 database, keyring, and runtime passphrase recovery unit. A
-rollback must restore that unit; changing only the binary or image tag is not a
-rollback. CLI compatibility does not extend the current REST/WebSocket surface
+v0.1.5 uses database schema 23. Its automatic path from v0.1.4 is schema
+20 → 21 → 22 → 23: management mode, reusable policy sets, then a rebuilt
+one-managed-Gateway uniqueness guard derived from canonical `functions_json`
+and the legacy role plus source-relative `client_observations` keyed by device
+and MAC. Observation and case-insensitive global-client MAC indexes keep the
+scope checks bounded. Migration does not itself configure routers or infer
+observation provenance from the global client row. A v0.1.4
+executable cannot open the migrated database. Before first startup, preserve
+and verify the matching schema-20 database, keyring, and runtime passphrase
+recovery unit. A rollback must restore that unit; changing only the binary or
+image tag is not a rollback. CLI compatibility does not extend the current REST/WebSocket surface
 into a stable third-party API guarantee.
 
 ## Healthcheck
@@ -241,7 +266,7 @@ It opens SQLite through the read-only recovery boundary and makes no network
 call. A successful result has this shape:
 
 ```text
-schema=20 devices=<n> credentials=<n> owned_sections=<n> wlans=<n> meshes=<n>
+schema=23 devices=<n> credentials=<n> owned_sections=<n> wlans=<n> meshes=<n>
 ```
 
 Those counts prove that the pair can be opened and its recovery invariants are

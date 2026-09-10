@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.4** codebase. The repository's
+This page orients contributors to the **v0.1.5** codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -196,6 +196,42 @@ prune, or delete foreign sections. A conflicting or ambiguous foreign target is
 a gate. Ownership and cleanup tests are security and data-loss tests, not
 formatting tests.
 
+### Management mode is enforced below the UI
+
+Legacy devices migrate to `managed`. At most one device whose canonical
+`functions_json` or compatibility role indicates Gateway may also be managed;
+schema 23 rebuilds that uniqueness guard so the representations cannot
+disagree around it. Monitor-only devices use the distinct read-only
+`oonfeewrt-monitor` ACL and remain poll/topology targets, but must be excluded
+from render, Preview/Apply, optional LLDP installation/configuration/removal,
+wireless-neighbour mutation, and other package/config/remove paths. Existing
+LLDP observation remains available. ACL refresh and un-adoption are intentional
+lifecycle exceptions.
+Capability-proved RF scan is also available to either mode after separate
+disruption acknowledgement; it is a transient active observation, not a
+persistent configuration mutation.
+
+### Policy-set references resolve or fail closed
+
+`source_set_id` and direct `source_macs` are mutually exclusive. Model, store,
+API, master-table, restore, and render paths must reject invalid/empty/dangling
+sets; deletion must refuse every enabled or disabled reference. Rendering uses
+current canonical members, so a membership edit invalidates an old Preview.
+Schema 23 keeps source-relative `client_observations` keyed by `(device_id,
+MAC)`, with scope and `last_seen`. Its MAC lookup and the case-insensitive
+`clients_mac_nocase` index keep maximum-size policy validation bounded. Every
+set member, direct or set-backed MAC Secure draft, and blocked/fixed-address
+intent must have a stored `local` observation from the currently adopted
+Managed Gateway. Monitor-only observations neither satisfy nor contaminate
+that proof, including after un-adoption. Upgrades and restores can have no such
+rows until the next successful managed-Gateway poll; active MAC intent must
+then become a Preview error until every referenced client is re-observed
+locally. The one-client clear path for existing block/fixed-address intent must
+remain available. Pruning removes observation provenance at the normal
+client-retention cutoff even when desired intent preserves the merged client
+row; retained active intent must continue to block Preview until local Gateway
+evidence returns.
+
 ### Preview does not authorize a changed plan
 
 Apply authorization is bound to rendered desired state, fleet, capabilities,
@@ -290,21 +326,29 @@ Pull requests and main-branch pushes run:
 - multi-platform container build without publishing; and
 - tree/history secret scans.
 
+The separate documentation workflow runs when documentation or its workflow
+changes. It audits `docs/package-lock.json` and builds VitePress on pull
+requests and `main`, then publishes the built site from `main`. Verify that
+main-branch job on the intended release commit before tagging. The tag-triggered
+release workflow independently installs the pinned documentation dependencies,
+repeats the OSV audit, and rebuilds VitePress at the tagged SHA.
+
 The OSV gate is intentionally strict: any known vulnerability match, download
 or checksum failure, package-extraction failure, or scanner/API error fails the
 job. It replaces npm's unavailable audit service without weakening dependency
 screening and checks all severities rather than only high and critical results.
 
 A `v*` tag triggers the release workflow. It requires strict SemVer on `main`,
-repeats the complete gates at the tagged SHA, builds reproducible Linux/macOS
-amd64/arm64 archives, builds and publishes the linux/amd64+arm64 OCI image,
-attaches SBOM/provenance, signs the immutable digest with GitHub Actions OIDC,
-verifies public aliases, and finally publishes the GitHub release.
+repeats the complete code, dependency, and documentation-build gates at the
+tagged SHA, builds reproducible Linux/macOS amd64/arm64 archives, builds and
+publishes the linux/amd64+arm64 OCI image, attaches SBOM/provenance, signs the
+immutable digest with GitHub Actions OIDC, verifies public aliases, and finally
+publishes the GitHub release.
 
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.4
+make release-check RELEASE_VERSION=v0.1.5
 ```
 
 only from the exact intended clean release tree. A local build from another

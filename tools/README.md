@@ -4,16 +4,23 @@
 
 `dryrun`, `optdiff`, `stalecheck`, `livecheck`, `recoverycheck`, and `applyone`
 open controller state through the same schema-14 cryptographic boundary as the
-daemon. The current source schema is **20**: 14 remains the secret-sealing
+daemon. The current source schema is **23**: 14 remains the secret-sealing
 epoch, 15 is the cross-feature policy semantic boundary, 16 is the attested
 observability shape, 17 adds the optional-capability rollback ledger, and 18
 adds controller-host speed-test jobs/history. Schema 19 adds the controller
 account foundation: canonical roles, enabled/deleted state, ASCII-NOCASE
 username uniqueness, last-enabled-owner protection and transactional mutation
 audit. Schema 20 adds the closed-topology-history query index and normalizes two
-historical topology-source names. The public v0.1.4 release uses schema 20. The
-published `v0.1.0-rc.1`, v40 artifact, and their hardware evidence remain
-historical schema-17 checkpoints; they do not describe the current release. Set
+historical topology-source names. Schema 21 adds explicit Managed and Monitor
+only device modes, schema 22 adds reusable exact-MAC policy sets, and schema 23
+adds source-relative per-device client provenance, the case-insensitive
+`clients_mac_nocase` lookup used by bounded policy checks, and a hardened
+one-managed-Gateway index. That migration drops the legacy Gateway index before
+canonicalizing the compatibility `role`, then rebuilds the guard from both
+`functions_json` and `role` so a disagreement cannot bypass it. The public
+v0.1.5 release uses schema 23. The published `v0.1.0-rc.1`, v40 artifact, and
+their hardware evidence remain historical schema-17 checkpoints; they do not
+describe the current release. Set
 `OONFEE_PASSPHRASE_FILE` to an absolute path naming the controller's mode-0600
 passphrase file. The tools open `keyring.json` next to the database and refuse a
 missing, wrong, or mismatched keyring.
@@ -30,7 +37,7 @@ go run ./tools/applyone /absolute/path/to/oonfeewrt.db DEVICE_HOST
 ```
 
 The first five open SQLite with `mode=ro` plus `query_only`. This source build
-requires schema 20 and `secret_state.scrub_complete=1`; they never migrate,
+requires schema 23 and `secret_state.scrub_complete=1`; they never migrate,
 finish a scrub or
 repair a colliding/partial observability table. Start the controller writable
 first when upgrading an older database.
@@ -44,18 +51,31 @@ snapshot whose self-contained database state is uncertain. A transient
 treated as backup members.
 
 `applyone` is different: it opens the controller store writable, may migrate an
-older database, and applies to the one explicitly named router. Before using it,
+older database, and applies to the one explicitly named router. Stop the daemon
+before using it. Both processes take the same exclusive data-directory lock, so
+`applyone` refuses to start while the controller (or another writable tool) owns
+the store. Before using it,
 take a consistent SQLite `.backup` (or stop/checkpoint cleanly) and copy the
 matching `keyring.json`. Do not discover a schema migration during a router
-apply.
+apply. Its direct-write admission gate refuses a missing or unadopted target,
+an invalid stored management mode or function set, every Monitor-only target,
+and an unsafe MAC-policy scope. Every MAC must have a stored `local` observation
+from the currently adopted Managed Gateway; Upstream/Unknown and missing
+provenance fail closed before a router write. Monitor-only observations neither
+satisfy nor contaminate that proof. This tool does not bypass the
+one-managed-Gateway, Preview, policy-set resolution, ownership, rollback, or
+health-check safety contracts.
 
 The published fresh-start hardware checkpoint was promoted through schema 16 to
 schema 17 and validated there. A later controlled live-lab checkpoint reached
-schema 19, while public v0.1.4 uses schema 20. These are separate evidence
-epochs: do not infer that an arbitrary retained store has migrated because the
-source or release has. For any older store, start the matching daemon writable
-and complete/validate migration before using a write-capable tool. These tools
-require the current schema and never perform that migration themselves.
+schema 19, public v0.1.4 uses schema 20, and public v0.1.5 uses schema 23. These
+are separate evidence epochs: do not infer that an arbitrary retained store has
+migrated because the source or release has. The automatic v0.1.4 upgrade path is
+20 → 21 → 22 → 23 and makes no router call. For any older store, start the
+matching daemon writable and complete/validate migration before using a
+write-capable tool. The five read-only tools require the current schema and
+never migrate it; although `applyone` opens writable and can run migrations,
+pre-migrating with the daemon keeps schema change separate from a router apply.
 
 Database and keyring are one restore unit. A passphrase cannot recreate the
 keyring's random data key. A database copied alone from a live WAL store may be

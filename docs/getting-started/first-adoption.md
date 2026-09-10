@@ -2,7 +2,7 @@
 
 Adoption gives the controller a scoped OpenWrt login and records what the device can actually do. It does not apply your desired WLAN, network, DHCP, or firewall configuration.
 
-> **Outcome:** One router appears as a managed device, polls successfully with its generated scoped credential, and has an explicit Gateway, AP, and/or Switch responsibility.
+> **Outcome:** One router appears as a Managed or Monitor only device, polls successfully with its generated scoped credential, and has explicit Gateway, AP, and/or Switch responsibilities.
 
 ## Before you begin
 
@@ -35,7 +35,7 @@ Adoption requires a separate acknowledgement and then:
 - verifies that login and records device capabilities;
 - records the router's SSH host key and, for HTTPS, its certificate fingerprint.
 
-Adoption installs no package, binary, daemon, service, or firmware. It does not change network, WLAN, DHCP, or firewall settings. Those require a later Preview and Apply.
+Adoption installs no package, binary, daemon, service, or firmware. It does not change network, WLAN, DHCP, or firewall settings. Those require a later Preview and Apply, and monitor-only devices are never eligible for that desired-configuration workflow.
 
 The administrator password and optional SSH private key exist only for this request and are not stored.
 
@@ -108,17 +108,36 @@ safety bounds causes report generation to fail closed while leaving the
 inspection result usable; do not replace the report with a raw response or
 screenshot that may expose identifiers.
 
-## 4. Select device functions
+## 4. Choose management mode and device functions
+
+First choose how oonfeeWRT may use the device:
+
+| Mode | Choose it when | Boundary |
+|---|---|---|
+| **Managed** | oonfeeWRT should poll the device and may later apply reviewed site intent | Eligible supported functions can enter Preview and Apply; the site still permits only one managed Gateway |
+| **Monitor only** | The device should appear in inventory, telemetry, events, and topology but another system or person owns its configuration | Uses the distinct read-only `oonfeewrt-monitor` ACL; never enters Preview/Apply and cannot receive optional LLDP installation/configuration/removal, wireless-neighbor mutations, or other package/config/remove operations; existing LLDP observation and an acknowledged RF scan remain available when supported; explicit ACL maintenance and un-adoption remain available |
+
+Monitor only still requires the acknowledged scoped login and its distinct
+read-only ACL below. It means
+no desired-configuration authority after adoption, not zero bootstrap writes.
+It is suitable for reachable OpenWrt routers on other routed management
+subnets. oonfeeWRT does not create the route or VPN: the controller host must
+already reach SSH and the selected HTTP or HTTPS `/ubus` endpoint.
+
+Monitor only is not a promise that every observation is passive. A separately
+acknowledged RF scan can take a capable serving radio off-channel, so clients
+may pause, roam, or disconnect. It has no intended persistent configuration
+change; do not run it merely to verify adoption.
 
 Select at least one function:
 
-- **Gateway:** routes between managed networks and toward the Internet; receives addressing, DHCP, and firewall intent.
+- **Gateway:** routes between networks and toward the Internet; a managed Gateway receives addressing, DHCP, and firewall intent, while a monitor-only Gateway contributes observation only.
 - **AP:** publishes managed WLANs and carries their networks; does not imply routing or DHCP.
 - **Switch:** records wired responsibility and available port/topology visibility; it does not promise universal per-port or VLAN configuration.
 
 Select every responsibility the router should perform. A combined OpenWrt router may be Gateway, AP, and Switch. An AP-only router should not receive Gateway just because it has a default route through its management LAN.
 
-If oonfeeWRT will manage the network's gateway, adopt that device first. Only one managed Gateway is supported. AP-only adoption remains valid when routing is intentionally managed elsewhere.
+If oonfeeWRT will manage the network's gateway, adopt that device first. Only one managed Gateway is supported. Additional monitor-only routed devices may be observed, and AP-only adoption remains valid when routing is intentionally managed elsewhere.
 
 Switch behavior is capability-dependent:
 
@@ -127,7 +146,7 @@ Switch behavior is capability-dependent:
 - `unknown` retains the uncertainty;
 - `none` means no switch capability was observed.
 
-A generic single-interface LAN is separate from legacy `swconfig`. v0.1.4
+A generic single-interface LAN is separate from legacy `swconfig`. v0.1.5
 does not create tagged VLAN attachments on that layout and leaves its existing
 LAN/VLAN configuration unchanged. See [Networks, VLANs, and DHCP](../guide/networks.md)
 before planning a tagged network.
@@ -147,6 +166,13 @@ Open **Review exact router changes** and read the displayed plan. The scoped ACL
 - runtime 802.11k neighbour-list updates for managed WLANs that request them.
 
 It does not grant client disconnection or steering. The client keeps the roaming decision.
+
+For monitor-only devices, adoption installs the distinct read-only
+`oonfeewrt-monitor` ACL group instead of the managed write-capable group. The
+server also fences desired/site configuration, optional LLDP installation/
+configuration/removal, runtime neighbour-list updates, and other package/
+config/remove operations. Existing LLDP observation remains available.
+Do not treat management mode as a substitute for reviewing the ACL itself.
 
 Select **Install the oonfeeWRT controller access payload?** only after you accept those exact changes. Leaving it unchecked keeps Adopt unavailable; cancelling leaves the router unchanged.
 
@@ -172,16 +198,19 @@ After completion:
 
 1. Review **What the capability probe found**. Available, undetermined, driver-quirk, and note lists should agree with the hardware evidence.
 2. Open **Devices** and select the device.
-3. Confirm its address, MAC, firmware, functions, class, and poll status.
+3. Confirm its address, MAC, firmware, management mode, functions, class, and poll status.
 4. Wait for a successful poll and confirm **Last seen** advances.
 5. Review the **Management overhead** section and unavailable sources.
 6. Open **Dashboard** and confirm the device count changes.
 
-Do not expect new SSIDs or network changes yet. Adoption and provisioning are separate.
+Do not expect new SSIDs or network changes yet. Adoption and provisioning are separate. For monitor-only devices, provisioning remains unavailable by design.
 
 ## Make the first desired-state change safely
 
 When you are ready:
+
+This section applies only to managed devices. A monitor-only device is omitted
+from the Preview target set and its configuration controls remain unavailable.
 
 1. Open **Settings → Network**.
 2. Create or edit only the intended network, AP group, or WLAN.
@@ -223,7 +252,10 @@ Confirm TCP/22 reachability, the administrator username, and whether Dropbear pe
 
 ### Gateway selection is refused
 
-The controller permits only one managed Gateway. Review the existing device functions before changing which router owns site routing.
+The controller permits only one managed Gateway. Review the existing device
+functions and management modes before changing which router owns site routing.
+A second routed device can be Monitor only, but that does not make it a managed
+failover Gateway or DHCP authority.
 
 ### Adoption stops partway through
 

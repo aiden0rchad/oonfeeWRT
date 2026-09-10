@@ -5,7 +5,7 @@ description: Which oonfeeWRT actions can affect routers, how Apply rollback work
 
 # Safety model
 
-oonfeeWRT v0.1.4 separates observation, controller desired state, and router
+oonfeeWRT v0.1.5 separates observation, controller desired state, and router
 mutation. A device appearing in the UI is never permission to change it.
 
 ## Know what an action can change
@@ -23,10 +23,10 @@ mutation. A device appearing in the UI is never permission to change it.
 | Controller-host speed test | No router API/SSH call | No | Sends about 15 MiB through the normal WAN path; may saturate it for up to 30 seconds |
 | Effective-WAN/topology collection | Read-only ubus and bounded `file.exec` calls | No | Observes the route table and logical interfaces; does not change routes, metrics, PPPoE, firewall, or failover |
 | Adoption with access payload accepted | Yes, over SSH | Yes | Creates/replaces the scoped login and ACL only |
-| Apply | Yes, over ubus | Yes | Changes reviewed controller-owned UCI sections and, only for an explicit management-LAN IPv6 mode, the allowlisted options on exact existing foreign sections described below |
+| Apply (managed devices only) | Yes, over ubus | Yes | Changes reviewed controller-owned UCI sections and, only for an explicit management-LAN IPv6 mode, the allowlisted options on exact existing foreign sections described below |
 | RF scan | Yes | No intended persistent change | Serving radio leaves channel temporarily; clients may be disrupted |
 | Verify on air | Yes | No intended persistent change | Uses disruptive scans and therefore requires acknowledgement |
-| Optional LLDP workflow | Yes, over SSH | Yes | May refresh package indexes, install official-feed packages, configure interfaces, and start a service after separate approvals |
+| Optional LLDP workflow (managed devices only) | Yes, over SSH | Yes | May refresh package indexes, install official-feed packages, configure interfaces, and start a service after separate approvals; monitor-only devices are refused |
 | Un-adopt | Yes | Yes | Reverts/removes controller-owned configuration, then removes scoped access |
 | Confirmed controller restore | No router call during restore | Controller data changes only | Restarts the controller, revokes sessions, and suppresses future router writes pending review |
 
@@ -43,6 +43,33 @@ Treat these as different decisions:
 
 Accepting the adoption payload does not authorize a later WLAN, network,
 firewall, DHCP, or package change.
+
+## Management mode is an independent boundary
+
+Every adopted device is **Managed** or **Monitor only**. Both modes use an
+explicit scoped-login/ACL bootstrap and can be polled; monitor only installs
+the distinct read-only `oonfeewrt-monitor` ACL group. Management mode then
+controls whether the device can receive desired configuration:
+
+- Managed devices can participate in Preview and Apply when their selected
+  functions, capabilities, and ownership checks permit it.
+- Monitor-only devices contribute inventory, telemetry, events, and topology,
+  but are excluded from Preview, Apply, desired/site configuration, optional
+  LLDP install/config/remove mutations, wireless-neighbor mutations, and other
+  package/config/remove operations. Existing LLDP observation remains
+  available.
+- A capable monitor-only radio can still run a separately acknowledged RF scan.
+  This is an active, transient observation: it takes the radio off-channel and
+  may interrupt clients, but makes no intended persistent configuration change.
+- Scoped ACL maintenance and un-adoption remain deliberate, reviewed actions
+  for monitor-only devices; otherwise the access footprint could not be
+  updated or removed safely.
+
+The server enforces these checks even when a caller bypasses hidden UI controls.
+A site permits at most one managed Gateway, while multiple reachable
+monitor-only routed devices are allowed. This is an authority boundary, not a
+routing feature: the controller still requires an existing route or VPN to each
+device's SSH and HTTP or HTTPS `/ubus` endpoint.
 
 ## Compatibility reports are a separate safe projection
 
@@ -76,9 +103,35 @@ ACL JSON file and create one scoped login named `oonfeewrt`. This payload:
 - does not itself change WLAN, network, firewall, or DHCP configuration; and
 - uses the device administrator credential only for the SSH transaction.
 
-Normal polling and Apply use the stored scoped credential. Refreshing the ACL
+Normal polling and managed-device Apply use the stored scoped credential.
+Monitor-only adoption and refresh install the distinct read-only
+`oonfeewrt-monitor` ACL group. Refreshing the ACL
 later again requires an ephemeral device-administrator credential and explicit
 approval.
+
+## Reusable policy-set safety
+
+Named policy sets contain canonical exact MAC addresses and can be referenced
+by firewall rules through a stable set ID. Saving or editing a set changes
+controller intent only. At validation, Master Table, and render time, the
+controller resolves the current members so the concrete affected clients can
+be reviewed.
+
+Empty or malformed sets, missing references, a rule that mixes direct MACs with
+a set reference, and membership outside the stored observed-client inventory
+or outside proved local managed-Gateway scope fail closed. Schema 23 requires a
+stored `local` observation for each MAC from the currently adopted Managed
+Gateway. Monitor-only observations neither satisfy nor contaminate this proof,
+including after un-adoption. Until a successful Gateway poll establishes proof,
+set creation/update and MAC-based Object Manager drafts are refused and active
+direct/set firewall, blocked-client, or fixed-address intent blocks Preview.
+Existing blocked/fixed-address intent can still be cleared one client at a
+time. A set cannot be deleted while any enabled or disabled rule still
+references it. Membership changes require a fresh Preview and acknowledged
+Apply before a managed router changes.
+
+MAC membership is not authentication. A client can randomize or spoof an
+address; use a stronger network/application control for high-trust boundaries.
 
 ## Ownership prevents silent takeover
 
@@ -208,7 +261,7 @@ automatic 802.11k neighbour maintenance, so review roaming intent first.
 
 ## Security limits to keep visible
 
-- The controller has no native TLS listener in v0.1.4. Use loopback or a
+- The controller has no native TLS listener in v0.1.5. Use loopback or a
   trusted management LAN and a trusted reverse proxy.
 - No independent security audit or penetration test has been completed.
 - Hardware support is capability-driven. The two-device end-to-end record and
@@ -218,6 +271,8 @@ automatic 802.11k neighbour maintenance, so review roaming intent first.
   or power failures.
 - A portable backup contains sensitive controller state and saved credentials.
   Anyone with the file and export passphrase can recover that content.
+- The Phase 5 flow-visibility document is a feasibility plan. v0.1.5 installs
+  no DPI/flow package and stores no application-flow history.
 
 See [Permissions](./permissions.md), [Troubleshooting](../reference/troubleshooting.md),
 and [Requirements](../reference/requirements.md).

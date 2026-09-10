@@ -1,12 +1,12 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.4.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.5.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.4**.
+v0.1.5**.
 
 ## Controller host
 
@@ -32,7 +32,7 @@ retention. Twenty-five devices is a sizing/evidence target, not a hard adoption
 cap. These are release targets, not a promise that every workload or diagnostic
 export stays below them.
 
-## Managed OpenWrt devices
+## OpenWrt devices
 
 The documented minimum is OpenWrt **21.02 or newer** with:
 
@@ -55,6 +55,18 @@ For adoption, prepare:
 A factory-default passwordless root account is unsafe. oonfeeWRT warns rather
 than blocking an explicitly trusted lab device, but production adoption should
 start only after setting a password.
+
+Choose **Managed** only when oonfeeWRT should hold desired-configuration
+authority. A site permits at most one managed Gateway. Choose **Monitor only**
+for an additional reachable router that should contribute polling, inventory,
+telemetry, events, and topology without Preview/Apply authority. Monitor-only
+adoption installs the scoped login with the distinct read-only
+`oonfeewrt-monitor` ACL; desired/site configuration, optional LLDP
+install/config/remove mutations, wireless-neighbor mutation, and other
+package/config/remove operations remain fenced. Existing LLDP observation, ACL
+maintenance, and un-adoption remain available. A supported RF scan also remains
+available after a separate disruption acknowledgement; it can interrupt clients
+but has no intended persistent configuration change.
 
 ### Capability-dependent OpenWrt components
 
@@ -86,11 +98,11 @@ Ordinary single DHCP, static, and PPPoE uplinks satisfy the modeled shape.
 Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
 `mwan3`, unmappable runtime devices, and bond-member selection remain
 unavailable rather than guessed. Those layouts can still be managed outside
-oonfeeWRT, but v0.1.4 does not claim their Dashboard WAN path is authoritative.
+oonfeeWRT, but v0.1.5 does not claim their Dashboard WAN path is authoritative.
 
 ### Optional router-clock status prerequisites
 
-v0.1.4 can compare fresh router UTC with the controller through
+v0.1.5 can compare fresh router UTC with the controller through
 `luci.getUnixtime`, falling back to `luci.getLocaltime` only when the preferred
 method is unavailable. A new adoption's reviewed ACL includes these read-only
 methods. An adoption created by an older release keeps ordinary polling,
@@ -114,6 +126,9 @@ oonfeeWRT does not provide:
 - its own VPN.
 
 Use an existing WireGuard or other routed management network for remote sites.
+Multiple monitor-only routers can be observed across those routed subnets, but
+oonfeeWRT does not configure the routes, VPN, or remote firewall policy needed
+to reach them.
 
 Common ports are:
 
@@ -187,15 +202,15 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.4:
+For v0.1.5:
 
-- download release archives and `SHA256SUMS` from the v0.1.4 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.5 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.4`. Stable aliases
+The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.5`. Stable aliases
 exist, but deployments should pin the exact version or digest.
 
 ## Source-build requirements
@@ -229,7 +244,8 @@ WAN `eth0`, and no independent switch ports.
 That Cudy evidence does not cover adoption/bootstrap, Apply/rollback, WLAN and
 client operation, tagged VLAN management, polling/resource budgets, topology,
 RF scans, speed tests, un-adoption, or other Filogic boards. Three-or-more-AP
-fan-out, real mesh backhaul, wireless uplink, and MT7621 also remain unverified.
+fan-out, real mesh backhaul, wireless uplink, literal peer isolation, the full
+Filogic/class-B resource budget, and MT7621 also remain unverified.
 
 v0.1.3's PPPoE/default-route correction has separate evidence: issue #20
 provided real route output, and automated regression tests cover the
@@ -243,11 +259,20 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.4` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.5` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.
-- [ ] Controller host reaches router SSH and `/ubus` endpoints.
+- [ ] Controller host reaches router SSH plus the selected HTTP or HTTPS
+      `/ubus` endpoint.
+- [ ] Managed versus Monitor only authority is chosen deliberately; any routed
+      monitor-only subnet is already reachable from the controller.
+- [ ] Every exact MAC used by a policy set, Secure draft, block, or fixed-address
+      policy has a stored `local` observation from the currently adopted Managed
+      Gateway. Monitor-only observations neither satisfy nor contaminate this
+      proof, including after un-adoption. After an upgrade or restore, allow a
+      successful managed-Gateway poll to recreate missing source-relative
+      observations before Preview.
 - [ ] Router runs supported OpenWrt with `rpcd` and the `uhttpd` ubus handler.
 - [ ] A gateway provides the stock `/sbin/ip`; the standard adoption payload
       will grant its exact read-only route command to the scoped login.

@@ -10,7 +10,7 @@ UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
 shape of Phases 4 and 6 below, but does **not** justify skipping the safety and
 site-model work ahead of them.
 
-**Current stable patch (v0.1.4, released 2026-09-03):** v0.1.2 shipped the
+**Current stable patch (v0.1.5, released 2026-09-10):** v0.1.2 shipped the
 bounded, sanitized, browser-local compatibility report on successful read-only
 Inspect and corrected physical-radio/direct-Ethernet inspection for the
 externally reported Cudy M3000 v2 variant. v0.1.3 replaced WAN interface-name
@@ -36,6 +36,31 @@ therefore requires the matching pre-upgrade database, keyring, and runtime
 passphrase, not only a binary/image change. Existing adoptions need no
 re-adoption; a separately reviewed ACL refresh is required only to add
 router-clock status.
+
+v0.1.5 adds Managed and Monitor only device authority. One managed Gateway
+continues to own site configuration, while multiple reachable monitor-only
+routers can contribute polling, inventory, telemetry, events, and topology
+across existing routed subnets. Monitor-only devices use the distinct read-only
+`oonfeewrt-monitor` ACL and are fenced from Preview/Apply, optional LLDP
+install/config/remove mutations, wireless-neighbor mutation, and other
+package/config/remove operations. Existing LLDP observation remains available;
+ACL lifecycle and un-adoption remain explicit maintenance.
+Capability-proved RF scan remains available to either mode after a separate
+disruption acknowledgement; it is transient active observation rather than
+persistent configuration authority.
+
+The same patch adds reusable exact-MAC policy sets, stable firewall
+`source_set_id` references, Object Manager Secure drafts, and concrete Master
+Table resolution. MAC policy requires proved local managed-Gateway scope and
+uses source-relative observations, so Monitor-only observations neither satisfy
+nor contaminate the proof. Missing proof refuses set creation/update and MAC
+drafts and blocks Preview while active MAC intent remains; existing
+block/fixed-address intent can still be cleared one client at a time. The patch
+also adds consistent responsive light/dark page treatment. Its automatic
+schema path is 20 → 21 → 22 → 23: management mode, policy sets, then provenance
+with bounded MAC lookup indexes plus a rebuilt one-managed-Gateway uniqueness
+guard using canonical device functions and the legacy role. Upgrade startup
+configures no router, and v0.1.4 cannot open schema 23.
 
 ---
 
@@ -783,6 +808,14 @@ packages.
 ## Phase 5 — Flows & security
 
 The expensive phase. Deliberately after the portable core.
+
+**v0.1.5 feasibility checkpoint:** package availability was confirmed for the
+documented OpenWrt 25.12 target architectures, but no package was installed and
+no DPI/application identity shipped. A pilot must first pass the storage,
+performance, privacy, package-plan, rollback, and truthful-claim gates in
+[Flow visibility feasibility](reference/flows-feasibility.md). `nlbwmon`
+provides accounting rather than DPI; `netifyd` remains optional research, not a
+release dependency.
 
 - `netifyd`/nDPI on the gateway → flow records with application identification.
 - Flow store with aggressive retention + summary rollups.

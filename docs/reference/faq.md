@@ -5,7 +5,7 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.4**.
+Answers below describe **oonfeeWRT v0.1.5**.
 
 ## What is oonfeeWRT?
 
@@ -50,6 +50,8 @@ implement vendor inform protocols or proprietary device APIs.
 Adoption never installs a package, executable, daemon, service, firmware, or
 custom controller code. With explicit default-off consent, it creates/replaces
 one rpcd ACL JSON file and creates one scoped `oonfeewrt` login.
+Managed devices receive the managed ACL group. Monitor-only devices receive
+the distinct read-only `oonfeewrt-monitor` group for observation.
 
 The optional LLDP capability is a separate workflow. It may install official
 OpenWrt feed packages only after showing and binding an exact plan to separate
@@ -63,6 +65,24 @@ bootstrap transaction. Normal polling and configuration use scoped ubus.
 
 The device administrator credential is used for the transaction and is not
 stored.
+
+## What does Monitor only mean?
+
+It keeps a reachable OpenWrt router in polling, inventory, telemetry, events,
+and topology without giving it desired-configuration authority. Monitor-only
+devices are excluded from Preview, Apply, site configuration, optional LLDP
+installation/configuration/removal, wireless-neighbor mutation, and other
+package/config/remove operations. Existing LLDP observation remains available.
+Their scoped ACL lifecycle and un-adoption remain explicit maintenance actions.
+
+A capable monitor-only radio can still run a separately acknowledged RF scan.
+That is an active, transient observation, not configuration authority: the
+serving radio goes off-channel and clients may pause, roam, or disconnect, but
+the scan has no intended persistent configuration change.
+
+Multiple monitor-only routers may be observed across routed management subnets,
+but oonfeeWRT neither creates those routes/VPNs nor turns the devices into
+managed failover gateways. A site still permits only one managed Gateway.
 
 ## Can I keep using LuCI and SSH?
 
@@ -84,6 +104,27 @@ a fresh Preview.
 
 No. Saving changes controller desired state only. Preview computes exact
 per-device changes; Apply is a separate reviewed action.
+
+The same boundary applies to named policy sets. Creating, renaming, or changing
+exact-MAC membership changes controller intent only. Referencing firewall rules
+resolve the current members during a fresh Preview; a router changes only after
+acknowledged Apply.
+
+MAC intent is accepted only when the exact MAC has a stored **This network**
+(`local`) observation from the currently adopted Managed Gateway. Schema 23
+keeps that source-relative evidence in `client_observations`, keyed by device
+and MAC. Monitor-only observations can still populate global inventory, but
+they neither satisfy nor contaminate the managed-Gateway proof, including after
+un-adoption. Policy-set create/update, direct or set-backed MAC Secure drafts,
+and blocked/fixed-address intent fail closed without that proof. Active MAC
+intent blocks Preview until every referenced client is re-observed locally;
+this commonly matters just after an upgrade or restore, before the next
+successful managed-Gateway client poll. Source-relative observations also age
+out at the normal 30-day client-retention cutoff even when desired intent keeps
+the merged client row; the intent remains stored, but Preview blocks until the
+Gateway observes the MAC locally again. Existing blocked/fixed-address intent
+can still be cleared one client at a time. Use network/zone or explicit IPv4
+scope for cross-device policy.
 
 ## What happens if Apply breaks connectivity?
 
@@ -231,11 +272,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.4.
+v0.1.5.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.4. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.5. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -294,17 +335,21 @@ OpenWrt logs for 24 hours, closed topology intervals for 31 days, 100,000
 controller/audit events, and the newest three terminal speed tests. See the
 complete [retention table](../concepts/data-retention.md).
 
-## Can I downgrade from v0.1.4?
+## Can I downgrade from v0.1.5?
 
-v0.1.4 migrates the controller database from schema 19 to schema 20. The
-v0.1.3 binary cannot open schema-20 state. To roll back, stop the controller and
-restore the matching pre-upgrade schema-19 database, `keyring.json`, runtime
-passphrase, and v0.1.3 binary/image together. Replacing only the executable or
+v0.1.5 migrates the controller database from schema 20 through schemas 21 and
+22 to schema 23. The steps add management mode, reusable policy sets,
+source-relative client provenance, and a rebuilt one-managed-Gateway uniqueness
+guard. Schema 23 also adds bounded observation/global-client MAC indexes. The
+v0.1.4 binary cannot open schema-23 state. To roll back, stop the controller and
+restore the matching
+pre-upgrade schema-20 database, `keyring.json`, runtime passphrase, and v0.1.4
+binary/image together. Replacing only the executable or
 image tag is not a valid rollback.
 
-If you retained only the pre-upgrade portable `.oowrtbak`, start v0.1.3 against
+If you retained only the pre-upgrade portable `.oowrtbak`, start v0.1.4 against
 a separate empty data directory or volume and restore that artifact through its
-Backup & Restore screen. Do not reuse the schema-20 live volume; no public CLI
+Backup & Restore screen. Do not reuse the schema-23 live volume; no public CLI
 extracts the portable artifact in place.
 
 Preserve the current pair before any restore as well. Migration or rollback
@@ -312,7 +357,7 @@ does not revert configuration that was already Applied to routers.
 
 Historical `v0.1.0-rc.1` uses schema 17. Rolling back that far requires the
 untouched pre-upgrade schema-17 database, matching keyring, prior passphrase,
-and old binary/image together. Do not open schema-19 or schema-20 data with the
+and old binary/image together. Do not open schema-19, schema-20, or schema-23 data with the
 RC daemon.
 
 ## What is deliberately out of scope?
@@ -324,7 +369,8 @@ RC daemon.
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.4.
+- DPI/application flow history on constrained routers in v0.1.5. The Phase 5
+  feasibility page does not install or ship a flow package.
 
 ## Where should I start?
 

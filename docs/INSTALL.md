@@ -3,9 +3,9 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets the current stable, schema-20 release `v0.1.4`, published
-September 3, 2026. The
-[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4)
+This guide targets the current stable, schema-23 release `v0.1.5`, published
+September 10, 2026. The
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5)
 and its completed tag workflow are the publication source of truth. Back up both the
 controller and each router before using it on a network you cannot afford to
 interrupt. Upgrade and rollback from historical `v0.1.0-rc.1` are documented
@@ -19,7 +19,9 @@ device address. Router changes are separate, default-off actions:
 1. **Controller access payload during adoption:** after an explicit prompt,
    one rpcd ACL JSON file and one scoped `oonfeewrt` login are added. This is not
    a package, executable, daemon, service, or firmware change. The supplied
-   administrator credential is used for that SSH action and is not stored.
+   administrator credential is used for that SSH action and is not stored. A
+   Managed device receives the managed ACL group; a Monitor only device
+   receives the distinct read-only `oonfeewrt-monitor` group.
 2. **LLDP capability:** after adoption, a separate workflow may install the
    official OpenWrt `lldpd` package and its feed dependencies. Refreshing the
    package index, installing the displayed exact plan, and configuring physical
@@ -35,6 +37,20 @@ device address. Router changes are separate, default-off actions:
    management LAN, its single matching DHCP section, and conventional
    `wan`/`wan6`; it never creates, claims, renames, or deletes those foreign
    sections, and ambiguous or conflicting layouts block Preview.
+
+Monitor-only devices remain available to polling, inventory, telemetry,
+events, and topology, including across routed management subnets. They are
+excluded from Preview, Apply, desired/site configuration, optional LLDP
+installation/configuration/removal, wireless-neighbor mutations, and other
+package/config/remove operations. Existing LLDP observation, scoped ACL
+maintenance, and un-adoption remain available. The controller host must already
+reach their SSH and HTTP or HTTPS `/ubus` endpoints; oonfeeWRT creates no route
+or VPN.
+
+A supported Monitor-only radio can still run a separately acknowledged RF
+scan. This is an active, transient observation that may interrupt clients while
+the serving radio is off-channel; it has no intended persistent configuration
+change.
 
 Un-adoption removes the scoped login and ACL. It is blocked until any recorded
 LLDP capability is rolled back, so package residue cannot be silently orphaned.
@@ -57,7 +73,7 @@ Set the release and platform. On macOS, `uname -m` reports `x86_64` rather than
 the archive's `amd64`, so normalize it:
 
 ```sh
-VERSION=v0.1.4
+VERSION=v0.1.5
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -119,7 +135,7 @@ first run and once after each restart.
 ## Run the container
 
 The published immutable release image is
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.4`. It is multi-platform, defaults to
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.5`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
 backups straightforward on both Linux and Docker Desktop.
@@ -127,8 +143,8 @@ backups straightforward on both Linux and Docker Desktop.
 Install `cosign` from the
 [official Sigstore instructions](https://docs.sigstore.dev/cosign/system_config/installation/),
 then verify the GitHub Actions keyless identity before first use. Stable aliases
-`0.1.4`, `0.1`, and `latest` resolve to the same final manifest, but deployments
-should pin `v0.1.4` or its reported digest.
+`0.1.5`, `0.1`, and `latest` resolve to the same final manifest, but deployments
+should pin `v0.1.5` or its reported digest.
 
 ```sh
 [ "$(id -u)" -ne 0 ] || { echo "run Docker as a non-root user" >&2; exit 1; }
@@ -147,9 +163,9 @@ by address.
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.4" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.5" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.5
 
 docker run -d \
   --name oonfeewrt \
@@ -166,11 +182,11 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.4
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.5
 ```
 
 To use Compose instead of the direct `docker run` command, create a private
-deployment directory, download the exact v0.1.4 file, and create its dedicated
+deployment directory, download the exact v0.1.5 file, and create its dedicated
 mode-0600 passphrase. The service uses the same release image, a named data
 volume, and a loopback-default bridge mapping. Its `OONFEE_HTTP_BIND` override
 can select one deliberate management address; host networking remains an
@@ -182,19 +198,19 @@ cd oonfeewrt-compose
 umask 077
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.4/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.4' \
+  'OONFEE_VERSION=v0.1.5' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
 ```
 
-The v0.1.4 Compose file keeps the loopback default but accepts
+The v0.1.5 Compose file keeps the loopback default but accepts
 `OONFEE_HTTP_BIND=<controller-LAN-IP>` when browsers must connect directly from
 a trusted management LAN. This changes only host-side publishing.
 `OONFEE_HTTP_BIND=0.0.0.0` explicitly publishes on every host IPv4 interface;
@@ -262,7 +278,7 @@ docker start oonfeewrt
 ```
 
 For a Compose named volume, stop the service and use trusted volume-snapshot
-tooling to preserve the whole volume before v0.1.4 opens it. Record the exact
+tooling to preserve the whole volume before v0.1.5 opens it. Record the exact
 Compose project/volume identity and retain the matching passphrase file. This
 raw snapshot is the simplest direct rollback path; never copy only the main
 SQLite file while WAL may be active.
@@ -274,47 +290,57 @@ To upgrade, retain that backup, stop the old process cleanly, replace the binary
 or container tag, and restart with the same data volume and passphrase file. The
 controller migrates its database on startup and refuses an unsupported downgrade.
 
-### Upgrade from v0.1.3 and roll back
+### Upgrade from v0.1.4 and roll back
 
-v0.1.3 uses schema 19; v0.1.4 migrates it to schema 20. Before upgrading,
-preserve and verify the matching schema-19 database, keyring, and passphrase.
-The migration adds the closed-topology lookup index and normalizes two old
-development-era topology-source names, retaining the newest observation when
-both spellings exist. It does not remove user configuration, credentials,
-secrets, or topology intervals.
+v0.1.4 uses schema 20; v0.1.5 migrates it to schema 23 in three ordered steps.
+Schema 21 adds device `management_mode` and assigns all existing devices
+**Managed**, preserving prior authority. Schema 22 adds named policy sets,
+exact-MAC members, and stable firewall `source_set_id` references. Schema 23
+adds source-relative `client_observations`, its MAC lookup, and the
+case-insensitive global-client MAC index used by bounded policy checks. It
+drops the legacy Gateway index before canonicalizing the compatibility role,
+then rebuilds the one-managed-Gateway uniqueness guard from `functions_json`
+plus `role`, so those representations cannot disagree and bypass it. The
+migration invents no sets, does not infer provenance from merged global client
+rows, and preserves existing policies, configuration, credentials, secrets,
+telemetry, and topology intervals.
 
-The v0.1.3 daemon cannot open schema 20. To roll back, stop v0.1.4, retain its
-schema-20 data separately, restore the matching pre-upgrade schema-19 database
-and keyring, install v0.1.3, and start it with the corresponding passphrase.
+The v0.1.4 daemon cannot open schema 23. To roll back, stop v0.1.5, retain its
+schema-23 data separately, restore the matching pre-upgrade schema-20 database
+and keyring, install v0.1.4, and start it with the corresponding passphrase.
 Changing only the binary or `OONFEE_VERSION` is not a valid rollback.
 
-If the portable `.oowrtbak` is your only schema-19 recovery point, start
-v0.1.3 against a new empty data directory or volume and restore the artifact
+If the portable `.oowrtbak` is your only schema-20 recovery point, start
+v0.1.4 against a new empty data directory or volume and restore the artifact
 through **Settings → Backup & Restore** with its export passphrase. Confirmation
-also uses that clean instance's runtime passphrase. Do not point v0.1.3 at the
-schema-20 live volume; the public recovery helper does not extract a portable
+also uses that clean instance's runtime passphrase. Do not point v0.1.4 at the
+schema-23 live volume; the public recovery helper does not extract a portable
 backup in place.
 
-The upgrade itself makes no router change. Existing networks decode as
-**Router managed**, so no IPv6 setting is rewritten merely by starting v0.1.4.
-Read-only route polling continues under the existing ACL. The new router-clock
-observation requires an explicit, separately acknowledged controller-access
-refresh on already-adopted routers; without it, only clock status remains
-unavailable. Re-adoption is not required.
+The upgrade itself makes no router change. Read-only polling resumes, and all
+existing devices remain Managed until an Administrator or Owner deliberately
+changes authority. A monitor-only selection installs the distinct read-only
+`oonfeewrt-monitor` ACL through the reviewed ACL lifecycle; it is not a silent
+startup change.
+
+Stable v0.1.1 through v0.1.3 use schema 19 and can migrate forward to v0.1.5,
+but rollback to one of those releases requires that version's matching
+pre-upgrade schema-19 database, keyring, and passphrase. Do not use a schema-20
+or schema-23 volume with a schema-19 daemon.
 
 ### Upgrade from v0.1.0-rc.1 and roll back
 
-`v0.1.0-rc.1` uses schema 17; v0.1.4 migrates supported state through schemas
-18 and 19 to schema 20. Before the upgrade, stop the RC cleanly and copy its
+`v0.1.0-rc.1` uses schema 17; v0.1.5 migrates supported state through schemas
+18–23. Before the upgrade, stop the RC cleanly and copy its
 database and matching keyring. Verify
 that pair with the RC archive's `oonfeewrt-recoverycheck`, then retain it without
-opening it with the final daemon. Start v0.1.4 with a copy of the same data pair
+opening it with the final daemon. Start v0.1.5 with a copy of the same data pair
 and unchanged passphrase file.
 
-Rollback is a data restore, not merely an image-tag change: stop v0.1.4, retain
-the schema-20 state separately, restore the untouched schema-17 database and
+Rollback is a data restore, not merely an image-tag change: stop v0.1.5, retain
+the schema-23 state separately, restore the untouched schema-17 database and
 matching keyring, then restart `v0.1.0-rc.1` with its prior passphrase. Never
-point the RC daemon at a schema-19 or schema-20 database. Controller migration
+point the RC daemon at a schema-19, schema-20, or schema-23 database. Controller migration
 and rollback make no router request and do not revert router configuration.
 
 ## Portable backup and restore

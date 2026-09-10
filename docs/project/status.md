@@ -1,17 +1,39 @@
 # Where this project is
 
-> **Current release status — 2026-09-03**
+> **Current release status — 2026-09-10**
 >
 > The current public release is
-> [`v0.1.4`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.4),
-> commit `fb199064`, using database schema 20. Its release workflow completed
-> successfully and published four checksummed standalone archives plus the
-> signed `linux/amd64` and `linux/arm64` container image.
+> [`v0.1.5`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5),
+> using database schema 23. It adds Managed/Monitor only device authority,
+> reusable exact-MAC policy sets, and consistent responsive page treatment.
+> The tag workflow and GitHub release are authoritative for checksummed
+> standalone archives and the signed `linux/amd64`/`linux/arm64` image.
+>
+> The automatic schema path is 20 → 21 → 22 → 23. Existing devices remain
+> Managed; policy-set storage is added; then source-relative client provenance
+> with bounded MAC lookup indexes and the hardened one-managed-Gateway
+> uniqueness guard are added.
+> Migration configures no router. Monitor-only devices use the distinct
+> read-only `oonfeewrt-monitor` ACL and stay observable while desired/site
+> configuration and optional mutation paths are fenced.
+> A capability-proved, separately acknowledged RF scan remains available as a
+> transient active observation with client-disruption risk, not persistent
+> configuration authority.
+> MAC policy requires a stored local observation from the currently adopted
+> Managed Gateway. Monitor-only observations neither satisfy nor contaminate
+> that proof. Missing proof gates set creation/update and MAC drafts and makes
+> active MAC intent block Preview rather than render an ineffective rule.
+> Existing block/fixed-address intent remains clearable one client at a time.
+>
+> Phase 5 remains feasibility work: no DPI or flow package ships. The final
+> issue #25 multi-router topology retest and the documented IPv6, third-AP,
+> mesh/uplink, Filogic/class-B, and literal peer-isolation hardware proofs
+> remain pending; source/release checks are not presented as physical evidence.
 >
 > The detailed handoff below records historical development and physical-lab
 > checkpoints through August 23. Statements using “current” inside that record
 > are relative to their documented checkpoint unless this banner explicitly
-> supersedes them. The active public release and schema are v0.1.4/schema 20;
+> supersedes them. The active public release and schema are v0.1.5/schema 23;
 > §5br remains the historical schema-19 live-lab checkpoint.
 
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current

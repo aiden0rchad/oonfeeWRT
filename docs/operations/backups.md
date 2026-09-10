@@ -2,7 +2,7 @@
 
 oonfeeWRT state is not one interchangeable database file. `oonfeewrt.db` and its matching `keyring.json` are a recovery unit, and the runtime passphrase is required to unlock that keyring.
 
-The recommended v0.1.4 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file.
+The recommended v0.1.5 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file. Schema-23 backups include device management modes and named policy sets.
 
 > **Outcome:** You have an encrypted off-host controller backup, its separately recorded export passphrase, and a tested understanding of the preview-first restore safety gate.
 

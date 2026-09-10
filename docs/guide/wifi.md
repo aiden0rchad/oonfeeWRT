@@ -133,7 +133,7 @@ recovery.
 ## Per-device overrides
 
 Overrides are for bounded hardware differences. They must not fork the WLAN's
-identity or security contract across APs. The v0.1.4 UI permits per-device
+identity or security contract across APs. The v0.1.5 UI permits per-device
 publication, hidden-SSID, and client-isolation overrides. It does not permit
 SSID, passphrase, security-mode, roaming, band, or radio-channel overrides.
 

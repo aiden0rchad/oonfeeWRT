@@ -5,7 +5,7 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture shipped in **oonfeeWRT v0.1.4**. For the
+This page describes the architecture shipped in **oonfeeWRT v0.1.5**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
@@ -18,6 +18,8 @@ oonfeeWRT is a self-hosted controller for stock OpenWrt. One Go process:
 - stores controller state in SQLite;
 - polls routers through OpenWrt's existing `rpcd`/ubus interface;
 - turns read-only inspection into a bounded, shareable compatibility report;
+- keeps device management mode separate from observed Gateway/AP/Switch
+  functions;
 - turns a site-level network model into per-device UCI changes; and
 - previews, applies, verifies, and confirms those changes.
 
@@ -64,7 +66,8 @@ connections, so a normal deployment has no cross-origin configuration.
 The main workspaces are Dashboard, Topology, Radios, Devices, Client Devices,
 Policy Engine, Settings, Adopt a device, and Logs. What appears in those
 workspaces depends on measured device capabilities; unavailable evidence is not
-silently replaced with zeroes.
+silently replaced with zeroes. Principal routes share one PageHeader/action
+pattern and have responsive light/dark browser coverage.
 
 ### Store and keyring
 
@@ -76,7 +79,7 @@ These three items have different jobs:
 
 | Item | Purpose | Can another item recreate it? |
 |---|---|---|
-| `oonfeewrt.db` | Inventory, desired state, accounts, events, audit history, rollups, sealed credential records | No |
+| `oonfeewrt.db` | Inventory, device management modes, desired state, policy sets, accounts, events, audit history, rollups, sealed credential records | No |
 | `keyring.json` | Wrapped random controller data key | No; neither the database nor passphrase can regenerate it |
 | Runtime passphrase or passphrase file | Unlocks the keyring | No; it is not stored in the database or keyring |
 
@@ -127,7 +130,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.4
+failed topology read from looking like an empty network. The exact v0.1.5
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ### Shareable compatibility evidence
@@ -150,9 +153,44 @@ the controller, or upload it anywhere.
 ## Site model and ownership
 
 Configuration is authored as site intent—WLANs, groups, networks, zones,
-policies, device functions, uplinks, meshes, and bounded per-device overrides.
+policies, reusable exact-MAC policy sets, device functions, uplinks, meshes,
+and bounded per-device overrides.
 The renderer turns that model into deterministic UCI sections for each selected
-device.
+managed device.
+
+Each device also has a management mode. **Managed** devices may be selected by
+the renderer subject to capabilities and function ownership. **Monitor only**
+devices use the distinct read-only `oonfeewrt-monitor` ACL and remain in
+inventory, collection, events, and topology but are removed from desired/site
+rendering and the Preview/Apply fleet. Optional LLDP installation/
+configuration/removal, wireless-neighbor mutation, and other package/config/
+remove paths also refuse them; existing LLDP observation remains
+available. Scoped ACL maintenance and un-adoption remain available so the
+controller footprint can be maintained or removed deliberately. At most one
+managed device can hold Gateway authority; additional reachable routed routers
+may be monitor only.
+
+A capability-proved RF scan is the intentional active-observation exception:
+Managed and Monitor only radios may run it only after the same separate
+disruption acknowledgement. It can take clients off-channel but has no intended
+persistent configuration effect.
+
+Policy sets have stable database IDs, case-insensitively unique names, and
+canonical exact-MAC members. A firewall rule may reference one set ID rather
+than copy its member list. Validation, Master Table, and rendering resolve the
+current members; missing/empty references and mixed direct/set sources fail
+closed, and deletion is refused while any rule references a set.
+
+MAC enforcement is additionally bound to proved local scope at the managed
+Gateway. The store rejects set members, active direct/set firewall rules, and
+client block/fixed-address intent when a client is Upstream/Unknown or lacks a
+stored local observation from the currently adopted Managed Gateway. Schema 23
+keeps those observations source-relative by device and MAC; Monitor-only
+observations neither satisfy nor contaminate the proof, including after
+un-adoption. Missing proof gates set creation/update and MAC Object Manager
+compilation; active MAC intent becomes a site-level Preview error rather than
+an ineffective rendered rule. The clear operation
+for existing block/fixed-address intent remains available one client at a time.
 
 oonfeeWRT coexists with LuCI by owning the sections it creates. Managed sections
 have an `oowrt_` name and/or an `oonfeewrt=1` marker, and the database also
@@ -172,16 +210,19 @@ than widening ownership.
 Saving desired state changes the controller database only. It does not write a
 router. Router changes follow a separate workflow:
 
-1. **Render:** build the complete per-device desired documents.
-2. **Diff:** compare desired state with current owned sections and any
+1. **Select:** exclude monitor-only devices from the desired-configuration
+   fleet.
+2. **Render:** build the complete per-device desired documents, resolving any
+   policy-set references to concrete source MACs.
+3. **Diff:** compare desired state with current owned sections and any
    explicitly selected, allowlisted management-LAN IPv6 option patches.
-3. **Preview:** show exact creates, updates, deletes, gaps, and required
+4. **Preview:** show exact creates, updates, deletes, gaps, and required
    acknowledgements.
-4. **Fleet preflight:** verify every selected device before the first write.
-5. **Apply:** stage the reviewed UCI changes with OpenWrt rollback enabled.
-6. **Health verification:** reconnect and read the expected runtime state.
-7. **Confirm:** cancel OpenWrt's rollback timer only after verification passes.
-8. **Receipt:** preserve the operation and per-device outcomes so a page reload
+5. **Fleet preflight:** verify every selected managed device before the first write.
+6. **Apply:** stage the reviewed UCI changes with OpenWrt rollback enabled.
+7. **Health verification:** reconnect and read the expected runtime state.
+8. **Confirm:** cancel OpenWrt's rollback timer only after verification passes.
+9. **Receipt:** preserve the operation and per-device outcomes so a page reload
    does not retry the write.
 
 Polling is quiesced around a write so collection cannot race the change. The
@@ -191,10 +232,11 @@ lost, OpenWrt's own timer is the recovery mechanism. See
 
 ## Collection and live updates
 
-The collector batches router reads and uses a baseline cadence of about one
-poll per minute. A focused device view may temporarily use the six-per-minute
-focused cadence. Per-device overrides can make full-state polling slower, up to
-15 minutes; lightweight router-log collection remains once per minute.
+The collector batches router reads for managed and monitor-only devices and
+uses a baseline cadence of about one poll per minute. A focused device view may
+temporarily use the six-per-minute focused cadence. Per-device overrides can
+make full-state polling slower, up to 15 minutes; lightweight router-log
+collection remains once per minute.
 
 Raw metric samples stay in memory until a complete five-minute window can be
 written as one SQLite transaction. Older data is folded into hourly rollups.
@@ -238,7 +280,7 @@ gateway. The projection is not permanent truth: stale, failed, or ambiguous
 sources expose the ambiguity again instead of carrying a prior path forward.
 
 Unchanged links do not churn history rows. Closed-history lookup uses the
-schema-20 index, and browser refreshes cancel abandoned requests rather than
+index introduced in schema 20, and browser refreshes cancel abandoned requests rather than
 stacking overlapping topology queries.
 
 ## Deployment boundary

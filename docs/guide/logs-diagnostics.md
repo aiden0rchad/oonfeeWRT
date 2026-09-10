@@ -34,7 +34,7 @@ A useful incident filter sequence:
 6. note source gaps and timestamps;
 7. correlate with Dashboard, Client Observability, or Topology at the same time.
 
-v0.1.4 does not provide a device or free-text search filter on the Logs page.
+v0.1.5 does not provide a device or free-text search filter on the Logs page.
 
 ## Understand the active IPv6 condition
 
