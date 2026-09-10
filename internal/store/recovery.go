@@ -169,6 +169,20 @@ func (db *DB) InspectRecovery(ctx context.Context,
 	if len(site.Validate()) != 0 {
 		return counts, errors.New("stored site validation failed")
 	}
+	if err := validateRecoveryPolicySetMembers(ctx, tx); err != nil {
+		return counts, err
+	}
+	policySetMACs := make([]string, 0)
+	for _, set := range site.PolicySets {
+		policySetMACs = append(policySetMACs, set.Members...)
+	}
+	problems, err := db.policyMACScopeProblemsOn(ctx, tx, site, policySetMACs...)
+	if err != nil {
+		return counts, recoveryQueryError(ctx, "policy MAC scope could not be verified")
+	}
+	if len(problems) != 0 {
+		return counts, errors.New("stored policy MAC scope validation failed")
+	}
 	counts.WLANs, counts.Meshes = len(site.WLANs), len(site.Meshes)
 
 	if err := validateRecoveryDevices(ctx, tx, verifyCredential, &counts); err != nil {
@@ -181,6 +195,26 @@ func (db *DB) InspectRecovery(ctx context.Context,
 		return counts, err
 	}
 	return counts, nil
+}
+
+// SavePolicySet only admits MACs that have been observed in the client
+// inventory. Keep that trust-boundary invariant when validating a recovery
+// database: policy_set_members deliberately has no client foreign key because
+// client retention and set retention have different lifetimes.
+func validateRecoveryPolicySetMembers(ctx context.Context, q siteReader) error {
+	var missing bool
+	if err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT lower(mac) FROM policy_set_members
+  EXCEPT
+  SELECT lower(mac) FROM clients
+)`).Scan(&missing); err != nil {
+		return recoveryQueryError(ctx, "policy set membership could not be verified")
+	}
+	if missing {
+		return errors.New("policy set membership validation failed")
+	}
+	return nil
 }
 
 func validateRecoveryCatalogBounds(ctx context.Context, q siteReader) error {
