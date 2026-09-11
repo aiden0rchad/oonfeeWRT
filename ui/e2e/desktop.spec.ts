@@ -778,36 +778,58 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 
     await page.getByRole('tab', { name: 'Manage accounts', exact: true }).click()
     const form = page.locator('.account-create-form')
     const role = form.getByRole('combobox', { name: 'Role', exact: true })
-    const fields = ['Username', 'Password', 'Repeat password'].map((label) =>
-      form.getByLabel(label, { exact: true }))
 
     for (const theme of ['dark', 'light']) {
       if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+      await role.scrollIntoViewIfNeeded()
+      await role.focus()
+      await expect(role).toBeFocused()
+      await expect(role).toBeInViewport()
       for (const option of accounts.roles) {
         await role.selectOption(option.value)
+        await expect(role).toHaveValue(option.value)
         await expect(role).toHaveAccessibleName('Role')
         await expect(role).toHaveAccessibleDescription(option.description)
-        const descriptionID = await role.getAttribute('aria-describedby')
-        const description = form.locator('small').filter({ hasText: option.description })
-        await expect(description).toHaveAttribute('id', descriptionID!)
-        await expectWithinMain(page, description)
-        await expectWithinMain(page, role)
-        for (const field of fields) await expectWithinMain(page, field)
-
-        const roleBox = await role.boundingBox()
-        expect(roleBox).not.toBeNull()
-        for (const field of fields) {
-          const fieldBox = await field.boundingBox()
-          expect(fieldBox).not.toBeNull()
-          expect(Math.abs(fieldBox!.height - roleBox!.height)).toBeLessThanOrEqual(1)
+        const layout = await form.evaluate((element) => {
+          const main = document.querySelector<HTMLElement>('#main-content')!
+          const select = element.querySelector<HTMLSelectElement>('select')!
+          const description = document.getElementById(select.getAttribute('aria-describedby')!)!
+          const measure = (node: HTMLElement) => {
+            const { x, y, width, height } = node.getBoundingClientRect()
+            const style = getComputedStyle(node)
+            return { x, y, width, height, visible: style.visibility === 'visible' && style.display !== 'none' }
+          }
+          return {
+            main: measure(main),
+            role: measure(select),
+            description: { ...measure(description), text: description.textContent },
+            fields: Array.from(element.querySelectorAll<HTMLInputElement>('input'), (input) => ({
+              ...measure(input), label: input.labels?.[0]?.textContent?.trim(),
+            })),
+            overflow: {
+              document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              main: main.scrollWidth - main.clientWidth,
+            },
+          }
+        })
+        expect(layout.description.text).toBe(option.description)
+        expect(layout.fields.map((field) => field.label)).toEqual(['Username', 'Password', 'Repeat password'])
+        for (const box of [layout.role, layout.description, ...layout.fields]) {
+          expect(box.visible).toBe(true)
+          expect(box.width).toBeGreaterThan(0)
+          expect(box.height).toBeGreaterThan(0)
+          expect(box.x).toBeGreaterThanOrEqual(layout.main.x - 1)
+          expect(box.x + box.width).toBeLessThanOrEqual(layout.main.x + layout.main.width + 1)
+        }
+        for (const field of layout.fields) {
+          expect(Math.abs(field.height - layout.role.height)).toBeLessThanOrEqual(1)
           if (viewport.width >= 1280) {
-            expect(Math.abs(fieldBox!.y - roleBox!.y)).toBeLessThanOrEqual(1)
+            expect(Math.abs(field.y - layout.role.y)).toBeLessThanOrEqual(1)
           }
         }
-        const overflow = await readOverflow(page)
-        expect(overflow.document).toBeLessThanOrEqual(1)
-        expect(overflow.main).toBeLessThanOrEqual(1)
+        expect(layout.overflow.document).toBeLessThanOrEqual(1)
+        expect(layout.overflow.main).toBeLessThanOrEqual(1)
       }
     }
     expect(unexpectedRequests).toEqual([])
