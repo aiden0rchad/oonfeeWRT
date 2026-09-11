@@ -65,9 +65,12 @@ connections, so a normal deployment has no cross-origin configuration.
 
 The stable v0.1.5 workspaces are Dashboard, Topology, Radios, Devices, Client
 Devices, Policy Engine, Settings, Adopt a device, and Logs. Current development
-source adds Statistics after Dashboard and moves Settings and Logs into a
-Controller group at the foot of the sidebar. Statistics reads retained WAN,
-system, exact-interface, and stable-radio rollups without raising a device's
+source adds Statistics after Dashboard and a dedicated Accounts workspace.
+Settings, Accounts, and Logs form the Controller group, in that order, at the
+foot of the sidebar. Accounts opens My account for every signed-in role, with
+an additional Manage accounts tab for owners. These controls remain under
+Settings in v0.1.5; the move does not change their permissions. Statistics reads
+retained WAN, system, exact-interface, and stable-radio rollups without raising a device's
 polling tier. What appears in each workspace depends on measured device
 capabilities; unavailable evidence is not silently replaced with zeroes.
 Principal routes share one PageHeader/action pattern and have responsive

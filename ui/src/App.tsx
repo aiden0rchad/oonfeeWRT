@@ -10,6 +10,7 @@ import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
 import { Adopt } from './screens/Adopt'
 import { Settings } from './screens/Settings'
+import { AccountsPage } from './screens/AccountsPage'
 import { PolicyEngine } from './screens/PolicyEngine'
 import { Topology } from './screens/Topology'
 import { Radios } from './screens/Radios'
@@ -18,7 +19,7 @@ import { NavigationIcon } from './components/icons'
 import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
 
-type Screen = 'dashboard' | 'statistics' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'logs'
+type Screen = 'dashboard' | 'statistics' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'accounts' | 'logs'
 type SettingsIntent = 'ipv6' | null
 type Theme = 'dark' | 'light'
 
@@ -42,6 +43,7 @@ const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'policy', label: 'Policy Engine', icon: 'policy' },
   { id: 'adopt', label: 'Adopt a device', icon: 'adopt' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
+  { id: 'accounts', label: 'Accounts', icon: 'accounts' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
 ]
 
@@ -506,10 +508,15 @@ export function App() {
                 devicesLoaded={devicesLoaded}
                 devicesError={refreshErrors.devices}
                 session={session}
-                onSessionChange={setSession}
-                onCurrentSessionRevoked={dropSession}
                 initialNetworkSection={settingsIntent}
                 onInitialNetworkSectionHandled={() => setSettingsIntent(null)}
+              />
+            )}
+            {screen === 'accounts' && session && (
+              <AccountsPage
+                session={session}
+                onSessionChange={setSession}
+                onCurrentSessionRevoked={dropSession}
               />
             )}
             {screen === 'adopt' && <Adopt onAdopted={refresh} />}

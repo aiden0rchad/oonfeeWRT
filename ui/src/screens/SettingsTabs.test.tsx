@@ -5,9 +5,6 @@ import { Settings } from './Settings'
 
 const mocks = vi.hoisted(() => ({
   site: vi.fn(),
-  account: vi.fn(),
-  accountSessions: vi.fn(),
-  accounts: vi.fn(),
   diagnostics: vi.fn(),
   backups: vi.fn(),
 }))
@@ -26,19 +23,13 @@ const owner: SessionInfo = {
   reauthenticated_until: null,
 }
 
-describe('Settings account tabs', () => {
+describe('Settings sections', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.site.mockResolvedValue({
       name: 'Default', uuid: 'site-uuid', wlans: [], meshes: [], uplinks: [], groups: [],
       networks: [], zones: [], problems: [], overrides: [], overridable: [], override_note: '',
     })
-    mocks.account.mockResolvedValue({ account: {
-      id: 1, username: 'owner', role: 'owner', role_label: 'Owner', enabled: true,
-      created_at: 1, last_login_at: 1, active_session_count: 1,
-    } })
-    mocks.accountSessions.mockResolvedValue({ sessions: [] })
-    mocks.accounts.mockResolvedValue({ accounts: [], roles: [] })
     mocks.diagnostics.mockResolvedValue({
       mode: 'stored', router_management_calls: false, router_changes: false,
       sections: [{ id: 'controller', label: 'Controller', description: 'Stored controller state.' }],
@@ -70,33 +61,32 @@ describe('Settings account tabs', () => {
     })
   })
 
-  it('keeps Network first and exposes owner account administration', async () => {
-    render(<Settings devices={[]} devicesLoaded={false} session={owner} onSessionChange={vi.fn()} onCurrentSessionRevoked={vi.fn()} />)
+  it('keeps Network first and separates account management from controller settings', async () => {
+    render(<Settings devices={[]} devicesLoaded={false} session={owner} />)
 
     const network = screen.getByRole('tab', { name: 'Network' })
     expect(network.getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByRole('tab', { name: 'My account' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'Accounts' })).toBeTruthy()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Network', 'Diagnostics', 'Backup & Restore',
+    ])
     expect(screen.getByRole('tab', { name: 'Diagnostics' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Backup & Restore' })).toBeTruthy()
 
     fireEvent.keyDown(network, { key: 'ArrowRight' })
-    await waitFor(() => expect(mocks.account).toHaveBeenCalledOnce())
-    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-account')
+    await waitFor(() => expect(mocks.diagnostics).toHaveBeenCalledOnce())
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-diagnostics')
   })
 
-  it('shows Diagnostics to administrators while hiding owner-only Accounts', async () => {
+  it('shows Diagnostics to administrators while hiding owner-only backups', async () => {
     render(<Settings
       devices={[]}
       devicesLoaded={false}
       session={{ ...owner, role: 'admin', role_label: 'Administrator' }}
-      onSessionChange={vi.fn()}
-      onCurrentSessionRevoked={vi.fn()}
     />)
 
     await screen.findByRole('status')
-    expect(screen.getByRole('tab', { name: 'My account' })).toBeTruthy()
-    expect(screen.queryByRole('tab', { name: 'Accounts' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'My account' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Manage accounts' })).toBeNull()
     expect(screen.getByRole('tab', { name: 'Diagnostics' })).toBeTruthy()
     expect(screen.queryByRole('tab', { name: 'Backup & Restore' })).toBeNull()
   })
@@ -106,13 +96,24 @@ describe('Settings account tabs', () => {
       devices={[]}
       devicesLoaded={false}
       session={{ ...owner, role: 'operator', role_label: 'Operator' }}
-      onSessionChange={vi.fn()}
-      onCurrentSessionRevoked={vi.fn()}
     />)
 
     await screen.findByRole('status')
-    expect(screen.getByRole('tab', { name: 'My account' })).toBeTruthy()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Network'])
     expect(screen.queryByRole('tab', { name: 'Diagnostics' })).toBeNull()
     expect(screen.queryByRole('tab', { name: 'Backup & Restore' })).toBeNull()
+  })
+
+  it('returns to Network when an active privileged section is no longer available', async () => {
+    const view = render(<Settings devices={[]} devicesLoaded={false} session={owner} />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Diagnostics' }))
+    await waitFor(() => expect(mocks.diagnostics).toHaveBeenCalledOnce())
+
+    view.rerender(<Settings devices={[]} devicesLoaded={false} session={{ ...owner, role: 'viewer' }} />)
+
+    expect(screen.queryByRole('tab', { name: 'Backup & Restore' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Diagnostics' })).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Network' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-network')
   })
 })

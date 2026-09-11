@@ -155,7 +155,7 @@ proof. The UI must still let an operator clear existing block/fixed-address
 intent one client at a time. Partial client inventory, referenced-set deletion,
 changed compile inputs, and stale Preview state must remain visible blockers.
 
-Dashboard, Statistics, Devices, Topology, Radios, Policy Engine, Settings,
+Dashboard, Statistics, Devices, Topology, Radios, Policy Engine, Accounts, Settings,
 adoption, and Logs use the shared PageHeader/action hierarchy. Desktop and
 mobile browser coverage now runs in light and dark themes; tokens, focus,
 status-without-color, and responsive no-overflow behavior remain release
@@ -199,8 +199,9 @@ not health-warning colours, while retaining exact missing-interval counts.
 
 **Navigation rail (64px collapsed).** The landed route list is split into a
 primary group—Dashboard, Statistics, Topology, Radios, Devices, Client Devices,
-Policy, and Adopt—and a **Controller** group containing Settings and Logs. The
-Controller divider uses the remaining vertical space to keep that group at the
+Policy, and Adopt—and a **Controller** group containing Settings, Accounts, and
+Logs, in that order. The Controller divider uses the remaining vertical space
+to keep that group at the
 foot of a normal-height sidebar; on a short viewport the rail scrolls so every
 route remains reachable. Future routes in §2 do not get empty placeholders.
 Use one project-owned inline SVG set—never font glyphs or raster icons. Icons
@@ -253,10 +254,14 @@ their warnings or controls.
 
 Current development source exposes **Dashboard**, **Statistics**, **Topology**,
 **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Adopt a
-device**, **Settings**, and **Logs**. The stable v0.1.5 artifacts do not contain
-Statistics or the bottom-anchored Controller group. The larger map below is the
-long-term target; entries absent from current development remain specifications
-only.
+device**, **Settings**, **Accounts**, and **Logs**. The stable v0.1.5 artifacts do
+not contain Statistics, the standalone Accounts route, or the bottom-anchored Controller
+group; account controls remain inside Settings in that release. Current
+development `/accounts` opens **My account** for every signed-in role and adds
+the owner-only **Manage accounts** tab. `/settings` retains **Network**,
+**Diagnostics** for owner/admin, and **Backup & Restore** for owner. The larger
+map below is the long-term target; entries absent from current development
+remain specifications only.
 
 ```
 Dashboard
@@ -269,6 +274,9 @@ Insights            → Radios · Coverage · RF Scan
 Flows               → Flows · Activity
 Logs                → General · Audit
 Alarm Manager       → Triggers · Scope · Actions
+Accounts
+ ├ My account       (password, own sessions; every signed-in role)
+ └ Manage accounts  (owner-only users, roles, state, session revocation)
 Settings
  ├ Overview         (summary tables for every domain, with Create New / Manage)
  ├ WiFi
@@ -279,16 +287,14 @@ Settings
  │                    Master Table facets: Firewall · Filtering · Routes · QoS · ACL · NAT/DNS
  ├ Security         (IDS/IPS, blocklists)
  ├ High Availability → Safe Apply · Recovery · Link Protection
- ├ My Account       (password, own sessions)
- ├ Accounts         (owner-only users, roles, state, session revocation)
  ├ Diagnostics      (redacted support-bundle preview and download)
  ├ Backup & Restore (encrypted export and staged owner-only restore)
  ├ System           (updates, timezone, SIEM export, notifications)
  └ Console          (control plane, identity, device credentials)
 ```
 
-This is the target map. My Account, Accounts, Diagnostics and Backup & Restore
-now exist. Other future entries remain specifications and do not get empty
+This is the target map. The account tabs, Diagnostics and Backup & Restore
+already exist. Other future entries remain specifications and do not get empty
 navigation destinations.
 
 The **Settings → Overview** page is a strong pattern worth copying exactly: every
@@ -758,12 +764,14 @@ middleware, My Account and owner account-management screens are implemented.
 Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
 Sweep close affected `/live` sockets and cancel in-flight requests.
 
-**Settings → My Account.** Every signed-in user can change their own password,
-and list/revoke their own in-memory sessions. Sessions state plainly that
+**Accounts → My account (development); Settings → My account (v0.1.5).**
+Every signed-in user can change their own password and list/revoke their own
+in-memory sessions. Sessions state plainly that
 controller restart invalidates them.
 
-**Settings → Accounts.** Owner-only management lists accounts, canonical role
-(`owner`, `admin`, `operator` or `viewer`), enabled state and recent login without
+**Accounts → Manage accounts (development); Settings → Accounts (v0.1.5).**
+Owner-only management lists accounts, canonical role (`owner`, `admin`,
+`operator` or `viewer`), enabled state and recent login without
 exposing password material. Owner can create, change role, enable/disable,
 soft-delete and revoke any account's sessions; the last enabled owner is
 protected. Client address is shown only under the documented trusted-proxy

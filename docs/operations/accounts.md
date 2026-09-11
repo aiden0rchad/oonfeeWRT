@@ -4,6 +4,25 @@ Controller accounts are local to oonfeeWRT. They are separate from router logins
 
 > **Outcome:** Each person has an individual account with the least role needed, and owners can review or revoke active sessions without sharing credentials.
 
+## Find account controls
+
+Current development builds after v0.1.5 have a dedicated **Accounts** workspace
+at `/accounts`. It sits between **Settings** and **Logs** in the bottom
+**Controller** sidebar group. Opening it shows **My account** for every signed-in
+role; only owners also see **Manage accounts**.
+
+The procedures below use this development navigation. Published v0.1.5 keeps
+the same account controls inside Settings:
+
+| Task | Current development | Published v0.1.5 |
+|---|---|---|
+| Own identity, password, and sessions | **Accounts → My account** | **Settings → My account** |
+| Create or manage other accounts and sessions | **Accounts → Manage accounts** | **Settings → Accounts** |
+
+This move changes navigation only, not permissions or account data. Development
+**Settings** retains **Network**, **Diagnostics** for administrators/owners, and
+**Backup & Restore** for owners.
+
 ## Prerequisites and impact
 
 - The first owner account must already exist.
@@ -49,7 +68,7 @@ Use a unique password for each person. Do not create one shared “admin” acco
 ## Create an account
 
 1. Sign in as an owner.
-2. Open **Settings → Accounts**.
+2. Open **Accounts → Manage accounts**.
 3. In **Create account**, enter the username.
 4. Choose **Read-only**, **Operator**, **Administrator**, or **Owner**.
 5. Enter and repeat a password of at least 12 characters.
@@ -64,13 +83,13 @@ Use a separate private browser window so you do not disturb the owner session:
 
 1. Sign in as the new user.
 2. Confirm the header shows the correct username.
-3. Open **Settings → My account** and verify the role.
+3. Open **Accounts → My account** and verify the role.
 4. Confirm the navigation and controls match the role matrix. A forbidden API operation remains forbidden even if stale UI state displayed a control.
 5. Sign out of the test window.
 
 ## Change an account's role
 
-1. Open **Settings → Accounts** as an owner.
+1. Open **Accounts → Manage accounts** as an owner.
 2. Find the account and select **Role**.
 3. Choose the new role.
 4. Review the privilege change, reauthenticate if requested, and confirm.
@@ -83,7 +102,7 @@ The last enabled owner cannot be demoted. Create and verify another owner first 
 
 Disabling preserves the account and audit identity while preventing authentication.
 
-1. Open **Settings → Accounts**.
+1. Open **Accounts → Manage accounts**.
 2. Select **Disable** or **Enable** beside the account.
 3. Review and confirm after any required reauthentication.
 
@@ -91,7 +110,7 @@ The last enabled owner cannot be disabled. Disabled and deleted accounts deliber
 
 ## Reset another account's password
 
-1. Open **Settings → Accounts**.
+1. Open **Accounts → Manage accounts**.
 2. Select **Reset password** for the account.
 3. Enter and repeat the new password.
 4. Reauthenticate as the owner if requested.
@@ -102,7 +121,7 @@ Password changes revoke that account's sessions so an old session cannot outlive
 
 ## Change your own password
 
-1. Open **Settings → My account**.
+1. Open **Accounts → My account**.
 2. Enter the current password.
 3. Enter and repeat the new password.
 4. Select **Change password**.
@@ -121,14 +140,14 @@ Current limits:
 
 ### Your own sessions
 
-1. Open **Settings → My account**.
+1. Open **Accounts → My account**.
 2. Review peer address, creation, last use, expiry, and the current-session marker.
 3. Select **Revoke** for an unfamiliar or no-longer-needed session.
 4. Confirm. Revoking the current session signs this browser out.
 
 ### Another user's sessions
 
-1. Open **Settings → Accounts** as an owner.
+1. Open **Accounts → Manage accounts** as an owner.
 2. Select **Sessions** for the account.
 3. Revoke one session or all sessions.
 4. Reauthenticate and confirm when requested.
@@ -139,7 +158,7 @@ Session revocation cancels requests associated with that session, including its 
 
 Deletion is soft: it disables the row, removes its password verifier, retains its username for audit identity, and prevents reuse.
 
-1. Open **Settings → Accounts**.
+1. Open **Accounts → Manage accounts**.
 2. Select **Delete**.
 3. Review the username carefully.
 4. Reauthenticate and confirm.

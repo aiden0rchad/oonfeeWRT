@@ -258,6 +258,7 @@ const accounts = {
 
 interface ControllerFixtureOptions {
   statistics?: boolean
+  accountRole?: 'owner' | 'admin' | 'operator' | 'viewer'
 }
 
 const statisticsDevices = {
@@ -327,6 +328,8 @@ async function installControllerFixture(
   options: ControllerFixtureOptions = {},
 ) {
   const unexpectedRequests: string[] = []
+  const accountRole = options.accountRole ?? 'owner'
+  const accountRoleLabel = accounts.roles.find((role) => role.value === accountRole)!.label
   await page.addInitScript(() => {
     class FixtureWebSocket {
       static readonly OPEN = 1
@@ -370,8 +373,8 @@ async function installControllerFixture(
       '/api/v1/session': {
         admin_id: 1,
         username: 'operator',
-        role: 'owner',
-        role_label: 'Owner',
+        role: accountRole,
+        role_label: accountRoleLabel,
         csrf: 'fixture',
         reauthenticated_until: null,
       },
@@ -426,6 +429,8 @@ async function installControllerFixture(
       '/api/v1/speedtests': speedTests,
       '/api/v1/topology': topologyResponse,
       '/api/v1/site': site,
+      '/api/v1/account': { account: { ...accounts.accounts[0], role: accountRole, role_label: accountRoleLabel } },
+      '/api/v1/account/sessions': { sessions: [] },
       '/api/v1/accounts': accounts,
       '/api/v1/radios': radios,
       '/api/v1/discovery': { networks: [], skipped: [], hosts: 0 },
@@ -735,6 +740,7 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   const logs = navigation.getByRole('button', { name: 'Logs' })
   await expect(divider).toBeVisible()
   await expect(navigation.getByRole('button', { name: 'Settings' })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Accounts' })).toBeVisible()
   await expect(adopt).toBeVisible()
   await expect(logs).toBeVisible()
   expect(await adopt.evaluate((element) =>
@@ -742,7 +748,9 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   expect(await divider.evaluate((element) =>
     element.nextElementSibling?.getAttribute('aria-label'))).toBe('Settings')
   expect(await divider.evaluate((element) =>
-    element.nextElementSibling?.nextElementSibling?.getAttribute('aria-label'))).toBe('Logs')
+    element.nextElementSibling?.nextElementSibling?.getAttribute('aria-label'))).toBe('Accounts')
+  expect(await navigation.getByRole('button', { name: 'Accounts' }).evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Logs')
 
   const [navigationBox, logsBox] = await Promise.all([
     navigation.boundingBox(),
@@ -761,6 +769,71 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toBeVisible()
   expect(unexpectedRequests).toEqual([])
 })
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 }]) {
+  for (const accountRole of ['owner', 'viewer'] as const) {
+    test(`${viewport.width}px Accounts workspace preserves ${accountRole} access and navigation`, async ({ page }) => {
+      await page.setViewportSize(viewport)
+      const unexpectedRequests = await installControllerFixture(page, topology, { accountRole })
+      const managementRequests: string[] = []
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/v1/accounts') managementRequests.push(request.method())
+      })
+      await page.goto('/accounts')
+
+      const heading = page.getByRole('heading', { level: 1, name: 'Accounts' })
+      await expect(heading).toBeVisible()
+      await expect(heading).toBeFocused()
+      await expect(page).toHaveTitle('Accounts — oonfeeWRT')
+      const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+      await expect(navigation.getByRole('button', { name: 'Accounts', exact: true })).toHaveAttribute('aria-current', 'page')
+      const accountTab = page.getByRole('tab', { name: 'My account', exact: true })
+      await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+      for (const label of ['Current password', 'New password', 'Repeat new password']) {
+        await expectWithinMain(page, page.getByLabel(label, { exact: true }))
+      }
+      await expectWithinMain(page, page.getByRole('tablist', { name: 'Account sections' }))
+
+      const manageTab = page.getByRole('tab', { name: 'Manage accounts', exact: true })
+      if (accountRole === 'owner') {
+        await accountTab.focus()
+        await accountTab.press('ArrowRight')
+        await expect(manageTab).toBeFocused()
+        await expect(manageTab).toHaveAttribute('aria-selected', 'true')
+        for (const label of ['Username', 'Password', 'Repeat password']) {
+          await expectWithinMain(page, page.getByLabel(label, { exact: true }).first())
+        }
+        await expectWithinMain(page, page.getByRole('combobox', { name: /^Role/ }))
+        await manageTab.focus()
+        await manageTab.press('Home')
+        await expect(accountTab).toBeFocused()
+        await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+        expect(managementRequests.length).toBeGreaterThan(0)
+        expect(managementRequests.every((method) => method === 'GET')).toBe(true)
+      } else {
+        await expect(manageTab).toHaveCount(0)
+        expect(managementRequests).toEqual([])
+      }
+
+      await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+      await expectWithinMain(page, page.getByLabel('Current password', { exact: true }))
+      const overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
+
+      await navigation.getByRole('button', { name: 'Settings', exact: true }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+      await expect(page.getByRole('tab', { name: 'My account', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('tab', { name: 'Manage accounts', exact: true })).toHaveCount(0)
+      await page.goBack()
+      await expect(page).toHaveURL(/\/accounts$/)
+      await expect(heading).toBeFocused()
+      await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+      expect(unexpectedRequests).toEqual([])
+    })
+  }
+}
 
 test('Statistics renders gap-aware stored history in dark and light themes and switches 30 days to hourly', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
@@ -905,6 +978,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
         { name: 'Radios', heading: 'Radios & Channel Plan', control: 'Refresh' },
         { name: 'Policy Engine', control: 'Zone Matrix' },
         { name: 'Settings', control: 'Network' },
+        { name: 'Accounts', control: 'My account' },
         { name: 'Adopt a device', control: 'Inspect capabilities' },
       ]) {
         await page.getByRole('button', { name: route.name, exact: true }).click()
@@ -936,9 +1010,9 @@ test('390x844 responsive routes keep controls and state in view', async ({ page 
   await expectWithinMain(page, page.getByRole('group', { name: 'Event view' }))
   await expectWithinMain(page, page.locator('.logs-page .pager').getByRole('button', { name: 'Next' }))
 
-  await page.goto('/settings')
-  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
-  await page.getByRole('tab', { name: 'Accounts' }).click()
+  await page.goto('/accounts')
+  await expect(page.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Manage accounts' }).click()
   for (const field of ['Username', 'Password', 'Repeat password']) {
     await expectWithinMain(page, page.getByLabel(field, { exact: true }).first())
   }
