@@ -17,7 +17,11 @@ vi.mock('../lib/api', async (importOriginal) => {
 
 vi.mock('../components/Chart', () => ({
   TimeChart: ({ label, points }: { label: string; points: Array<{ avg: number | null }> }) => (
-    <div data-testid={`chart-${label}`} data-missing={points.filter((point) => point.avg == null).length}>
+    <div
+      data-testid={`chart-${label}`}
+      data-missing={points.filter((point) => point.avg == null).length}
+      data-observed={points.filter((point) => point.avg != null).length}
+    >
       {label} chart
     </div>
   ),
@@ -197,6 +201,77 @@ describe('Statistics', () => {
     expect(screen.getByText(/Refresh failed: rollup unavailable/)).toBeTruthy()
     expect(screen.getByTestId('chart-ICMP latency').textContent).toContain('ICMP latency chart')
     expect(screen.getByText(/Successful series are current/)).toBeTruthy()
+  })
+
+  it.each(['gateway', 'interface'] as const)('does not relabel old WAN data after a %s change and failed refresh', async (change) => {
+    render(<Statistics />)
+    await waitFor(() => expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('1'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false))
+
+    const next = dashboard(change === 'interface' ? 'new-wan-key' : 'wan-proof-key')
+    if (change === 'gateway') {
+      next.wan.gateway = { ...next.wan.gateway!, device_id: 8, name: 'Replacement gateway' }
+    } else {
+      next.wan.gateway = { ...next.wan.gateway!, route_interface: 'new-wan-key' }
+    }
+    apiMocks.dashboard.mockResolvedValue(next)
+    let rejectSource!: (reason: Error) => void
+    const replacement = new Promise<Series>((_resolve, reject) => { rejectSource = reject })
+    apiMocks.stats.mockImplementation((kind, deviceID, key, from, to) =>
+      deviceID === 8 || key === 'new-wan-key' ? replacement : storedSeries(kind, deviceID, key, from, to))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(apiMocks.stats).toHaveBeenCalledWith(
+      'iface_rx_bps', next.wan.gateway!.device_id, next.wan.gateway!.series_key,
+      expect.any(Number), expect.any(Number),
+    ))
+    expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('0')
+    expect(screen.getByTestId('chart-Upload traffic').getAttribute('data-observed')).toBe('0')
+    expect(screen.getByTestId('chart-ICMP latency').getAttribute('data-observed')).toBe(change === 'gateway' ? '0' : '1')
+    expect(screen.getByRole('img', { name: /^ICMP reachability:/ }).getAttribute('aria-label')).toContain(
+      change === 'gateway' ? 'no stored buckets' : '1 all-reply bucket',
+    )
+
+    rejectSource(new Error('replacement source unavailable'))
+    await screen.findByText(new RegExp(`${change === 'gateway' ? 5 : 2} Internet metric requests failed`))
+    expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('0')
+    expect(screen.getByTestId('chart-Upload traffic').getAttribute('data-observed')).toBe('0')
+    expect(screen.queryByText(/Last successful response retained/)).toBeNull()
+  })
+
+  it('does not reuse percentage history when the memory source changes to bytes', async () => {
+    apiMocks.deviceSeries.mockResolvedValue({ series: { sys_mem_pct: [''] } })
+    render(<Statistics />)
+    await waitFor(() => expect(screen.getByTestId('chart-Memory in use').getAttribute('data-observed')).toBe('1'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false))
+
+    apiMocks.deviceSeries.mockResolvedValue({ series: { sys_mem_used: [''] } })
+    let rejectSource!: (reason: Error) => void
+    const replacement = new Promise<Series>((_resolve, reject) => { rejectSource = reject })
+    apiMocks.stats.mockImplementation((kind, deviceID, key, from, to) =>
+      kind === 'sys_mem_used' ? replacement : storedSeries(kind, deviceID, key, from, to))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(apiMocks.stats).toHaveBeenCalledWith(
+      'sys_mem_used', 7, '', expect.any(Number), expect.any(Number),
+    ))
+    expect(screen.getByTestId('chart-Memory in use').getAttribute('data-observed')).toBe('0')
+    rejectSource(new Error('memory source unavailable'))
+    await screen.findByText(/Refresh failed: memory source unavailable/)
+    expect(screen.getByTestId('chart-Memory in use').getAttribute('data-observed')).toBe('0')
+    expect(screen.queryByText(/Last successful response retained/)).toBeNull()
+  })
+
+  it('retains recorded data when a refresh fails for the same source', async () => {
+    render(<Statistics />)
+    await waitFor(() => expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('1'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Refresh' }) as HTMLButtonElement).disabled).toBe(false))
+    apiMocks.stats.mockRejectedValue(new Error('temporary storage failure'))
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await screen.findByText(/5 Internet metric requests failed/)
+    expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('1')
+    expect(screen.getByRole('img', { name: /^ICMP reachability:/ }).getAttribute('aria-label')).toContain('1 all-reply bucket')
+    expect(screen.getAllByText(/Last successful response retained/).length).toBeGreaterThan(0)
   })
 })
 

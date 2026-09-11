@@ -585,8 +585,12 @@ function query(id: string, deviceID: number, kind: string, key: string, label?: 
   return { id, deviceID, kind, key, ...presentation, label: label ?? presentation.label }
 }
 
+function seriesSource(query: SeriesQuery): string {
+  return JSON.stringify([query.deviceID, query.kind, query.key])
+}
+
 function useSeriesQueries(queries: SeriesQuery[], range: RangeID, revision: number) {
-  const [results, setResults] = useState<Record<string, LoadedSeries>>({})
+  const [results, setResults] = useState<Record<string, LoadedSeries & { source: string }>>({})
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -604,19 +608,28 @@ function useSeriesQueries(queries: SeriesQuery[], range: RangeID, revision: numb
       if (!active) return
       setResults((previous) => Object.fromEntries(queries.map((item, index) => {
         const result = settled[index]
+        const source = seriesSource(item)
+        const retained = previous[item.id]?.source === source ? previous[item.id] : undefined
         return result.status === 'fulfilled'
-          ? [item.id, { data: result.value, range, window: [from, to] as const }]
-          : [item.id, { ...previous[item.id], error: errorText(result.reason) }]
+          ? [item.id, { source, data: result.value, range, window: [from, to] as const }]
+          : [item.id, { ...retained, source, error: errorText(result.reason) }]
       })))
       setLoading(false)
     })
     return () => { active = false }
   }, [queries, range, revision])
 
+  // A gateway, interface, or metric kind can change while its display slot
+  // stays the same. Never show the old source under the new source's label,
+  // including the render before the replacement request starts or settles.
+  const currentResults = Object.fromEntries(queries.flatMap((item) => {
+    const loaded = results[item.id]
+    return loaded?.source === seriesSource(item) ? [[item.id, loaded]] : []
+  }))
   return {
-    results,
+    results: currentResults,
     loading,
-    failures: Object.values(results).filter((result) => result.error).length,
+    failures: Object.values(currentResults).filter((result) => result.error).length,
   }
 }
 
