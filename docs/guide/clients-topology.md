@@ -11,6 +11,12 @@ coverage gaps so an inferred link never looks like a measured cable.
 The Client Devices table is scoped to managed LANs and excludes adopted
 infrastructure from the client count without deleting it from inventory.
 
+<DocScreenshot
+  src="clients-inventory" :width="1620" :height="959"
+  alt="Client Devices workspace with inventory and scope, presence, and connection filters"
+  caption="Start with network scope and presence filters. The result count applies to the complete filtered inventory, not just the visible page."
+/>
+
 ### Use the filters
 
 Filters operate on the complete matching result before pagination:
@@ -74,6 +80,12 @@ Use the same time cursor when comparing a client symptom with AP load, radio
 quality, WAN health, and events. Correlation by time is more reliable than
 comparing each screen's latest value after the incident has passed.
 
+<DocScreenshot
+  src="client-observability" :width="1620" :height="959"
+  alt="Client Observability workspace with a shared investigation time cursor"
+  caption="Move the shared cursor to investigate one moment across client, path, and event evidence. Empty panes or metrics remain evidence limits, not proof that nothing happened."
+/>
+
 ### A client investigation sequence
 
 1. Confirm the client identity, including MAC randomization possibility.
@@ -97,6 +109,12 @@ Open **Topology** to view nodes and active link intervals. Sources can include:
 
 Each edge includes a confidence and medium. Confidence describes the evidence,
 not the importance of the device.
+
+<DocScreenshot
+  src="topology-current" :width="1620" :height="959"
+  alt="Topology workspace in Current mode with infrastructure placement and evidence controls"
+  caption="Current topology shows supported placement with its confidence and source coverage. An unplaced node is still part of inventory; the controller is not inventing an attachment for it."
+/>
 
 For the Internet edge, the selector introduced in v0.1.3 chooses the unique usable lowest-metric IPv4
 default in the installed main table and maps it to one active OpenWrt logical
@@ -166,6 +184,12 @@ given time?** It does not reconstruct packets or invent missing intervals.
 Choose a preset or custom range. The view uses interval semantics: a link is
 present when its evidence interval overlaps the selected time. A last-known
 placement may be shown separately from a currently supported link.
+
+<DocScreenshot
+  src="topology-history" :width="1620" :height="959"
+  alt="Topology workspace in History mode with retained interval and time controls"
+  caption="Switch to History to inspect retained evidence at a selected time. Missing intervals stay missing; historical placement is not reconstructed from today's graph."
+/>
 
 Topology history is retained for 31 days. A request near or beyond that bound
 can be marked retention-truncated. Export or record incident evidence before

@@ -18,6 +18,18 @@ Open **Logs** and choose the appropriate view:
 The exact detail panel preserves source provenance and fields that would be too
 dense for the table.
 
+<DocScreenshot
+  src="logs-general" :width="1918" :height="982"
+  alt="Logs General view with event filters, source information, and the event table"
+  caption="Logs → General combines operational events with source and coverage information. Use the filters, then open a row for its exact evidence."
+/>
+
+<DocScreenshot
+  src="logs-audit" :width="1918" :height="982"
+  alt="Logs Audit view for controller administrative and security events"
+  caption="Logs → Audit is the separate view for administrative and security-relevant actions. Access depends on the signed-in role."
+/>
+
 ## Filter effectively
 
 Use filters/facets before paging. The event store applies the filter before the
@@ -137,11 +149,17 @@ support snapshot, not a replacement for a dedicated long-term log platform.
 Users with the required administrative permission can open **Settings →
 Diagnostics**.
 
+<DocScreenshot
+  src="diagnostics" :width="1165" :height="982"
+  alt="Settings Diagnostics tab with the stored-only bundle disclosure"
+  caption="Open More information in Settings → Diagnostics to review included sections and excluded secret classes before generation. Opening this page does not create or download a bundle."
+/>
+
 1. Read the descriptor before generation. It lists included sections, excluded
    secret classes, and size limits.
 2. Confirm it reports `router_management_calls=false` and
    `router_changes=false`.
-3. Select **Generate**.
+3. Select **Generate stored-only bundle**.
 4. Watch the job state. Only one active generation is accepted at a time.
 5. Download the completed ZIP.
 6. Store and share it as private network metadata, even though it is redacted.

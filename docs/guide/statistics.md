@@ -54,6 +54,12 @@ the stored evidence was last populated; it is not the browser refresh time.
 
 ## Read the Internet history
 
+<DocScreenshot
+  src="statistics-internet" :width="1620" :height="959"
+  alt="Statistics workspace showing time-range controls and Internet history"
+  caption="Use one time range to compare traffic and ICMP evidence. History gaps describe missing stored observations; they do not establish downtime or measured zero traffic."
+/>
+
 The Internet section combines four related—but distinct—kinds of evidence:
 
 | Display | Stored series | Meaning |
@@ -111,6 +117,12 @@ change how that should be interpreted.
 Choose an adopted managed or monitor-only device in **Device detail**. The
 controller first asks for that device's series catalog, then requests only the
 series keys proven to exist.
+
+<DocScreenshot
+  src="statistics-device" :width="1620" :height="959"
+  alt="Statistics Device history section with interface and stable-radio controls"
+  caption="Device history follows the selected device, interface, and stable radio. Changing this selection does not change the managed Gateway or request new router collection."
+/>
 
 ### System
 

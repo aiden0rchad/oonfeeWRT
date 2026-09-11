@@ -53,8 +53,14 @@ controller to display it.
 
 ## Create or update a WLAN
 
-1. Open **Settings → Network** and find the Wi-Fi/WLAN section.
-2. Choose **Add WLAN**, or open the WLAN you intend to change.
+<DocScreenshot
+  src="wireless-networks" :width="1165" :height="982"
+  alt="WLAN editor with SSID, security, network, AP group, and roaming controls"
+  caption="Select Edit under Settings → Network → Wireless networks to review this WLAN form. Choose the intended network and AP group, then review security and roaming before saving desired state."
+/>
+
+1. Open **Settings → Network** and find **Wireless networks**.
+2. Choose **Add a WLAN**, or select **Edit** for the WLAN you intend to change.
 3. Enter the SSID exactly as clients should see it.
 4. Select a security mode supported by every target AP/client combination.
 5. Enter a passphrase when the mode requires one.

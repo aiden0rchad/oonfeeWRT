@@ -215,6 +215,12 @@ The Run action is the plan-bound acknowledgement. Do not schedule repeated tests
 
 Owners and administrators can open **Settings → Diagnostics**.
 
+<DocScreenshot
+  src="diagnostics" :width="1165" :height="982"
+  alt="Settings Diagnostics workspace for generating a stored-only support bundle"
+  caption="Review Settings → Diagnostics before preparing support evidence. Expand More information for the stored-only collection boundary and the information excluded from the bundle."
+/>
+
 The bundle:
 
 - uses stored controller evidence only;

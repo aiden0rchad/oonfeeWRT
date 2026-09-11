@@ -43,6 +43,12 @@ The administrator password and optional SSH private key exist only for this requ
 
 Sign in and select **Adopt a device** in the left navigation.
 
+<DocScreenshot
+  src="adoption-overview" :width="1620" :height="959"
+  alt="Adopt a device workspace with the connection and device-use steps"
+  caption="The adoption page separates connecting, choosing how to use the device, and reviewing controller access. Opening this form does not adopt or configure a router."
+/>
+
 The page always provides add-by-address. Its discovery scan is only a convenience:
 
 - bridge-mode Docker's automatic plan normally sees only the container's own
@@ -159,6 +165,12 @@ controller access payload?** in **Review access and adopt**, then expand
 checkbox are grouped together; the checkbox is not selected automatically.
 Published v0.1.5 instead uses **Review exact router changes** beside its
 separate access notice.
+
+<DocScreenshot
+  src="adoption-access" :width="1620" :height="959"
+  alt="Review access and adopt section with the controller access payload consent and details"
+  caption="The concise access explanation and consent checkbox are grouped together. Open View access details before accepting; leaving the checkbox unchecked keeps Adopt unavailable."
+/>
 
 Read the access plan before proceeding. For a Managed device, the scoped ACL grants:
 

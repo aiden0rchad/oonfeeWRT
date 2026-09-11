@@ -32,10 +32,22 @@ Counts carry source-coverage information. A partial wireless-client count is
 not silently presented as a complete fleet total. Follow the adjacent source
 message before treating a number as authoritative.
 
+<DocScreenshot
+  src="dashboard-overview" :width="1620" :height="959"
+  alt="oonfeeWRT Dashboard with fleet overview cards and the main navigation"
+  caption="Start with fleet counts and source freshness, then open the workspace that answers the next question. Settings, Accounts, and Logs remain together at the bottom of the navigation."
+/>
+
 ## Understand Internet health
 
 Internet health is derived from the managed Gateway, not from the browser and
 not from a cloud service.
+
+<DocScreenshot
+  src="dashboard-internet" :width="1918" :height="982"
+  alt="Dashboard Internet health section with Gateway and WAN observations"
+  caption="Read the Gateway path and observation times alongside Internet health. The controller-host speed test is a separate measurement, not a substitute for Gateway evidence."
+/>
 
 ### Observed Gateway path
 

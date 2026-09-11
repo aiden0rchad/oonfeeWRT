@@ -44,6 +44,12 @@ Display order helps reviewers understand intent, but do not assume a numeric
 priority has packet-processing semantics unless the preview/concrete backend
 proves it.
 
+<DocScreenshot
+  src="policy-rules" :width="1918" :height="982"
+  alt="Policy Engine Master Table in its empty state, with no configured policy records"
+  caption="This development controller has no configured policy records, so Master Table is empty. This does not mean the routers have no existing firewall rules."
+/>
+
 ### Zone Matrix
 
 The matrix shows effective relationships from each managed source zone to
@@ -57,10 +63,17 @@ Use it to spot broad forwarding before reading the exception rules:
 - Which directions are read-only or derived?
 - Does an allowed relationship exceed the narrow service actually needed?
 
+<DocScreenshot
+  src="policy-zones" :width="1918" :height="982"
+  alt="Policy Engine Zone Matrix in its empty state, with no managed zones configured"
+  caption="No managed zones are configured in this capture. Once present, Zone Matrix compares whole-zone forwarding; it is not a summary of every explicit firewall exception."
+/>
+
 ### Object Manager
 
 Object Manager compiles selected networks/clients and an intended action into a
-visible **unsaved draft**. Read the concrete result before saving it.
+visible **unsaved draft**. Open the **Objects** tab to find it, and read the
+concrete result before saving it.
 
 v0.1.5 also accepts a named client set as an object for **Secure (IPv4)**. The
 result is a firewall draft that keeps the set's stable ID rather than copying a
@@ -73,13 +86,19 @@ inventory is not proof that every intended endpoint is covered. Prefer stable
 network or explicit address objects when identity must survive MAC
 randomization or an offline client.
 
+<DocScreenshot
+  src="policy-objects" :width="1430" :height="720"
+  alt="Policy Engine Objects tab with the Object Manager selection controls"
+  caption="Policy Engine → Objects separates object selection from draft compilation and saving. An empty selection or draft area is not a deployed rule."
+/>
+
 ## Create and maintain a named client set
 
 Named client sets let several firewall rules share one exact-MAC membership
 list. They are controller objects, not OpenWrt address sets and not dynamic
 queries.
 
-1. Open **Policy Engine → Object Manager**.
+1. Open **Policy Engine → Objects** and find **Object Manager**.
 2. In **Named client sets**, create a set with a unique descriptive name.
 3. Select one or more clients from the observed client inventory. Each must be
    classified **This network** (`local`) for the managed Gateway. Being merely

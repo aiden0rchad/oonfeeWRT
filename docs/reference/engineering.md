@@ -62,6 +62,43 @@ an assumption, update the implementation and documentation together.
 
 ## Build and test
 
+### Refresh documentation screenshots
+
+The [visual tour](../getting-started/visual-tour.md) and individual guides use
+real development-controller screenshots, not UI mockups. Keep them in step
+with the code that readers will actually run:
+
+1. Build the UI and controller from the intended revision, start the
+   development controller, and sign in through the normal browser flow.
+2. Visit the relevant workspace or local tab. Let loading finish and keep
+   source, freshness, missing-data, and safety labels visible. Open editors
+   without saving; do not run scans, Apply, adoption, account changes, or
+   recovery operations just to stage a picture.
+3. Capture the app in **dark mode only** at the native browser viewport size;
+   focused panels may use a clipped capture instead of the entire viewport.
+   Keep enough context to identify the screen and its controls. Save JPEGs in
+   `docs/public/screenshots/` as `<screen>-dark.jpg`. Cover every visible MAC
+   address with an opaque solid mask, not blur, while preserving measurements,
+   source notes, and safety labels. Review the final exported image at full
+   size to verify that no MAC address remains readable.
+4. Add or update the nearby `<DocScreenshot src="<screen>" alt="..."
+   caption="..." />`. Set its `:width` and `:height` to the final JPEG's pixel
+   dimensions, including any crop, so space is reserved before loading.
+   The component handles the deployed base path, lazy
+   loading, and full-size image link; the image stays dark in either docs
+   theme. Describe what is actually visible, not an operation that was never
+   performed. Match the caption's selected time range to the capture without
+   changing the documented default.
+5. Update the capture date/revision in the visual tour. Preserve the
+   distinction between a development build and published release artifacts.
+6. Run `npm --prefix docs run check:screenshots` and
+   `npm --prefix docs run build`, then inspect the rendered guides in both
+   documentation themes. Check the README's linked dark JPEG previews when
+   replacing its images.
+
+Screenshots supplement the written instructions: all essential steps, source
+limitations, role restrictions, and warnings must remain available as text.
+
 ### Fast local gates
 
 ```sh

@@ -265,11 +265,36 @@ body {
   margin: 28px 0;
 }
 
+.docs-screenshot > a {
+  display: block;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 8%);
+}
+
+.docs-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.docs-screenshot[data-portrait='true'] {
+  max-width: 370px;
+  margin-inline: auto;
+}
+
 .docs-screenshot figcaption {
   margin-top: 8px;
   color: var(--vp-c-text-2);
   font-size: 13px;
   text-align: center;
+}
+
+.docs-screenshot-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--vp-c-text-3);
+  font-size: 11px;
 }
 
 .write-impact {

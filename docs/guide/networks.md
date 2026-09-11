@@ -36,6 +36,12 @@ A network gives a named IPv4 segment its CIDR, optional VLAN ID, DHCP behavior,
 and firewall-zone membership. Networks are site-wide; device functions and
 capability evidence determine what each Preview can safely render.
 
+<DocScreenshot
+  src="network-overview" :width="1165" :height="982"
+  alt="Settings Network workspace with the site configuration overview"
+  caption="Settings → Network collects the site's desired configuration. Review networks and their dependencies here before opening Preview."
+/>
+
 ### VLAN
 
 A VLAN ID labels traffic; it does not configure every switch between the
@@ -112,20 +118,28 @@ blocks or warns on conflicts it cannot safely reconcile.
 ## Create a network
 
 1. Open **Settings → Network**.
-2. Find **Networks** and choose **Add network**.
-3. Enter a unique, descriptive name.
-4. Enter the IPv4 CIDR, such as `192.168.20.1/24`, using the router address in
-   the prefix where the editor expects the interface address.
-5. If the segment is tagged, enter its VLAN ID and confirm the upstream trunks
+2. Find **Networks** and use the new-network fields below the table.
+3. Enter a unique, descriptive **Name**.
+4. Enter the IPv4 CIDR in **Address**, such as `192.168.20.1/24`, using the
+   router address in the prefix.
+5. If the segment is tagged, enter its **VLAN** ID and confirm the upstream trunks
    already carry it.
-6. Choose or create the firewall zone.
-7. Enable DHCP only if this managed Gateway should provide it.
-8. Set the DHCP pool and lease options shown by the editor.
+6. Enter the **Firewall zone**, then select **Add** to save the network's
+   initial desired state.
+7. Open the network row to review its detailed settings.
+8. Enable DHCP only if this managed Gateway should provide it, and set the
+   DHCP pool and lease options shown by the editor.
 9. Choose the IPv6 policy. Leave **Router managed** selected unless you intend
    to review and apply an explicit IPv6 change.
-10. Save desired state.
+10. Save the editor's desired-state changes.
 
 At this point no router Apply has happened.
+
+<DocScreenshot
+  src="network-details" :width="370" :height="935"
+  alt="Network editor showing addressing and IPv6 configuration controls"
+  caption="Open a network row to review its addressing, IPv6 policy, and DHCP settings. Opening the editor does not save or apply a change."
+/>
 
 ## Respond to the IPv6 condition in Logs
 

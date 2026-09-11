@@ -61,13 +61,21 @@ for scope and limitations; this is not a new version release.
 
 ## Preview
 
-[![oonfeeWRT live dashboard showing Internet health, speed tests, and fleet status](docs/images/dashboard-overview.jpg)](docs/images/dashboard-overview.jpg)
+Real dark-mode screenshots of the current development UI after v0.1.5.
+[Explore the visual tour and illustrated guides](https://aiden0rchad.github.io/oonfeeWRT/getting-started/visual-tour)
+for a screen-by-screen walkthrough; these views are not a new version release.
 
-*Live Internet health, controller-host speed tests, and fleet status.*
+[![oonfeeWRT Dashboard with fleet health and Internet observations](docs/public/screenshots/dashboard-overview-dark.jpg)](docs/public/screenshots/dashboard-overview-dark.jpg)
 
-[![oonfeeWRT radio and channel planning dashboard](docs/images/radios-channel-plan.jpg)](docs/images/radios-channel-plan.jpg)
+*Fleet health and Internet observations, with dedicated workspaces in the sidebar.*
 
-*Live radio inventory and evidence-aware channel planning.*
+[![Statistics showing historical traffic and ICMP charts](docs/public/screenshots/statistics-internet-dark.jpg)](docs/public/screenshots/statistics-internet-dark.jpg)
+
+*Traffic and ICMP history with the 24-hour range selected and source coverage kept visible.*
+
+[![The Accounts workspace with aligned role selection and account management controls](docs/public/screenshots/accounts-manage-dark.jpg)](docs/public/screenshots/accounts-manage-dark.jpg)
+
+*A dedicated Accounts workspace with clear role descriptions and owner-only administration.*
 
 ## What it provides
 

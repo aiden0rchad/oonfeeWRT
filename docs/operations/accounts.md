@@ -23,6 +23,12 @@ This move changes navigation only, not permissions or account data. Development
 **Settings** retains **Network**, **Diagnostics** for administrators/owners, and
 **Backup & Restore** for owners.
 
+<DocScreenshot
+  src="accounts-profile" :width="1165" :height="982"
+  alt="Accounts My account tab with profile, password, and active-session controls"
+  caption="Accounts → My account keeps your own identity, password, and sessions together. The Manage accounts tab is available only to owners."
+/>
+
 ## Prerequisites and impact
 
 - The first owner account must already exist.
@@ -66,6 +72,12 @@ Usernames are ASCII case-insensitive for uniqueness. A soft-deleted username rem
 Use a unique password for each person. Do not create one shared “admin” account when individual accountability matters.
 
 ## Create an account
+
+<DocScreenshot
+  src="accounts-manage" :width="1165" :height="982"
+  alt="Accounts Manage accounts tab with the account form and role selector"
+  caption="Accounts → Manage accounts starts new users at Read-only. The description below Role changes with the selection so owners can compare privileges before creating an account."
+/>
 
 1. Sign in as an owner.
 2. Open **Accounts → Manage accounts**.

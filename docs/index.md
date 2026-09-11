@@ -140,15 +140,16 @@ with a separate plan and rollback.
 
 ## See the controller
 
-<figure class="docs-screenshot">
-  <img src="./images/dashboard-overview.jpg" alt="oonfeeWRT dashboard showing Internet health, speed tests, fleet status, topology, and recent events" loading="lazy">
-  <figcaption>The live dashboard keeps health, provenance, trends, and gaps together instead of reducing the network to a single status color.</figcaption>
-</figure>
+These screenshots show the current development interface after v0.1.5, using
+a real development controller in dark mode. The documentation supports both
+light and dark themes; screenshots remain dark. Select any image to see it at
+full size.
 
-<figure class="docs-screenshot">
-  <img src="./images/radios-channel-plan.jpg" alt="oonfeeWRT radio inventory and channel planning screen" loading="lazy">
-  <figcaption>Radio inventory and evidence-aware channel planning. Disruptive scans stay explicit and acknowledged.</figcaption>
-</figure>
+<DocScreenshot src="dashboard-overview" :width="1620" :height="959" alt="oonfeeWRT Dashboard with fleet health, Internet observations, and sidebar navigation" caption="Start with fleet health, then follow a device, client, or historical trend for more detail." />
+
+<DocScreenshot src="statistics-internet" :width="1620" :height="959" alt="Statistics workspace showing the 24-hour range and Internet history charts" caption="Statistics brings retained traffic and ICMP observations into a dedicated workspace. This capture uses the 24-hour range, with gaps kept visible." />
+
+[Take the visual tour of every workspace →](/getting-started/visual-tour)
 
 ## What runs where
 

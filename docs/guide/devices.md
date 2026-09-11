@@ -169,7 +169,19 @@ The list is the fleet-level view. Use status and last-seen time together:
 
 Open a row for the detail workspace.
 
+<DocScreenshot
+  src="devices-inventory" :width="1620" :height="959"
+  alt="Devices inventory with per-device status and management information"
+  caption="Use the inventory for a fleet-level check, then select a row for its evidence. An intentional Monitor only boundary is different from an offline device or an unavailable measurement."
+/>
+
 ## Use device detail
+
+<DocScreenshot
+  src="device-detail" :width="370" :height="935"
+  alt="Device detail panel opened from the Devices inventory"
+  caption="The detail panel keeps the selected device's identity and observations together. Review capability and source notes before deciding that an absent measurement needs corrective action."
+/>
 
 The detail view can include:
 

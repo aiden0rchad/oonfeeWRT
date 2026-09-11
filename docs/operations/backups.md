@@ -36,6 +36,15 @@ The export passphrase:
 
 ## Export an encrypted backup
 
+<DocScreenshot
+  src="backup-restore" :width="1165" :height="982"
+  alt="Upper overview of Settings Backup and Restore, with export and restore introductions"
+  caption="The workspace overview introduces encrypted export and restore. Lower restore-upload controls are outside this capture; opening the page does not start an export or restore."
+/>
+
+The steps below cover export. Continue to [Preview a restore](#preview-a-restore)
+for the upload controls and the rest of the restore workflow.
+
 1. Sign in as an owner over loopback or trusted HTTPS.
 2. Open **Settings → Backup & Restore**.
 3. Under **Controller backup export**, select **Review encrypted export**.

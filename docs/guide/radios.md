@@ -16,6 +16,12 @@ interference, airtime, retry/failure, signal, and a scan-derived channel score
 when those sources are available. The latest scan row shows its outcome and BSS
 count; v0.1.5 does not display the raw BSS inventory.
 
+<DocScreenshot
+  src="radios-channel-plan" :width="1620" :height="959"
+  alt="Radios workspace showing the Channel Plan and channel classification information"
+  caption="Compare radios within the same band and consider channel width and source freshness. A channel placement is not a promise that the surrounding spectrum is clear."
+/>
+
 Treat it as a plan, not an automatic optimizer:
 
 - a missing scan does not mean the channel is clear;
@@ -85,6 +91,12 @@ backhaul radio without a recovery and timing plan.
 4. Verify the device and radio key in the dialog.
 5. Read and accept the disruption acknowledgement.
 6. Start the scan once and wait for its terminal state.
+
+<DocScreenshot
+  src="radios-details" :width="1620" :height="959"
+  alt="RF scan confirmation dialog with a client-disruption warning and acknowledgement"
+  caption="Confirm the device and stable radio before acknowledging possible client disruption. This capture stops at the confirmation dialog; no scan was executed."
+/>
 
 The controller persists the latest terminal scan result for each radio. It
 does not build an unlimited scan archive. Record a before/after comparison

@@ -2,6 +2,7 @@ import { defineConfig } from 'vitepress'
 
 const start = [
   { text: 'What oonfeeWRT does', link: '/getting-started/' },
+  { text: 'Visual tour', link: '/getting-started/visual-tour' },
   { text: 'Quick start', link: '/getting-started/quick-start' },
   { text: 'Adopt your first device', link: '/getting-started/first-adoption' },
 ]
