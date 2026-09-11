@@ -324,7 +324,7 @@ function MetricGroup({ title, subtitle, metrics, timestamps, bucketMs, index, cu
           TX failure delta {formula.weights.tx_fail_delta * 100}%. {formula.missing_policy}.
         </div>
       )}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: 10 }}>
         {metrics.map((metric) => (
           <MetricChart
             key={metric.id}

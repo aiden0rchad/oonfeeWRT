@@ -20,6 +20,17 @@ import { live } from './lib/live'
 
 type Screen = 'dashboard' | 'statistics' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'logs'
 type SettingsIntent = 'ipv6' | null
+type Theme = 'dark' | 'light'
+
+const themePreferenceKey = 'oonfeewrt:theme'
+
+function readThemePreference(): Theme {
+  try {
+    return window.localStorage.getItem(themePreferenceKey) === 'light' ? 'light' : 'dark'
+  } catch {
+    return 'dark'
+  }
+}
 
 const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -93,7 +104,7 @@ export function App() {
   const username = session?.username ?? null
   const [screen, setScreen] = useState<Screen>(() => screenFromPath(window.location.pathname))
   const [settingsIntent, setSettingsIntent] = useState<SettingsIntent>(null)
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
+  const [theme, setTheme] = useState<Theme>(readThemePreference)
   const [navigationExpanded, setNavigationExpanded] = useState(false)
 
   const [dash, setDash] = useState<DashboardData | null>(null)
@@ -145,6 +156,11 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
+    try {
+      window.localStorage.setItem(themePreferenceKey, theme)
+    } catch {
+      // Theme switching remains available when browser storage is blocked.
+    }
   }, [theme])
 
   useEffect(() => {
@@ -314,30 +330,20 @@ export function App() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <header
-        style={{
-          height: 40,
-          flex: '0 0 40px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0 14px',
-          background: 'var(--surface-1)',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <strong style={{ fontSize: 13 }}>oonfeeWRT</strong>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12 }}>
+      <header className="app-topbar">
+        <strong className="app-brand">oonfeeWRT</strong>
+        <div className="app-account-controls">
           <button
+            className="app-theme-control"
             onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
             aria-label={`${theme === 'dark' ? 'Dark' : 'Light'} theme active; switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
             title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 14 }}
           >
             ◐
           </button>
-          <span style={{ color: 'var(--text-secondary)' }}>{username}</span>
+          <span className="app-account-name" title={username}>{username}</span>
           <button
+            className="app-signout-control"
             disabled={signingOut}
             onClick={async () => {
               setSigningOut(true)
@@ -355,7 +361,6 @@ export function App() {
                 setSigningOut(false)
               }
             }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-text)', fontSize: 12 }}
           >
             {signingOut ? 'Signing out…' : 'Sign out'}
           </button>
@@ -451,7 +456,7 @@ export function App() {
           ))}
         </nav>
 
-        <main ref={mainRef} id="main-content" tabIndex={-1} style={{ flex: 1, overflow: 'auto', padding: 14, minWidth: 0, outline: 'none' }}>
+        <main ref={mainRef} id="main-content" className="app-main" tabIndex={-1}>
           {accountErr && (
             <div style={{ marginBottom: 12 }}>
               <div role="alert"><Banner tone="critical">{accountErr}</Banner></div>

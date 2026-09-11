@@ -191,6 +191,8 @@ export function DeviceDetailPanel({
   const [err, setErr] = useState('')
   const [seriesErr, setSeriesErr] = useState('')
   const loadGeneration = useRef(0)
+  const activeDeviceID = useRef(id)
+  activeDeviceID.current = id
 
   // Provenance per INTERFACE, not per SSID.
   //
@@ -214,7 +216,9 @@ export function DeviceDetailPanel({
       // overhead to report, which is a real state rather than zero cost.
       api
         .overhead(id)
-        .then(setOverhead)
+        .then((report) => {
+          if (generation === loadGeneration.current) setOverhead(report)
+        })
         .catch(() => {})
     } else {
       setErr(detailResult.reason instanceof Error ? detailResult.reason.message : String(detailResult.reason))
@@ -612,12 +616,16 @@ export function DeviceDetailPanel({
         <ManagementOverhead
           report={overhead}
           deviceID={id}
-          onChanged={() =>
+          onChanged={() => {
+            if (activeDeviceID.current !== id) return
+            const generation = loadGeneration.current
             api
               .overhead(id)
-              .then(setOverhead)
+              .then((report) => {
+                if (generation === loadGeneration.current) setOverhead(report)
+              })
               .catch(() => {})
-          }
+          }}
         />
       )}
 

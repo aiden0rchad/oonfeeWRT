@@ -6,7 +6,7 @@ import { Button, Banner, Card } from '../components/ui'
 /**
  * Look for OpenWrt devices on the local network.
  *
- * Sits above the add-by-address form rather than replacing it. Discovery cannot
+ * Complements the add-by-address form. Discovery cannot
  * work at all on a bridged container or on Docker Desktop — there is no layer 2
  * to sweep — so a UI that made scanning the primary path would be broken for a
  * large share of installs (ARCHITECTURE §1). Scan when it helps; type an
@@ -99,7 +99,7 @@ export function Discover({
         {plan?.hosts === 0 && (
           <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
             Scan is unavailable because the controller found no eligible local
-            addresses. Add the router by address below instead.
+            addresses. Add the router by address instead.
           </div>
         )}
 
@@ -138,7 +138,7 @@ function Results({
             ? 'No addresses were eligible for scanning.'
             : `Nothing on ${networks.join(', ')} answered as an OpenWrt device.`}{' '}
           If yours is on another subnet, or this controller is in a container
-          that cannot see your LAN, add it by address below — that path works
+          that cannot see your LAN, add it by address — that path works
           everywhere and needs no discovery.
         </Banner>
       )}

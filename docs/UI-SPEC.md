@@ -161,13 +161,24 @@ mobile browser coverage now runs in light and dark themes; tokens, focus,
 status-without-color, and responsive no-overflow behavior remain release
 gates.
 
+The current development UI also preserves the selected light/dark theme across
+reloads, including native form controls and scrollbars. Shared cards and form
+controls use a consistent spacing scale. Adoption is grouped into connection,
+device responsibility, and access review, with discovery alongside the form on
+wide screens and above it on narrow screens. Discovery selections preserve the
+device's protocol and management port; changing the endpoint clears inspection
+results and requires a fresh adoption acknowledgement.
+Client history keeps the inventory above the investigation panels on laptop
+screens; the four-pane layout is reserved for wide displays. Metric cards must
+also fit narrow mobile viewports without clipping their controls or labels.
+
 ---
 
 ## 1. Frame
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ [Site ▾] [App tabs]            oonfeeWRT            [◐ theme] [avatar]  │  40px topbar
+│ [Site ▾] [App tabs]            oonfeeWRT            [◐ theme] [avatar]  │  48px topbar
 ├──┬──────────────────────┬──────────────────────────────────────────────┤
 │  │                      │                                              │
 │I │  Context rail        │   Content                                    │
@@ -352,6 +363,8 @@ gray midpoint.
 
 | Role | Size | Weight |
 |---|---|---|
+| Page title | 26px | 650 |
+| Page purpose | 12px | 400, `--text-muted` |
 | Table header | 11px | 600, `--text-secondary` |
 | Table cell | 13px | 400 |
 | Card title | 13px | 600 |
@@ -364,9 +377,13 @@ tabular-nums`. System font stack — do not ship Ubiquiti's typeface.
 
 ### Shape
 
-Cards: 8px radius, 1px `--border`, no drop shadow (the dark theme separates by
-value, not elevation). Chips/pills: 4px radius, 11px text. Buttons: 6px radius,
-28px tall.
+Shared cards: 10px radius, 1px `--border`, no drop shadow. Headers use 12px ×
+16px padding and bodies use 16px, reduced to 12px on small screens. The main
+workspace uses 22px padding on desktop and 14px on mobile. Charts retain their
+compact 8px cards. Chips/pills: 4px radius, 11px text. Shared buttons: 7px radius,
+at least 32px tall; page-header and navigation actions retain a 44px minimum.
+Text inputs are 36px tall and native selects follow the active color scheme.
+Hover transitions are brief and respect reduced-motion preferences.
 
 ---
 

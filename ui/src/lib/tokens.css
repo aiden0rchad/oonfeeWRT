@@ -12,6 +12,8 @@
 
 :root,
 [data-theme='dark'] {
+  color-scheme: dark;
+  --app-topbar-height: 48px;
   --surface-0: #0f1114;
   --surface-1: #16181c;
   --surface-2: #1e2126;
@@ -50,6 +52,7 @@
 /* Light is SELECTED, not an inverted flip: every series colour is the
  * separately validated light-surface variant from UI-SPEC §3. */
 [data-theme='light'] {
+  color-scheme: light;
   --surface-0: #f5f6f8;
   --surface-1: #ffffff;
   --surface-2: #eef0f4;
@@ -190,6 +193,195 @@ a {
   color: var(--accent-text);
 }
 
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+select {
+  min-height: 32px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background-color: var(--surface-0);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+input[type='checkbox'],
+input[type='radio'],
+input[type='range'] {
+  accent-color: var(--control-accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.app-topbar {
+  display: flex;
+  flex: 0 0 var(--app-topbar-height);
+  min-height: var(--app-topbar-height);
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+
+.app-brand {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.app-account-controls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.app-account-name {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-theme-control,
+.app-signout-control {
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.app-theme-control {
+  width: 32px;
+  color: var(--text-secondary);
+  font-size: 17px;
+}
+
+.app-theme-control:hover,
+.app-signout-control:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 22px;
+  outline: none;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.ui-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.ui-card-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ui-card-body {
+  min-width: 0;
+}
+
+.ui-card-body[data-padded='true'] {
+  padding: 16px;
+}
+
+.ui-button {
+  min-height: 32px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.ui-button[data-kind='primary'] {
+  border-color: var(--control-accent);
+  background: var(--control-accent);
+  color: #fff;
+}
+
+.ui-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-2), var(--text-primary) 7%);
+}
+
+.ui-button[data-kind='primary']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--control-accent), #000 12%);
+}
+
+.ui-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@media (max-width: 720px) {
+  .app-main {
+    padding: 14px;
+  }
+
+  .app-topbar {
+    padding-inline: 12px;
+    gap: 8px;
+  }
+
+  .app-account-controls {
+    gap: 4px;
+  }
+
+  .app-account-name {
+    max-width: 80px;
+  }
+
+  .ui-card-header,
+  .ui-card-body[data-padded='true'] {
+    padding: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button {
+    transition: none;
+  }
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -202,6 +394,7 @@ a {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
+  padding-bottom: 4px;
 }
 
 .page-header-copy {
@@ -211,17 +404,21 @@ a {
 }
 
 .page-header h1 {
+  width: fit-content;
+  max-width: 100%;
   margin: 0;
-  font-size: 22px;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
   line-height: 1.2;
 }
 
 .page-header-purpose {
   min-width: 0;
-  margin-top: 2px;
+  margin-top: 5px;
   overflow-wrap: anywhere;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .page-header-actions {
@@ -2923,18 +3120,21 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-@media (min-width: 1180px) {
+/* Leave room for the expanded navigation and four readable panes. Laptop
+ * screens keep the inventory above the investigation instead of squeezing
+ * the client table between filters and event history. */
+@media (min-width: 1800px) {
   .client-observability-workspace.is-open {
     grid-template-columns:
-      minmax(150px, 190px) minmax(260px, 0.8fr)
-      minmax(190px, 220px) minmax(420px, 1.7fr);
+      minmax(160px, 190px) minmax(460px, 1fr)
+      minmax(190px, 220px) minmax(580px, 1.3fr);
     grid-template-areas:
       'filters list toolbar toolbar'
       'filters list events analysis';
   }
 }
 
-@media (min-width: 721px) and (max-width: 1179px) {
+@media (min-width: 721px) and (max-width: 1799px) {
   .client-observability-workspace.is-open {
     grid-template-columns: minmax(180px, 0.45fr) minmax(0, 1.55fr);
     grid-template-areas:

@@ -192,6 +192,33 @@ describe('App session boundaries', () => {
     expect(window.location.pathname).toBe('/topology')
   })
 
+  it('restores the selected theme after the app remounts', async () => {
+    signedIn()
+    const first = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /switch to light theme/ }))
+    expect(document.documentElement.dataset.theme).toBe('light')
+    first.unmount()
+
+    render(<App />)
+    expect(await screen.findByRole('button', { name: /Light theme active; switch to dark theme/ })).toBeTruthy()
+    expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('keeps theme switching usable when preference storage is blocked', async () => {
+    signedIn()
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    try {
+      render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /switch to light theme/ }))
+      expect(await screen.findByRole('button', { name: /Light theme active/ })).toBeTruthy()
+      expect(document.documentElement.dataset.theme).toBe('light')
+    } finally {
+      get.mockRestore()
+      set.mockRestore()
+    }
+  })
+
   it('mounts and focuses a deep-linked Devices heading before inventory resolves without stealing focus later', async () => {
     window.history.replaceState(null, '', '/devices')
     signedIn()

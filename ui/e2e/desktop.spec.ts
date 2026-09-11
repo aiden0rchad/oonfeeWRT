@@ -1,5 +1,15 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+const pageErrors = new WeakMap<Page, string[]>()
+test.beforeEach(async ({ page }) => {
+  const errors: string[] = []
+  pageErrors.set(page, errors)
+  page.on('pageerror', (error) => errors.push(error.message))
+})
+test.afterEach(async ({ page }) => {
+  expect(pageErrors.get(page)).toEqual([])
+})
+
 const dashboardObservedAt = Date.now() - 240_000
 const dashboardTimes = Array.from(
   { length: 72 },
@@ -1023,6 +1033,7 @@ for (const theme of ['dark', 'light'] as const) {
     expect(await contrastRatio(page.getByRole('button', { name: 'General' }))).toBeGreaterThanOrEqual(4.5)
 
     await page.goto('/policy')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
     const objects = page.getByRole('tab', { name: 'Objects' })
     await objects.click()
     expect(await contrastRatio(objects)).toBeGreaterThanOrEqual(4.5)
@@ -1037,6 +1048,78 @@ for (const theme of ['dark', 'light'] as const) {
     const health = page.getByRole('region', { name: 'Internet health details' })
     await expect(health.getByRole('img')).toHaveCount(4)
     await expectWithinMain(page, health)
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
+}
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+]) {
+  test(`${viewport.width}px adoption keeps connection fields and consent within the page`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    const unexpectedRequests = await installControllerFixture(page)
+    await page.goto('/adopt')
+    await expect(page.getByRole('heading', { level: 1, name: 'Adopt a device' })).toBeVisible()
+    for (const label of ['Address', 'Name (optional)', 'Management port (optional)', 'Device username', 'Device password (for ubus)']) {
+      await expectWithinMain(page, page.getByLabel(label, { exact: true }))
+    }
+    const consent = page.getByRole('checkbox', { name: /^Install the oonfeeWRT controller access payload/ })
+    await expect(consent).not.toBeChecked()
+    await expect(page.getByRole('button', { name: 'Adopt', exact: true })).toBeDisabled()
+    await expectWithinMain(page, consent.locator('..'))
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
+}
+
+for (const width of [320, 1280, 1440, 1920]) {
+  test(`${width}px client investigation keeps its list and analysis usable`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const unexpectedRequests = await installControllerFixture(page)
+    await page.route('**/api/v1/clients/*/observability?*', async (route) => {
+      const to = Date.now()
+      await route.fulfill({ json: {
+        client_mac: clientPage.clients[0].mac, from: to - 600_000, to,
+        resolution: '5m', bucket_ms: 300_000, timestamps: [to - 600_000, to - 300_000],
+        ap_device_at: [null, null], events: [], paths: [], gaps: [],
+        metrics: [{
+          id: 'client-signal', scope: 'client', kind: 'signal_dbm', label: 'Signal',
+          unit: 'dBm', values: [-55, -53],
+          availability: { state: 'available', source: 'rollup_5m', observed_points: 2, expected_points: 2, gaps: [] },
+        }],
+        experience_formula: {
+          name: 'wifi-v1', weights: { rssi: 0.45, retry_delta: 0.35, tx_fail_delta: 0.2 },
+          missing_policy: 'Missing inputs remain unavailable',
+        },
+        data_contract: {
+          metric_source: 'rollup_5m', raw_samples_persisted: false,
+          event_time_resolution_ms: 1000, events_truncated: false,
+          topology_source: 'persisted validity intervals',
+        },
+      } })
+    })
+    await page.goto('/clients')
+    if (width >= 1280) await page.getByRole('button', { name: 'Expand navigation' }).click()
+    await page.getByRole('button', { name: 'Open observability for Fixture phone' }).click()
+    const list = page.getByRole('region', { name: 'Client list' })
+    const analysis = page.getByRole('region', { name: 'Client analysis' })
+    await expect(analysis.getByRole('region', { name: 'Signal metric' })).toBeVisible()
+    await expectWithinMain(page, list)
+    await expectWithinMain(page, analysis)
+    await expectWithinMain(page, analysis.getByRole('region', { name: 'Signal metric' }))
+    const columns = await page.locator('.client-observability-workspace').evaluate((element) =>
+      getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)
+    expect(columns).toBe(width === 320 ? 1 : width < 1800 ? 2 : 4)
+    if (width >= 1280) {
+      expect((await list.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(width < 1800 ? 700 : 460)
+    }
     const overflow = await readOverflow(page)
     expect(overflow.document).toBeLessThanOrEqual(1)
     expect(overflow.main).toBeLessThanOrEqual(1)

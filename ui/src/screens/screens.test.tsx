@@ -38,6 +38,7 @@ const api = {
   device: vi.fn(),
   deviceSeries: vi.fn(),
   overhead: vi.fn(),
+  setPollInterval: vi.fn(),
   reprobe: vi.fn(),
   refreshACL: vi.fn(),
   lldpCapability: vi.fn(),
@@ -562,6 +563,60 @@ describe('Adopt', () => {
       role: 'gateway',
       acknowledge_router_changes: true,
     })
+  })
+
+  it.each([
+    { scheme: 'http', port: 80, previousScheme: 'https', expectedPort: undefined },
+    { scheme: 'https', port: 443, previousScheme: 'http', expectedPort: undefined },
+    { scheme: 'http', port: 8080, previousScheme: 'https', expectedPort: 8080 },
+  ])('uses the discovered $scheme endpoint on port $port for inspection and adoption', async ({ scheme, port, previousScheme, expectedPort }) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: ['192.168.1.0/24'], hosts: 1 })
+    api.scan.mockResolvedValue({
+      found: [{
+        host: '192.168.1.1', port, scheme, verdict: 'openwrt',
+        signals: { objects: 1, radios: 1, wireless: true, gateway: false, dhcp: false },
+      }],
+      swept: 1, answered: 1, networks: ['192.168.1.0/24'], elapsed_ms: 1,
+    })
+    api.inspectDevice.mockRejectedValue(new Error('fixture inspection unavailable'))
+    api.adopt.mockRejectedValue(new Error('fixture adoption unavailable'))
+    render(<Adopt onAdopted={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: previousScheme }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Adopt this' }))
+    expect(screen.getByRole('button', { name: scheme }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.change(screen.getByLabelText('Device password (for ubus)'), { target: { value: 'router-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+    await screen.findByText(/fixture inspection unavailable/)
+    expect(api.inspectDevice.mock.lastCall?.[0]).toMatchObject({ host: '192.168.1.1', scheme })
+    expect(api.inspectDevice.mock.lastCall?.[0].port).toBe(expectedPort)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt' }))
+    await screen.findByText(/fixture adoption unavailable/)
+    expect(api.adopt.mock.lastCall?.[0]).toMatchObject({ host: '192.168.1.1', scheme })
+    expect(api.adopt.mock.lastCall?.[0].port).toBe(expectedPort)
+  })
+
+  it.each(['0', '65536', '1.5'])('blocks an invalid management port %s before sending credentials', async (port) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    render(<Adopt onAdopted={vi.fn()} />)
+    await screen.findByText(/found no eligible local addresses/i)
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.168.1.1' } })
+    const consent = screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }) as HTMLInputElement
+    fireEvent.click(consent)
+    fireEvent.change(screen.getByLabelText('Management port (optional)'), { target: { value: port } })
+    expect(consent.checked).toBe(false)
+    fireEvent.click(consent)
+    const inspect = screen.getByRole('button', { name: 'Inspect capabilities' }) as HTMLButtonElement
+    const adopt = screen.getByRole('button', { name: 'Adopt' }) as HTMLButtonElement
+    expect(inspect.disabled).toBe(true)
+    expect(adopt.disabled).toBe(true)
+    fireEvent.submit(adopt.closest('form')!)
+    expect(api.inspectDevice).not.toHaveBeenCalled()
+    expect(api.adopt).not.toHaveBeenCalled()
   })
 
   it('renders an unreadable radio inventory as unknown, never zero', async () => {
@@ -2228,6 +2283,50 @@ describe('Devices — re-probe panel', () => {
     const panel = screen.getByRole('dialog', { name: 'ap-1' })
     expect(within(panel).getByText('192.168.1.1')).toBeTruthy()
     expect(within(panel).getByText(/Metric catalog refresh failed \(series unavailable\)/)).toBeTruthy()
+  })
+
+  it.each(['initial', 'interval change', 'pending interval change'] as const)('does not show another device’s late management-overhead response after %s', async (trigger) => {
+    const { DeviceDetailPanel } = await import('./Devices')
+    const report = (deviceID: number, packageName: string) => ({
+      overhead: {
+        device_id: deviceID, tier: 'baseline', interval_seconds: 60,
+        polls_per_minute: 1, requests_per_minute: 1, bytes_out: 0,
+        polls: 1, failed_polls: 0, cpu_basis: 'not measured',
+      },
+      packages: [packageName], packages_note: 'controller capability', poll_interval_s: 0,
+    })
+    let finishFirst!: (value: ReturnType<typeof report>) => void
+    let finishInterval!: () => void
+    api.device.mockImplementation(async (id) => ({ ...detail, id, name: `ap-${id}` }))
+    if (trigger !== 'initial') {
+      api.overhead.mockResolvedValueOnce(report(1, 'first-device-package'))
+      api.setPollInterval.mockImplementationOnce(() => trigger === 'pending interval change'
+        ? new Promise((resolve) => { finishInterval = () => resolve({}) })
+        : Promise.resolve({}))
+    }
+    if (trigger !== 'pending interval change') {
+      api.overhead.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve }))
+    }
+    api.overhead.mockResolvedValueOnce(report(2, 'second-device-package'))
+    const props = { onClose: vi.fn(), onChanged: vi.fn(), onRemoved: vi.fn() }
+    const { rerender } = render(<DeviceDetailPanel id={1} {...props} />)
+    await waitFor(() => expect(api.overhead).toHaveBeenCalledWith(1))
+    if (trigger !== 'initial') {
+      fireEvent.click(await screen.findByRole('button', { name: '2 min' }))
+      if (trigger === 'interval change') await waitFor(() => expect(api.overhead).toHaveBeenCalledTimes(2))
+    }
+
+    rerender(<DeviceDetailPanel id={2} {...props} />)
+    expect(await screen.findByText('second-device-package')).toBeTruthy()
+    await act(async () => {
+      if (trigger === 'pending interval change') finishInterval()
+      else finishFirst(report(1, 'first-device-package'))
+    })
+
+    const panel = screen.getByRole('dialog', { name: 'ap-2' })
+    expect(within(panel).getByText('second-device-package')).toBeTruthy()
+    expect(within(panel).queryByText('first-device-package')).toBeNull()
+    expect(api.overhead.mock.lastCall?.[0]).toBe(2)
   })
 
   it('does not mislabel explicit non-poll actions as unexpected logins', async () => {

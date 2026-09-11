@@ -403,9 +403,18 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	detail.Interfaces, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindIfaceRx))
-	detail.Radios, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindChanBusy))
-	detail.Stations, _ = s.Store.SeriesKeys(ctx, id, string(telemetry.KindStaRSSI))
+	detail.Interfaces, err = s.Store.SeriesKeys(ctx, id, string(telemetry.KindIfaceRx))
+	if handleStoreErr(w, err, "interface series") {
+		return
+	}
+	detail.Radios, err = s.Store.SeriesKeys(ctx, id, string(telemetry.KindChanBusy))
+	if handleStoreErr(w, err, "radio series") {
+		return
+	}
+	detail.Stations, err = s.Store.SeriesKeys(ctx, id, string(telemetry.KindStaRSSI))
+	if handleStoreErr(w, err, "station series") {
+		return
+	}
 	if _, gateway := s.dashboardGatewayTopology(ctx, []*store.Device{d}, s.now()); gateway != nil {
 		wan := gateway.RouteInterface
 		detail.WANInterface = &wan
