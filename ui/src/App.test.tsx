@@ -12,6 +12,9 @@ const mocks = vi.hoisted(() => ({
     devices: vi.fn(),
     login: vi.fn(),
     logout: vi.fn(),
+    account: vi.fn(),
+    accountSessions: vi.fn(),
+    accounts: vi.fn(),
   },
   live: { connect: vi.fn(), close: vi.fn() },
   radioCrash: false,
@@ -30,6 +33,7 @@ vi.mock('./screens/Dashboard', () => ({
     </div>
   ),
 }))
+vi.mock('./screens/Statistics', () => ({ Statistics: () => <h1>Statistics</h1> }))
 vi.mock('./screens/Topology', () => ({ Topology: () => <h1>Topology</h1> }))
 vi.mock('./screens/Radios', () => ({ Radios: () => {
   if (mocks.radioCrash) throw new Error('radio fixture failed')
@@ -56,6 +60,13 @@ function signedIn(username = 'admin') {
   })
   mocks.api.dashboard.mockResolvedValue({ devices: {}, recent_events: [], recent_alert_events: [] })
   mocks.api.devices.mockResolvedValue({ devices: [] })
+  mocks.api.account.mockResolvedValue({ account: {
+    id: 1, username, role: username === 'viewer' ? 'viewer' : 'owner',
+    role_label: username === 'viewer' ? 'Read only' : 'Owner', enabled: true,
+    created_at: 1, last_login_at: 1, active_session_count: 0,
+  } })
+  mocks.api.accountSessions.mockResolvedValue({ sessions: [] })
+  mocks.api.accounts.mockResolvedValue({ accounts: [], roles: [] })
 }
 
 describe('App session boundaries', () => {
@@ -123,6 +134,17 @@ describe('App session boundaries', () => {
     expect(window.location.pathname).toBe('/topology')
   })
 
+  it('opens Statistics from navigation with route, title, and focus', async () => {
+    signedIn()
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Statistics' }))
+    const heading = await screen.findByRole('heading', { name: 'Statistics' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(window.location.pathname).toBe('/statistics')
+    expect(document.title).toBe('Statistics — oonfeeWRT')
+  })
+
   it('opens Network Settings from an actionable IPv6 log warning', async () => {
     signedIn()
     render(<App />)
@@ -133,6 +155,40 @@ describe('App session boundaries', () => {
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeTruthy()
     expect(window.location.pathname).toBe('/settings')
     expect(screen.getByRole('tab', { name: 'Network' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('opens Accounts from navigation with its own route, title, and focus', async () => {
+    signedIn()
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Accounts' }))
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Accounts' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(window.location.pathname).toBe('/accounts')
+    expect(document.title).toBe('Accounts — oonfeeWRT')
+    expect(screen.getByRole('button', { name: 'Accounts' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('tab', { name: 'My account' }).getAttribute('aria-selected')).toBe('true')
+    expect(await screen.findByLabelText('Current password')).toBeTruthy()
+  })
+
+  it('restores Accounts deep links and follows browser history for a read-only account', async () => {
+    window.history.replaceState(null, '', '/accounts')
+    signedIn('viewer')
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Accounts' })).toBeTruthy()
+    expect(await screen.findByLabelText('Current password')).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: 'Manage accounts' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Logs' }))
+    expect(await screen.findByRole('heading', { name: 'Logs' })).toBeTruthy()
+    act(() => {
+      window.history.replaceState(null, '', '/accounts')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Accounts' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(document.title).toBe('Accounts — oonfeeWRT')
   })
 
   it('keeps the authenticated UI when logout fails', async () => {
@@ -178,6 +234,33 @@ describe('App session boundaries', () => {
     await waitFor(() => expect(document.activeElement).toBe(heading))
     expect(document.title).toBe('Topology — oonfeeWRT')
     expect(window.location.pathname).toBe('/topology')
+  })
+
+  it('restores the selected theme after the app remounts', async () => {
+    signedIn()
+    const first = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /switch to light theme/ }))
+    expect(document.documentElement.dataset.theme).toBe('light')
+    first.unmount()
+
+    render(<App />)
+    expect(await screen.findByRole('button', { name: /Light theme active; switch to dark theme/ })).toBeTruthy()
+    expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('keeps theme switching usable when preference storage is blocked', async () => {
+    signedIn()
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked') })
+    try {
+      render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /switch to light theme/ }))
+      expect(await screen.findByRole('button', { name: /Light theme active/ })).toBeTruthy()
+      expect(document.documentElement.dataset.theme).toBe('light')
+    } finally {
+      get.mockRestore()
+      set.mockRestore()
+    }
   })
 
   it('mounts and focuses a deep-linked Devices heading before inventory resolves without stealing focus later', async () => {
@@ -262,8 +345,8 @@ describe('App session boundaries', () => {
     const navigation = await screen.findByRole('navigation', { name: 'Main navigation' })
     expect(navigation.style.width).toBe('64px')
     const routeNames = [
-      'Dashboard', 'Topology', 'Radios', 'Devices', 'Client Devices',
-      'Policy Engine', 'Settings', 'Adopt a device', 'Logs',
+      'Dashboard', 'Statistics', 'Topology', 'Radios', 'Devices', 'Client Devices',
+      'Policy Engine', 'Adopt a device', 'Settings', 'Accounts', 'Logs',
     ]
     for (const name of routeNames) {
       const button = screen.getByRole('button', { name })
@@ -274,7 +357,10 @@ describe('App session boundaries', () => {
     }
     const divider = screen.getByRole('separator', { name: 'Controller tools' })
     expect(divider.getAttribute('data-expanded')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Adopt a device' }).nextElementSibling).toBe(divider)
     expect(divider.nextElementSibling).toBe(screen.getByRole('button', { name: 'Settings' }))
+    expect(divider.nextElementSibling?.nextElementSibling).toBe(screen.getByRole('button', { name: 'Accounts' }))
+    expect(screen.getByRole('button', { name: 'Accounts' }).nextElementSibling).toBe(screen.getByRole('button', { name: 'Logs' }))
     expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page')
 
     const expand = screen.getByRole('button', { name: 'Expand navigation' })
@@ -319,15 +405,20 @@ describe('App session boundaries', () => {
     expect(await screen.findByRole('heading', { name: 'Radios & Channel Plan' })).toBeTruthy()
   })
 
-  it('keeps account settings available when the device inventory fails', async () => {
+  it('keeps Accounts available independently when the device inventory fails', async () => {
     signedIn()
     mocks.api.devices.mockRejectedValue(new Error('inventory offline'))
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
-    expect(await screen.findByRole('tab', { name: 'My account' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: 'Accounts' })).toBeTruthy()
     expect((await screen.findByRole('alert')).textContent).toMatch(/Device inventory is unavailable: inventory offline/)
+    expect(screen.queryByRole('tab', { name: 'My account' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accounts' }))
+    expect(await screen.findByRole('tab', { name: 'My account' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Manage accounts' })).toBeTruthy()
+    expect(await screen.findByLabelText('Current password')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })
 

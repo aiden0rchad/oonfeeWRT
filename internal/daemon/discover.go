@@ -97,9 +97,9 @@ func annotate(res *discovery.Result, known map[string]*store.Device) *api.ScanRe
 	out := &api.ScanResult{
 		Swept:     res.Swept,
 		Answered:  res.Answered,
-		Networks:  res.Networks,
-		Skipped:   res.Skipped,
-		Failures:  res.Failures,
+		Networks:  append([]string{}, res.Networks...),
+		Skipped:   append([]string{}, res.Skipped...),
+		Failures:  append([]discovery.NetworkFailure{}, res.Failures...),
 		ElapsedMS: res.ElapsedMS,
 		Found:     make([]api.DiscoveredDevice, 0, len(res.Found)),
 	}

@@ -259,15 +259,16 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	// over a five-minute bucket, and the question the grid asks is about now.
 	for mac, st := range live {
 		e := rf[mac]
-		e.deviceID = st.deviceID
-		e.associationAmbiguous = st.ambiguous
-		if st.ambiguous {
-			e.haveSignal = false
+		// A roam changes the attribution immediately; a retained retry bucket
+		// from the previous AP must not become a measurement on the new AP.
+		if st.ambiguous || e.deviceID == nil || st.deviceID == nil || *e.deviceID != *st.deviceID {
 			e.retry = nil
 		}
-		if st.signal != nil {
+		e.deviceID = st.deviceID
+		e.associationAmbiguous = st.ambiguous
+		e.haveSignal = st.signal != nil && !st.ambiguous
+		if e.haveSignal {
 			e.signal = *st.signal
-			e.haveSignal = true
 		}
 		e.live = true
 		rf[mac] = e

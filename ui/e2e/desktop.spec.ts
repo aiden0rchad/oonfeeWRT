@@ -1,5 +1,15 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 
+const pageErrors = new WeakMap<Page, string[]>()
+test.beforeEach(async ({ page }) => {
+  const errors: string[] = []
+  pageErrors.set(page, errors)
+  page.on('pageerror', (error) => errors.push(error.message))
+})
+test.afterEach(async ({ page }) => {
+  expect(pageErrors.get(page)).toEqual([])
+})
+
 const dashboardObservedAt = Date.now() - 240_000
 const dashboardTimes = Array.from(
   { length: 72 },
@@ -246,8 +256,80 @@ const accounts = {
   ],
 }
 
-async function installControllerFixture(page: Page, topologyResponse: unknown = topology) {
+interface ControllerFixtureOptions {
+  statistics?: boolean
+  accountRole?: 'owner' | 'admin' | 'operator' | 'viewer'
+}
+
+const statisticsDevices = {
+  devices: [{
+    id: 1,
+    mac: '02:00:00:00:01:01',
+    name: 'Gateway',
+    host: '192.168.1.1',
+    role: 'gateway',
+    functions: ['gateway'],
+    management_mode: 'managed',
+    adopted: true,
+    adopted_at: 1_787_000_000,
+    class: 'router',
+    firmware: 'OpenWrt 24.10.2',
+    last_seen: 1_788_000_000,
+    poll_state: 'healthy',
+    status: 'online',
+  }],
+}
+
+const statisticsCatalog = {
+  series: {
+    sys_load1: [''],
+    sys_mem_pct: [''],
+    iface_rx_bps: ['wan'],
+    iface_tx_bps: ['wan'],
+    radio_utilization_pct: ['radio0'],
+  },
+}
+
+function statisticsSeries(url: URL) {
+  const kind = url.pathname.split('/').at(-1) ?? ''
+  const key = url.searchParams.get('key') ?? ''
+  const deviceID = Number(url.searchParams.get('device_id'))
+  const from = Number(url.searchParams.get('from'))
+  const to = Number(url.searchParams.get('to'))
+  const hourly = to - from > 7 * 24 * 60 * 60
+  const resolution = hourly ? '1h' : '5m'
+  const bucketSeconds = hourly ? 60 * 60 : 5 * 60
+  const first = Math.ceil(from / bucketSeconds) * bucketSeconds
+  const points = []
+  let index = 0
+
+  for (let ts = first; ts + bucketSeconds <= to; ts += bucketSeconds, index++) {
+    // One deliberate hole proves the page distinguishes missing evidence from zero.
+    if (index === 2) continue
+    const avg = kind === 'iface_rx_bps' ? 1_250_000 + (index % 12) * 22_000
+      : kind === 'iface_tx_bps' ? 340_000 + (index % 9) * 11_000
+        : kind === 'site_wan_latency_ms' ? 18 + (index % 7) * 0.4
+          : kind === 'site_wan_loss_pct' ? (index % 97 === 0 ? 1.5 : 0)
+            : kind === 'site_wan_up' ? (index === 5 ? 0 : 1)
+              : kind === 'sys_load1' ? 0.24 + (index % 8) * 0.03
+                : kind === 'sys_mem_pct' ? 61 + (index % 5) * 0.25
+                  : kind === 'radio_utilization_pct' ? 32 + (index % 11)
+                    : 0
+    const spread = kind === 'site_wan_up' ? 0 : Math.max(Math.abs(avg) * 0.04, 0.05)
+    points.push({ ts, avg, min: Math.max(0, avg - spread), max: avg + spread, cnt: hourly ? 12 : 1 })
+  }
+
+  return { device_id: deviceID, kind, key, resolution, points }
+}
+
+async function installControllerFixture(
+  page: Page,
+  topologyResponse: unknown = topology,
+  options: ControllerFixtureOptions = {},
+) {
   const unexpectedRequests: string[] = []
+  const accountRole = options.accountRole ?? 'owner'
+  const accountRoleLabel = accounts.roles.find((role) => role.value === accountRole)!.label
   await page.addInitScript(() => {
     class FixtureWebSocket {
       static readonly OPEN = 1
@@ -291,13 +373,14 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/session': {
         admin_id: 1,
         username: 'operator',
-        role: 'owner',
-        role_label: 'Owner',
+        role: accountRole,
+        role_label: accountRoleLabel,
         csrf: 'fixture',
         reauthenticated_until: null,
       },
       '/api/v1/dashboard': dashboard,
-      '/api/v1/devices': { devices: [] },
+      '/api/v1/devices': options.statistics ? statisticsDevices : { devices: [] },
+      ...(options.statistics ? { '/api/v1/devices/1/series': statisticsCatalog } : {}),
       '/api/v1/clients': clientPage,
       '/api/v1/events': {
         events: [{
@@ -346,6 +429,8 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/speedtests': speedTests,
       '/api/v1/topology': topologyResponse,
       '/api/v1/site': site,
+      '/api/v1/account': { account: { ...accounts.accounts[0], role: accountRole, role_label: accountRoleLabel } },
+      '/api/v1/account/sessions': { sessions: [] },
       '/api/v1/accounts': accounts,
       '/api/v1/radios': radios,
       '/api/v1/discovery': { networks: [], skipped: [], hosts: 0 },
@@ -353,7 +438,9 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/site/mesh-health': { links: [], note: 'No configured mesh links.' },
     }
     const body = path.startsWith('/api/v1/stats/')
-      ? { device_id: 7, kind: path.split('/').at(-1), key: 'radio0', resolution: '5m', points: [] }
+      ? options.statistics
+        ? statisticsSeries(url)
+        : { device_id: 7, kind: path.split('/').at(-1), key: 'radio0', resolution: '5m', points: [] }
       : responses[path]
     if (route.request().method() !== 'GET' || body === undefined) {
       unexpectedRequests.push(`${route.request().method()} ${path}`)
@@ -516,7 +603,38 @@ for (const viewport of [
     await expect(impactDialog).toBeHidden()
     await expect(impact).toBeFocused()
     if (viewport.width >= 1000) {
-      expect((await speed.boundingBox())!.height).toBeLessThanOrEqual(90)
+      const compact = await speed.evaluate((element) => {
+        const summary = element.querySelector<HTMLElement>('.speedtest-launch-consequence')!
+        const actions = element.querySelector<HTMLElement>('.speedtest-launch-actions')!
+        const bounds = element.getBoundingClientRect()
+        const summaryBounds = summary.getBoundingClientRect()
+        const controls = [
+          actions.querySelector<HTMLElement>('.speedtest-impact-trigger')!,
+          actions.querySelector<HTMLElement>(':scope > .ui-button')!,
+        ].map((control) => control.getBoundingClientRect())
+        const [impactBounds, runBounds] = controls
+        const style = getComputedStyle(element)
+        // System fonts wrap differently on macOS and Linux; bound text lines, not a platform-specific 90px height.
+        const maxHeight = 5 * parseFloat(getComputedStyle(summary).lineHeight)
+          + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+          + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+        return {
+          height: bounds.height,
+          maxHeight,
+          summaryClipped: summary.scrollHeight > summary.clientHeight + 1,
+          contentContained: [summaryBounds, ...controls].every((box) =>
+            box.width > 0 && box.height > 0 && box.left >= bounds.left - 1
+            && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1),
+          summaryOverlap: summaryBounds.right > actions.getBoundingClientRect().left + 1,
+          controlsOverlap: !(impactBounds.right <= runBounds.left || runBounds.right <= impactBounds.left
+            || impactBounds.bottom <= runBounds.top || runBounds.bottom <= impactBounds.top),
+        }
+      })
+      expect(compact.height).toBeLessThanOrEqual(compact.maxHeight + 1)
+      expect(compact.summaryClipped).toBe(false)
+      expect(compact.contentContained).toBe(true)
+      expect(compact.summaryOverlap).toBe(false)
+      expect(compact.controlsOverlap).toBe(false)
       expect((await metrics.boundingBox())!.height).toBeLessThanOrEqual(64)
     }
 
@@ -641,6 +759,281 @@ test('Topology keeps review actions visible while technical detail is collapsed'
   expect(unexpectedRequests).toEqual([])
 })
 
+test('Controller tools sit at the sidebar foot and remain reachable when navigation scrolls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  const unexpectedRequests = await installControllerFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Expand navigation' }).click()
+
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+  const divider = navigation.getByRole('separator', { name: 'Controller tools' })
+  const adopt = navigation.getByRole('button', { name: 'Adopt a device' })
+  const logs = navigation.getByRole('button', { name: 'Logs' })
+  await expect(divider).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Settings' })).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Accounts' })).toBeVisible()
+  await expect(adopt).toBeVisible()
+  await expect(logs).toBeVisible()
+  expect(await adopt.evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Controller tools')
+  expect(await divider.evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Settings')
+  expect(await divider.evaluate((element) =>
+    element.nextElementSibling?.nextElementSibling?.getAttribute('aria-label'))).toBe('Accounts')
+  expect(await navigation.getByRole('button', { name: 'Accounts' }).evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Logs')
+
+  const [navigationBox, logsBox] = await Promise.all([
+    navigation.boundingBox(),
+    logs.boundingBox(),
+  ])
+  expect(navigationBox).not.toBeNull()
+  expect(logsBox).not.toBeNull()
+  expect(navigationBox!.y + navigationBox!.height - logsBox!.y - logsBox!.height)
+    .toBeLessThanOrEqual(12)
+
+  await page.setViewportSize({ width: 1280, height: 420 })
+  expect(await navigation.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await logs.scrollIntoViewIfNeeded()
+  await expect(logs).toBeVisible()
+  await logs.click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toBeVisible()
+  expect(unexpectedRequests).toEqual([])
+})
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 }]) {
+  test(`${viewport.width}px account role fields stay aligned and describe every option in both themes`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    const unexpectedRequests = await installControllerFixture(page, topology)
+    await page.goto('/accounts')
+    await page.getByRole('tab', { name: 'Manage accounts', exact: true }).click()
+    const form = page.locator('.account-create-form')
+    const role = form.getByRole('combobox', { name: 'Role', exact: true })
+
+    for (const theme of ['dark', 'light']) {
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+      await role.scrollIntoViewIfNeeded()
+      await role.focus()
+      await expect(role).toBeFocused()
+      await expect(role).toBeInViewport()
+      for (const option of accounts.roles) {
+        await role.selectOption(option.value)
+        await expect(role).toHaveValue(option.value)
+        await expect(role).toHaveAccessibleName('Role')
+        await expect(role).toHaveAccessibleDescription(option.description)
+        const layout = await form.evaluate((element) => {
+          const main = document.querySelector<HTMLElement>('#main-content')!
+          const select = element.querySelector<HTMLSelectElement>('select')!
+          const description = document.getElementById(select.getAttribute('aria-describedby')!)!
+          const measure = (node: HTMLElement) => {
+            const { x, y, width, height } = node.getBoundingClientRect()
+            const style = getComputedStyle(node)
+            return { x, y, width, height, visible: style.visibility === 'visible' && style.display !== 'none' }
+          }
+          return {
+            main: measure(main),
+            role: measure(select),
+            description: { ...measure(description), text: description.textContent },
+            fields: Array.from(element.querySelectorAll<HTMLInputElement>('input'), (input) => ({
+              ...measure(input), label: input.labels?.[0]?.textContent?.trim(),
+            })),
+            overflow: {
+              document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              main: main.scrollWidth - main.clientWidth,
+            },
+          }
+        })
+        expect(layout.description.text).toBe(option.description)
+        expect(layout.fields.map((field) => field.label)).toEqual(['Username', 'Password', 'Repeat password'])
+        for (const box of [layout.role, layout.description, ...layout.fields]) {
+          expect(box.visible).toBe(true)
+          expect(box.width).toBeGreaterThan(0)
+          expect(box.height).toBeGreaterThan(0)
+          expect(box.x).toBeGreaterThanOrEqual(layout.main.x - 1)
+          expect(box.x + box.width).toBeLessThanOrEqual(layout.main.x + layout.main.width + 1)
+        }
+        for (const field of layout.fields) {
+          expect(Math.abs(field.height - layout.role.height)).toBeLessThanOrEqual(1)
+          if (viewport.width >= 1280) {
+            expect(Math.abs(field.y - layout.role.y)).toBeLessThanOrEqual(1)
+          }
+        }
+        expect(layout.overflow.document).toBeLessThanOrEqual(1)
+        expect(layout.overflow.main).toBeLessThanOrEqual(1)
+      }
+    }
+    expect(unexpectedRequests).toEqual([])
+  })
+
+  for (const accountRole of ['owner', 'viewer'] as const) {
+    test(`${viewport.width}px Accounts workspace preserves ${accountRole} access and navigation`, async ({ page }) => {
+      await page.setViewportSize(viewport)
+      const unexpectedRequests = await installControllerFixture(page, topology, { accountRole })
+      const managementRequests: string[] = []
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/v1/accounts') managementRequests.push(request.method())
+      })
+      await page.goto('/accounts')
+
+      const heading = page.getByRole('heading', { level: 1, name: 'Accounts' })
+      await expect(heading).toBeVisible()
+      await expect(heading).toBeFocused()
+      await expect(page).toHaveTitle('Accounts — oonfeeWRT')
+      const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+      await expect(navigation.getByRole('button', { name: 'Accounts', exact: true })).toHaveAttribute('aria-current', 'page')
+      const accountTab = page.getByRole('tab', { name: 'My account', exact: true })
+      await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+      for (const label of ['Current password', 'New password', 'Repeat new password']) {
+        await expectWithinMain(page, page.getByLabel(label, { exact: true }))
+      }
+      await expectWithinMain(page, page.getByRole('tablist', { name: 'Account sections' }))
+
+      const manageTab = page.getByRole('tab', { name: 'Manage accounts', exact: true })
+      if (accountRole === 'owner') {
+        await accountTab.focus()
+        await accountTab.press('ArrowRight')
+        await expect(manageTab).toBeFocused()
+        await expect(manageTab).toHaveAttribute('aria-selected', 'true')
+        for (const label of ['Username', 'Password', 'Repeat password']) {
+          await expectWithinMain(page, page.getByLabel(label, { exact: true }).first())
+        }
+        await expectWithinMain(page, page.getByRole('combobox', { name: /^Role/ }))
+        await manageTab.focus()
+        await manageTab.press('Home')
+        await expect(accountTab).toBeFocused()
+        await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+        expect(managementRequests.length).toBeGreaterThan(0)
+        expect(managementRequests.every((method) => method === 'GET')).toBe(true)
+      } else {
+        await expect(manageTab).toHaveCount(0)
+        expect(managementRequests).toEqual([])
+      }
+
+      await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+      await expectWithinMain(page, page.getByLabel('Current password', { exact: true }))
+      const overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
+
+      await navigation.getByRole('button', { name: 'Settings', exact: true }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+      await expect(page.getByRole('tab', { name: 'My account', exact: true })).toHaveCount(0)
+      await expect(page.getByRole('tab', { name: 'Manage accounts', exact: true })).toHaveCount(0)
+      await page.goBack()
+      await expect(page).toHaveURL(/\/accounts$/)
+      await expect(heading).toBeFocused()
+      await expect(accountTab).toHaveAttribute('aria-selected', 'true')
+      expect(unexpectedRequests).toEqual([])
+    })
+  }
+}
+
+test('Statistics renders gap-aware stored history in dark and light themes and switches 30 days to hourly', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const unexpectedRequests = await installControllerFixture(page, topology, { statistics: true })
+  const statisticRequests: URL[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/v1/stats/')) statisticRequests.push(url)
+  })
+
+  await page.goto('/statistics')
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Statistics' })).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Statistics time range' })).toBeVisible()
+  await expect(page.getByLabel('Device detail')).toHaveValue('1')
+  await expect(page.getByLabel('Network interface')).toHaveValue('wan')
+  await expect(page.getByLabel('Stable radio')).toHaveValue('radio0')
+  await expect(page.locator('.statistics-chart-card')).toHaveCount(9)
+  await expect(page.getByText('History gaps', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '6 hours', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const coverageDetail = page.getByLabel('Download traffic history coverage')
+  await coverageDetail.click()
+  await expect(coverageDetail.locator('..')).toContainText('intervals are unobserved')
+  await expectWithinMain(page, coverageDetail.locator('..'))
+  await coverageDetail.click()
+  await expect(page.getByRole('img', {
+    name: /ICMP reachability: \d+ all-reply buckets, 0 mixed-reply buckets, 1 no-reply bucket, and 1 missing bucket/,
+  })).toBeVisible()
+  await expect(page.getByText(/^All replied · \d+$/)).toBeVisible()
+  await expect(page.getByText('No replies · 1', { exact: true })).toBeVisible()
+  await expect(page.getByText('Missing · 1', { exact: true })).toBeVisible()
+  expect(statisticRequests.some((url) =>
+    url.pathname.endsWith('/iface_rx_bps') &&
+    url.searchParams.get('device_id') === '1' &&
+    url.searchParams.get('key') === 'wan')).toBe(true)
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  let overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  await page.getByRole('button', { name: /switch to light theme/i }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+
+  const thirtyDayRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return url.pathname.startsWith('/api/v1/stats/') &&
+      Number(url.searchParams.get('to')) - Number(url.searchParams.get('from')) === 30 * 24 * 60 * 60
+  })
+  await page.getByRole('button', { name: '30 days' }).click()
+  const request = new URL((await thirtyDayRequest).url())
+  expect(Number(request.searchParams.get('to')) - Number(request.searchParams.get('from')))
+    .toBe(30 * 24 * 60 * 60)
+  await expect(page.getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText(/hourly rollup/).first()).toBeVisible()
+  await expect(page.getByText('History gaps', { exact: true }).first()).toBeVisible()
+  expect(unexpectedRequests).toEqual([])
+})
+
+test('sparse Statistics keeps recent trends readable in both themes', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const unexpectedRequests = await installControllerFixture(page, topology, { statistics: true })
+  await page.route('**/api/v1/stats/**', async (route) => {
+    const series = statisticsSeries(new URL(route.request().url()))
+    await route.fulfill({ json: { ...series, points: series.points.slice(-17) } })
+  })
+  await page.goto('/statistics')
+  await expect(page.getByRole('button', { name: '6 hours', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('img', { name: /^Download traffic: 17 observed rollup buckets/ })).toBeVisible()
+  const grid = page.locator('.statistics-chart-grid').first()
+  for (const theme of ['dark', 'light']) {
+    if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/ }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+    await expectWithinMain(page, grid)
+    await grid.screenshot({ path: testInfo.outputPath(`recent-history-${theme}.png`) })
+  }
+  expect(unexpectedRequests).toEqual([])
+})
+
+test('320px Statistics controls and charts stay within the content viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  const unexpectedRequests = await installControllerFixture(page, topology, { statistics: true })
+
+  await page.goto('/statistics')
+  await expect(page.getByRole('heading', { level: 1, name: 'Statistics' })).toBeVisible()
+  await expect(page.getByText('History gaps', { exact: true }).first()).toBeVisible()
+  const coverageDetail = page.getByLabel('Download traffic history coverage')
+  await coverageDetail.click()
+  await expectWithinMain(page, coverageDetail.locator('..'))
+  await page.getByText('About history and missing samples', { exact: true }).click()
+  await expectWithinMain(page, page.locator('.statistics-history-help'))
+  await expectWithinMain(page, page.getByRole('group', { name: 'Statistics time range' }))
+  await expectWithinMain(page, page.getByLabel('Device detail'))
+  await expectWithinMain(page, page.locator('.statistics-chart-card').first())
+  expect(await page.locator('.statistics-chart-grid').first().evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+
+  const overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  expect(unexpectedRequests).toEqual([])
+})
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
   for (const theme of ['dark', 'light'] as const) {
     test(`${viewport.width}x${viewport.height} ${theme} route page headers keep controls in view`, async ({ page }) => {
@@ -675,10 +1068,12 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
 
       for (const route of [
         { name: 'Dashboard', control: 'Live controller view' },
+        { name: 'Statistics', control: '24h' },
         { name: 'Topology', control: 'Current' },
         { name: 'Radios', heading: 'Radios & Channel Plan', control: 'Refresh' },
         { name: 'Policy Engine', control: 'Zone Matrix' },
         { name: 'Settings', control: 'Network' },
+        { name: 'Accounts', control: 'My account' },
         { name: 'Adopt a device', control: 'Inspect capabilities' },
       ]) {
         await page.getByRole('button', { name: route.name, exact: true }).click()
@@ -710,9 +1105,9 @@ test('390x844 responsive routes keep controls and state in view', async ({ page 
   await expectWithinMain(page, page.getByRole('group', { name: 'Event view' }))
   await expectWithinMain(page, page.locator('.logs-page .pager').getByRole('button', { name: 'Next' }))
 
-  await page.goto('/settings')
-  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
-  await page.getByRole('tab', { name: 'Accounts' }).click()
+  await page.goto('/accounts')
+  await expect(page.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
+  await page.getByRole('tab', { name: 'Manage accounts' }).click()
   for (const field of ['Username', 'Password', 'Repeat password']) {
     await expectWithinMain(page, page.getByLabel(field, { exact: true }).first())
   }
@@ -819,6 +1214,20 @@ test('320px narrow dashboard, Logs pager, and Channel Plan do not clip', async (
   const channel = page.locator('.radio-channel[data-state="in-use"]')
   await expect(channel).toBeVisible()
   await expectWithinMain(page, channel)
+  const classification = page.getByRole('group', { name: 'Information: Channel classification' })
+  const classificationDetails = classification.locator('details')
+  const classificationToggle = classificationDetails.locator('summary')
+  await expectWithinMain(page, classification)
+  await expectWithinMain(page, classification.locator('.notice-context'))
+  await expectWithinMain(page, classificationToggle)
+  await classificationToggle.click()
+  await expect(classificationDetails).toHaveAttribute('open', '')
+  await expectWithinMain(page, classificationDetails)
+  const expandedOverflow = await readOverflow(page)
+  expect(expandedOverflow.document).toBeLessThanOrEqual(1)
+  expect(expandedOverflow.main).toBeLessThanOrEqual(1)
+  await classificationToggle.click()
+  await expect(classificationDetails).not.toHaveAttribute('open')
   expect(await page.locator('.radio-plan-row').evaluate((element) =>
     getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
   overflow = await readOverflow(page)
@@ -838,6 +1247,7 @@ for (const theme of ['dark', 'light'] as const) {
     expect(await contrastRatio(page.getByRole('button', { name: 'General' }))).toBeGreaterThanOrEqual(4.5)
 
     await page.goto('/policy')
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
     const objects = page.getByRole('tab', { name: 'Objects' })
     await objects.click()
     expect(await contrastRatio(objects)).toBeGreaterThanOrEqual(4.5)
@@ -852,6 +1262,102 @@ for (const theme of ['dark', 'light'] as const) {
     const health = page.getByRole('region', { name: 'Internet health details' })
     await expect(health.getByRole('img')).toHaveCount(4)
     await expectWithinMain(page, health)
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpectedRequests).toEqual([])
+  })
+}
+
+for (const viewport of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+]) {
+  for (const theme of ['dark', 'light'] as const) {
+    test(`${viewport.width}px ${theme} adoption keeps connection fields and consent within the page`, async ({ page }) => {
+      await page.setViewportSize(viewport)
+      const unexpectedRequests = await installControllerFixture(page)
+      await page.goto('/adopt')
+      await expect(page.getByRole('heading', { level: 1, name: 'Adopt a device' })).toBeVisible()
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      for (const label of ['Address', 'Name (optional)', 'Management port (optional)', 'Device username', 'Device password (for ubus)']) {
+        await expectWithinMain(page, page.getByLabel(label, { exact: true }))
+      }
+      const consent = page.getByRole('checkbox', { name: /^Install the oonfeeWRT controller access payload/ })
+      const access = page.getByRole('group', { name: 'Controller access' })
+      const details = access.locator('details')
+      const summary = details.locator('summary')
+      const adopt = page.getByRole('button', { name: 'Adopt', exact: true })
+      await expect(access.getByRole('checkbox')).toHaveCount(1)
+      await expect(consent).toHaveAccessibleDescription('Adds a dedicated login and permissions file—no packages or firmware. Network changes still require Preview and Apply.')
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      await expect(details).not.toHaveAttribute('open')
+      await expect(summary).toHaveText('View access details')
+      await expectWithinMain(page, access)
+      await summary.focus()
+      await page.keyboard.press('Enter')
+      await expect(details).toHaveAttribute('open', '')
+      await expect(details.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeVisible()
+      await expect(details.getByText(/Rollback asks for the device administrator login again/)).toBeVisible()
+      await expectWithinMain(page, details)
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      await summary.focus()
+      await page.keyboard.press('Enter')
+      await expect(details).not.toHaveAttribute('open')
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      const overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
+      expect(unexpectedRequests).toEqual([])
+    })
+  }
+}
+
+for (const width of [320, 1280, 1440, 1920]) {
+  test(`${width}px client investigation keeps its list and analysis usable`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const unexpectedRequests = await installControllerFixture(page)
+    await page.route('**/api/v1/clients/*/observability?*', async (route) => {
+      const to = Date.now()
+      await route.fulfill({ json: {
+        client_mac: clientPage.clients[0].mac, from: to - 600_000, to,
+        resolution: '5m', bucket_ms: 300_000, timestamps: [to - 600_000, to - 300_000],
+        ap_device_at: [null, null], events: [], paths: [], gaps: [],
+        metrics: [{
+          id: 'client-signal', scope: 'client', kind: 'signal_dbm', label: 'Signal',
+          unit: 'dBm', values: [-55, -53],
+          availability: { state: 'available', source: 'rollup_5m', observed_points: 2, expected_points: 2, gaps: [] },
+        }],
+        experience_formula: {
+          name: 'wifi-v1', weights: { rssi: 0.45, retry_delta: 0.35, tx_fail_delta: 0.2 },
+          missing_policy: 'Missing inputs remain unavailable',
+        },
+        data_contract: {
+          metric_source: 'rollup_5m', raw_samples_persisted: false,
+          event_time_resolution_ms: 1000, events_truncated: false,
+          topology_source: 'persisted validity intervals',
+        },
+      } })
+    })
+    await page.goto('/clients')
+    if (width >= 1280) await page.getByRole('button', { name: 'Expand navigation' }).click()
+    await page.getByRole('button', { name: 'Open observability for Fixture phone' }).click()
+    const list = page.getByRole('region', { name: 'Client list' })
+    const analysis = page.getByRole('region', { name: 'Client analysis' })
+    await expect(analysis.getByRole('region', { name: 'Signal metric' })).toBeVisible()
+    await expectWithinMain(page, list)
+    await expectWithinMain(page, analysis)
+    await expectWithinMain(page, analysis.getByRole('region', { name: 'Signal metric' }))
+    const columns = await page.locator('.client-observability-workspace').evaluate((element) =>
+      getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)
+    expect(columns).toBe(width === 320 ? 1 : width < 1800 ? 2 : 4)
+    if (width >= 1280) {
+      expect((await list.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(width < 1800 ? 700 : 460)
+    }
     const overflow = await readOverflow(page)
     expect(overflow.document).toBeLessThanOrEqual(1)
     expect(overflow.main).toBeLessThanOrEqual(1)

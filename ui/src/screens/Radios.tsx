@@ -201,33 +201,59 @@ export function Radios() {
       {notice && <div role="status"><Banner>{notice}</Banner></div>}
       {data && data.gaps.length > 0 && (
         <Notice
+          compact
           component="Radio coverage"
           summary={(
             <div role="status">
               Radio coverage is partial. {data.gaps.length}{' '}
-              {data.gaps.length === 1 ? 'source gap is' : 'source gaps are'} recorded;{' '}
-              missing data is not rendered as zero.
+              {data.gaps.length === 1 ? 'source gap is' : 'source gaps are'} recorded.
             </div>
           )}
           closedLabel="More information about radio coverage"
           openLabel="Hide radio coverage information"
           details={(
-            <ul style={{ margin: 0, paddingLeft: 20, overflowWrap: 'anywhere' }}>
-              {data.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-            </ul>
+            <div>
+              <p style={{ marginTop: 0 }}>Missing data is not rendered as zero. These are the exact source limits:</p>
+              <ul style={{ margin: 0, paddingLeft: 20, overflowWrap: 'anywhere' }}>
+                {data.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+              </ul>
+              <p>
+                For stale or failed collection, open the named device and review its connection
+                and “What the controller cannot read here.” Restore reachability for an offline
+                router; refresh controller access only for a reported permission denial. Then
+                allow another poll and refresh this page.
+              </p>
+              <p style={{ marginBottom: 0 }}>
+                An unknown channel list may be a firmware or driver limit; refreshing cannot
+                make an unsupported source available. A stale scan can also leave suggestions
+                unavailable. Running an RF scan is optional and requires separate consent because
+                it can interrupt connected clients.
+              </p>
+            </div>
           )}
         />
       )}
       <Notice
+        tone="accent"
+        compact
         component="Channel classification"
-        summary="The controller cannot prove which restricted channels require DFS, so it labels them Restricted rather than guessing."
+        summary="Channel restrictions are shown as reported. DFS status is unavailable."
         closedLabel="More information about channel classification"
         openLabel="Hide channel classification information"
         details={(
-          <>
-            OpenWrt&apos;s <code>freqlist.restricted</code> flag is not proof of radar/DFS state.
-            The controller does not have a persisted channel-exclusion evidence model in this release.
-          </>
+          <div>
+            <p style={{ marginTop: 0 }}>
+              The controller cannot prove which restricted channels require DFS, so it labels
+              them Restricted rather than guessing. OpenWrt&apos;s <code>freqlist.restricted</code>{' '}
+              flag is not proof of radar/DFS state. Configured channel exclusions are also
+              unavailable in this release.
+            </p>
+            <p style={{ marginBottom: 0 }}>
+              No controller setting or RF scan can fill this evidence gap. Check the router&apos;s
+              wireless settings and driver information for its reported restrictions. Refresh
+              can update channel availability, but DFS remains unknown without an explicit source.
+            </p>
+          </div>
         )}
       />
 

@@ -15,6 +15,7 @@ const install = [
 
 const use = [
   { text: 'Dashboard and speed tests', link: '/guide/dashboard' },
+  { text: 'Statistics and historical telemetry', link: '/guide/statistics' },
   { text: 'Discovery, adoption, and devices', link: '/guide/devices' },
   { text: 'Networks, VLANs, and DHCP', link: '/guide/networks' },
   { text: 'Wi-Fi, roaming, and overrides', link: '/guide/wifi' },

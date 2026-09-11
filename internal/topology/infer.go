@@ -1097,7 +1097,7 @@ func CurrentPresentationEdges(edges []model.TopologyEdge, sources []model.Topolo
 		if hidden[i] {
 			continue
 		}
-		edge.Ambiguities = append([]string(nil), edge.Ambiguities...)
+		edge.Ambiguities = append([]string{}, edge.Ambiguities...)
 		visible = append(visible, edge)
 	}
 	parents := map[string]map[string]bool{}

@@ -1,11 +1,13 @@
 export type NavigationIconName =
   | 'dashboard'
+  | 'statistics'
   | 'topology'
   | 'radios'
   | 'devices'
   | 'clients'
   | 'policy'
   | 'settings'
+  | 'accounts'
   | 'adopt'
   | 'logs'
   | 'expand'
@@ -20,6 +22,11 @@ export function NavigationIcon({ name }: { name: NavigationIconName }) {
           <rect x="13.5" y="3.5" width="7" height="4.5" rx="1.25" />
           <rect x="13.5" y="11" width="7" height="9.5" rx="1.25" />
           <rect x="3.5" y="13.5" width="7" height="7" rx="1.25" />
+        </>
+      case 'statistics':
+        return <>
+          <path d="M4.5 19.5V13M10 19.5V9M15.5 19.5V5.5M21 19.5V10.5" />
+          <path d="m4.5 9 5.5-4 5.5 2.2L21 3" />
         </>
       case 'topology':
         return <>
@@ -58,6 +65,11 @@ export function NavigationIcon({ name }: { name: NavigationIconName }) {
           <circle cx="12" cy="12" r="4" />
           <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
           <path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.5 5.5l2.1 2.1M16.4 16.4l2.1 2.1M18.5 5.5l-2.1 2.1M7.6 16.4l-2.1 2.1" />
+        </>
+      case 'accounts':
+        return <>
+          <circle cx="9" cy="8" r="3.5" />
+          <path d="M2.5 20v-2a6.5 6.5 0 0 1 13 0v2M16 4.8a3.5 3.5 0 0 1 0 6.4M18 14a5 5 0 0 1 3.5 4.8V20" />
         </>
       case 'adopt':
         return <>

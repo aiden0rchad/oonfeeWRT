@@ -155,10 +155,28 @@ proof. The UI must still let an operator clear existing block/fixed-address
 intent one client at a time. Partial client inventory, referenced-set deletion,
 changed compile inputs, and stale Preview state must remain visible blockers.
 
-Dashboard, Devices, Topology, Radios, Policy Engine, Settings, and adoption use
-the shared PageHeader/action hierarchy. Desktop and mobile browser coverage now
-runs in light and dark themes; tokens, focus, status-without-color, and
-responsive no-overflow behavior remain release gates.
+Dashboard, Statistics, Devices, Topology, Radios, Policy Engine, Accounts, Settings,
+adoption, and Logs use the shared PageHeader/action hierarchy. Desktop and
+mobile browser coverage now runs in light and dark themes; tokens, focus,
+status-without-color, and responsive no-overflow behavior remain release
+gates.
+
+The current development UI also preserves the selected light/dark theme across
+reloads, including native form controls and scrollbars. Shared cards and form
+controls use a consistent spacing scale. Adoption is grouped into connection,
+device responsibility, and access review, with discovery alongside the form on
+wide screens and above it on narrow screens. Discovery selections preserve the
+device's protocol and management port; changing the endpoint clears inspection
+results and requires a fresh adoption acknowledgement.
+Client history keeps the inventory above the investigation panels on laptop
+screens; the four-pane layout is reserved for wide displays. Metric cards must
+also fit narrow mobile viewports without clipping their controls or labels.
+
+Routine source limitations use compact information with expandable causes and
+remedies. Only explicit history-only router-log gaps use the neutral state;
+stale/missing current coverage, failed reads, and safety gates remain prominent.
+Statistics starts at six hours and uses neutral history-coverage disclosures,
+not health-warning colours, while retaining exact missing-interval counts.
 
 ---
 
@@ -166,7 +184,7 @@ responsive no-overflow behavior remain release gates.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ [Site ▾] [App tabs]            oonfeeWRT            [◐ theme] [avatar]  │  40px topbar
+│ [Site ▾] [App tabs]            oonfeeWRT            [◐ theme] [avatar]  │  48px topbar
 ├──┬──────────────────────┬──────────────────────────────────────────────┤
 │  │                      │                                              │
 │I │  Context rail        │   Content                                    │
@@ -179,16 +197,18 @@ responsive no-overflow behavior remain release gates.
 └──┴──────────────────────┴──────────────────────────────────────────────┘
 ```
 
-**Navigation rail (64px collapsed).** The landed first slice uses one route list;
-a remaining visual-polish pass will split it into two groups separated by a
-divider and add a dedicated hover treatment.
-Phase 4.1 first covers the routes that exist now: Dashboard, Topology, Radios,
-Devices, Client Devices, Policy, Settings, Adopt and Logs. Future routes in §2
-do not get empty placeholders. Use one project-owned inline SVG set—never font
-glyphs or raster icons. Icons are 22–24px in controls at least 44px square, with
-a consistent stroke, visible focus/active states, accessible names and
-tooltips. The rail expands to show text labels and stores its preference locally,
-namespaced by controller and account; collapsed mode remains keyboard-usable.
+**Navigation rail (64px collapsed).** The landed route list is split into a
+primary group—Dashboard, Statistics, Topology, Radios, Devices, Client Devices,
+Policy, and Adopt—and a **Controller** group containing Settings, Accounts, and
+Logs, in that order. The Controller divider uses the remaining vertical space
+to keep that group at the
+foot of a normal-height sidebar; on a short viewport the rail scrolls so every
+route remains reachable. Future routes in §2 do not get empty placeholders.
+Use one project-owned inline SVG set—never font glyphs or raster icons. Icons
+are 22–24px in controls at least 44px square, with a consistent stroke, visible
+focus/active states, accessible names and tooltips. The rail expands to show
+text labels and stores its preference locally, namespaced by controller and
+account; collapsed mode remains keyboard-usable.
 
 **Context rail (264px).** Screen-specific. Two personalities:
 - *Filter rail* (Topology, Clients, Devices, Observability, Insights, Flows,
@@ -232,6 +252,17 @@ their warnings or controls.
 
 ## 2. Navigation map
 
+Current development source exposes **Dashboard**, **Statistics**, **Topology**,
+**Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Adopt a
+device**, **Settings**, **Accounts**, and **Logs**. The stable v0.1.5 artifacts do
+not contain Statistics, the standalone Accounts route, or the bottom-anchored Controller
+group; account controls remain inside Settings in that release. Current
+development `/accounts` opens **My account** for every signed-in role and adds
+the owner-only **Manage accounts** tab. `/settings` retains **Network**,
+**Diagnostics** for owner/admin, and **Backup & Restore** for owner. The larger
+map below is the long-term target; entries absent from current development
+remain specifications only.
+
 ```
 Dashboard
 Topology            → Topology · Infrastructure
@@ -243,6 +274,9 @@ Insights            → Radios · Coverage · RF Scan
 Flows               → Flows · Activity
 Logs                → General · Audit
 Alarm Manager       → Triggers · Scope · Actions
+Accounts
+ ├ My account       (password, own sessions; every signed-in role)
+ └ Manage accounts  (owner-only users, roles, state, session revocation)
 Settings
  ├ Overview         (summary tables for every domain, with Create New / Manage)
  ├ WiFi
@@ -253,16 +287,14 @@ Settings
  │                    Master Table facets: Firewall · Filtering · Routes · QoS · ACL · NAT/DNS
  ├ Security         (IDS/IPS, blocklists)
  ├ High Availability → Safe Apply · Recovery · Link Protection
- ├ My Account       (password, own sessions)
- ├ Accounts         (owner-only users, roles, state, session revocation)
  ├ Diagnostics      (redacted support-bundle preview and download)
  ├ Backup & Restore (encrypted export and staged owner-only restore)
  ├ System           (updates, timezone, SIEM export, notifications)
  └ Console          (control plane, identity, device credentials)
 ```
 
-This is the target map. My Account, Accounts, Diagnostics and Backup & Restore
-now exist. Other future entries remain specifications and do not get empty
+This is the target map. The account tabs, Diagnostics and Backup & Restore
+already exist. Other future entries remain specifications and do not get empty
 navigation destinations.
 
 The **Settings → Overview** page is a strong pattern worth copying exactly: every
@@ -343,6 +375,8 @@ gray midpoint.
 
 | Role | Size | Weight |
 |---|---|---|
+| Page title | 26px | 650 |
+| Page purpose | 12px | 400, `--text-muted` |
 | Table header | 11px | 600, `--text-secondary` |
 | Table cell | 13px | 400 |
 | Card title | 13px | 600 |
@@ -355,9 +389,13 @@ tabular-nums`. System font stack — do not ship Ubiquiti's typeface.
 
 ### Shape
 
-Cards: 8px radius, 1px `--border`, no drop shadow (the dark theme separates by
-value, not elevation). Chips/pills: 4px radius, 11px text. Buttons: 6px radius,
-28px tall.
+Shared cards: 10px radius, 1px `--border`, no drop shadow. Headers use 12px ×
+16px padding and bodies use 16px, reduced to 12px on small screens. The main
+workspace uses 22px padding on desktop and 14px on mobile. Charts retain their
+compact 8px cards. Chips/pills: 4px radius, 11px text. Shared buttons: 7px radius,
+at least 32px tall; page-header and navigation actions retain a 44px minimum.
+Text inputs are 36px tall and native selects follow the active color scheme.
+Hover transitions are brief and respect reduced-motion preferences.
 
 ---
 
@@ -388,7 +426,9 @@ Everywhere else in the app: **one axis per chart.**
 
 ### Marks
 
-- Lines 2px, no point markers on dense series; markers ≥8px only on sparse ones.
+- Lines 2px; connected time-series observations have no permanent point markers.
+  Isolated samples retain a small filled marker, with hover highlighting for
+  inspection. Preserve min/max shading and never connect missing intervals.
 - Area fills at ~18% opacity of the series color, hard 2px surface gap between
   stacked segments.
 - Bars: 4px rounded data-end anchored to the baseline; square at the baseline.
@@ -618,7 +658,11 @@ that router configuration changed.
 
 Adopt and capability installation submit `acknowledge_router_changes:true` only
 after their respective unchecked disclosure is selected. Adoption's disclosure
-also says that acceptance creates the scoped controller login. Omitted/false
+combines a neutral checkbox, short access summary and expandable exact-change
+and rollback details in one section. The details toggle never grants consent;
+the checkbox stays visible and unchecked by default. The summary says that
+acceptance creates a dedicated login and permissions file, installs no packages
+or firmware, and keeps network changes behind Preview and Apply. Omitted/false
 requests are rejected before SSH or any mutation. Inspect never sends it
 because Inspect is read-only.
 
@@ -720,12 +764,14 @@ middleware, My Account and owner account-management screens are implemented.
 Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
 Sweep close affected `/live` sockets and cancel in-flight requests.
 
-**Settings → My Account.** Every signed-in user can change their own password,
-and list/revoke their own in-memory sessions. Sessions state plainly that
+**Accounts → My account (development); Settings → My account (v0.1.5).**
+Every signed-in user can change their own password and list/revoke their own
+in-memory sessions. Sessions state plainly that
 controller restart invalidates them.
 
-**Settings → Accounts.** Owner-only management lists accounts, canonical role
-(`owner`, `admin`, `operator` or `viewer`), enabled state and recent login without
+**Accounts → Manage accounts (development); Settings → Accounts (v0.1.5).**
+Owner-only management lists accounts, canonical role (`owner`, `admin`,
+`operator` or `viewer`), enabled state and recent login without
 exposing password material. Owner can create, change role, enable/disable,
 soft-delete and revoke any account's sessions; the last enabled owner is
 protected. Client address is shown only under the documented trusted-proxy

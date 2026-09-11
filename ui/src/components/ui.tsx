@@ -69,33 +69,14 @@ export function Card({
   pad?: boolean
 }) {
   return (
-    <section
-      style={{
-        background: 'var(--surface-1)',
-        border: '1px solid var(--border)',
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
-    >
+    <section className="ui-card">
       {title && (
-        <header
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            gap: 12,
-            padding: '10px 14px',
-            borderBottom: '1px solid var(--border)',
-            fontSize: 13,
-            fontWeight: 600,
-          }}
-        >
+        <header className="ui-card-header">
           <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{title}</span>
           {actions}
         </header>
       )}
-      <div style={{ padding: pad ? 14 : 0 }}>{children}</div>
+      <div className="ui-card-body" data-padded={pad}>{children}</div>
     </section>
   )
 }
@@ -164,25 +145,15 @@ export function Button({
 }) {
   return (
     <button
+      className="ui-button"
+      data-kind={kind}
       type={type}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedBy}
       aria-pressed={ariaPressed}
       onClick={onClick}
       disabled={disabled}
-      style={{
-        height: 28,
-        padding: '0 12px',
-        borderRadius: 6,
-        fontSize: 12,
-        fontWeight: 500,
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled ? 0.55 : 1,
-        color: kind === 'primary' ? '#fff' : 'var(--text-primary)',
-        background: kind === 'primary' ? 'var(--control-accent)' : 'var(--surface-2)',
-        border: `1px solid ${kind === 'primary' ? 'var(--control-accent)' : 'var(--border-strong)'}`,
-        ...style,
-      }}
+      style={style}
     >
       {children}
     </button>
@@ -205,7 +176,7 @@ export function Field({
         {...props}
         style={{
           width: '100%',
-          height: 30,
+          height: 36,
           padding: '0 10px',
           borderRadius: 6,
           background: 'var(--surface-0)',
@@ -1288,7 +1259,7 @@ export function SlideOver({
         aria-labelledby={titleID}
         style={{
           position: 'fixed',
-          top: 40,
+          top: 'var(--app-topbar-height)',
           right: 0,
           bottom: 0,
           width: 'min(370px, 100vw)',

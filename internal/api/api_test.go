@@ -766,6 +766,7 @@ func TestDeviceDetailAndSeries(t *testing.T) {
 		{DeviceID: dev.ID, Kind: "iface_rx_bps", Key: "wan", TS: base, Avg: 100, Cnt: 12},
 		{DeviceID: dev.ID, Kind: "chan_busy_pct", Key: "wlan0", TS: base, Avg: 25, Cnt: 12},
 		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb", TS: base, Avg: -52, Cnt: 12},
+		{DeviceID: dev.ID, Kind: "sys_mem_used", TS: base, Avg: 64 << 20, Cnt: 12},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -797,13 +798,44 @@ func TestDeviceDetailAndSeries(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &idx); err != nil {
 		t.Fatal(err)
 	}
-	if len(idx.Series) != 3 {
-		t.Fatalf("series index = %v, want exactly the three that have data", idx.Series)
+	if len(idx.Series) != 4 || len(idx.Series["sys_mem_used"]) != 1 || idx.Series["sys_mem_used"][0] != "" {
+		t.Fatalf("series index = %v, want exactly the four that have data including unkeyed memory", idx.Series)
 	}
 
 	w = h.do(http.MethodGet, "/api/v1/devices/9999", nil)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown device: %d, want 404", w.Code)
+	}
+}
+
+func TestDeviceDetailReportsSeriesCatalogReadFailure(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	dev := h.seedDevice("ap1", true, nil)
+	ctx := context.Background()
+	path := fmt.Sprintf("/api/v1/devices/%d", dev.ID)
+
+	if _, err := h.db.SQL().ExecContext(ctx, `ALTER TABLE series RENAME TO unavailable_series`); err != nil {
+		t.Fatal(err)
+	}
+	w := h.do(http.MethodGet, path, nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("unreadable series catalog returned %d, want 500: %s", w.Code, w.Body.String())
+	}
+
+	if _, err := h.db.SQL().ExecContext(ctx, `ALTER TABLE unavailable_series RENAME TO series`); err != nil {
+		t.Fatal(err)
+	}
+	w = h.do(http.MethodGet, path, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("recovered device detail: %d %s", w.Code, w.Body.String())
+	}
+	var detail deviceDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Interfaces == nil || detail.Radios == nil || detail.Stations == nil {
+		t.Fatalf("known empty catalogs must be arrays: %s", w.Body.String())
 	}
 }
 
@@ -3615,6 +3647,83 @@ func TestClientsDoNotChooseAnAPFromCompetingFleetAssociations(t *testing.T) {
 	}
 	if client.DeviceID != nil || client.Signal != nil {
 		t.Fatalf("iteration selected an AP or RSSI: %+v", client)
+	}
+}
+
+func TestClientsLiveAssociationKeepsRFMetricsOnTheirObservedAP(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		roamed     bool
+		withSignal bool
+	}{
+		{name: "same AP with live RSSI", withSignal: true},
+		{name: "same AP without live RSSI"},
+		{name: "roamed with live RSSI", roamed: true, withSignal: true},
+		{name: "roamed without live RSSI", roamed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.setup()
+			ctx := context.Background()
+			now := time.Now()
+			h.srv.Now = func() time.Time { return now }
+			oldAP := h.seedDevice("previous-ap", true, nil)
+			currentAP := oldAP
+			if tc.roamed {
+				currentAP = h.seedDevice("current-ap", true, nil)
+			}
+			const mac = "02:00:00:ab:61:01"
+			if err := h.db.UpsertClients(ctx, []store.SeenClient{{MAC: mac, Name: "phone"}}, now.Unix()); err != nil {
+				t.Fatal(err)
+			}
+			base := now.Truncate(5 * time.Minute).Unix()
+			if err := h.db.WriteRollups(ctx, []store.RollupRow{
+				{DeviceID: oldAP.ID, Kind: "sta_rssi", Key: mac, TS: base, Avg: -81, Cnt: 12},
+				{DeviceID: oldAP.ID, Kind: "sta_retry_delta_pct", Key: mac, TS: base, Avg: 36, Cnt: 12},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var signal *int
+			if tc.withSignal {
+				value := -42
+				signal = &value
+			}
+			h.fleet.stations = map[int64]collector.LiveStationSet{
+				currentAP.ID: {mac: {{Iface: "phy0-ap0", Signal: signal}}},
+			}
+
+			w := h.do(http.MethodGet, "/api/v1/clients", nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("clients: %d %s", w.Code, w.Body.String())
+			}
+			var response struct {
+				Clients []clientView `json:"clients"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if len(response.Clients) != 1 {
+				t.Fatalf("clients = %+v", response.Clients)
+			}
+			client := response.Clients[0]
+			if client.Connection != "wireless" || client.DeviceID == nil || *client.DeviceID != currentAP.ID {
+				t.Fatalf("current association was not retained: %+v", client)
+			}
+			if tc.withSignal {
+				if client.Signal == nil || *client.Signal != *signal {
+					t.Errorf("signal = %v, want current AP's RSSI %d", client.Signal, *signal)
+				}
+			} else if client.Signal != nil {
+				t.Errorf("unmeasured current association inherited old RSSI %d", *client.Signal)
+			}
+			if tc.roamed {
+				if client.RetryPct != nil {
+					t.Errorf("current AP inherited previous AP's retry rate %.0f%%", *client.RetryPct)
+				}
+			} else if client.RetryPct == nil || *client.RetryPct != 36 {
+				t.Errorf("same-AP retry measurement was lost: %v", client.RetryPct)
+			}
+		})
 	}
 }
 

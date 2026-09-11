@@ -28,6 +28,14 @@ Treat it as a plan, not an automatic optimizer:
 
 ### Per-radio observability
 
+The development UI presents **Channel classification** as compact information,
+not a router fault. OpenWrt's `freqlist.restricted` flag does not prove DFS
+status, and the current controller does not persist explicit DFS or configured
+channel-exclusion evidence. Channels stay **Restricted** or unknown where
+appropriate. Refreshing or running an RF scan cannot supply that missing
+classification. Consult the router's wireless settings and driver information
+for the restrictions it reports; do not bypass them to clear a notice.
+
 Each radio row identifies the device, stable radio key, band, channel,
 utilization/interference and related metrics, scan capability, and source state
 that the controller can establish.

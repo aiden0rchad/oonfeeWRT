@@ -76,6 +76,25 @@ beforeEach(() => {
 })
 
 describe('Topology', () => {
+  it('renders legacy null topology collections without crashing', async () => {
+    api.topology.mockResolvedValueOnce({
+      ...current,
+      gaps: null,
+      edges: [{
+        ...current.edges[0],
+        evidence: null,
+        ambiguities: null,
+      }],
+      last_known_edges: null,
+    } as unknown as TopologySnapshot)
+    render(<Topology />)
+
+    const table = await screen.findByRole('table', { name: /Matching active parent-child links/ })
+    expect(within(table).getByText('0 sources')).toBeTruthy()
+    expect(screen.getByText(/Source coverage is incomplete/)).toBeTruthy()
+    expect(screen.getByRole('group', { name: /2 topology nodes and 1 links/ })).toBeTruthy()
+  })
+
   it('keeps the neutral VLAN note when every active link lacks VLAN metadata', async () => {
     render(<Topology />)
 

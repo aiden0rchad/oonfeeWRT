@@ -38,6 +38,7 @@ const api = {
   device: vi.fn(),
   deviceSeries: vi.fn(),
   overhead: vi.fn(),
+  setPollInterval: vi.fn(),
   reprobe: vi.fn(),
   refreshACL: vi.fn(),
   lldpCapability: vi.fn(),
@@ -255,6 +256,25 @@ describe('Discover', () => {
     await waitFor(() => expect(screen.getByText(/Nothing on .* answered as an OpenWrt device/i)).toBeTruthy())
     expect(screen.queryByText(/could not route to any address/i)).toBeNull()
   })
+
+  it('treats a legacy null network list as an empty completed scan', async () => {
+    api.scanPlan.mockResolvedValue({
+      networks: ['192.168.1.0/24'],
+      hosts: 254,
+    })
+    api.scan.mockResolvedValue({
+      found: [],
+      swept: 0,
+      answered: 0,
+      networks: null as unknown as string[],
+      elapsed_ms: 1,
+    })
+
+    render(<Discover onPick={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }))
+
+    expect(await screen.findByText(/No addresses were eligible for scanning/i)).toBeTruthy()
+  })
 })
 
 describe('Adopt', () => {
@@ -299,34 +319,39 @@ describe('Adopt', () => {
     expect(submit.disabled).toBe(true)
     const optIn = screen.getByRole('checkbox', {
       name: /Install the oonfeeWRT controller access payload/i,
-    })
-    const acknowledgement = optIn.closest('label')?.textContent
-    expect(acknowledgement).toMatch(/unchecked or cancelling leaves the router unchanged/i)
-    expect(acknowledgement).toMatch(/keeps Adopt unavailable/i)
-    const payloadNotice = screen.getByRole('group', {
-      name: 'Warning: Optional controller access payload',
-    })
-    expect(within(payloadNotice).getByText(/adds one scoped rpcd ACL file and login/i)).toBeTruthy()
-    expect(within(payloadNotice).getByText(/installs no package, binary, daemon, service, or firmware/i)).toBeTruthy()
-    const capabilityDetails = within(payloadNotice)
-      .getByText('What adoption installs and rolls back')
-      .closest('details') as HTMLDetailsElement
-    const reviewPayload = within(payloadNotice).getByRole('button', {
-      name: 'Review exact router changes',
-    })
+    }) as HTMLInputElement
+    const accessGroup = screen.getByRole('group', { name: 'Controller access' })
+    expect(accessGroup.contains(optIn)).toBe(true)
+    expect(optIn.checked).toBe(false)
+    expect(optIn.getAttribute('aria-describedby')).toBe('adopt-access-summary')
+    expect(document.getElementById('adopt-access-summary')?.textContent).toBe(
+      'Adds a dedicated login and permissions file—no packages or firmware. Network changes still require Preview and Apply.',
+    )
+    const reviewPayload = within(accessGroup).getByText('View access details')
+    expect(reviewPayload.tagName).toBe('SUMMARY')
+    const capabilityDetails = reviewPayload.closest('details') as HTMLDetailsElement
     expect(capabilityDetails.open).toBe(false)
-    expect(reviewPayload.closest('details')).toBeNull()
     expect(optIn.closest('details')).toBeNull()
     fireEvent.click(reviewPayload)
     expect(capabilityDetails.open).toBe(true)
-    expect(reviewPayload.getAttribute('aria-pressed')).toBe('true')
+    expect(optIn.checked).toBe(false)
+    expect(submit.disabled).toBe(true)
+    expect(api.adopt).not.toHaveBeenCalled()
     const permissionDetails = capabilityDetails.textContent
+    expect(permissionDetails).toMatch(/installs no package, binary, daemon, service, or firmware/i)
+    expect(permissionDetails).toMatch(/unchecked or cancelling leaves the router unchanged/i)
+    expect(permissionDetails).toMatch(/keeps Adopt unavailable/i)
     expect(permissionDetails).toMatch(/\/usr\/share\/rpcd\/acl\.d\/oonfeewrt\.json/i)
     expect(permissionDetails).toMatch(/controller-owned network, wireless, firewall, and DHCP/i)
     expect(permissionDetails).toMatch(/runtime 802\.11k neighbour-list updates/i)
     expect(permissionDetails).toMatch(/cannot disconnect or steer clients/i)
     expect(permissionDetails).toMatch(/require Preview and Apply later/i)
     expect(permissionDetails).toMatch(/Rollback asks for the device administrator login again/i)
+    fireEvent.click(reviewPayload)
+    expect(capabilityDetails.open).toBe(false)
+    expect(optIn.checked).toBe(false)
+    expect(submit.disabled).toBe(true)
+    expect(api.adopt).not.toHaveBeenCalled()
     fireEvent.click(optIn)
     expect(submit.disabled).toBe(false)
     fireEvent.click(submit)
@@ -543,6 +568,60 @@ describe('Adopt', () => {
       role: 'gateway',
       acknowledge_router_changes: true,
     })
+  })
+
+  it.each([
+    { scheme: 'http', port: 80, previousScheme: 'https', expectedPort: undefined },
+    { scheme: 'https', port: 443, previousScheme: 'http', expectedPort: undefined },
+    { scheme: 'http', port: 8080, previousScheme: 'https', expectedPort: 8080 },
+  ])('uses the discovered $scheme endpoint on port $port for inspection and adoption', async ({ scheme, port, previousScheme, expectedPort }) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: ['192.168.1.0/24'], hosts: 1 })
+    api.scan.mockResolvedValue({
+      found: [{
+        host: '192.168.1.1', port, scheme, verdict: 'openwrt',
+        signals: { objects: 1, radios: 1, wireless: true, gateway: false, dhcp: false },
+      }],
+      swept: 1, answered: 1, networks: ['192.168.1.0/24'], elapsed_ms: 1,
+    })
+    api.inspectDevice.mockRejectedValue(new Error('fixture inspection unavailable'))
+    api.adopt.mockRejectedValue(new Error('fixture adoption unavailable'))
+    render(<Adopt onAdopted={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: previousScheme }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Adopt this' }))
+    expect(screen.getByRole('button', { name: scheme }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.change(screen.getByLabelText('Device password (for ubus)'), { target: { value: 'router-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect capabilities' }))
+    await screen.findByText(/fixture inspection unavailable/)
+    expect(api.inspectDevice.mock.lastCall?.[0]).toMatchObject({ host: '192.168.1.1', scheme })
+    expect(api.inspectDevice.mock.lastCall?.[0].port).toBe(expectedPort)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt' }))
+    await screen.findByText(/fixture adoption unavailable/)
+    expect(api.adopt.mock.lastCall?.[0]).toMatchObject({ host: '192.168.1.1', scheme })
+    expect(api.adopt.mock.lastCall?.[0].port).toBe(expectedPort)
+  })
+
+  it.each(['0', '65536', '1.5'])('blocks an invalid management port %s before sending credentials', async (port) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.scanPlan.mockResolvedValue({ networks: [], hosts: 0 })
+    render(<Adopt onAdopted={vi.fn()} />)
+    await screen.findByText(/found no eligible local addresses/i)
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '192.168.1.1' } })
+    const consent = screen.getByRole('checkbox', { name: /Install the oonfeeWRT controller access payload/i }) as HTMLInputElement
+    fireEvent.click(consent)
+    fireEvent.change(screen.getByLabelText('Management port (optional)'), { target: { value: port } })
+    expect(consent.checked).toBe(false)
+    fireEvent.click(consent)
+    const inspect = screen.getByRole('button', { name: 'Inspect capabilities' }) as HTMLButtonElement
+    const adopt = screen.getByRole('button', { name: 'Adopt' }) as HTMLButtonElement
+    expect(inspect.disabled).toBe(true)
+    expect(adopt.disabled).toBe(true)
+    fireEvent.submit(adopt.closest('form')!)
+    expect(api.inspectDevice).not.toHaveBeenCalled()
+    expect(api.adopt).not.toHaveBeenCalled()
   })
 
   it('renders an unreadable radio inventory as unknown, never zero', async () => {
@@ -2211,6 +2290,50 @@ describe('Devices — re-probe panel', () => {
     expect(within(panel).getByText(/Metric catalog refresh failed \(series unavailable\)/)).toBeTruthy()
   })
 
+  it.each(['initial', 'interval change', 'pending interval change'] as const)('does not show another device’s late management-overhead response after %s', async (trigger) => {
+    const { DeviceDetailPanel } = await import('./Devices')
+    const report = (deviceID: number, packageName: string) => ({
+      overhead: {
+        device_id: deviceID, tier: 'baseline', interval_seconds: 60,
+        polls_per_minute: 1, requests_per_minute: 1, bytes_out: 0,
+        polls: 1, failed_polls: 0, cpu_basis: 'not measured',
+      },
+      packages: [packageName], packages_note: 'controller capability', poll_interval_s: 0,
+    })
+    let finishFirst!: (value: ReturnType<typeof report>) => void
+    let finishInterval!: () => void
+    api.device.mockImplementation(async (id) => ({ ...detail, id, name: `ap-${id}` }))
+    if (trigger !== 'initial') {
+      api.overhead.mockResolvedValueOnce(report(1, 'first-device-package'))
+      api.setPollInterval.mockImplementationOnce(() => trigger === 'pending interval change'
+        ? new Promise((resolve) => { finishInterval = () => resolve({}) })
+        : Promise.resolve({}))
+    }
+    if (trigger !== 'pending interval change') {
+      api.overhead.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve }))
+    }
+    api.overhead.mockResolvedValueOnce(report(2, 'second-device-package'))
+    const props = { onClose: vi.fn(), onChanged: vi.fn(), onRemoved: vi.fn() }
+    const { rerender } = render(<DeviceDetailPanel id={1} {...props} />)
+    await waitFor(() => expect(api.overhead).toHaveBeenCalledWith(1))
+    if (trigger !== 'initial') {
+      fireEvent.click(await screen.findByRole('button', { name: '2 min' }))
+      if (trigger === 'interval change') await waitFor(() => expect(api.overhead).toHaveBeenCalledTimes(2))
+    }
+
+    rerender(<DeviceDetailPanel id={2} {...props} />)
+    expect(await screen.findByText('second-device-package')).toBeTruthy()
+    await act(async () => {
+      if (trigger === 'pending interval change') finishInterval()
+      else finishFirst(report(1, 'first-device-package'))
+    })
+
+    const panel = screen.getByRole('dialog', { name: 'ap-2' })
+    expect(within(panel).getByText('second-device-package')).toBeTruthy()
+    expect(within(panel).queryByText('first-device-package')).toBeNull()
+    expect(api.overhead.mock.lastCall?.[0]).toBe(2)
+  })
+
   it('does not mislabel explicit non-poll actions as unexpected logins', async () => {
     api.overhead.mockResolvedValue({
       overhead: {
@@ -2507,9 +2630,33 @@ describe('Devices — re-probe panel', () => {
     await openPanel()
 
     const disabled = await screen.findByRole('button', { name: 'LLDP installation disabled for monitor-only' }) as HTMLButtonElement
+    expect(screen.getByRole('group', { name: 'Information: Optional LLDP topology capability' }).getAttribute('data-compact')).toBe('true')
     expect(disabled.disabled).toBe(true)
     expect(screen.getByText(/observes existing capabilities and never offers an installation/i)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /show exact install plan/i })).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it('keeps an LLDP capability read failure visible rather than calling it optional absence', async () => {
+    api.lldpCapability.mockRejectedValueOnce(new Error('LLDP record unavailable'))
+    await openPanel()
+    const notice = await screen.findByRole('group', { name: 'Warning: Optional LLDP topology capability' })
+    expect(notice.getAttribute('data-compact')).toBeNull()
+    expect(notice.textContent).toMatch(/needs attention/)
+    expect(screen.getByText('LLDP record unavailable').closest('[role="alert"]')).toBeTruthy()
+    expect(screen.queryByText('Optional wired-neighbour discovery is not installed.')).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it.each(['installing', 'removing'])('keeps an active LLDP %s operation marked as needing attention', async (state) => {
+    api.lldpCapability.mockResolvedValueOnce({
+      device_id: 1, name: 'ap-1', state, requested_packages: ['lldpd'], added_packages: [],
+    })
+    await openPanel()
+    const notice = await screen.findByRole('group', { name: 'Warning: Optional LLDP topology capability' })
+    expect(notice.getAttribute('data-compact')).toBeNull()
+    expect(notice.textContent).toMatch(/change is in progress/)
+    expect(notice.textContent).toContain(state)
     expect(api.changeLLDPCapability).not.toHaveBeenCalled()
   })
 
@@ -2532,6 +2679,7 @@ describe('Devices — re-probe panel', () => {
     const lldp = await screen.findByRole('button', { name: 'LLDP actions blocked' }) as HTMLButtonElement
     expect(acl.disabled).toBe(true)
     expect(lldp.disabled).toBe(true)
+    expect(screen.getByRole('group', { name: 'Warning: Optional LLDP topology capability' }).getAttribute('data-compact')).toBeNull()
     expect(screen.getByText(/ACL refresh is disabled because the stored management mode is invalid/i)).toBeTruthy()
     expect(screen.getByText(/LLDP package, service and configuration actions are disabled/i)).toBeTruthy()
     expect(api.refreshACL).not.toHaveBeenCalled()
@@ -2563,20 +2711,29 @@ describe('Devices — re-probe panel', () => {
         service_running: true,
     })
     await openPanel()
-    expect(await screen.findByText(/Adds measured wired-neighbour discovery/)).toBeTruthy()
+    expect(await screen.findByText('Optional wired-neighbour discovery is not installed.')).toBeTruthy()
+    const optionalNotice = screen.getByRole('group', { name: 'Information: Optional LLDP topology capability' })
+    expect(optionalNotice.getAttribute('data-compact')).toBe('true')
+    expect(optionalNotice.textContent).toMatch(/leave it uninstalled if you do not need that evidence/)
     const capabilityDetails = screen.getByText('What this installs and rolls back').closest('details') as HTMLDetailsElement
     const review = screen.getByText('Review LLDP installation')
     expect(capabilityDetails.open).toBe(false)
     expect(review.closest('details')).toBeNull()
+    fireEvent.click(within(optionalNotice).getByText('What this installs and rolls back'))
+    expect(capabilityDetails.open).toBe(true)
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+    expect(screen.queryByRole('checkbox', { name: /authorize refreshing the router's package index cache/i })).toBeNull()
     fireEvent.click(review)
     expect(capabilityDetails.open).toBe(true)
+    expect(screen.getByRole('group', { name: 'Warning: Optional LLDP topology capability' }).getAttribute('data-compact')).toBeNull()
     const planButton = screen.getByRole('button', {
       name: 'Refresh index and show exact install plan',
     }) as HTMLButtonElement
     expect(planButton.disabled).toBe(true)
     const indexAcknowledgement = screen.getByRole('checkbox', {
       name: /authorize refreshing the router's package index cache/i,
-    })
+    }) as HTMLInputElement
+    expect(indexAcknowledgement.checked).toBe(false)
     expect(indexAcknowledgement.parentElement?.querySelector(':scope > span code')?.textContent).toBe('lldpd')
     fireEvent.click(indexAcknowledgement)
     fireEvent.click(planButton)
@@ -4755,6 +4912,16 @@ describe('Unadopt', () => {
 })
 
 describe('Logs', () => {
+  it('keeps a failed log request visible instead of presenting it as a history limitation', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockRejectedValueOnce(new Error('event store unavailable'))
+    render(<Logs />)
+    expect((await screen.findByRole('alert')).textContent).toContain('event store unavailable')
+    expect(screen.getByText('Events for these filters could not be loaded.')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: /Router log coverage/ })).toBeNull()
+    expect(screen.queryByText('No general events were observed.')).toBeNull()
+  })
+
   it('distinguishes observed-empty router logs from missing coverage', async () => {
     api.devices.mockResolvedValue({ devices: [] })
     api.events.mockResolvedValueOnce({
@@ -4778,14 +4945,16 @@ describe('Logs', () => {
     expect(sourceNotice.getAttribute('data-compact')).toBe('true')
     const coverageNotice = await screen.findByRole('group', { name: 'Warning: Router log coverage' })
     expect(coverageNotice.getAttribute('data-compact')).toBe('true')
-    expect(within(coverageNotice).getByText(/Some router log intervals are unverified/)).toBeTruthy()
-    expect(within(coverageNotice).getByText(/“No events” cannot be confirmed/)).toBeTruthy()
+    expect(within(coverageNotice).getByRole('status').textContent).toMatch(/Some router log coverage is missing or out of date/)
     expect(within(coverageNotice).getByRole('button', { name: 'Check again' })).toBeTruthy()
     const coverageToggle = within(coverageNotice).getByText('More information about log coverage')
-    expect(coverageToggle.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(coverageToggle, { detail: 0 })
-    const coverageDetails = screen.getByRole('dialog', { name: 'Warning: Router log coverage' })
+    const coverageDetails = coverageToggle.closest('details') as HTMLDetailsElement
+    expect(coverageDetails.open).toBe(false)
+    fireEvent.click(coverageToggle)
+    expect(coverageDetails.open).toBe(true)
     expect(within(coverageDetails).getByText(/has not been observed on AP one/)).toBeTruthy()
+    expect(within(coverageDetails).getByText(/“No events” cannot be confirmed/)).toBeTruthy()
+    expect(within(coverageDetails).getByText(/Restore connectivity if it is offline/)).toBeTruthy()
     expect(screen.queryByText('No general events were observed.')).toBeNull()
     unmount()
 
@@ -4805,7 +4974,45 @@ describe('Logs', () => {
     })
     render(<Logs />)
     expect(await screen.findByText('No general events were observed.')).toBeTruthy()
-    expect(screen.queryByText(/Router log coverage is incomplete/)).toBeNull()
+    expect(screen.queryByRole('group', { name: /Router log coverage/ })).toBeNull()
+  })
+
+  it.each([
+    { kind: 'historical', gaps: ['router log continuity has a retained gap on AP one'], informational: true },
+    { kind: 'stale', gaps: ['router log coverage is stale on AP one'], informational: false },
+    { kind: 'mixed', gaps: ['router log continuity has a retained gap on AP one', 'router log coverage is stale on AP two'], informational: false },
+    { kind: 'unknown', gaps: ['an unrecognized source limitation'], informational: false },
+  ])('keeps $kind coverage honest when every router has a stored cursor', async ({ gaps, informational }) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockResolvedValueOnce({
+      events: [], total: 0, limit: 100, scope: 'general', next_before: null,
+      facets: { category: [], severity: [] },
+      coverage: { complete: false, expected_devices: 2, observed_devices: 2, gaps },
+    })
+    render(<Logs />)
+    const notice = await screen.findByRole('group', {
+      name: `${informational ? 'Information' : 'Warning'}: Router log coverage`,
+    })
+    expect(within(notice).getByRole('status').textContent).toBe(informational
+      ? 'Current collection is up to date. Some earlier log history is unavailable.'
+      : 'Some router log coverage is missing or out of date.')
+    expect(notice.textContent).not.toMatch(/All .* routers responded/)
+    const toggle = within(notice).getByText('More information about log coverage')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    for (const gap of gaps) expect(within(details).getByText(gap)).toBeTruthy()
+    expect(details.textContent).toMatch(/“No events” cannot be confirmed/)
+    if (informational) {
+      expect(details.textContent).toMatch(/do not reconstruct that interval/)
+      expect(details.textContent).toMatch(/expires 24 hours after the last discontinuity/)
+      expect(within(notice).queryByRole('button', { name: 'Check again' })).toBeNull()
+    } else {
+      expect(details.textContent).toMatch(/Restore connectivity if it is offline/)
+      expect(within(notice).getByRole('button', { name: 'Check again' })).toBeTruthy()
+    }
+    expect(screen.queryByText('No general events were observed.')).toBeNull()
   })
 
   const ev = (over: Record<string, unknown> = {}) => ({

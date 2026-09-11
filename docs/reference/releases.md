@@ -1,7 +1,8 @@
 # Release notes
 
-The documentation describes the current stable patch release, **v0.1.5**,
-published September 10, 2026. Release artifacts, checksums, container digests,
+The documentation covers the current stable patch release, **v0.1.5**,
+published September 10, 2026, with explicitly marked development additions.
+Release artifacts, checksums, container digests,
 signatures, and attached notes on the GitHub release are the publication source
 of truth.
 
@@ -59,6 +60,71 @@ configures no router and does not infer source provenance from global client
 rows. Preserve the complete pre-upgrade database, keyring, and runtime
 passphrase recovery unit: v0.1.4 cannot open schema 23, so changing only the
 binary or image tag is not a rollback.
+
+## Development after v0.1.5
+
+The following changes are in current development source. They do not alter the
+published v0.1.5 artifacts or declare a new release. Follow a future release's
+notes before expecting them in a stable binary or image.
+
+### Statistics and clearer history
+
+The read-only [Statistics workspace](../guide/statistics.md) provides 6-hour
+through 30-day stored WAN, system, exact-interface, and available stable-radio
+rollups. It defaults to six hours, uses lines and lighter min/max shading, and
+keeps small markers for isolated measurements rather than every connected
+sample. Expand **History gaps** for exact observed/expected interval counts and
+**About history and missing samples** for collection guidance.
+
+Missing intervals remain blank, not zero traffic or proved downtime. The page
+does not focus devices, backfill uncollected history, or turn rate samples into
+traffic accounting.
+
+### Accounts and controller navigation
+
+The bottom **Controller** sidebar group contains **Settings**, **Accounts**,
+and **Logs**, in that order. [Accounts](../operations/accounts.md) opens
+**My account** for every signed-in role and adds **Manage accounts** only for
+owners. Settings keeps Network, permission-gated Diagnostics, and owner-only
+Backup & Restore. Account forms align their role selector with the other
+fields and associate the selected role's description with the control for
+keyboard and screen-reader use. Roles, account data, reauthentication,
+session revocation, and server authorization are unchanged.
+
+### Adoption and source information
+
+The [adoption workflow](../getting-started/first-adoption.md) groups address and
+inspection, device responsibilities, and access review into clearer steps.
+**Install the oonfeeWRT controller access payload?** now contains the short
+explanation and expandable **View access details**. Consent stays required;
+adoption still installs only the reviewed scoped login and ACL, not packages
+or firmware, and does not apply network configuration.
+
+Routine limitations—fresh collection with earlier log gaps, unavailable DFS
+classification, and uninstalled optional LLDP—use compact information with
+source explanations and remedies. Current missing/stale log coverage,
+collection failures, and risky or destructive actions retain warnings and
+safety gates. [Troubleshooting](./troubleshooting.md#understand-notices-without-treating-every-gap-as-a-fault)
+explains what can be fixed and which missing evidence cannot be recovered.
+
+### Frontend and backend correctness
+
+- Empty discovery and topology collections serialize consistently and render
+  safe empty states; null collections from older responses no longer crash
+  the affected views. Empty telemetry inventories are returned as arrays.
+- A delayed management-overhead response cannot replace evidence for a
+  different device after switching the detail panel.
+- Retained Statistics samples stay tied to their device, metric, and exact
+  series key. A failed replacement request cannot relabel the previous
+  gateway's, interface's, or metric's history as the newly selected source.
+- Current client association evidence governs attribution. An old AP's retry
+  bucket is not shown as a measurement from the new AP after a roam; missing
+  or ambiguous live signal remains unavailable.
+- Device-detail series lookup failures are surfaced as errors instead of
+  silently masquerading as an empty metric inventory.
+
+These fixes do not add router write authority, new measurement sources, or
+broader hardware-validation claims.
 
 ## Earlier releases
 

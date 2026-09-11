@@ -142,6 +142,10 @@ export function Logs({ onConfigureIPv6 }: { onConfigureIPv6?: () => void }) {
     complete: false, expected_devices: 0, observed_devices: 0,
     gaps: ['router log coverage was not reported by this controller response'],
   }
+  // Stored cursors count as observed even when stale. Only the API's explicit
+  // retained-continuity reason proves these gaps are entirely historical.
+  const historyGapsOnly = coverage.gaps.length > 0 && coverage.gaps.every((gap) =>
+    gap.startsWith('router log continuity has a retained gap on '))
   const rows = page?.events ?? []
   const ipv6RAConditions = (page?.conditions ?? []).filter(
     (condition) => condition.state === 'recent',
@@ -340,33 +344,47 @@ export function Logs({ onConfigureIPv6 }: { onConfigureIPv6?: () => void }) {
             <div className="logs-notice-row">
               <Notice
                 compact
-                popoverDetails
+                tone={historyGapsOnly ? 'accent' : 'warning'}
                 component="Router log coverage"
                 summary={(
                   <div role="status">
-                    <strong>Some router log intervals are unverified.</strong>{' '}
-                    {coverage.observed_devices < coverage.expected_devices
-                      ? `${coverage.observed_devices} of ${coverage.expected_devices} expected routers reported coverage.`
-                      : `All ${coverage.expected_devices} expected routers responded, but at least one interval lacks positive coverage evidence.`}
-                    {' '}“No events” cannot be confirmed for those intervals.
+                    {historyGapsOnly
+                      ? 'Current collection is up to date. Some earlier log history is unavailable.'
+                      : 'Some router log coverage is missing or out of date.'}
                   </div>
                 )}
                 details={(
                   <div>
                     <p style={{ marginTop: 0 }}>
-                      Coverage describes what the controller successfully checked; it is
-                      not a warning that router logs are growing without a limit.
+                      {coverage.observed_devices} of {coverage.expected_devices} expected routers
+                      have stored coverage evidence. “No events” cannot be confirmed for the
+                      unverified intervals below. Router logs remain bounded.
                     </p>
                     {coverage.gaps.length > 0
                       ? <ul style={{ margin: 0, paddingLeft: 20 }}>{coverage.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
                       : <p>The controller response did not include a per-router explanation.</p>}
-                    <p style={{ marginBottom: 0 }}>
-                      Restore reachability or credentials for a named router, then check
-                      again after its next collection cycle.
-                    </p>
+                    {historyGapsOnly ? (
+                      <p style={{ marginBottom: 0 }}>
+                        The controller could not bridge an earlier interval in the router logs.
+                        Current successful reads do not reconstruct that interval. Keep the
+                        controller running and the router reachable to reduce new gaps; if gaps
+                        recur, review unusually high log volume. Collection continues normally;
+                        the retained-gap indicator expires 24 hours after the last discontinuity
+                        if no new gap occurs.
+                      </p>
+                    ) : (
+                      <p style={{ marginBottom: 0 }}>
+                        Open the named router in Devices and review its connection and
+                        “What the controller cannot read here.” Restore connectivity if it is
+                        offline; review controller access only for a reported permission denial.
+                        Collection retries on the normal polling cycle. Check again refreshes
+                        this view, not the router. Any earlier retained gaps remain historical
+                        limits even after collection recovers.
+                      </p>
+                    )}
                   </div>
                 )}
-                actions={<Button onClick={() => void load()}>Check again</Button>}
+                actions={!historyGapsOnly ? <Button onClick={() => void load()}>Check again</Button> : undefined}
                 closedLabel="More information about log coverage"
                 openLabel="Hide log coverage information"
               />

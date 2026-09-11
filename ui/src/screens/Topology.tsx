@@ -200,6 +200,29 @@ function nodeLabel(nodes: Map<string, TopologyNode>, id: string) {
   return nodes.get(id)?.name || id
 }
 
+function normalizeTopologySnapshot(snapshot: TopologySnapshot): TopologySnapshot {
+  const edges = (value: TopologyEdge[] | null | undefined) => (Array.isArray(value) ? value : []).map((edge) => ({
+    ...edge,
+    evidence: (Array.isArray(edge.evidence) ? edge.evidence : [])
+      .filter((item) => item != null && typeof item === 'object')
+      .map((item) => ({
+        ...item,
+        detail: item.detail && typeof item.detail === 'object' ? item.detail : {},
+      })),
+    ambiguities: (Array.isArray(edge.ambiguities) ? edge.ambiguities : [])
+      .filter((ambiguity) => typeof ambiguity === 'string'),
+  }))
+
+  return {
+    ...snapshot,
+    nodes: Array.isArray(snapshot.nodes) ? snapshot.nodes : [],
+    edges: edges(snapshot.edges),
+    last_known_edges: edges(snapshot.last_known_edges),
+    gaps: (Array.isArray(snapshot.gaps) ? snapshot.gaps : [])
+      .filter((gap) => typeof gap === 'string'),
+  }
+}
+
 function detailValue(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(detailValue).join(', ')}]`
   if (value && typeof value === 'object') {
@@ -292,10 +315,11 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
           ? historyRange.from
           : to - historyRange.hours * hourMillis
         : to
-      const next = mode === 'current'
+      const response = mode === 'current'
         ? await api.topology(undefined, controller.signal)
         : await api.topologyHistory(from, to, controller.signal)
       if (request !== generation.current) return
+      const next = normalizeTopologySnapshot(response)
       const loadedFrom = mode === 'current' ? next.at : from
       setLoaded({ query, data: next, from: loadedFrom, to })
       if (mode === 'history') setHistoryAt(Math.max(loadedFrom, to - 1))

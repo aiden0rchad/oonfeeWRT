@@ -96,7 +96,18 @@ docker compose logs --tail=100 oonfeewrt
 
 The version command must print `v0.1.5`, and the service must report healthy.
 
-In the browser, confirm that the left navigation shows **Dashboard**, **Topology**, **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Settings**, **Adopt a device**, and **Logs**.
+In a stable v0.1.5 installation, confirm that the left navigation shows
+**Dashboard**, **Topology**, **Radios**, **Devices**, **Client Devices**,
+**Policy Engine**, **Settings**, **Adopt a device**, and **Logs**.
+
+Current development builds additionally show **Statistics** after Dashboard,
+move **Adopt a device** into the primary group, and place **Settings**,
+**Accounts**, and **Logs**, in that order, in a **Controller** group at the foot
+of the sidebar. The group remains reachable by scrolling on a short screen.
+**Accounts** opens your identity, password, and sessions; owners also get a
+**Manage accounts** tab. In v0.1.5 these controls remain in Settings. See
+[Accounts, roles, and sessions](../operations/accounts.md) for both navigation
+paths.
 
 ## If it does not start
 

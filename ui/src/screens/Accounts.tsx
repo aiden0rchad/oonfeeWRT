@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { ApiError, api } from '../lib/api'
 import type {
   Account,
@@ -506,11 +506,12 @@ function RolePicker({
   disabled: boolean
   onChange: (role: AccountRole) => void
 }) {
-  return <label className="account-picker">
-    <span>{label}</span>
-    <select value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as AccountRole)}>
+  const id = useId()
+  return <div className="account-picker">
+    <label htmlFor={id}>{label}</label>
+    <select id={id} aria-describedby={`${id}-description`} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as AccountRole)}>
       {roles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
     </select>
-    <small>{roles.find((role) => role.value === value)?.description}</small>
-  </label>
+    <small id={`${id}-description`}>{roles.find((role) => role.value === value)?.description}</small>
+  </div>
 }

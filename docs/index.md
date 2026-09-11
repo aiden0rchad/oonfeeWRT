@@ -29,7 +29,7 @@ features:
   - title: Preview, rollback, confirm
     details: Configuration is reviewed first, staged through UCI, protected by OpenWrt's rollback timer, and confirmed only after the controller reads the expected state.
   - title: Useful fleet visibility
-    details: See Internet health and throughput when one usable main-table WAN is proved and its exact runtime device has RX/TX history, including PPPoE, plus clients, device telemetry, topology history, radios, events, management overhead, and controller-host speed tests.
+    details: See Internet health and throughput when one usable main-table WAN is proved and its exact runtime device has RX/TX history, including PPPoE, plus clients, device telemetry, topology history, radios, events, management overhead, and controller-host speed tests. Development builds add 6-hour through 30-day Statistics.
   - title: Local security boundaries
     details: Local accounts and roles, scoped router access, encrypted stored secrets, redacted diagnostics, and no cloud broker or controller-authored router package.
   - title: Recovery designed in
@@ -44,6 +44,15 @@ adoption, multi-subnet observation, reusable exact-MAC policy sets, and a
 consistent responsive UI. Phase 5 flow visibility remains feasibility work;
 no DPI package is installed. [See what changed](/reference/releases) or
 [follow the schema-safe upgrade guide](/installation/upgrades).
+:::
+
+::: info Current development
+Source after v0.1.5 adds a read-only, gap-aware
+[Statistics workspace](/guide/statistics) for retained WAN and device
+telemetry, a separate [Accounts workspace](/operations/accounts), clearer
+adoption consent, compact source explanations, and empty-state/telemetry
+reliability fixes. These changes are not included in the published v0.1.5
+artifacts. [Read the development change summary](/reference/releases#development-after-v0-1-5).
 :::
 
 ## One control plane, explicit boundaries
@@ -103,7 +112,7 @@ with a separate plan and rollback.
   </div>
   <div class="capability-card">
     <h3>Devices and clients</h3>
-    <p>Firmware, load, memory, throughput, radio series, management overhead, adjustable polling, client presence and attribution, and a joined observability workspace.</p>
+    <p>Firmware, load, memory, throughput, radio series, management overhead, adjustable polling, client presence and attribution, and a joined observability workspace. Current development adds gap-aware historical Statistics.</p>
   </div>
   <div class="capability-card">
     <h3>Topology and RF</h3>

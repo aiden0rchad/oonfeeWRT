@@ -89,6 +89,12 @@ Coverage markers distinguish observed buckets from unavailable ones. A gap is
 not a zero. Use the table when you need exact timestamps and values; use the
 chart to correlate simultaneous changes.
 
+In current development builds after v0.1.5, open **Statistics** when you need
+the same proved WAN source over **24h**, **7d**, or **30d**, want explicit
+bucket-coverage counts, or need to compare it with the Gateway's system,
+interface, and available stable-radio history. See
+[Statistics and historical telemetry](./statistics.md).
+
 ## Run a controller speed test
 
 The speed test measures the path from the **controller host or container** to
@@ -170,6 +176,7 @@ When the Dashboard looks unhealthy:
 
 ## Related guides
 
+- [Statistics and historical telemetry](./statistics.md)
 - [Clients and topology](./clients-topology.md)
 - [Radios and channel planning](./radios.md)
 - [Logs and diagnostics](./logs-diagnostics.md)

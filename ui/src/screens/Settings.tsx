@@ -23,8 +23,6 @@ import {
   Banner, Button, Card, DataGrid, Field, Notice, PageHeader, Prop, SlideOver, Toggle, Unknown,
 } from '../components/ui'
 import { ago } from '../components/Chart'
-import { Account } from './Account'
-import { Accounts } from './Accounts'
 import { Diagnostics } from './Diagnostics'
 import { Backups } from './Backups'
 
@@ -108,15 +106,13 @@ function applyWriteSummary(
   return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
 }
 
-type SettingsTab = 'network' | 'account' | 'accounts' | 'diagnostics' | 'backups'
+type SettingsTab = 'network' | 'diagnostics' | 'backups'
 
 export function Settings({
   devices,
   devicesLoaded = true,
   devicesError = '',
   session,
-  onSessionChange,
-  onCurrentSessionRevoked,
   initialNetworkSection = null,
   onInitialNetworkSectionHandled,
 }: {
@@ -124,28 +120,21 @@ export function Settings({
   devicesLoaded?: boolean
   devicesError?: string
   session?: SessionInfo
-  onSessionChange?: (session: SessionInfo) => void
-  onCurrentSessionRevoked?: () => void
   initialNetworkSection?: 'ipv6' | null
   onInitialNetworkSectionHandled?: () => void
 }) {
   const [tab, setTab] = useState<SettingsTab>('network')
-  const accountTabs = Boolean(session)
-  const accountsTab = session?.role === 'owner'
   const diagnosticsTab = session?.role === 'owner' || session?.role === 'admin'
   const backupsTab = session?.role === 'owner'
 
   useEffect(() => {
-    if ((!accountTabs && tab === 'account') || (!accountsTab && tab === 'accounts') ||
-      (!diagnosticsTab && tab === 'diagnostics') || (!backupsTab && tab === 'backups')) {
+    if ((!diagnosticsTab && tab === 'diagnostics') || (!backupsTab && tab === 'backups')) {
       setTab('network')
     }
-  }, [accountTabs, accountsTab, backupsTab, diagnosticsTab, tab])
+  }, [backupsTab, diagnosticsTab, tab])
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'network', label: 'Network' },
-    ...(accountTabs ? [{ id: 'account' as const, label: 'My account' }] : []),
-    ...(accountsTab ? [{ id: 'accounts' as const, label: 'Accounts' }] : []),
     ...(diagnosticsTab ? [{ id: 'diagnostics' as const, label: 'Diagnostics' }] : []),
     ...(backupsTab ? [{ id: 'backups' as const, label: 'Backup & Restore' }] : []),
   ]
@@ -157,9 +146,7 @@ export function Settings({
         ? 'Desired network state and controller operations.'
         : tab === 'diagnostics'
           ? 'Redacted, stored-only support bundles.'
-          : tab === 'backups'
-            ? 'Encrypted controller backup, preview, and restore.'
-          : 'Controller-local identity and access.'}
+          : 'Encrypted controller backup, preview, and restore.'}
     />
     <div className="settings-tabs" role="tablist" aria-label="Settings sections">
       {tabs.map((item) => <button
@@ -201,19 +188,9 @@ export function Settings({
           />
         : devicesError
           ? <div role="alert"><Banner tone="critical">
-              Device inventory is unavailable: {devicesError}. My account remains available above.
+              Device inventory is unavailable: {devicesError}. Account settings remain available in Accounts in the sidebar.
             </Banner></div>
           : <div role="status">Loading device inventory…</div>)}
-      {tab === 'account' && session && onCurrentSessionRevoked && (
-        <Account session={session} onCurrentSessionRevoked={onCurrentSessionRevoked} />
-      )}
-      {tab === 'accounts' && session?.role === 'owner' && onSessionChange && onCurrentSessionRevoked && (
-        <Accounts
-          session={session}
-          onSessionChange={onSessionChange}
-          onCurrentSessionRevoked={onCurrentSessionRevoked}
-        />
-      )}
       {tab === 'diagnostics' && diagnosticsTab && <Diagnostics />}
       {tab === 'backups' && backupsTab && session && <Backups session={session} />}
     </div>

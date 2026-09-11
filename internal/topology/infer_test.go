@@ -22,6 +22,20 @@ func observedSource(deviceID int64, source string) model.TopologySourceObservati
 	}
 }
 
+func TestCurrentPresentationEdgesPreservesEmptyAmbiguityArray(t *testing.T) {
+	edges := []model.TopologyEdge{{
+		ChildNode:   "device:" + c6MAC,
+		ParentNode:  "device:" + wrtMAC,
+		Evidence:    []model.TopologyEvidence{},
+		Ambiguities: []string{},
+	}}
+
+	got := CurrentPresentationEdges(edges, nil, 200, 50)
+	if len(got) != 1 || got[0].Ambiguities == nil {
+		t.Fatalf("current presentation ambiguities must remain an empty array: %#v", got)
+	}
+}
+
 func TestInferResolvesSeveralC6MACsToOneStableDeviceNode(t *testing.T) {
 	input := InferenceInput{
 		At: 1_787_100_000_000,

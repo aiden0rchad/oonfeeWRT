@@ -1,6 +1,6 @@
 # Where this project is
 
-> **Current release status — 2026-09-10**
+> **Current release status — reviewed 2026-09-11**
 >
 > The current public release is
 > [`v0.1.5`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5),
@@ -35,6 +35,31 @@
 > are relative to their documented checkpoint unless this banner explicitly
 > supersedes them. The active public release and schema are v0.1.5/schema 23;
 > §5br remains the historical schema-19 live-lab checkpoint.
+
+## Current development after v0.1.5 — 2026-09-11
+
+Current source adds the read-only Statistics workspace with a six-hour default,
+gap-preserving trends, exact history coverage, and per-source limitations.
+Accounts moves out of Settings into its own bottom-sidebar workspace, between
+Settings and Logs. It retains My account for all signed-in users and
+owner-only Manage accounts; the role selector has aligned fields and
+accessible contextual help.
+
+The adoption flow groups its scoped-access explanation with explicit consent.
+Routine historical/source limitations have compact expandable explanations
+and recovery guidance, while current failures and write-risk gates remain
+visible. Backend/frontend fixes preserve empty collection contracts, prevent
+late device-overhead responses from crossing device selection, keep current
+client association and retry attribution consistent, and expose series lookup
+failures rather than presenting them as no data.
+
+These are source changes after the public v0.1.5 tag, not a new release or
+replacement for its immutable artifacts. They add no router-write authority
+and do not close the outstanding hardware proofs above. See the
+[development change summary](../reference/releases.md#development-after-v0-1-5)
+and linked operating guides; the historical handoff below remains unchanged.
+
+---
 
 Written 2026-08-13 as a handoff, and rewritten as the work moved. Current
 through **2026-08-23**, with the earlier Phase-3 hardware endpoint in §5bg, the

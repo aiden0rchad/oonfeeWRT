@@ -174,6 +174,12 @@ Zero is a measurement. Unavailable means the controller could not obtain or
 trust the measurement. Treating a missing driver counter or failed RPC as zero
 would produce confident but false charts and health claims.
 
+The Statistics workspace added in development after v0.1.5 applies the same
+rule across its complete requested time window. An absent bucket breaks the
+line and lowers its observed/expected coverage; it is not converted to zero or
+joined to the next known value. See
+[Statistics and historical telemetry](../guide/statistics.md).
+
 ## How does oonfeeWRT choose the WAN interface?
 
 The selector introduced in v0.1.3 reads the installed IPv4 route table and
@@ -336,6 +342,11 @@ Defaults include five-minute metrics for 14 days, hourly metrics for 396 days,
 OpenWrt logs for 24 hours, closed topology intervals for 31 days, 100,000
 controller/audit events, and the newest three terminal speed tests. See the
 complete [retention table](../concepts/data-retention.md).
+
+The post-v0.1.5 development Statistics page offers 6h, 24h, and 7d views at the
+server-selected five-minute resolution and a 30d view at hourly resolution. It
+reads completed stored rollups only; opening the page does not focus devices or
+preserve raw samples.
 
 ## Can I downgrade from v0.1.5?
 

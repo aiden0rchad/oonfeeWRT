@@ -33,6 +33,32 @@ Released September 10, 2026. [Read the complete release notes](docs/releases/v0.
 - A documented Phase 5 flow-visibility feasibility boundary. No DPI or flow
   package is installed or shipped.
 
+### Current development after v0.1.5
+
+The current source includes these changes beyond the published release:
+
+- A read-only [**Statistics** workspace](docs/guide/statistics.md) for 6-hour
+  through 30-day WAN, system, exact-interface, and available stable-radio
+  history. Clean trend lines retain missing-data gaps and exact coverage
+  details; the default view is six hours.
+- A dedicated [**Accounts** workspace](docs/operations/accounts.md), between
+  Settings and Logs at the bottom of the sidebar, for your profile, password,
+  and sessions, plus owner-only account management. Role choices include
+  readable permission summaries without changing existing access controls.
+- A clearer [adoption workflow](docs/getting-started/first-adoption.md) with
+  the scoped-access explanation and explicit consent together. Routine source
+  limitations use compact information with
+  [explanations and remedies](docs/reference/troubleshooting.md#understand-notices-without-treating-every-gap-as-a-fault);
+  current failures and safety gates remain visible.
+- More resilient empty-state handling for discovery and topology, and fixes
+  that prevent late device responses or retained measurements from another AP
+  being attributed to the currently selected device or client association.
+
+These changes are available in current source builds, not the published
+v0.1.5 binary or container image. See the
+[development change summary](https://aiden0rchad.github.io/oonfeeWRT/reference/releases#development-after-v0-1-5)
+for scope and limitations; this is not a new version release.
+
 ## Preview
 
 [![oonfeeWRT live dashboard showing Internet health, speed tests, and fleet status](docs/images/dashboard-overview.jpg)](docs/images/dashboard-overview.jpg)
@@ -50,6 +76,10 @@ Released September 10, 2026. [Read the complete release notes](docs/releases/v0.
   route—including PPPoE runtime devices—and the exact runtime device exists in
   RX/TX history, plus topology, clients, radios, events, and controller-host
   speed tests.
+- On the current development branch, a dedicated Statistics workspace for
+  retained WAN, system, interface, and capability-dependent radio rollups. It
+  uses the proved exact WAN series, labels five-minute or hourly resolution,
+  and leaves missing buckets blank instead of estimating them.
 - Reviewed site configuration for networks, VLANs, DHCP, firewall zones, and
   WLANs, plus explicit per-network IPv6 **Router managed**, **Prefix
   delegation**, or **Disabled** policy, with OpenWrt's rollback timer protecting
