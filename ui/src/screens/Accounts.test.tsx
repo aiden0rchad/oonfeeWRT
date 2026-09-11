@@ -75,6 +75,32 @@ describe('Accounts', () => {
     api.managedAccountSessions.mockResolvedValue({ sessions: [] })
   })
 
+  it('labels role selectors separately from their changing descriptions', async () => {
+    renderAccounts()
+
+    await screen.findByText('router-operator')
+    const createRole = screen.getByRole('combobox', { name: 'Role' })
+    const createDescriptionID = createRole.getAttribute('aria-describedby')
+    expect(createDescriptionID).toBeTruthy()
+    expect(document.getElementById(createDescriptionID!)?.textContent).toBe('View controller state.')
+
+    for (const role of roles) {
+      fireEvent.change(createRole, { target: { value: role.value } })
+      expect(screen.getByRole('combobox', { name: 'Role' })).toBe(createRole)
+      expect(document.getElementById(createDescriptionID!)?.textContent).toBe(role.description)
+    }
+
+    const row = screen.getByText('router-operator').closest('.account-list-row')
+    fireEvent.click(within(row as HTMLElement).getByRole('button', { name: 'Role' }))
+    const newRole = screen.getByRole('combobox', { name: 'New role' })
+    const newDescriptionID = newRole.getAttribute('aria-describedby')
+    expect(newDescriptionID).toBeTruthy()
+    expect(newDescriptionID).not.toBe(createDescriptionID)
+    expect(document.getElementById(newDescriptionID!)?.textContent).toBe('Operate the network.')
+    expect(api.createAccount).not.toHaveBeenCalled()
+    expect(api.setAccountRole).not.toHaveBeenCalled()
+  })
+
   it('runs a named role change and requires a username-specific delete confirmation', async () => {
     api.setAccountRole.mockResolvedValue({
       account: { ...operator, role: 'admin', role_label: 'Administrator' },

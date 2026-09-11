@@ -771,6 +771,48 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
 })
 
 for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 }]) {
+  test(`${viewport.width}px account role fields stay aligned and describe every option in both themes`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    const unexpectedRequests = await installControllerFixture(page, topology)
+    await page.goto('/accounts')
+    await page.getByRole('tab', { name: 'Manage accounts', exact: true }).click()
+    const form = page.locator('.account-create-form')
+    const role = form.getByRole('combobox', { name: 'Role', exact: true })
+    const fields = ['Username', 'Password', 'Repeat password'].map((label) =>
+      form.getByLabel(label, { exact: true }))
+
+    for (const theme of ['dark', 'light']) {
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+      for (const option of accounts.roles) {
+        await role.selectOption(option.value)
+        await expect(role).toHaveAccessibleName('Role')
+        await expect(role).toHaveAccessibleDescription(option.description)
+        const descriptionID = await role.getAttribute('aria-describedby')
+        const description = form.locator('small').filter({ hasText: option.description })
+        await expect(description).toHaveAttribute('id', descriptionID!)
+        await expectWithinMain(page, description)
+        await expectWithinMain(page, role)
+        for (const field of fields) await expectWithinMain(page, field)
+
+        const roleBox = await role.boundingBox()
+        expect(roleBox).not.toBeNull()
+        for (const field of fields) {
+          const fieldBox = await field.boundingBox()
+          expect(fieldBox).not.toBeNull()
+          expect(Math.abs(fieldBox!.height - roleBox!.height)).toBeLessThanOrEqual(1)
+          if (viewport.width >= 1280) {
+            expect(Math.abs(fieldBox!.y - roleBox!.y)).toBeLessThanOrEqual(1)
+          }
+        }
+        const overflow = await readOverflow(page)
+        expect(overflow.document).toBeLessThanOrEqual(1)
+        expect(overflow.main).toBeLessThanOrEqual(1)
+      }
+    }
+    expect(unexpectedRequests).toEqual([])
+  })
+
   for (const accountRole of ['owner', 'viewer'] as const) {
     test(`${viewport.width}px Accounts workspace preserves ${accountRole} access and navigation`, async ({ page }) => {
       await page.setViewportSize(viewport)
