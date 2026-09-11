@@ -30,6 +30,7 @@ vi.mock('./screens/Dashboard', () => ({
     </div>
   ),
 }))
+vi.mock('./screens/Statistics', () => ({ Statistics: () => <h1>Statistics</h1> }))
 vi.mock('./screens/Topology', () => ({ Topology: () => <h1>Topology</h1> }))
 vi.mock('./screens/Radios', () => ({ Radios: () => {
   if (mocks.radioCrash) throw new Error('radio fixture failed')
@@ -121,6 +122,17 @@ describe('App session boundaries', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Open topology' }))
     expect(await screen.findByRole('heading', { name: 'Topology' })).toBeTruthy()
     expect(window.location.pathname).toBe('/topology')
+  })
+
+  it('opens Statistics from navigation with route, title, and focus', async () => {
+    signedIn()
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Statistics' }))
+    const heading = await screen.findByRole('heading', { name: 'Statistics' })
+    await waitFor(() => expect(document.activeElement).toBe(heading))
+    expect(window.location.pathname).toBe('/statistics')
+    expect(document.title).toBe('Statistics — oonfeeWRT')
   })
 
   it('opens Network Settings from an actionable IPv6 log warning', async () => {
@@ -262,8 +274,8 @@ describe('App session boundaries', () => {
     const navigation = await screen.findByRole('navigation', { name: 'Main navigation' })
     expect(navigation.style.width).toBe('64px')
     const routeNames = [
-      'Dashboard', 'Topology', 'Radios', 'Devices', 'Client Devices',
-      'Policy Engine', 'Settings', 'Adopt a device', 'Logs',
+      'Dashboard', 'Statistics', 'Topology', 'Radios', 'Devices', 'Client Devices',
+      'Policy Engine', 'Adopt a device', 'Settings', 'Logs',
     ]
     for (const name of routeNames) {
       const button = screen.getByRole('button', { name })
@@ -274,7 +286,9 @@ describe('App session boundaries', () => {
     }
     const divider = screen.getByRole('separator', { name: 'Controller tools' })
     expect(divider.getAttribute('data-expanded')).toBe('false')
+    expect(screen.getByRole('button', { name: 'Adopt a device' }).nextElementSibling).toBe(divider)
     expect(divider.nextElementSibling).toBe(screen.getByRole('button', { name: 'Settings' }))
+    expect(divider.nextElementSibling?.nextElementSibling).toBe(screen.getByRole('button', { name: 'Logs' }))
     expect(screen.getByRole('button', { name: 'Dashboard' }).getAttribute('aria-current')).toBe('page')
 
     const expand = screen.getByRole('button', { name: 'Expand navigation' })

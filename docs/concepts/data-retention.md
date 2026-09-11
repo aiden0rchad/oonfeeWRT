@@ -64,6 +64,26 @@ more than 14 days ago, or spanning more than seven days, use hourly data. This
 keeps responses bounded and avoids implying that old five-minute points still
 exist.
 
+### How the development Statistics page presents retained metrics
+
+The **Statistics** workspace added in development after v0.1.5 offers 6-hour,
+24-hour, 7-day, and 30-day windows. It uses the resolution returned by the
+server: the first three normally use five-minute rollups and the 30-day view
+uses hourly rollups. It does not upsample hourly history or read raw in-memory
+samples.
+
+Expected-but-unobserved timestamps are drawn as gaps and counted in each
+card's coverage state. The line is the stored average; the shaded band is the
+stored minimum and maximum inside that bucket. The latest value is therefore a
+completed historical bucket, not an instantaneous router reading.
+
+Opening Statistics does not focus a device or increase its polling rate. Some
+radio and station evidence is collected only while another live detail context
+holds the focused tier, so retained radio history can be sparse even when
+baseline system and interface history is present. See
+[Statistics and historical telemetry](../guide/statistics.md) for how to
+interpret each series and its gaps.
+
 ## Client inventory and MAC provenance
 
 The normal client-retention cutoff is 30 days after `last_seen`. Schema 23 also

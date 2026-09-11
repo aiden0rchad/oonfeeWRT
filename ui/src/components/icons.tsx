@@ -1,5 +1,6 @@
 export type NavigationIconName =
   | 'dashboard'
+  | 'statistics'
   | 'topology'
   | 'radios'
   | 'devices'
@@ -20,6 +21,11 @@ export function NavigationIcon({ name }: { name: NavigationIconName }) {
           <rect x="13.5" y="3.5" width="7" height="4.5" rx="1.25" />
           <rect x="13.5" y="11" width="7" height="9.5" rx="1.25" />
           <rect x="3.5" y="13.5" width="7" height="7" rx="1.25" />
+        </>
+      case 'statistics':
+        return <>
+          <path d="M4.5 19.5V13M10 19.5V9M15.5 19.5V5.5M21 19.5V10.5" />
+          <path d="m4.5 9 5.5-4 5.5 2.2L21 3" />
         </>
       case 'topology':
         return <>

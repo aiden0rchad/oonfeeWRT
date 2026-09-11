@@ -426,7 +426,7 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kinds := []telemetry.Kind{
-		telemetry.KindLoad1, telemetry.KindMemPct,
+		telemetry.KindLoad1, telemetry.KindMemUsed, telemetry.KindMemPct,
 		telemetry.KindIfaceRx, telemetry.KindIfaceTx,
 		telemetry.KindAPClients, telemetry.KindAPAirtime, telemetry.KindChanBusy,
 		telemetry.KindStaRSSI, telemetry.KindStaRx, telemetry.KindStaTx,

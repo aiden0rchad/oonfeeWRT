@@ -33,6 +33,14 @@ Released September 10, 2026. [Read the complete release notes](docs/releases/v0.
 - A documented Phase 5 flow-visibility feasibility boundary. No DPI or flow
   package is installed or shipped.
 
+### Current development after v0.1.5
+
+The current source adds a read-only
+[**Statistics** workspace](docs/guide/statistics.md) for 6-hour through 30-day
+WAN, system, exact-interface, and available stable-radio history, with visible
+gaps and rollup coverage. This page is not present in the published v0.1.5
+binary or container image.
+
 ## Preview
 
 [![oonfeeWRT live dashboard showing Internet health, speed tests, and fleet status](docs/images/dashboard-overview.jpg)](docs/images/dashboard-overview.jpg)
@@ -50,6 +58,10 @@ Released September 10, 2026. [Read the complete release notes](docs/releases/v0.
   route—including PPPoE runtime devices—and the exact runtime device exists in
   RX/TX history, plus topology, clients, radios, events, and controller-host
   speed tests.
+- On the current development branch, a dedicated Statistics workspace for
+  retained WAN, system, interface, and capability-dependent radio rollups. It
+  uses the proved exact WAN series, labels five-minute or hourly resolution,
+  and leaves missing buckets blank instead of estimating them.
 - Reviewed site configuration for networks, VLANs, DHCP, firewall zones, and
   WLANs, plus explicit per-network IPv6 **Router managed**, **Prefix
   delegation**, or **Disabled** policy, with OpenWrt's rollback timer protecting

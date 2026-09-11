@@ -155,10 +155,11 @@ proof. The UI must still let an operator clear existing block/fixed-address
 intent one client at a time. Partial client inventory, referenced-set deletion,
 changed compile inputs, and stale Preview state must remain visible blockers.
 
-Dashboard, Devices, Topology, Radios, Policy Engine, Settings, and adoption use
-the shared PageHeader/action hierarchy. Desktop and mobile browser coverage now
-runs in light and dark themes; tokens, focus, status-without-color, and
-responsive no-overflow behavior remain release gates.
+Dashboard, Statistics, Devices, Topology, Radios, Policy Engine, Settings,
+adoption, and Logs use the shared PageHeader/action hierarchy. Desktop and
+mobile browser coverage now runs in light and dark themes; tokens, focus,
+status-without-color, and responsive no-overflow behavior remain release
+gates.
 
 ---
 
@@ -179,16 +180,17 @@ responsive no-overflow behavior remain release gates.
 └──┴──────────────────────┴──────────────────────────────────────────────┘
 ```
 
-**Navigation rail (64px collapsed).** The landed first slice uses one route list;
-a remaining visual-polish pass will split it into two groups separated by a
-divider and add a dedicated hover treatment.
-Phase 4.1 first covers the routes that exist now: Dashboard, Topology, Radios,
-Devices, Client Devices, Policy, Settings, Adopt and Logs. Future routes in §2
-do not get empty placeholders. Use one project-owned inline SVG set—never font
-glyphs or raster icons. Icons are 22–24px in controls at least 44px square, with
-a consistent stroke, visible focus/active states, accessible names and
-tooltips. The rail expands to show text labels and stores its preference locally,
-namespaced by controller and account; collapsed mode remains keyboard-usable.
+**Navigation rail (64px collapsed).** The landed route list is split into a
+primary group—Dashboard, Statistics, Topology, Radios, Devices, Client Devices,
+Policy, and Adopt—and a **Controller** group containing Settings and Logs. The
+Controller divider uses the remaining vertical space to keep that group at the
+foot of a normal-height sidebar; on a short viewport the rail scrolls so every
+route remains reachable. Future routes in §2 do not get empty placeholders.
+Use one project-owned inline SVG set—never font glyphs or raster icons. Icons
+are 22–24px in controls at least 44px square, with a consistent stroke, visible
+focus/active states, accessible names and tooltips. The rail expands to show
+text labels and stores its preference locally, namespaced by controller and
+account; collapsed mode remains keyboard-usable.
 
 **Context rail (264px).** Screen-specific. Two personalities:
 - *Filter rail* (Topology, Clients, Devices, Observability, Insights, Flows,
@@ -231,6 +233,13 @@ their warnings or controls.
 ---
 
 ## 2. Navigation map
+
+Current development source exposes **Dashboard**, **Statistics**, **Topology**,
+**Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Adopt a
+device**, **Settings**, and **Logs**. The stable v0.1.5 artifacts do not contain
+Statistics or the bottom-anchored Controller group. The larger map below is the
+long-term target; entries absent from current development remain specifications
+only.
 
 ```
 Dashboard

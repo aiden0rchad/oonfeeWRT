@@ -103,6 +103,9 @@ overwritten.
 ## What the interface covers
 
 - **Dashboard:** fleet state, clients, Internet reachability and traffic history, topology summary, warnings, and controller-host speed tests.
+- **Statistics (development after v0.1.5):** 6-hour through 30-day stored WAN,
+  system, interface, and available stable-radio rollups, with exact series
+  provenance and visible missing-bucket coverage.
 - **Topology:** current and historical links with source and confidence information. v0.1.4 uses fresh multi-hop FDB/LLDP evidence to avoid presenting one managed device as directly attached to several upstream devices; raw intervals remain available in history.
 - **Radios:** radio inventory, channel plans, utilization evidence, and explicit RF scans.
 - **Devices:** management mode, health, capabilities, collection overhead, polling, ACL refresh, mode-appropriate optional actions, and un-adoption. Older adoptions need a separately reviewed ACL refresh only if you want router-clock status; ordinary management continues without re-adoption.

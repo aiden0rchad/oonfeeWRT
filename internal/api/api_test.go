@@ -766,6 +766,7 @@ func TestDeviceDetailAndSeries(t *testing.T) {
 		{DeviceID: dev.ID, Kind: "iface_rx_bps", Key: "wan", TS: base, Avg: 100, Cnt: 12},
 		{DeviceID: dev.ID, Kind: "chan_busy_pct", Key: "wlan0", TS: base, Avg: 25, Cnt: 12},
 		{DeviceID: dev.ID, Kind: "sta_rssi", Key: "aa:bb", TS: base, Avg: -52, Cnt: 12},
+		{DeviceID: dev.ID, Kind: "sys_mem_used", TS: base, Avg: 64 << 20, Cnt: 12},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -797,8 +798,8 @@ func TestDeviceDetailAndSeries(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &idx); err != nil {
 		t.Fatal(err)
 	}
-	if len(idx.Series) != 3 {
-		t.Fatalf("series index = %v, want exactly the three that have data", idx.Series)
+	if len(idx.Series) != 4 || len(idx.Series["sys_mem_used"]) != 1 || idx.Series["sys_mem_used"][0] != "" {
+		t.Fatalf("series index = %v, want exactly the four that have data including unkeyed memory", idx.Series)
 	}
 
 	w = h.do(http.MethodGet, "/api/v1/devices/9999", nil)

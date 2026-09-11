@@ -60,6 +60,15 @@ rows. Preserve the complete pre-upgrade database, keyring, and runtime
 passphrase recovery unit: v0.1.4 cannot open schema 23, so changing only the
 binary or image tag is not a rollback.
 
+## Development after v0.1.5
+
+Current source adds a read-only **Statistics** workspace for 6-hour through
+30-day stored WAN, system, exact-interface, and available stable-radio rollups.
+It reports observed versus expected bucket coverage, leaves missing buckets as
+chart gaps, and does not focus devices or turn rate history into traffic
+accounting. This workspace is not in the published v0.1.5 artifacts; follow a
+future release's notes before expecting it in a stable binary or image.
+
 ## Earlier releases
 
 - [v0.1.4 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.4.md)

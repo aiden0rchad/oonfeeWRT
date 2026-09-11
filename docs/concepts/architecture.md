@@ -63,11 +63,15 @@ The React/TypeScript interface is built into `ui/dist` and embedded in the Go
 binary. It talks to the controller over same-origin REST and WebSocket
 connections, so a normal deployment has no cross-origin configuration.
 
-The main workspaces are Dashboard, Topology, Radios, Devices, Client Devices,
-Policy Engine, Settings, Adopt a device, and Logs. What appears in those
-workspaces depends on measured device capabilities; unavailable evidence is not
-silently replaced with zeroes. Principal routes share one PageHeader/action
-pattern and have responsive light/dark browser coverage.
+The stable v0.1.5 workspaces are Dashboard, Topology, Radios, Devices, Client
+Devices, Policy Engine, Settings, Adopt a device, and Logs. Current development
+source adds Statistics after Dashboard and moves Settings and Logs into a
+Controller group at the foot of the sidebar. Statistics reads retained WAN,
+system, exact-interface, and stable-radio rollups without raising a device's
+polling tier. What appears in each workspace depends on measured device
+capabilities; unavailable evidence is not silently replaced with zeroes.
+Principal routes share one PageHeader/action pattern and have responsive
+light/dark browser coverage.
 
 ### Store and keyring
 
@@ -243,6 +247,12 @@ written as one SQLite transaction. Older data is folded into hourly rollups.
 The WebSocket carries bounded live `device.stats` frames; durable history still
 comes from SQLite. See [Data retention](./data-retention.md) for the exact
 limits.
+
+The post-v0.1.5 Statistics workspace reads that durable history through bounded
+series queries. It obtains available interface and stable-radio keys from the
+stored per-device series catalog instead of constructing names. Its WAN rate
+queries use only Dashboard's exact proved route-device key; missing timestamps
+are inserted as explicit chart gaps in the browser, not interpolated values.
 
 ### Effective WAN route evidence
 

@@ -7,7 +7,8 @@ description: What oonfeeWRT v0.1.5 can do, what depends on device evidence, and 
 
 This is the user-facing capability boundary for stable **oonfeeWRT v0.1.5**,
 published September 10, 2026. It is intentionally narrower than the long-term
-roadmap.
+roadmap. Rows explicitly labeled **Development** describe current post-release
+source and are not claims about v0.1.5 artifacts.
 
 ## How to read status
 
@@ -19,6 +20,7 @@ roadmap.
 | **Source-tested only** | Automated contracts exist, but the published hardware run did not execute the disruptive or optional operation |
 | **Unverified** | Intended/shipped path lacks the stated physical topology or hardware proof |
 | **Unavailable** | Not provided by v0.1.5 or deliberately outside the project boundary |
+| **Development** | Present in current source after v0.1.5; absent from published v0.1.5 artifacts |
 
 An unavailable measurement is not a zero. The UI distinguishes unknown,
 unsupported, stale, partial, and observed-empty evidence.
@@ -60,6 +62,7 @@ unsupported, stale, partial, and observed-empty evidence.
 |---|---|---|
 | Device inventory, health, model, firmware, uptime | **Shipped, hardware-verified** | Freshness and source gaps remain visible |
 | Interface throughput and durable metric history | **Shipped, hardware-verified** | Five-minute rollups for 14 days; hourly for 396 days |
+| Statistics workspace | **Development** | Read-only 6h/24h/7d/30d views of stored WAN, device, exact-interface, and available stable-radio rollups. It shows observed/expected bucket coverage and breaks lines across gaps; it does not focus devices, infer missing series, total traffic, or provide DPI/application history |
 | Management-overhead readout | **Shipped, hardware-verified** | Reports poll interval, request rate/bytes, failures, installed-capability packages, and only measured attributable CPU estimates |
 | Per-device poll interval override | **Shipped** | UI offers 60 seconds to 15 minutes. `0` clears the override, and values below the controller default do not increase the effective poll rate |
 | OpenWrt log ingestion | **Shipped, hardware-verified** | Once per minute, bounded retention and explicit continuity gaps |
@@ -77,6 +80,7 @@ unsupported, stale, partial, and observed-empty evidence.
 | Effective main-table IPv4 WAN selection | **Shipped, source-tested only** | Selects one usable lowest-metric installed route and maps its kernel device to exactly one active netifd default-route interface; the issue supplied real route evidence, but the v0.1.3 fix is proved by regression fixtures rather than a new published physical-controller run |
 | WAN reachability charts/table | **Shipped, hardware-verified** | Gateway sends three ICMP probes to fixed `1.1.1.1` at most once per minute; this is not full ISP uptime, HTTP, or DNS validation |
 | Dashboard WAN throughput | **Shipped** | Uses the proved kernel route interface only when the exact RX/TX series key exists; otherwise it stays unavailable instead of guessing `wan`, an Ethernet interface, or the first series |
+| Statistics WAN history | **Development** | Reuses the Dashboard's exact current Gateway/route-series proof for traffic and keeps ICMP latency, loss, and reachability scoped to the fixed target. Missing buckets are visible; this is not ISP uptime or multi-WAN/failover history |
 | Device Detail interface chart | **Shipped** | Uses the current proved route-device candidate directly and can remain empty until that series has samples; explicit `null` from a v0.1.3 server prevents guessing, while omission from an older server retains the rolling-version fallback |
 | Controller-host speed test | **Shipped** | Cloudflare endpoint, about 15 MiB, one active job, 30-second hard bound, three terminal results retained |
 | Gateway-run speed test | **Unavailable in v0.1.5** | Would need a separately approved router capability |

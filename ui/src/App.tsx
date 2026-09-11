@@ -4,6 +4,7 @@ import { api, ApiError, onControllerRestart, onUnauthorized } from './lib/api'
 import type { Dashboard as DashboardData, Device, SessionInfo } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
+import { Statistics } from './screens/Statistics'
 import { Devices } from './screens/Devices'
 import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
@@ -17,18 +18,19 @@ import { NavigationIcon } from './components/icons'
 import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
 
-type Screen = 'dashboard' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'settings' | 'adopt' | 'logs'
+type Screen = 'dashboard' | 'statistics' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'logs'
 type SettingsIntent = 'ipv6' | null
 
 const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'statistics', label: 'Statistics', icon: 'statistics' },
   { id: 'topology', label: 'Topology', icon: 'topology' },
   { id: 'radios', label: 'Radios', icon: 'radios' },
   { id: 'devices', label: 'Devices', icon: 'devices' },
   { id: 'clients', label: 'Client Devices', icon: 'clients' },
   { id: 'policy', label: 'Policy Engine', icon: 'policy' },
-  { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'adopt', label: 'Adopt a device', icon: 'adopt' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
 ]
 
@@ -475,6 +477,7 @@ export function App() {
             {screen === 'dashboard' && (dash
               ? <Dashboard data={dash} onOpenTopology={() => navigate('topology')} />
               : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
+            {screen === 'statistics' && <Statistics />}
             {screen === 'topology' && (
               <Topology onReviewCapabilities={() => navigate('devices')} />
             )}

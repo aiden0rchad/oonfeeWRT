@@ -246,7 +246,76 @@ const accounts = {
   ],
 }
 
-async function installControllerFixture(page: Page, topologyResponse: unknown = topology) {
+interface ControllerFixtureOptions {
+  statistics?: boolean
+}
+
+const statisticsDevices = {
+  devices: [{
+    id: 1,
+    mac: '02:00:00:00:01:01',
+    name: 'Gateway',
+    host: '192.168.1.1',
+    role: 'gateway',
+    functions: ['gateway'],
+    management_mode: 'managed',
+    adopted: true,
+    adopted_at: 1_787_000_000,
+    class: 'router',
+    firmware: 'OpenWrt 24.10.2',
+    last_seen: 1_788_000_000,
+    poll_state: 'healthy',
+    status: 'online',
+  }],
+}
+
+const statisticsCatalog = {
+  series: {
+    sys_load1: [''],
+    sys_mem_pct: [''],
+    iface_rx_bps: ['wan'],
+    iface_tx_bps: ['wan'],
+    radio_utilization_pct: ['radio0'],
+  },
+}
+
+function statisticsSeries(url: URL) {
+  const kind = url.pathname.split('/').at(-1) ?? ''
+  const key = url.searchParams.get('key') ?? ''
+  const deviceID = Number(url.searchParams.get('device_id'))
+  const from = Number(url.searchParams.get('from'))
+  const to = Number(url.searchParams.get('to'))
+  const hourly = to - from > 7 * 24 * 60 * 60
+  const resolution = hourly ? '1h' : '5m'
+  const bucketSeconds = hourly ? 60 * 60 : 5 * 60
+  const first = Math.ceil(from / bucketSeconds) * bucketSeconds
+  const points = []
+  let index = 0
+
+  for (let ts = first; ts + bucketSeconds <= to; ts += bucketSeconds, index++) {
+    // One deliberate hole proves the page distinguishes missing evidence from zero.
+    if (index === 2) continue
+    const avg = kind === 'iface_rx_bps' ? 1_250_000 + (index % 12) * 22_000
+      : kind === 'iface_tx_bps' ? 340_000 + (index % 9) * 11_000
+        : kind === 'site_wan_latency_ms' ? 18 + (index % 7) * 0.4
+          : kind === 'site_wan_loss_pct' ? (index % 97 === 0 ? 1.5 : 0)
+            : kind === 'site_wan_up' ? (index === 5 ? 0 : 1)
+              : kind === 'sys_load1' ? 0.24 + (index % 8) * 0.03
+                : kind === 'sys_mem_pct' ? 61 + (index % 5) * 0.25
+                  : kind === 'radio_utilization_pct' ? 32 + (index % 11)
+                    : 0
+    const spread = kind === 'site_wan_up' ? 0 : Math.max(Math.abs(avg) * 0.04, 0.05)
+    points.push({ ts, avg, min: Math.max(0, avg - spread), max: avg + spread, cnt: hourly ? 12 : 1 })
+  }
+
+  return { device_id: deviceID, kind, key, resolution, points }
+}
+
+async function installControllerFixture(
+  page: Page,
+  topologyResponse: unknown = topology,
+  options: ControllerFixtureOptions = {},
+) {
   const unexpectedRequests: string[] = []
   await page.addInitScript(() => {
     class FixtureWebSocket {
@@ -297,7 +366,8 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
         reauthenticated_until: null,
       },
       '/api/v1/dashboard': dashboard,
-      '/api/v1/devices': { devices: [] },
+      '/api/v1/devices': options.statistics ? statisticsDevices : { devices: [] },
+      ...(options.statistics ? { '/api/v1/devices/1/series': statisticsCatalog } : {}),
       '/api/v1/clients': clientPage,
       '/api/v1/events': {
         events: [{
@@ -353,7 +423,9 @@ async function installControllerFixture(page: Page, topologyResponse: unknown = 
       '/api/v1/site/mesh-health': { links: [], note: 'No configured mesh links.' },
     }
     const body = path.startsWith('/api/v1/stats/')
-      ? { device_id: 7, kind: path.split('/').at(-1), key: 'radio0', resolution: '5m', points: [] }
+      ? options.statistics
+        ? statisticsSeries(url)
+        : { device_id: 7, kind: path.split('/').at(-1), key: 'radio0', resolution: '5m', points: [] }
       : responses[path]
     if (route.request().method() !== 'GET' || body === undefined) {
       unexpectedRequests.push(`${route.request().method()} ${path}`)
@@ -641,6 +713,118 @@ test('Topology keeps review actions visible while technical detail is collapsed'
   expect(unexpectedRequests).toEqual([])
 })
 
+test('Controller tools sit at the sidebar foot and remain reachable when navigation scrolls', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  const unexpectedRequests = await installControllerFixture(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Expand navigation' }).click()
+
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+  const divider = navigation.getByRole('separator', { name: 'Controller tools' })
+  const adopt = navigation.getByRole('button', { name: 'Adopt a device' })
+  const logs = navigation.getByRole('button', { name: 'Logs' })
+  await expect(divider).toBeVisible()
+  await expect(navigation.getByRole('button', { name: 'Settings' })).toBeVisible()
+  await expect(adopt).toBeVisible()
+  await expect(logs).toBeVisible()
+  expect(await adopt.evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Controller tools')
+  expect(await divider.evaluate((element) =>
+    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Settings')
+  expect(await divider.evaluate((element) =>
+    element.nextElementSibling?.nextElementSibling?.getAttribute('aria-label'))).toBe('Logs')
+
+  const [navigationBox, logsBox] = await Promise.all([
+    navigation.boundingBox(),
+    logs.boundingBox(),
+  ])
+  expect(navigationBox).not.toBeNull()
+  expect(logsBox).not.toBeNull()
+  expect(navigationBox!.y + navigationBox!.height - logsBox!.y - logsBox!.height)
+    .toBeLessThanOrEqual(12)
+
+  await page.setViewportSize({ width: 1280, height: 420 })
+  expect(await navigation.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await logs.scrollIntoViewIfNeeded()
+  await expect(logs).toBeVisible()
+  await logs.click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Logs' })).toBeVisible()
+  expect(unexpectedRequests).toEqual([])
+})
+
+test('Statistics renders gap-aware stored history in dark and light themes and switches 30 days to hourly', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const unexpectedRequests = await installControllerFixture(page, topology, { statistics: true })
+  const statisticRequests: URL[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname.startsWith('/api/v1/stats/')) statisticRequests.push(url)
+  })
+
+  await page.goto('/statistics')
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Statistics' })).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Statistics time range' })).toBeVisible()
+  await expect(page.getByLabel('Device detail')).toHaveValue('1')
+  await expect(page.getByLabel('Network interface')).toHaveValue('wan')
+  await expect(page.getByLabel('Stable radio')).toHaveValue('radio0')
+  await expect(page.locator('.statistics-chart-card')).toHaveCount(9)
+  await expect(page.getByText(/^Partial · \d+\/\d+ buckets$/).first()).toBeVisible()
+  await expect(page.getByRole('img', {
+    name: /ICMP reachability: \d+ all-reply buckets, 0 mixed-reply buckets, 1 no-reply bucket, and 1 missing bucket/,
+  })).toBeVisible()
+  await expect(page.getByText(/^All replied · \d+$/)).toBeVisible()
+  await expect(page.getByText('No replies · 1', { exact: true })).toBeVisible()
+  await expect(page.getByText('Missing · 1', { exact: true })).toBeVisible()
+  expect(statisticRequests.some((url) =>
+    url.pathname.endsWith('/iface_rx_bps') &&
+    url.searchParams.get('device_id') === '1' &&
+    url.searchParams.get('key') === 'wan')).toBe(true)
+
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  let overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  await page.getByRole('button', { name: /switch to light theme/i }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+
+  const thirtyDayRequest = page.waitForRequest((request) => {
+    const url = new URL(request.url())
+    return url.pathname.startsWith('/api/v1/stats/') &&
+      Number(url.searchParams.get('to')) - Number(url.searchParams.get('from')) === 30 * 24 * 60 * 60
+  })
+  await page.getByRole('button', { name: '30 days' }).click()
+  const request = new URL((await thirtyDayRequest).url())
+  expect(Number(request.searchParams.get('to')) - Number(request.searchParams.get('from')))
+    .toBe(30 * 24 * 60 * 60)
+  await expect(page.getByRole('button', { name: '30 days' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText(/hourly rollup/).first()).toBeVisible()
+  await expect(page.getByText(/^Partial · \d+\/\d+ buckets$/).first()).toBeVisible()
+  expect(unexpectedRequests).toEqual([])
+})
+
+test('320px Statistics controls and charts stay within the content viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  const unexpectedRequests = await installControllerFixture(page, topology, { statistics: true })
+
+  await page.goto('/statistics')
+  await expect(page.getByRole('heading', { level: 1, name: 'Statistics' })).toBeVisible()
+  await expect(page.getByText(/^Partial · \d+\/\d+ buckets$/).first()).toBeVisible()
+  await expectWithinMain(page, page.getByRole('group', { name: 'Statistics time range' }))
+  await expectWithinMain(page, page.getByLabel('Device detail'))
+  await expectWithinMain(page, page.locator('.statistics-chart-card').first())
+  expect(await page.locator('.statistics-chart-grid').first().evaluate((element) =>
+    getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(1)
+
+  const overflow = await readOverflow(page)
+  expect(overflow.document).toBeLessThanOrEqual(1)
+  expect(overflow.main).toBeLessThanOrEqual(1)
+  expect(unexpectedRequests).toEqual([])
+})
+
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {
   for (const theme of ['dark', 'light'] as const) {
     test(`${viewport.width}x${viewport.height} ${theme} route page headers keep controls in view`, async ({ page }) => {
@@ -675,6 +859,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
 
       for (const route of [
         { name: 'Dashboard', control: 'Live controller view' },
+        { name: 'Statistics', control: '24h' },
         { name: 'Topology', control: 'Current' },
         { name: 'Radios', heading: 'Radios & Channel Plan', control: 'Refresh' },
         { name: 'Policy Engine', control: 'Zone Matrix' },

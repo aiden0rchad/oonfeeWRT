@@ -127,7 +127,10 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 7px;
-  margin: 5px 0;
+  /* Keep Controller tools at the foot of a roomy sidebar. When the viewport is
+   * short, the auto margin collapses and the existing nav scroller keeps every
+   * destination reachable. */
+  margin: auto 0 5px;
   background: var(--border);
 }
 
@@ -1435,6 +1438,424 @@ a {
   display: grid;
   gap: 14px;
   min-width: 0;
+}
+
+.statistics-page {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  max-width: 1400px;
+}
+
+.statistics-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 260px) minmax(240px, 1fr);
+  align-items: end;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.statistics-control-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.statistics-range-control {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-0);
+}
+
+.statistics-range-control button {
+  min-width: 42px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.statistics-range-control button:hover:not([aria-pressed='true']) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.statistics-range-control button[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.statistics-select-control {
+  display: block;
+  min-width: 0;
+}
+
+.statistics-select-control select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 32px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.statistics-select-control select:disabled {
+  opacity: .6;
+}
+
+.statistics-read-boundary {
+  align-self: center;
+  justify-self: end;
+  max-width: 520px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.statistics-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.statistics-section-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.statistics-section-heading h2,
+.statistics-metric-group h3,
+.statistics-chart-card h4,
+.statistics-reachability-card h3 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.statistics-section-heading h2 {
+  font-size: 15px;
+}
+
+.statistics-section-heading p,
+.statistics-reachability-card header p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.statistics-freshness,
+.statistics-coverage {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.statistics-coverage[data-state='complete'] {
+  border-color: var(--good);
+  color: var(--good);
+}
+
+.statistics-coverage[data-state='partial'] {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.statistics-coverage[data-state='unavailable'] {
+  color: var(--text-muted);
+}
+
+.statistics-empty {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  padding: 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.statistics-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.statistics-summary-card {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.statistics-summary-card > span,
+.statistics-summary-card > strong,
+.statistics-summary-card > small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statistics-summary-card > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.statistics-summary-card > strong {
+  margin-top: 2px;
+  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.statistics-summary-card > small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.statistics-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.statistics-chart-card,
+.statistics-reachability-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.statistics-chart-card > header,
+.statistics-reachability-card > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.statistics-chart-card > header > div,
+.statistics-reachability-card > header > div {
+  min-width: 0;
+}
+
+.statistics-chart-card h4 {
+  font-size: 12px;
+}
+
+.statistics-chart-card code {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statistics-series-warning,
+.statistics-series-loading {
+  margin-bottom: 6px;
+  font-size: 10px;
+}
+
+.statistics-series-warning {
+  color: var(--warning);
+}
+
+.statistics-series-loading {
+  color: var(--text-muted);
+}
+
+.statistics-source-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.statistics-dimension-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 260px));
+  gap: 10px;
+  align-items: end;
+}
+
+.statistics-metric-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.statistics-metric-group h3 {
+  font-size: 12px;
+}
+
+.statistics-reachability-card h3 {
+  font-size: 12px;
+}
+
+.statistics-reachability-figure {
+  display: grid;
+  min-height: 34px;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.statistics-reachability-figure svg {
+  display: block;
+  width: 100%;
+  height: 34px;
+}
+
+.statistics-reachability-missing {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.statistics-reachability-up {
+  fill: var(--good);
+}
+
+.statistics-reachability-mixed {
+  fill: var(--warning);
+}
+
+.statistics-reachability-down {
+  fill: var(--critical);
+}
+
+.statistics-reachability-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.statistics-reachability-legend span::before {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  background: var(--surface-2);
+  content: '';
+}
+
+.statistics-reachability-legend span[data-state='up']::before {
+  background: var(--good);
+}
+
+.statistics-reachability-legend span[data-state='mixed']::before {
+  background: var(--warning);
+}
+
+.statistics-reachability-legend span[data-state='down']::before {
+  background: var(--critical);
+}
+
+@media (max-width: 1100px) {
+  .statistics-toolbar {
+    grid-template-columns: auto minmax(180px, 1fr);
+  }
+
+  .statistics-read-boundary {
+    grid-column: 1 / -1;
+    justify-self: start;
+    max-width: none;
+    text-align: left;
+  }
+
+  .statistics-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .statistics-section-heading,
+  .statistics-chart-card > header,
+  .statistics-reachability-card > header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .statistics-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statistics-dimension-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .statistics-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statistics-range-control {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .statistics-range-control button {
+    min-width: 0;
+    padding: 0 6px;
+  }
+
+  .statistics-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statistics-read-boundary {
+    grid-column: auto;
+  }
 }
 
 .dashboard-section-heading,

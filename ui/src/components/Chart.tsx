@@ -3,6 +3,12 @@ import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import type { Point } from '../lib/api'
 
+export type TimeChartPoint = Pick<Point, 'ts' | 'cnt'> & {
+  avg: number | null
+  min: number | null
+  max: number | null
+}
+
 /**
  * The shared time chart.
  *
@@ -32,7 +38,7 @@ export function TimeChart({
   emptyNote,
   minSpan,
 }: {
-  points: Point[]
+  points: TimeChartPoint[]
   label: string
   format: (v: number, step?: number) => string
   height?: number
@@ -128,7 +134,7 @@ export function TimeChart({
           label,
           stroke,
           width: 1.5,
-          points: { show: points.length < 40 },
+          points: { show: points.filter((point) => point.avg != null).length < 40 },
           value: (_u, v) => (v == null ? 'no data' : format(v)),
         },
       ],
@@ -145,7 +151,13 @@ export function TimeChart({
       plot.current?.destroy()
       plot.current = null
     }
-  }, [points, label, format, height, colour, window])
+  }, [points, label, format, height, colour, window, minSpan])
+
+  const observed = points.filter((point): point is TimeChartPoint & {
+    avg: number
+    min: number
+    max: number
+  } => point.avg != null && point.min != null && point.max != null)
 
   // Below the chart in BOTH states, deliberately. The note is what tells two
   // charts of the same quantity apart, and an empty one is exactly when that
@@ -154,8 +166,8 @@ export function TimeChart({
   const footnote = (resolution || note) && (
     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
       {note}
-      {note && resolution && points.length > 0 && ' · '}
-      {resolution && points.length > 0 && (
+      {note && resolution && observed.length > 0 && ' · '}
+      {resolution && observed.length > 0 && (
         <>
           {resolution === '1h' ? 'hourly' : '5-minute'} rollup · shaded band is
           min/max within each bucket
@@ -164,11 +176,11 @@ export function TimeChart({
     </div>
   )
 
-  const chartSummary = points.length > 0
-    ? `${label}: ${points.length} rollup bucket${points.length === 1 ? '' : 's'} from ${new Date(points[0].ts * 1000).toLocaleString()} to ${new Date(points.at(-1)!.ts * 1000).toLocaleString()}. Latest average ${format(points.at(-1)!.avg)}; observed range ${format(Math.min(...points.map((point) => point.min)))} to ${format(Math.max(...points.map((point) => point.max)))}.`
+  const chartSummary = observed.length > 0
+    ? `${label}: ${observed.length} observed rollup bucket${observed.length === 1 ? '' : 's'} from ${new Date(observed[0].ts * 1000).toLocaleString()} to ${new Date(observed.at(-1)!.ts * 1000).toLocaleString()}. Latest average ${format(observed.at(-1)!.avg)}; observed range ${format(Math.min(...observed.map((point) => point.min)))} to ${format(Math.max(...observed.map((point) => point.max)))}.`
     : `${label}: ${emptyNote ?? 'No data yet — telemetry is written every five minutes'}.`
 
-  if (points.length === 0) {
+  if (observed.length === 0) {
     return (
       <div>
         <div
