@@ -644,7 +644,11 @@ that router configuration changed.
 
 Adopt and capability installation submit `acknowledge_router_changes:true` only
 after their respective unchecked disclosure is selected. Adoption's disclosure
-also says that acceptance creates the scoped controller login. Omitted/false
+combines a neutral checkbox, short access summary and expandable exact-change
+and rollback details in one section. The details toggle never grants consent;
+the checkbox stays visible and unchecked by default. The summary says that
+acceptance creates a dedicated login and permissions file, installs no packages
+or firmware, and keeps network changes behind Preview and Apply. Omitted/false
 requests are rejected before SSH or any mutation. Inspect never sends it
 because Inspect is read-only.
 

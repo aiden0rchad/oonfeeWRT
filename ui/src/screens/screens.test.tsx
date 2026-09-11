@@ -319,34 +319,39 @@ describe('Adopt', () => {
     expect(submit.disabled).toBe(true)
     const optIn = screen.getByRole('checkbox', {
       name: /Install the oonfeeWRT controller access payload/i,
-    })
-    const acknowledgement = optIn.closest('label')?.textContent
-    expect(acknowledgement).toMatch(/unchecked or cancelling leaves the router unchanged/i)
-    expect(acknowledgement).toMatch(/keeps Adopt unavailable/i)
-    const payloadNotice = screen.getByRole('group', {
-      name: 'Warning: Optional controller access payload',
-    })
-    expect(within(payloadNotice).getByText(/adds one scoped rpcd ACL file and login/i)).toBeTruthy()
-    expect(within(payloadNotice).getByText(/installs no package, binary, daemon, service, or firmware/i)).toBeTruthy()
-    const capabilityDetails = within(payloadNotice)
-      .getByText('What adoption installs and rolls back')
-      .closest('details') as HTMLDetailsElement
-    const reviewPayload = within(payloadNotice).getByRole('button', {
-      name: 'Review exact router changes',
-    })
+    }) as HTMLInputElement
+    const accessGroup = screen.getByRole('group', { name: 'Controller access' })
+    expect(accessGroup.contains(optIn)).toBe(true)
+    expect(optIn.checked).toBe(false)
+    expect(optIn.getAttribute('aria-describedby')).toBe('adopt-access-summary')
+    expect(document.getElementById('adopt-access-summary')?.textContent).toBe(
+      'Adds a dedicated login and permissions file—no packages or firmware. Network changes still require Preview and Apply.',
+    )
+    const reviewPayload = within(accessGroup).getByText('View access details')
+    expect(reviewPayload.tagName).toBe('SUMMARY')
+    const capabilityDetails = reviewPayload.closest('details') as HTMLDetailsElement
     expect(capabilityDetails.open).toBe(false)
-    expect(reviewPayload.closest('details')).toBeNull()
     expect(optIn.closest('details')).toBeNull()
     fireEvent.click(reviewPayload)
     expect(capabilityDetails.open).toBe(true)
-    expect(reviewPayload.getAttribute('aria-pressed')).toBe('true')
+    expect(optIn.checked).toBe(false)
+    expect(submit.disabled).toBe(true)
+    expect(api.adopt).not.toHaveBeenCalled()
     const permissionDetails = capabilityDetails.textContent
+    expect(permissionDetails).toMatch(/installs no package, binary, daemon, service, or firmware/i)
+    expect(permissionDetails).toMatch(/unchecked or cancelling leaves the router unchanged/i)
+    expect(permissionDetails).toMatch(/keeps Adopt unavailable/i)
     expect(permissionDetails).toMatch(/\/usr\/share\/rpcd\/acl\.d\/oonfeewrt\.json/i)
     expect(permissionDetails).toMatch(/controller-owned network, wireless, firewall, and DHCP/i)
     expect(permissionDetails).toMatch(/runtime 802\.11k neighbour-list updates/i)
     expect(permissionDetails).toMatch(/cannot disconnect or steer clients/i)
     expect(permissionDetails).toMatch(/require Preview and Apply later/i)
     expect(permissionDetails).toMatch(/Rollback asks for the device administrator login again/i)
+    fireEvent.click(reviewPayload)
+    expect(capabilityDetails.open).toBe(false)
+    expect(optIn.checked).toBe(false)
+    expect(submit.disabled).toBe(true)
+    expect(api.adopt).not.toHaveBeenCalled()
     fireEvent.click(optIn)
     expect(submit.disabled).toBe(false)
     fireEvent.click(submit)

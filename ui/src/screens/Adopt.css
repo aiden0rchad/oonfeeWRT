@@ -113,15 +113,49 @@
 
 .adopt-consent {
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: start;
-  gap: 10px;
+  gap: 6px;
   padding: 14px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.adopt-consent-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
   cursor: pointer;
+}
+
+.adopt-consent-choice input {
+  margin: 3px 0 0;
+}
+
+.adopt-consent-summary,
+.adopt-consent-details {
+  margin: 0 0 0 23px;
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.adopt-consent-details summary {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+
+.adopt-consent-detail-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.adopt-consent-detail-body > p:first-child {
+  margin: 0 0 10px;
 }
 
 .adopt-submit {

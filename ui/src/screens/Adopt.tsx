@@ -86,7 +86,6 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
   const [inspection, setInspection] = useState<InspectResult | null>(null)
   const [inspectBusy, setInspectBusy] = useState(false)
   const [inspectErr, setInspectErr] = useState('')
-  const [payloadReviewOpen, setPayloadReviewOpen] = useState(false)
   const [routerChangesAccepted, setRouterChangesAccepted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -258,7 +257,6 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
     setManagementMode('managed')
     setFunctions(['ap'])
     setPossibleGateway(false)
-    setPayloadReviewOpen(false)
     setRouterChangesAccepted(false)
     setErr('')
     setResult(null)
@@ -644,23 +642,29 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                 the one-time SSH bootstrap. Neither credential is stored.
               </div>
 
-              <Notice
-                tone="warning"
-                component="Optional controller access payload"
-                summary="Adoption adds one scoped rpcd ACL file and login. It installs no package, binary, daemon, service, or firmware."
-                defaultOpen={payloadReviewOpen}
-                closedLabel="What adoption installs and rolls back"
-                openLabel="Hide exact router changes"
-                actions={(
-                  <Button
-                    aria-pressed={payloadReviewOpen}
-                    onClick={() => setPayloadReviewOpen((current) => !current)}
-                  >
-                    {payloadReviewOpen ? 'Close payload review' : 'Review exact router changes'}
-                  </Button>
-                )}
-                details={(
-                  <>
+              <div className="adopt-consent" role="group" aria-label="Controller access">
+                <label className="adopt-consent-choice">
+                  <input
+                    type="checkbox"
+                    checked={routerChangesAccepted}
+                    aria-describedby="adopt-access-summary"
+                    onChange={(e) => setRouterChangesAccepted(e.target.checked)}
+                  />
+                  <strong>Install the oonfeeWRT controller access payload?</strong>
+                </label>
+                <p id="adopt-access-summary" className="adopt-consent-summary">
+                  Adds a dedicated login and permissions file—no packages or firmware.
+                  Network changes still require Preview and Apply.
+                </p>
+                <details className="adopt-consent-details">
+                  <summary>View access details</summary>
+                  <div className="adopt-consent-detail-body">
+                    <p>
+                      Adoption adds one scoped rpcd ACL file and login. It installs no
+                      package, binary, daemon, service, or firmware. Leaving this
+                      acknowledgement unchecked or cancelling leaves the router unchanged
+                      and keeps Adopt unavailable.
+                    </p>
                     <strong>Exact adoption changes</strong>
                     <ul style={{ margin: '6px 0 0', paddingLeft: 20, lineHeight: 1.5 }}>
                       <li>
@@ -689,23 +693,9 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                       this ACL file and scoped login, and leaves controller-managed network
                       configuration for a separately reviewed rollback.
                     </p>
-                  </>
-                )}
-              />
-
-              <label className="adopt-consent">
-                <input
-                  type="checkbox"
-                  checked={routerChangesAccepted}
-                  onChange={(e) => setRouterChangesAccepted(e.target.checked)}
-                  style={{ marginTop: 2 }}
-                />
-                <span>
-                  <strong>Install the oonfeeWRT controller access payload?</strong>{' '}
-                  Leaving this acknowledgement unchecked or cancelling leaves the router
-                  unchanged and keeps Adopt unavailable.
-                </span>
-              </label>
+                  </div>
+                </details>
+              </div>
 
               <div className="adopt-submit">
                 <Button

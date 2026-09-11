@@ -1060,23 +1060,47 @@ for (const viewport of [
   { width: 390, height: 844 },
   { width: 320, height: 568 },
 ]) {
-  test(`${viewport.width}px adoption keeps connection fields and consent within the page`, async ({ page }) => {
-    await page.setViewportSize(viewport)
-    const unexpectedRequests = await installControllerFixture(page)
-    await page.goto('/adopt')
-    await expect(page.getByRole('heading', { level: 1, name: 'Adopt a device' })).toBeVisible()
-    for (const label of ['Address', 'Name (optional)', 'Management port (optional)', 'Device username', 'Device password (for ubus)']) {
-      await expectWithinMain(page, page.getByLabel(label, { exact: true }))
-    }
-    const consent = page.getByRole('checkbox', { name: /^Install the oonfeeWRT controller access payload/ })
-    await expect(consent).not.toBeChecked()
-    await expect(page.getByRole('button', { name: 'Adopt', exact: true })).toBeDisabled()
-    await expectWithinMain(page, consent.locator('..'))
-    const overflow = await readOverflow(page)
-    expect(overflow.document).toBeLessThanOrEqual(1)
-    expect(overflow.main).toBeLessThanOrEqual(1)
-    expect(unexpectedRequests).toEqual([])
-  })
+  for (const theme of ['dark', 'light'] as const) {
+    test(`${viewport.width}px ${theme} adoption keeps connection fields and consent within the page`, async ({ page }) => {
+      await page.setViewportSize(viewport)
+      const unexpectedRequests = await installControllerFixture(page)
+      await page.goto('/adopt')
+      await expect(page.getByRole('heading', { level: 1, name: 'Adopt a device' })).toBeVisible()
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      for (const label of ['Address', 'Name (optional)', 'Management port (optional)', 'Device username', 'Device password (for ubus)']) {
+        await expectWithinMain(page, page.getByLabel(label, { exact: true }))
+      }
+      const consent = page.getByRole('checkbox', { name: /^Install the oonfeeWRT controller access payload/ })
+      const access = page.getByRole('group', { name: 'Controller access' })
+      const details = access.locator('details')
+      const summary = details.locator('summary')
+      const adopt = page.getByRole('button', { name: 'Adopt', exact: true })
+      await expect(access.getByRole('checkbox')).toHaveCount(1)
+      await expect(consent).toHaveAccessibleDescription('Adds a dedicated login and permissions file—no packages or firmware. Network changes still require Preview and Apply.')
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      await expect(details).not.toHaveAttribute('open')
+      await expect(summary).toHaveText('View access details')
+      await expectWithinMain(page, access)
+      await summary.focus()
+      await page.keyboard.press('Enter')
+      await expect(details).toHaveAttribute('open', '')
+      await expect(details.getByText('/usr/share/rpcd/acl.d/oonfeewrt.json')).toBeVisible()
+      await expect(details.getByText(/Rollback asks for the device administrator login again/)).toBeVisible()
+      await expectWithinMain(page, details)
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      await summary.focus()
+      await page.keyboard.press('Enter')
+      await expect(details).not.toHaveAttribute('open')
+      await expect(consent).not.toBeChecked()
+      await expect(adopt).toBeDisabled()
+      const overflow = await readOverflow(page)
+      expect(overflow.document).toBeLessThanOrEqual(1)
+      expect(overflow.main).toBeLessThanOrEqual(1)
+      expect(unexpectedRequests).toEqual([])
+    })
+  }
 }
 
 for (const width of [320, 1280, 1440, 1920]) {
