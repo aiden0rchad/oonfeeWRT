@@ -603,7 +603,38 @@ for (const viewport of [
     await expect(impactDialog).toBeHidden()
     await expect(impact).toBeFocused()
     if (viewport.width >= 1000) {
-      expect((await speed.boundingBox())!.height).toBeLessThanOrEqual(90)
+      const compact = await speed.evaluate((element) => {
+        const summary = element.querySelector<HTMLElement>('.speedtest-launch-consequence')!
+        const actions = element.querySelector<HTMLElement>('.speedtest-launch-actions')!
+        const bounds = element.getBoundingClientRect()
+        const summaryBounds = summary.getBoundingClientRect()
+        const controls = [
+          actions.querySelector<HTMLElement>('.speedtest-impact-trigger')!,
+          actions.querySelector<HTMLElement>(':scope > .ui-button')!,
+        ].map((control) => control.getBoundingClientRect())
+        const [impactBounds, runBounds] = controls
+        const style = getComputedStyle(element)
+        // System fonts wrap differently on macOS and Linux; bound text lines, not a platform-specific 90px height.
+        const maxHeight = 5 * parseFloat(getComputedStyle(summary).lineHeight)
+          + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+          + parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+        return {
+          height: bounds.height,
+          maxHeight,
+          summaryClipped: summary.scrollHeight > summary.clientHeight + 1,
+          contentContained: [summaryBounds, ...controls].every((box) =>
+            box.width > 0 && box.height > 0 && box.left >= bounds.left - 1
+            && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1),
+          summaryOverlap: summaryBounds.right > actions.getBoundingClientRect().left + 1,
+          controlsOverlap: !(impactBounds.right <= runBounds.left || runBounds.right <= impactBounds.left
+            || impactBounds.bottom <= runBounds.top || runBounds.bottom <= impactBounds.top),
+        }
+      })
+      expect(compact.height).toBeLessThanOrEqual(compact.maxHeight + 1)
+      expect(compact.summaryClipped).toBe(false)
+      expect(compact.contentContained).toBe(true)
+      expect(compact.summaryOverlap).toBe(false)
+      expect(compact.controlsOverlap).toBe(false)
       expect((await metrics.boundingBox())!.height).toBeLessThanOrEqual(64)
     }
 
