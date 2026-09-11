@@ -35,11 +35,29 @@ Released September 10, 2026. [Read the complete release notes](docs/releases/v0.
 
 ### Current development after v0.1.5
 
-The current source adds a read-only
-[**Statistics** workspace](docs/guide/statistics.md) for 6-hour through 30-day
-WAN, system, exact-interface, and available stable-radio history, with visible
-gaps and rollup coverage. This page is not present in the published v0.1.5
-binary or container image.
+The current source includes these changes beyond the published release:
+
+- A read-only [**Statistics** workspace](docs/guide/statistics.md) for 6-hour
+  through 30-day WAN, system, exact-interface, and available stable-radio
+  history. Clean trend lines retain missing-data gaps and exact coverage
+  details; the default view is six hours.
+- A dedicated [**Accounts** workspace](docs/operations/accounts.md), between
+  Settings and Logs at the bottom of the sidebar, for your profile, password,
+  and sessions, plus owner-only account management. Role choices include
+  readable permission summaries without changing existing access controls.
+- A clearer [adoption workflow](docs/getting-started/first-adoption.md) with
+  the scoped-access explanation and explicit consent together. Routine source
+  limitations use compact information with
+  [explanations and remedies](docs/reference/troubleshooting.md#understand-notices-without-treating-every-gap-as-a-fault);
+  current failures and safety gates remain visible.
+- More resilient empty-state handling for discovery and topology, and fixes
+  that prevent late device responses or retained measurements from another AP
+  being attributed to the currently selected device or client association.
+
+These changes are available in current source builds, not the published
+v0.1.5 binary or container image. See the
+[development change summary](https://aiden0rchad.github.io/oonfeeWRT/reference/releases#development-after-v0-1-5)
+for scope and limitations; this is not a new version release.
 
 ## Preview
 

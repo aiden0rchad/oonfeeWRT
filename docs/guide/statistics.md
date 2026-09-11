@@ -237,8 +237,10 @@ available above the charts.
 
 If one series request fails while others succeed, Statistics keeps the
 successful series current. A failed card labels the refresh error and can keep
-its last successful response visible, so check the warning before comparing
-timestamps from different cards.
+its last successful response visible only for the same device, metric, and
+exact series key. Changing the source clears incompatible retained history
+immediately, even if the replacement request fails. Check each card's error
+and timestamps before comparing it with another card.
 
 ## Practical investigations
 

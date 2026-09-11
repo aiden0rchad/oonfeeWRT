@@ -70,7 +70,10 @@ Use a unique password for each person. Do not create one shared “admin” acco
 1. Sign in as an owner.
 2. Open **Accounts → Manage accounts**.
 3. In **Create account**, enter the username.
-4. Choose **Read-only**, **Operator**, **Administrator**, or **Owner**.
+4. Choose **Read-only**, **Operator**, **Administrator**, or **Owner**. New
+   accounts default to Read-only. In development builds, the description below
+   the role selector updates with the selection; compare it with the role
+   matrix before granting more access.
 5. Enter and repeat a password of at least 12 characters.
 6. Select **Create account**.
 7. If prompted, enter your current owner password to establish a new five-minute reauthentication window, then run the pending action.

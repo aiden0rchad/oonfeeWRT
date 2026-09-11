@@ -36,6 +36,32 @@ A useful incident filter sequence:
 
 v0.1.5 does not provide a device or free-text search filter on the Logs page.
 
+## Understand router-log coverage
+
+Coverage describes which router-log intervals the controller can establish.
+It is not a warning that logs grow without a limit, and a stored cursor alone
+does not prove that a router is currently reachable.
+
+In development builds after v0.1.5, **Router log coverage** separates two cases:
+
+- **Current collection is up to date; earlier history is unavailable.** The
+  compact information disclosure preserves the affected routers and gap
+  details. Keep the controller and routers reachable; if gaps recur during
+  continuous collection, investigate excessive router logging. The retained
+  gap indicator expires 24 hours after the last discontinuity if no new one
+  occurs. A successful poll cannot reconstruct the missing interval.
+- **Coverage is missing or out of date.** This remains a warning. Open the
+  named device, check connectivity and **What the controller cannot read here**,
+  and fix the reported cause. Refresh the controller-access payload only for
+  a reported permission denial, then allow the normal collection cycle.
+  **Check again** reloads the stored view; it does not force a router poll.
+
+A saved continuation cursor can fall outside the next bounded log batch after
+a collection pause or high message volume. The controller cannot always
+distinguish the router overwriting its log ring from the batch-size limit. Do
+not delete retained evidence or repeatedly change credentials to hide an
+earlier gap. See [source notices and remedies](../reference/troubleshooting.md#understand-notices-without-treating-every-gap-as-a-fault).
+
 ## Understand the active IPv6 condition
 
 On **Logs → General**, v0.1.4 adds an IPv6 condition card above the event

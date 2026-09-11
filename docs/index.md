@@ -49,7 +49,10 @@ no DPI package is installed. [See what changed](/reference/releases) or
 ::: info Current development
 Source after v0.1.5 adds a read-only, gap-aware
 [Statistics workspace](/guide/statistics) for retained WAN and device
-telemetry. It is not included in the published v0.1.5 artifacts.
+telemetry, a separate [Accounts workspace](/operations/accounts), clearer
+adoption consent, compact source explanations, and empty-state/telemetry
+reliability fixes. These changes are not included in the published v0.1.5
+artifacts. [Read the development change summary](/reference/releases#development-after-v0-1-5).
 :::
 
 ## One control plane, explicit boundaries
