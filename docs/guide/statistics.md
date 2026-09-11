@@ -33,7 +33,8 @@ whole-network total.
   if you want the Internet section to identify WAN traffic.
 - Treat an empty chart as missing history, not a measured zero.
 
-Open **Statistics** from the main navigation. The default range is **24h**.
+Open **Statistics** from the main navigation. The default range is **6h**, so
+recent collection is easier to read without compressing it into a full day.
 The available ranges are **6h**, **24h**, **7d**, and **30d**.
 
 ## What the controls change
@@ -168,13 +169,17 @@ scan workflow.
 Each metric card preserves the storage contract rather than smoothing it into
 a more confident picture:
 
-- The line is the average of valid samples in each stored bucket.
-- The shaded band is that bucket's measured minimum-to-maximum range.
+- The line is the average of valid samples in each stored bucket. Connected
+  samples use a clean line; a small dot preserves an isolated observation that
+  could not otherwise form a line. Hover highlights the nearby sample.
+- The subtle shaded band is that bucket's measured minimum-to-maximum range;
+  no smoothing removes its peaks.
 - The x-axis covers the complete requested window, even if history exists for
   only part of it.
 - Missing buckets break the line. The chart never interpolates across them.
-- The coverage pill reports observed buckets against the expected bucket count:
-  **Complete**, **Partial**, or **Unavailable**.
+- The neutral **Full history**, **History gaps**, or **No history** control opens
+  the exact observed and expected interval counts. These describe stored
+  evidence, not router health. Failed refreshes still appear separately.
 - The expected count includes only complete, aligned storage buckets inside the
   requested window; an in-progress bucket at either edge is not a gap.
 - The summary card uses the newest valid stored bucket, not a live RPC value.
@@ -219,6 +224,16 @@ Common causes include:
 
 Use the source-specific gaps on **Devices**, **Radios**, and **Logs** to decide
 which explanation applies. Do not fill a gap with zero when comparing charts.
+
+For example, 17 samples out of 287 expected five-minute intervals can mean the
+controller has only recently resumed collection within a 24-hour view. It does
+not establish that the network was down for the other 270 intervals. Keep the
+controller running as a persistent service and maintain its route to the
+devices to build future history. A completed window can appear after the next
+storage flush; Refresh does not force a new router poll or recreate old data.
+Choose **6h** for a closer view, or retain **24h** when the missing time itself
+is relevant. **About history and missing samples** keeps this guidance
+available above the charts.
 
 If one series request fails while others succeed, Statistics keeps the
 successful series current. A failed card labels the refresh error and can keep

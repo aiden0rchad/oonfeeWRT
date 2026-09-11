@@ -663,6 +663,8 @@ textarea::placeholder {
 
 .notice[data-compact='true'] .notice-context {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
   gap: 4px;
   line-height: 1.35;
 }
@@ -676,8 +678,9 @@ textarea::placeholder {
 }
 
 .notice[data-compact='true'] .notice-disclosure {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
 }
 
 .notice[data-compact='true'] .notice-disclosure > summary,
@@ -685,6 +688,7 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   min-height: 28px;
+  max-width: 100%;
   margin-top: 0;
   line-height: 1.25;
 }
@@ -1772,18 +1776,41 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
-.statistics-coverage[data-state='complete'] {
-  border-color: var(--good);
-  color: var(--good);
+.statistics-coverage-disclosure {
+  min-width: 0;
+  max-width: 100%;
 }
 
-.statistics-coverage[data-state='partial'] {
-  border-color: var(--warning);
-  color: var(--warning);
+.statistics-coverage-disclosure summary {
+  width: fit-content;
+  cursor: pointer;
 }
 
-.statistics-coverage[data-state='unavailable'] {
-  color: var(--text-muted);
+.statistics-coverage-disclosure[open] {
+  flex-basis: 100%;
+}
+
+.statistics-coverage-disclosure p,
+.statistics-history-help p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.statistics-history-help {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.statistics-history-help summary {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 .statistics-empty {
@@ -1860,6 +1887,7 @@ textarea::placeholder {
 .statistics-chart-card > header,
 .statistics-reachability-card > header {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: flex-start;
   justify-content: space-between;

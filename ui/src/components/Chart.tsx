@@ -91,6 +91,11 @@ export function TimeChart({
     const avg = points.map((p) => p.avg)
     const lo = points.map((p) => p.min)
     const hi = points.map((p) => p.max)
+    // Connected observations read as a trend, not a cloud of overlapping dots.
+    // An isolated observation still needs a marker: no line can represent it.
+    const isolated = avg.flatMap((value, index) =>
+      value != null && avg[index - 1] == null && avg[index + 1] == null ? [index] : [],
+    )
 
     const opts: uPlot.Options = {
       width: el.clientWidth || 600,
@@ -112,7 +117,7 @@ export function TimeChart({
       axes: [
         {
           stroke: ink,
-          grid: { stroke: grid, width: 1 },
+          grid: { show: false },
           ticks: { stroke: grid },
           font: '11px ui-sans-serif, system-ui, sans-serif',
         },
@@ -128,17 +133,18 @@ export function TimeChart({
       series: [
         { value: (_u, v) => (v == null ? '' : new Date(v * 1000).toLocaleString()) },
         // The band, drawn first so the average sits on top of it.
-        { stroke: 'transparent', fill: hexWithAlpha(stroke, 0.14), points: { show: false } },
+        { stroke: 'transparent', fill: hexWithAlpha(stroke, 0.10), points: { show: false } },
         { stroke: 'transparent', fill: 'transparent', points: { show: false } },
         {
           label,
           stroke,
-          width: 1.5,
-          points: { show: points.filter((point) => point.avg != null).length < 40 },
+          width: 2,
+          spanGaps: false,
+          points: { show: false, filter: isolated.length ? isolated : null, size: 4, width: 0, fill: stroke },
           value: (_u, v) => (v == null ? 'no data' : format(v)),
         },
       ],
-      bands: [{ series: [1, 2], fill: hexWithAlpha(stroke, 0.14) }],
+      bands: [{ series: [1, 2], fill: hexWithAlpha(stroke, 0.10) }],
     }
 
     plot.current = new uPlot(opts, [xs, hi, lo, avg], el)

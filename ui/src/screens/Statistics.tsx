@@ -172,7 +172,7 @@ export function Statistics() {
   const [dashboardError, setDashboardError] = useState('')
   const [devicesError, setDevicesError] = useState('')
   const [coreLoading, setCoreLoading] = useState(true)
-  const [range, setRange] = useState<RangeID>('24h')
+  const [range, setRange] = useState<RangeID>('6h')
   const [revision, setRevision] = useState(0)
   const [selectedDeviceID, setSelectedDeviceID] = useState<number | null>(null)
   const [catalogState, setCatalogState] = useState<{
@@ -333,6 +333,27 @@ export function Statistics() {
           Stored rollups only · viewing this page does not focus devices or raise their polling rate.
         </div>
       </section>
+
+      <details className="statistics-history-help">
+        <summary>About history and missing samples</summary>
+        <p>
+          Charts show stored observations, not a continuous recording. A new or recently
+          restarted controller may have only a short stretch of history. Blank intervals
+          mean no stored measurement—not zero traffic or a confirmed outage.
+        </p>
+        <p>
+          Keep the controller running and its devices reachable to build history. Allow a
+          complete five-minute interval and the next storage flush; Refresh only reads
+          saved data. If an expected metric stays empty, check the device&apos;s connection
+          and capability details. Some sources need focused collection or are not exposed
+          by the device. Past gaps cannot be filled retrospectively.
+        </p>
+        <p>
+          Use 6h for recent trends or select a longer range to compare history. Lines show
+          averages, the subtle band retains the measured minimum and maximum, and a lone
+          dot means an isolated sample. Missing intervals are never joined by a line.
+        </p>
+      </details>
 
       {dashboardError && <Banner tone={dashboard ? 'warning' : 'critical'}>
         Dashboard sources could not refresh: {dashboardError}.
@@ -636,7 +657,7 @@ function MetricCard({
           <h4>{query.label}</h4>
           {query.key && <code>{query.key}</code>}
         </div>
-        <CoveragePill coverage={coverage} />
+        <CoveragePill coverage={coverage} label={query.label} />
       </header>
       {loaded?.error && <div className="statistics-series-warning" role="alert">
         Refresh failed: {loaded.error}.{loaded.data && ' Last successful response retained.'}
@@ -693,7 +714,7 @@ export function ReachabilityStrip({
           <h3>ICMP reachability</h3>
           <p>Fixed target reply evidence; blank intervals are missing observations</p>
         </div>
-        <CoveragePill coverage={coverage} />
+        <CoveragePill coverage={coverage} label="ICMP reachability" />
       </header>
       {loaded?.error && <div className="statistics-series-warning" role="alert">
         Refresh failed: {loaded.error}.{loaded.data && ' Last successful response retained.'}
@@ -729,13 +750,20 @@ export function ReachabilityStrip({
   )
 }
 
-function CoveragePill({ coverage }: { coverage: ReturnType<typeof seriesCoverage> }) {
+function CoveragePill({ coverage, label }: { coverage: ReturnType<typeof seriesCoverage>; label: string }) {
   if (!coverage) return <span className="statistics-coverage" data-state="unavailable">Awaiting data</span>
   return (
-    <span className="statistics-coverage" data-state={coverage.state}>
-      {coverage.state === 'complete' ? 'Complete' : coverage.state === 'partial' ? 'Partial' : 'Unavailable'} ·{' '}
-      {coverage.observed}/{coverage.expected} buckets
-    </span>
+    <details className="statistics-coverage-disclosure" data-state={coverage.state}>
+      <summary className="statistics-coverage" aria-label={`${label} history coverage`}>
+        {coverage.state === 'complete' ? 'Full history' : coverage.state === 'partial' ? 'History gaps' : 'No history'}
+      </summary>
+      <p>
+        {coverage.observed} of {coverage.expected} completed intervals have stored samples
+        in this range. {coverage.missing > 0
+          ? `${coverage.missing} intervals are unobserved; blank space does not mean zero activity or downtime.`
+          : 'Every completed interval in this range has a stored sample.'}
+      </p>
+    </details>
   )
 }
 

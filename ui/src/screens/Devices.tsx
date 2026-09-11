@@ -1255,6 +1255,8 @@ function LLDPCapability({ deviceID, managementMode, managementModeError, onUpdat
   const installed = status != null && status.state !== 'not_installed'
   const planningRemoval = installed
   const readOnly = managementMode === 'monitor_only'
+  const capabilityNeedsAttention = Boolean(managementModeError || error || status?.state === 'error')
+  const capabilityChanging = status?.state === 'installing' || status?.state === 'removing'
 
   const credentials = () => ({
     username,
@@ -1394,17 +1396,24 @@ function LLDPCapability({ deviceID, managementMode, managementModeError, onUpdat
         </div>
       )}
       <Notice
-        tone={installed ? 'accent' : 'warning'}
+        tone={capabilityNeedsAttention || capabilityChanging || (open && !readOnly) ? 'warning' : 'accent'}
+        compact={status?.state === 'not_installed' && !open && !capabilityNeedsAttention}
         component="Optional LLDP topology capability"
         summary={managementModeError
           ? 'LLDP state remains visible, but actions are blocked because the controller cannot prove this device management boundary.'
+          : error || status?.state === 'error'
+            ? 'LLDP capability needs attention. Review the error below before changing this device.'
+          : status == null
+            ? 'Checking optional wired-neighbour discovery.'
+          : capabilityChanging
+            ? 'An LLDP capability change is in progress. Review its recorded state before another action.'
           : readOnly
             ? installed
               ? 'LLDP wired-neighbour observation is available. Monitor-only mode permits diagnostics and read-only plans, never package, service or UCI changes.'
               : 'LLDP is not installed. Monitor-only mode observes existing capabilities and never offers an installation.'
             : installed
               ? 'LLDP wired-neighbour discovery is available. Review its controller-recorded package and service baseline before changing or removing it.'
-              : 'Adds measured wired-neighbour discovery by installing OpenWrt lldpd. No router change occurs until an exact plan is accepted.'}
+              : 'Optional wired-neighbour discovery is not installed.'}
         defaultOpen={open}
         closedLabel="What this installs and rolls back"
         openLabel="Hide capability details"
@@ -1433,6 +1442,14 @@ function LLDPCapability({ deviceID, managementMode, managementModeError, onUpdat
               <p style={{ margin: '8px 0 0' }}>
                 Controller record: {status?.state}. Controller-added packages:{' '}
                 {status?.added_packages.join(', ') || 'none; lldpd existed before adoption'}.
+              </p>
+            )}
+            {!installed && !readOnly && (
+              <p style={{ margin: '8px 0 0' }}>
+                LLDP can add direct wired-neighbour evidence when nearby devices advertise it.
+                It is optional; leave it uninstalled if you do not need that evidence. Review
+                the exact installation plan first. No package or service change occurs until
+                you separately authorize it.
               </p>
             )}
           </>

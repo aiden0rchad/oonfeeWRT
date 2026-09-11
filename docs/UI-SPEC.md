@@ -172,6 +172,12 @@ Client history keeps the inventory above the investigation panels on laptop
 screens; the four-pane layout is reserved for wide displays. Metric cards must
 also fit narrow mobile viewports without clipping their controls or labels.
 
+Routine source limitations use compact information with expandable causes and
+remedies. Only explicit history-only router-log gaps use the neutral state;
+stale/missing current coverage, failed reads, and safety gates remain prominent.
+Statistics starts at six hours and uses neutral history-coverage disclosures,
+not health-warning colours, while retaining exact missing-interval counts.
+
 ---
 
 ## 1. Frame
@@ -414,7 +420,9 @@ Everywhere else in the app: **one axis per chart.**
 
 ### Marks
 
-- Lines 2px, no point markers on dense series; markers ≥8px only on sparse ones.
+- Lines 2px; connected time-series observations have no permanent point markers.
+  Isolated samples retain a small filled marker, with hover highlighting for
+  inspection. Preserve min/max shading and never connect missing intervals.
 - Area fills at ~18% opacity of the series color, hard 2px surface gap between
   stacked segments.
 - Bars: 4px rounded data-end anchored to the baseline; square at the baseline.

@@ -2630,9 +2630,33 @@ describe('Devices — re-probe panel', () => {
     await openPanel()
 
     const disabled = await screen.findByRole('button', { name: 'LLDP installation disabled for monitor-only' }) as HTMLButtonElement
+    expect(screen.getByRole('group', { name: 'Information: Optional LLDP topology capability' }).getAttribute('data-compact')).toBe('true')
     expect(disabled.disabled).toBe(true)
     expect(screen.getByText(/observes existing capabilities and never offers an installation/i)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /show exact install plan/i })).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it('keeps an LLDP capability read failure visible rather than calling it optional absence', async () => {
+    api.lldpCapability.mockRejectedValueOnce(new Error('LLDP record unavailable'))
+    await openPanel()
+    const notice = await screen.findByRole('group', { name: 'Warning: Optional LLDP topology capability' })
+    expect(notice.getAttribute('data-compact')).toBeNull()
+    expect(notice.textContent).toMatch(/needs attention/)
+    expect(screen.getByText('LLDP record unavailable').closest('[role="alert"]')).toBeTruthy()
+    expect(screen.queryByText('Optional wired-neighbour discovery is not installed.')).toBeNull()
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+  })
+
+  it.each(['installing', 'removing'])('keeps an active LLDP %s operation marked as needing attention', async (state) => {
+    api.lldpCapability.mockResolvedValueOnce({
+      device_id: 1, name: 'ap-1', state, requested_packages: ['lldpd'], added_packages: [],
+    })
+    await openPanel()
+    const notice = await screen.findByRole('group', { name: 'Warning: Optional LLDP topology capability' })
+    expect(notice.getAttribute('data-compact')).toBeNull()
+    expect(notice.textContent).toMatch(/change is in progress/)
+    expect(notice.textContent).toContain(state)
     expect(api.changeLLDPCapability).not.toHaveBeenCalled()
   })
 
@@ -2655,6 +2679,7 @@ describe('Devices — re-probe panel', () => {
     const lldp = await screen.findByRole('button', { name: 'LLDP actions blocked' }) as HTMLButtonElement
     expect(acl.disabled).toBe(true)
     expect(lldp.disabled).toBe(true)
+    expect(screen.getByRole('group', { name: 'Warning: Optional LLDP topology capability' }).getAttribute('data-compact')).toBeNull()
     expect(screen.getByText(/ACL refresh is disabled because the stored management mode is invalid/i)).toBeTruthy()
     expect(screen.getByText(/LLDP package, service and configuration actions are disabled/i)).toBeTruthy()
     expect(api.refreshACL).not.toHaveBeenCalled()
@@ -2686,20 +2711,29 @@ describe('Devices — re-probe panel', () => {
         service_running: true,
     })
     await openPanel()
-    expect(await screen.findByText(/Adds measured wired-neighbour discovery/)).toBeTruthy()
+    expect(await screen.findByText('Optional wired-neighbour discovery is not installed.')).toBeTruthy()
+    const optionalNotice = screen.getByRole('group', { name: 'Information: Optional LLDP topology capability' })
+    expect(optionalNotice.getAttribute('data-compact')).toBe('true')
+    expect(optionalNotice.textContent).toMatch(/leave it uninstalled if you do not need that evidence/)
     const capabilityDetails = screen.getByText('What this installs and rolls back').closest('details') as HTMLDetailsElement
     const review = screen.getByText('Review LLDP installation')
     expect(capabilityDetails.open).toBe(false)
     expect(review.closest('details')).toBeNull()
+    fireEvent.click(within(optionalNotice).getByText('What this installs and rolls back'))
+    expect(capabilityDetails.open).toBe(true)
+    expect(api.changeLLDPCapability).not.toHaveBeenCalled()
+    expect(screen.queryByRole('checkbox', { name: /authorize refreshing the router's package index cache/i })).toBeNull()
     fireEvent.click(review)
     expect(capabilityDetails.open).toBe(true)
+    expect(screen.getByRole('group', { name: 'Warning: Optional LLDP topology capability' }).getAttribute('data-compact')).toBeNull()
     const planButton = screen.getByRole('button', {
       name: 'Refresh index and show exact install plan',
     }) as HTMLButtonElement
     expect(planButton.disabled).toBe(true)
     const indexAcknowledgement = screen.getByRole('checkbox', {
       name: /authorize refreshing the router's package index cache/i,
-    })
+    }) as HTMLInputElement
+    expect(indexAcknowledgement.checked).toBe(false)
     expect(indexAcknowledgement.parentElement?.querySelector(':scope > span code')?.textContent).toBe('lldpd')
     fireEvent.click(indexAcknowledgement)
     fireEvent.click(planButton)
@@ -4878,6 +4912,16 @@ describe('Unadopt', () => {
 })
 
 describe('Logs', () => {
+  it('keeps a failed log request visible instead of presenting it as a history limitation', async () => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockRejectedValueOnce(new Error('event store unavailable'))
+    render(<Logs />)
+    expect((await screen.findByRole('alert')).textContent).toContain('event store unavailable')
+    expect(screen.getByText('Events for these filters could not be loaded.')).toBeTruthy()
+    expect(screen.queryByRole('group', { name: /Router log coverage/ })).toBeNull()
+    expect(screen.queryByText('No general events were observed.')).toBeNull()
+  })
+
   it('distinguishes observed-empty router logs from missing coverage', async () => {
     api.devices.mockResolvedValue({ devices: [] })
     api.events.mockResolvedValueOnce({
@@ -4901,14 +4945,16 @@ describe('Logs', () => {
     expect(sourceNotice.getAttribute('data-compact')).toBe('true')
     const coverageNotice = await screen.findByRole('group', { name: 'Warning: Router log coverage' })
     expect(coverageNotice.getAttribute('data-compact')).toBe('true')
-    expect(within(coverageNotice).getByText(/Some router log intervals are unverified/)).toBeTruthy()
-    expect(within(coverageNotice).getByText(/“No events” cannot be confirmed/)).toBeTruthy()
+    expect(within(coverageNotice).getByRole('status').textContent).toMatch(/Some router log coverage is missing or out of date/)
     expect(within(coverageNotice).getByRole('button', { name: 'Check again' })).toBeTruthy()
     const coverageToggle = within(coverageNotice).getByText('More information about log coverage')
-    expect(coverageToggle.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(coverageToggle, { detail: 0 })
-    const coverageDetails = screen.getByRole('dialog', { name: 'Warning: Router log coverage' })
+    const coverageDetails = coverageToggle.closest('details') as HTMLDetailsElement
+    expect(coverageDetails.open).toBe(false)
+    fireEvent.click(coverageToggle)
+    expect(coverageDetails.open).toBe(true)
     expect(within(coverageDetails).getByText(/has not been observed on AP one/)).toBeTruthy()
+    expect(within(coverageDetails).getByText(/“No events” cannot be confirmed/)).toBeTruthy()
+    expect(within(coverageDetails).getByText(/Restore connectivity if it is offline/)).toBeTruthy()
     expect(screen.queryByText('No general events were observed.')).toBeNull()
     unmount()
 
@@ -4928,7 +4974,45 @@ describe('Logs', () => {
     })
     render(<Logs />)
     expect(await screen.findByText('No general events were observed.')).toBeTruthy()
-    expect(screen.queryByText(/Router log coverage is incomplete/)).toBeNull()
+    expect(screen.queryByRole('group', { name: /Router log coverage/ })).toBeNull()
+  })
+
+  it.each([
+    { kind: 'historical', gaps: ['router log continuity has a retained gap on AP one'], informational: true },
+    { kind: 'stale', gaps: ['router log coverage is stale on AP one'], informational: false },
+    { kind: 'mixed', gaps: ['router log continuity has a retained gap on AP one', 'router log coverage is stale on AP two'], informational: false },
+    { kind: 'unknown', gaps: ['an unrecognized source limitation'], informational: false },
+  ])('keeps $kind coverage honest when every router has a stored cursor', async ({ gaps, informational }) => {
+    api.devices.mockResolvedValue({ devices: [] })
+    api.events.mockResolvedValueOnce({
+      events: [], total: 0, limit: 100, scope: 'general', next_before: null,
+      facets: { category: [], severity: [] },
+      coverage: { complete: false, expected_devices: 2, observed_devices: 2, gaps },
+    })
+    render(<Logs />)
+    const notice = await screen.findByRole('group', {
+      name: `${informational ? 'Information' : 'Warning'}: Router log coverage`,
+    })
+    expect(within(notice).getByRole('status').textContent).toBe(informational
+      ? 'Current collection is up to date. Some earlier log history is unavailable.'
+      : 'Some router log coverage is missing or out of date.')
+    expect(notice.textContent).not.toMatch(/All .* routers responded/)
+    const toggle = within(notice).getByText('More information about log coverage')
+    const details = toggle.closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    fireEvent.click(toggle)
+    expect(details.open).toBe(true)
+    for (const gap of gaps) expect(within(details).getByText(gap)).toBeTruthy()
+    expect(details.textContent).toMatch(/“No events” cannot be confirmed/)
+    if (informational) {
+      expect(details.textContent).toMatch(/do not reconstruct that interval/)
+      expect(details.textContent).toMatch(/expires 24 hours after the last discontinuity/)
+      expect(within(notice).queryByRole('button', { name: 'Check again' })).toBeNull()
+    } else {
+      expect(details.textContent).toMatch(/Restore connectivity if it is offline/)
+      expect(within(notice).getByRole('button', { name: 'Check again' })).toBeTruthy()
+    }
+    expect(screen.queryByText('No general events were observed.')).toBeNull()
   })
 
   const ev = (over: Record<string, unknown> = {}) => ({

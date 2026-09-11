@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Dashboard, DashboardMetric, Device, Point, Series } from '../lib/api'
 import { ReachabilityStrip, Statistics, alignChartPoints } from './Statistics'
@@ -142,7 +142,27 @@ describe('Statistics', () => {
     expect(apiMocks.stats.mock.calls.some((call) => call[2] === 'pppoe-wan')).toBe(false)
 
     const downloadCall = apiMocks.stats.mock.calls.find((call) => call[0] === 'iface_rx_bps')
-    expect(downloadCall?.[4] - downloadCall?.[3]).toBe(24 * 60 * 60)
+    expect(downloadCall?.[4] - downloadCall?.[3]).toBe(6 * 60 * 60)
+    expect(screen.getByRole('button', { name: '6 hours' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps partial history neutral and discloses exact missing counts and remedies on demand', async () => {
+    render(<Statistics />)
+    const summary = await screen.findByLabelText('Download traffic history coverage')
+    expect(summary.textContent).toBe('History gaps')
+    const details = summary.closest('details')!
+    expect(details.open).toBe(false)
+    fireEvent.click(summary)
+    expect(details.open).toBe(true)
+    expect(details.textContent).toMatch(/1 of \d+ completed intervals/)
+    expect(details.textContent).toContain('blank space does not mean zero activity or downtime')
+    expect(screen.queryByRole('alert')).toBeNull()
+    const help = screen.getByText('About history and missing samples').closest('details')!
+    expect(help.open).toBe(false)
+    fireEvent.click(screen.getByText('About history and missing samples'))
+    expect(help.open).toBe(true)
+    expect(help.textContent).toContain('Keep the controller running and its devices reachable')
+    expect(help.textContent).toContain('Past gaps cannot be filled retrospectively')
   })
 
   it('does not invent a WAN interface when the dashboard has no exact series match', async () => {

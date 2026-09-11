@@ -255,6 +255,31 @@ retention. Neither compaction nor deleting controller evidence suppresses the
 router's own `logd` output. **Router managed** also does not clear the source;
 it simply stops oonfeeWRT from changing existing IPv6 option values.
 
+## Understand notices without treating every gap as a fault
+
+The development UI separates routine information from conditions that need
+attention. Expand a notice for the exact source, what can be done, and what the
+controller cannot establish. Historical or unsupported evidence is not erased
+to make a screen appear healthy.
+
+| Message | Meaning | What to do |
+|---|---|---|
+| Earlier router-log history is unavailable | Current collection is fresh, but an earlier interval could not be bridged | Keep the controller and router reachable. The continuity marker expires 24 hours after the last gap if no new gap occurs; current reads cannot reconstruct missing history |
+| Router-log coverage is missing or out of date | A current source is missing, stale, or unknown | Open the named device, check reachability and capability details, and restore connectivity. Refresh controller access only for a reported permission denial; then allow the normal collection cycle |
+| Channel classification / DFS unavailable | The controller has no explicit evidence to distinguish DFS from other restrictions | Keep the reported Restricted/unknown labels. Check the router's wireless settings; no controller refresh or RF scan resolves this implementation limit |
+| History gaps / No history | Some or all completed intervals have no stored metric | Keep collection running, allow a completed interval and storage flush, and inspect source-specific gaps. Use a shorter chart range for recent data. Missing history is not downtime or zero activity |
+| Optional LLDP capability is not installed | Richer neighbour evidence is optional, not a requirement for ordinary monitoring | Leave it uninstalled unless you need that evidence. Review the separate installation plan and consent before making any router changes |
+| Refresh failed, offline device, clock skew, or configuration blocker | There is a current failure, time-quality concern, or safety gate | Read the specific remedy. These remain prominent; do not dismiss them as a historical gap or retry a write blindly |
+
+One router-log discontinuity reason is **log ring no longer contains the
+cursor**. The collector did not find its saved continuation position in the
+latest bounded batch (up to 512 entries). That can follow a long collection
+pause or high message volume; it does not by itself distinguish ring overwrite
+from the request's batch limit. Continuous controller/network availability
+reduces gaps. If they recur during healthy collection, investigate excessive
+router logging. Increasing a buffer alone is not a guaranteed fix, and deleting
+controller evidence does not recover the missing events.
+
 ## Router clock status is unavailable or reports a large offset
 
 On an adoption created before v0.1.4, ordinary management keeps working but the

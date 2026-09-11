@@ -72,14 +72,19 @@ describe('Radios', () => {
       .closest('.page-header')).toBeTruthy()
     expect(screen.getByText(/Stable UCI radios, measured channel occupancy/)).toBeTruthy()
     expect(screen.getAllByText('radio0').length).toBeGreaterThan(0)
-    const classification = screen.getByRole('group', { name: 'Warning: Channel classification' })
-    expect(within(classification).getByText(/cannot prove which restricted channels require DFS/i)).toBeTruthy()
+    const classification = screen.getByRole('group', { name: 'Information: Channel classification' })
+    expect(classification.getAttribute('data-compact')).toBe('true')
+    expect(within(classification).getByText(/Channel restrictions are shown as reported. DFS status is unavailable/)).toBeTruthy()
     const classificationToggle = within(classification).getByText('More information about channel classification')
     const classificationDetails = classificationToggle.closest('details')
     expect(classificationDetails?.open).toBe(false)
     fireEvent.click(classificationToggle)
     expect(classificationDetails?.open).toBe(true)
+    expect(within(classification).getByText(/cannot prove which restricted channels require DFS/i)).toBeTruthy()
     expect(within(classification).getByText(/freqlist\.restricted/)).toBeTruthy()
+    expect(within(classification).getByText(/No controller setting or RF scan can fill this evidence gap/)).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Warning: Channel classification' })).toBeNull()
+    expect(screen.queryByRole('group', { name: /Radio coverage/ })).toBeNull()
     const plan = screen.getByRole('list', { name: /Channel plan for 1 radios/ })
     for (const [channel, state] of [['36', 'in-use'], ['52', 'restricted'], ['60', 'unknown']] as const) {
       const tile = plan.querySelector(`.radio-channel[data-state="${state}"]`)!
@@ -111,6 +116,7 @@ describe('Radios', () => {
     render(<Radios />)
 
     const notice = await screen.findByRole('group', { name: 'Warning: Radio coverage' })
+    expect(notice.getAttribute('data-compact')).toBe('true')
     expect(within(notice).getByText(/2 source gaps are recorded/i)).toBeTruthy()
     expect(within(notice).getByText(/missing data is not rendered as zero/i)).toBeTruthy()
     const toggle = within(notice).getByText('More information about radio coverage')
@@ -120,6 +126,9 @@ describe('Radios', () => {
     expect(details?.open).toBe(true)
     expect(within(notice).getByText('device:7/radio0: channel list unavailable')).toBeTruthy()
     expect(within(notice).getByText('device:8/radio1: inventory is stale')).toBeTruthy()
+    expect(within(notice).getByText(/refresh controller access only for a reported permission denial/)).toBeTruthy()
+    expect(within(notice).getByText(/refreshing cannot make an unsupported source available/)).toBeTruthy()
+    expect(api.scanRadio).not.toHaveBeenCalled()
   })
 
   it('distinguishes an initial inventory failure from an empty radio fleet', async () => {
