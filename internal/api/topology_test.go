@@ -72,6 +72,10 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d: %s", w.Code, w.Body.String())
 	}
+	if body := w.Body.String(); strings.Contains(body, `"ambiguities":null`) ||
+		!strings.Contains(body, `"ambiguities":[]`) {
+		t.Fatalf("current topology exposed nullable edge ambiguities: %s", body)
+	}
 	var got topologyResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -105,6 +109,18 @@ func TestTopologyReturnsCanonicalNodesEvidenceAndExplicitGaps(t *testing.T) {
 	}
 	if c6.ID == 0 {
 		t.Fatal("test device was not persisted")
+	}
+}
+
+func TestTopologyEdgeViewSerializesCollectionsAsArrays(t *testing.T) {
+	raw, err := json.Marshal(topologyEdgeViewFromModel(model.TopologyEdge{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if strings.Contains(body, `"evidence":null`) || strings.Contains(body, `"ambiguities":null`) ||
+		!strings.Contains(body, `"evidence":[]`) || !strings.Contains(body, `"ambiguities":[]`) {
+		t.Fatalf("topology edge collections must encode as arrays: %s", body)
 	}
 }
 

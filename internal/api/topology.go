@@ -225,12 +225,20 @@ func (s *Server) writeTopology(w http.ResponseWriter, r *http.Request, at, cover
 }
 
 func topologyEdgeViewFromModel(edge model.TopologyEdge) topologyEdgeView {
+	evidence := edge.Evidence
+	if evidence == nil {
+		evidence = []model.TopologyEvidence{}
+	}
+	ambiguities := edge.Ambiguities
+	if ambiguities == nil {
+		ambiguities = []string{}
+	}
 	return topologyEdgeView{
 		ID: edge.ID, ChildID: edge.ChildNode, ParentID: edge.ParentNode,
 		ParentDeviceID: edge.ParentDeviceID, ParentPort: edge.ParentPort,
 		Medium: edge.Medium, Confidence: edge.Confidence,
 		ValidFrom: edge.ValidFrom, ValidTo: edge.ValidTo, LastSeen: edge.LastSeen,
-		Evidence: edge.Evidence, Ambiguities: edge.Ambiguities,
+		Evidence: evidence, Ambiguities: ambiguities,
 	}
 }
 

@@ -255,6 +255,25 @@ describe('Discover', () => {
     await waitFor(() => expect(screen.getByText(/Nothing on .* answered as an OpenWrt device/i)).toBeTruthy())
     expect(screen.queryByText(/could not route to any address/i)).toBeNull()
   })
+
+  it('treats a legacy null network list as an empty completed scan', async () => {
+    api.scanPlan.mockResolvedValue({
+      networks: ['192.168.1.0/24'],
+      hosts: 254,
+    })
+    api.scan.mockResolvedValue({
+      found: [],
+      swept: 0,
+      answered: 0,
+      networks: null as unknown as string[],
+      elapsed_ms: 1,
+    })
+
+    render(<Discover onPick={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Scan' }))
+
+    expect(await screen.findByText(/No addresses were eligible for scanning/i)).toBeTruthy()
+  })
 })
 
 describe('Adopt', () => {

@@ -257,7 +257,10 @@ func Sweep(ctx context.Context, opt Options) (*Result, error) {
 	}
 	if len(nets) == 0 {
 		return &Result{
+			Found:     []Candidate{},
+			Networks:  []string{},
 			Skipped:   skipped,
+			Failures:  []NetworkFailure{},
 			ElapsedMS: time.Since(start).Milliseconds(),
 		}, nil
 	}

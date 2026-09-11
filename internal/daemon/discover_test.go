@@ -104,6 +104,13 @@ func TestAnnotatePreservesNetworkFailures(t *testing.T) {
 	}
 }
 
+func TestAnnotateNormalizesRequiredDiscoveryCollections(t *testing.T) {
+	out := annotate(&discovery.Result{}, nil)
+	if out.Found == nil || out.Networks == nil {
+		t.Fatalf("required discovery collections must be non-nil: %+v", out)
+	}
+}
+
 // The sweep probes the standard port and reports honestly when that finds
 // nothing, which is the case an operator hits when their device is elsewhere.
 func TestScanReportsAnEmptySweepLegibly(t *testing.T) {

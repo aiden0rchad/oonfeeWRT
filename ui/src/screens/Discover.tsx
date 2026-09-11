@@ -116,6 +116,7 @@ function Results({
   result: ScanResult
   onPick: (host: string, candidate?: Discovered) => void
 }) {
+  const networks = Array.isArray(result.networks) ? result.networks : []
   return (
     <div style={{ display: 'grid', gap: 8 }}>
       {/* The summary comes first and is always shown, including when nothing
@@ -133,9 +134,9 @@ function Results({
 
       {result.found.length === 0 && (!result.failures || result.failures.length === 0) && (
         <Banner>
-          {result.networks.length === 0
+          {networks.length === 0
             ? 'No addresses were eligible for scanning.'
-            : `Nothing on ${result.networks.join(', ')} answered as an OpenWrt device.`}{' '}
+            : `Nothing on ${networks.join(', ')} answered as an OpenWrt device.`}{' '}
           If yours is on another subnet, or this controller is in a container
           that cannot see your LAN, add it by address below — that path works
           everywhere and needs no discovery.

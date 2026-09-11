@@ -333,6 +333,24 @@ func TestSweepReportsWhatItSwept(t *testing.T) {
 	}
 }
 
+func TestSweepWithoutEligibleNetworksEncodesRequiredCollectionsAsArrays(t *testing.T) {
+	res, err := Sweep(context.Background(), Options{Networks: []string{"2001:db8::/64"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Found == nil || res.Networks == nil || res.Failures == nil {
+		t.Fatalf("no-network collections must be non-nil: %+v", res)
+	}
+	payload, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(payload), `"found":[]`) ||
+		!strings.Contains(string(payload), `"networks":[]`) {
+		t.Fatalf("required collections encoded as null: %s", payload)
+	}
+}
+
 // EHOSTUNREACH/ENETUNREACH are facts about the controller's route, not about
 // whether an address has a device on it. If every attempt in one CIDR returns
 // either error, an empty Found must not be presented as a successful empty
