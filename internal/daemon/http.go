@@ -18,6 +18,7 @@ func (d *Daemon) routes() (http.Handler, error) {
 
 	d.api = api.New(d.Store, fleetAdapter{d}, d, d.Log)
 	d.api.Keys = d.Keys
+	d.api.WireGuard = d
 	d.api.RestoreOwnerInstanceID = d.restoreOwnerInstanceID
 	d.api.RequestRestart = d.RequestRestoreRestart
 	d.api.RouterWriteSuppression = d.RouterWriteSuppression()

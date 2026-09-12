@@ -15,6 +15,8 @@ import {
 import type { Column } from '../components/ui'
 import { ago } from '../components/Chart'
 import { ClientObservability } from './ClientObservability'
+import { DeviceGlyph } from '../components/DeviceGlyph'
+import './Inventory.css'
 
 /**
  * The Client Devices grid.
@@ -141,17 +143,15 @@ export function Clients() {
       render: (c) => (
         <button
           type="button"
+          className="inventory-identity"
           aria-label={`Open observability for ${c.name || c.mac}`}
           onClick={(event) => {
             event.stopPropagation()
             setSelectedClient(c)
           }}
-          style={{
-            padding: 0, border: 0, background: 'none', color: c.name ? 'inherit' : 'var(--text-muted)',
-            cursor: 'pointer', font: 'inherit', textAlign: 'left',
-          }}
         >
-          {c.name || c.mac}
+          <span className="inventory-identity-glyph"><DeviceGlyph kind={c.connection === 'wireless' ? 'wireless' : 'client'} size={25} /></span>
+          <span className="inventory-identity-copy"><strong>{c.name || c.mac}</strong><small>{c.fixed_ip ? 'Address reservation configured' : c.name ? 'Reported hostname' : 'Unnamed client'}</small></span>
         </button>
       ),
       sortBy: (c) => c.name || c.mac,
@@ -184,7 +184,11 @@ export function Clients() {
             ? 'multiple managed AP or BSS observations currently report this MAC, so no single RSSI is attributed'
             : "no access point this controller manages is reporting this client, so nothing has measured its signal. Associated clients are read from hostapd on every poll — a client on another network's access point will never have a reading here."} />
         ) : (
-          <span style={{ color: signalTone(c.signal) }}>{c.signal} dBm</span>
+          <span className="inventory-signal" style={{ color: signalTone(c.signal) }}>
+            <span className="inventory-signal-bars" aria-hidden="true">{[-90, -80, -70, -60].map((threshold, index) =>
+              <i key={threshold} data-active={c.signal! >= threshold} style={{ height: 4 + index * 4 }} />)}</span>
+            {c.signal} dBm
+          </span>
         ),
       sortBy: (c) => c.signal ?? -999,
     },
@@ -250,11 +254,16 @@ export function Clients() {
   ]
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div className="inventory-page">
       <PageHeader
         title="Client Devices"
         purpose="Current wired and wireless clients with scoped network and access-point evidence."
       />
+      <div className="inventory-summary inventory-client-summary" aria-label="Client inventory summary">
+        <div className="inventory-summary-item"><span>Matching clients</span><strong>{page ? page.total.toLocaleString() : '—'}</strong><small>All pages · current filters</small></div>
+        <div className="inventory-summary-item"><span>On this page</span><strong>{page ? rows.length.toLocaleString() : '—'}</strong><small>Inventory records loaded</small></div>
+        <div className="inventory-summary-item"><span>Signal readings</span><strong>{page ? withRF.toLocaleString() : '—'}</strong><small>On this page · measured RSSI</small></div>
+      </div>
       {/* The server decides what this says: the remedy differs by cause, and
           "Open a device to populate them" used to be appended to all of them.
           On a fleet whose radios have no associated stations at all, opening a

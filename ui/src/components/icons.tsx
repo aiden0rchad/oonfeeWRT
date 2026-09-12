@@ -1,6 +1,10 @@
 export type NavigationIconName =
   | 'dashboard'
   | 'statistics'
+  | 'reports'
+  | 'alerts'
+  | 'firmware'
+  | 'integrations'
   | 'topology'
   | 'radios'
   | 'devices'
@@ -27,6 +31,24 @@ export function NavigationIcon({ name }: { name: NavigationIconName }) {
         return <>
           <path d="M4.5 19.5V13M10 19.5V9M15.5 19.5V5.5M21 19.5V10.5" />
           <path d="m4.5 9 5.5-4 5.5 2.2L21 3" />
+        </>
+      case 'reports':
+        return <>
+          <path d="M5 3.5h10l4 4v13H5Z M15 3.5v4h4" />
+          <path d="M8 17v-4M12 17v-6M16 17v-3" />
+        </>
+      case 'alerts':
+        return <>
+          <path d="M5 17h14l-2-3V9a5 5 0 0 0-10 0v5Z M10 20h4 M12 2v2" />
+        </>
+      case 'firmware':
+        return <>
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+          <path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m12 0h3M3 15h3m12 0h3M9 12h6m-3-3v6" />
+        </>
+      case 'integrations':
+        return <>
+          <path d="m9 9 6 6M7 4l-3 3a4 4 0 0 0 6 6l2-2M17 20l3-3a4 4 0 0 0-6-6l-2 2" />
         </>
       case 'topology':
         return <>

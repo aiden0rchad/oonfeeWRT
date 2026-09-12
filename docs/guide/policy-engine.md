@@ -1,5 +1,15 @@
 # Policy Engine and firewall
 
+::: info Observation is not policy enforcement
+Reports and Alerts summarize evidence or send explicitly enabled
+notifications; they do not create firewall rules or remediate a condition.
+AdGuard integration does not turn DNS observations into DPI/application
+identity, and an illustrated client is not authenticated by its icon. The
+exact-MAC managed-Gateway proof, desired-state review, and Preview/Apply gates
+below remain unchanged. See [Integrations](./integrations.md) and
+[Alerts](./alerts.md) for those separate workflows.
+:::
+
 The Policy Engine turns explicit intent into reviewable firewall, forwarding,
 route, and client-policy objects. It exposes both the high-level relationship
 and the concrete draft so broad access is not hidden behind friendly labels.
@@ -19,7 +29,7 @@ and the concrete draft so broad access is not hidden behind friendly labels.
 - Begin with a narrow test rule and a known client.
 - Know how you will retain management access if the rule is wrong.
 
-The Policy Engine is IPv4-focused in v0.1.5. QoS, application/DPI identity,
+The Policy Engine is IPv4-focused in v0.1.6. QoS, application/DPI identity,
 proved priority semantics, switch ACLs, device/group routing, and advanced
 traffic classification remain unavailable or gated.
 
@@ -45,7 +55,7 @@ priority has packet-processing semantics unless the preview/concrete backend
 proves it.
 
 <DocScreenshot
-  src="policy-rules" :width="1918" :height="982"
+  src="policy-rules" :width="1499" :height="982"
   alt="Policy Engine Master Table in its empty state, with no configured policy records"
   caption="This development controller has no configured policy records, so Master Table is empty. This does not mean the routers have no existing firewall rules."
 />
@@ -64,7 +74,7 @@ Use it to spot broad forwarding before reading the exception rules:
 - Does an allowed relationship exceed the narrow service actually needed?
 
 <DocScreenshot
-  src="policy-zones" :width="1918" :height="982"
+  src="policy-zones" :width="1499" :height="982"
   alt="Policy Engine Zone Matrix in its empty state, with no managed zones configured"
   caption="No managed zones are configured in this capture. Once present, Zone Matrix compares whole-zone forwarding; it is not a summary of every explicit firewall exception."
 />
@@ -87,7 +97,7 @@ network or explicit address objects when identity must survive MAC
 randomization or an offline client.
 
 <DocScreenshot
-  src="policy-objects" :width="1430" :height="720"
+  src="policy-objects" :width="1499" :height="982"
   alt="Policy Engine Objects tab with the Object Manager selection controls"
   caption="Policy Engine → Objects separates object selection from draft compilation and saving. An empty selection or draft area is not a deployed rule."
 />

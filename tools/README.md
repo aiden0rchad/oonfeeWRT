@@ -4,7 +4,7 @@
 
 `dryrun`, `optdiff`, `stalecheck`, `livecheck`, `recoverycheck`, and `applyone`
 open controller state through the same schema-14 cryptographic boundary as the
-daemon. The current source schema is **23**: 14 remains the secret-sealing
+daemon. The v0.1.6 source schema is **25**: 14 remains the secret-sealing
 epoch, 15 is the cross-feature policy semantic boundary, 16 is the attested
 observability shape, 17 adds the optional-capability rollback ledger, and 18
 adds controller-host speed-test jobs/history. Schema 19 adds the controller
@@ -17,8 +17,11 @@ adds source-relative per-device client provenance, the case-insensitive
 `clients_mac_nocase` lookup used by bounded policy checks, and a hardened
 one-managed-Gateway index. That migration drops the legacy Gateway index before
 canonicalizing the compatibility `role`, then rebuilds the guard from both
-`functions_json` and `role` so a disagreement cannot bypass it. The public
-v0.1.5 release uses schema 23. The published `v0.1.0-rc.1`, v40 artifact, and
+`functions_json` and `role` so a disagreement cannot bypass it. Schema 24 adds
+bounded controller alert rules, incidents, delivery state, and an encrypted
+webhook destination. Schema 25 adds the encrypted AdGuard Home connection.
+The v0.1.5 release remains a schema-23 checkpoint; v0.1.6 uses schema 25.
+The published `v0.1.0-rc.1`, v40 artifact, and
 their hardware evidence remain historical schema-17 checkpoints; they do not
 describe the current release. Set
 `OONFEE_PASSPHRASE_FILE` to an absolute path naming the controller's mode-0600
@@ -37,14 +40,16 @@ go run ./tools/applyone /absolute/path/to/oonfeewrt.db DEVICE_HOST
 ```
 
 The first five open SQLite with `mode=ro` plus `query_only`. This source build
-requires schema 23 and `secret_state.scrub_complete=1`; they never migrate,
+requires schema 25 and `secret_state.scrub_complete=1`; they never migrate,
 finish a scrub or
 repair a colliding/partial observability table. Start the controller writable
 first when upgrading an older database.
 The first four may read the routers named by the store, but do not stage or
 apply router changes. `recoverycheck` makes no network calls: it requires an
 exact sibling `keyring.json`, opens and validates every sealed record, and
-prints counts only. Run it on an isolated recovery copy: it refuses sibling
+prints counts only. Its validation includes the encrypted alert destination
+and AdGuard Home configuration, without contacting either service or exposing
+their secrets. Run it on an isolated recovery copy: it refuses sibling
 SQLite `-wal` or `-journal` files that contain state rather than blessing a
 snapshot whose self-contained database state is uncertain. A transient
 `-shm` file and empty sidecars carry no recoverable database pages and are not
@@ -68,10 +73,14 @@ health-check safety contracts.
 
 The published fresh-start hardware checkpoint was promoted through schema 16 to
 schema 17 and validated there. A later controlled live-lab checkpoint reached
-schema 19, public v0.1.4 uses schema 20, and public v0.1.5 uses schema 23. These
+schema 19, v0.1.4 uses schema 20, v0.1.5 uses schema 23, and v0.1.6 uses schema 25. These
 are separate evidence epochs: do not infer that an arbitrary retained store has
-migrated because the source or release has. The automatic v0.1.4 upgrade path is
-20 → 21 → 22 → 23 and makes no router call. For any older store, start the
+migrated because the source or release has. Upgrading v0.1.5 to v0.1.6 follows
+23 → 24 → 25; upgrading v0.1.4 follows 20 → 21 → 22 → 23 → 24 → 25. These
+controller-local migrations make no router call. Before upgrading, retain the
+matching pre-upgrade database, keyring, runtime passphrase, and old controller
+binary. Downgrading to v0.1.5 requires restoring that schema-23 pair, not merely
+replacing the binary. For any older store, start the
 matching daemon writable and complete/validate migration before using a
 write-capable tool. The five read-only tools require the current schema and
 never migrate it; although `applyone` opens writable and can run migrations,

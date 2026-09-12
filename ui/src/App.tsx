@@ -1,10 +1,14 @@
-import { Component, Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { api, ApiError, onControllerRestart, onUnauthorized } from './lib/api'
+import { api, ApiError, isDemo, onControllerRestart, onUnauthorized } from './lib/api'
 import type { Dashboard as DashboardData, Device, SessionInfo } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
 import { Statistics } from './screens/Statistics'
+import { Reports } from './screens/Reports'
+import { Alerts } from './screens/Alerts'
+import { Firmware } from './screens/Firmware'
+import { Integrations } from './screens/Integrations'
 import { Devices } from './screens/Devices'
 import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
@@ -18,8 +22,9 @@ import { Banner, Button } from './components/ui'
 import { NavigationIcon } from './components/icons'
 import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
+import './Shell.css'
 
-type Screen = 'dashboard' | 'statistics' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'accounts' | 'logs'
+type Screen = 'dashboard' | 'statistics' | 'reports' | 'alerts' | 'firmware' | 'integrations' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'accounts' | 'logs'
 type SettingsIntent = 'ipv6' | null
 type Theme = 'dark' | 'light'
 
@@ -36,12 +41,16 @@ function readThemePreference(): Theme {
 const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
   { id: 'statistics', label: 'Statistics', icon: 'statistics' },
+  { id: 'reports', label: 'Reports', icon: 'reports' },
+  { id: 'alerts', label: 'Alerts', icon: 'alerts' },
   { id: 'topology', label: 'Topology', icon: 'topology' },
   { id: 'radios', label: 'Radios', icon: 'radios' },
   { id: 'devices', label: 'Devices', icon: 'devices' },
   { id: 'clients', label: 'Client Devices', icon: 'clients' },
   { id: 'policy', label: 'Policy Engine', icon: 'policy' },
   { id: 'adopt', label: 'Adopt a device', icon: 'adopt' },
+  { id: 'firmware', label: 'Firmware', icon: 'firmware' },
+  { id: 'integrations', label: 'Integrations', icon: 'integrations' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'accounts', label: 'Accounts', icon: 'accounts' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
@@ -98,6 +107,28 @@ class ScreenBoundary extends Component<{ name: string; children: ReactNode }, { 
 }
 
 export function App() {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  const navigationRef = useRef<HTMLElement | null>(null)
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (!mobileNavigationOpen) return
+    const nav = navigationRef.current
+    const focusable = () => Array.from(nav?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? [])
+      .filter((el) => getComputedStyle(el).display !== 'none')
+    focusable()[0]?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }
+      if (event.key !== 'Tab') return
+      const items = focusable()
+      const first = items[0], last = items.at(-1)
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+    const onResize = () => { if (window.innerWidth > 720) setMobileNavigationOpen(false) }
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onResize)
+    return () => { document.removeEventListener('keydown', onKey); window.removeEventListener('resize', onResize) }
+  }, [mobileNavigationOpen])
   const [ready, setReady] = useState(false)
   const [bootstrapAttempt, setBootstrapAttempt] = useState(0)
   const [bootstrapErr, setBootstrapErr] = useState('')
@@ -122,6 +153,7 @@ export function App() {
   const mainRef = useRef<HTMLElement>(null)
 
   const clearProtectedState = useCallback(() => {
+    setMobileNavigationOpen(false)
     refreshGeneration.current++
     dashboardRefresh.current?.abort()
     devicesRefresh.current?.abort()
@@ -136,6 +168,7 @@ export function App() {
   }, [])
 
   const navigate = useCallback((next: Screen, intent: SettingsIntent = null) => {
+    setMobileNavigationOpen(false)
     const path = screenPath(next)
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setSettingsIntent(next === 'settings' ? intent : null)
@@ -289,16 +322,18 @@ export function App() {
     live.close()
   }, [ready, username])
 
+  const headingReady = screen !== 'dashboard' || dash != null
   useEffect(() => {
     if (!username) return
     document.title = `${NAV.find((item) => item.id === screen)?.label ?? 'oonfeeWRT'} — oonfeeWRT`
+    if (!headingReady) return
     const timer = window.setTimeout(() => {
       const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current
       if (target && target !== mainRef.current) target.tabIndex = -1
       target?.focus()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [screen, username])
+  }, [screen, username, headingReady])
 
   if (!ready) {
     return (
@@ -327,13 +362,19 @@ export function App() {
     )
   }
 
-  const navigationWidth = navigationExpanded ? 208 : 64
+  const showNavigationLabels = navigationExpanded || mobileNavigationOpen
+  const navigationWidth = showNavigationLabels ? 208 : 64
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
       <header className="app-topbar">
+        <button ref={menuButtonRef} className="mobile-menu-button" type="button" aria-label="Open navigation"
+          aria-expanded={mobileNavigationOpen} aria-controls="app-navigation" onClick={() => setMobileNavigationOpen(true)}>
+          <NavigationIcon name="expand" />
+        </button>
         <strong className="app-brand">oonfeeWRT</strong>
+        {isDemo && <span className="app-demo-label">Demo · synthetic data · read only</span>}
         <div className="app-account-controls">
           <button
             className="app-theme-control"
@@ -344,7 +385,7 @@ export function App() {
             ◐
           </button>
           <span className="app-account-name" title={username}>{username}</span>
-          <button
+          {!isDemo && <button
             className="app-signout-control"
             disabled={signingOut}
             onClick={async () => {
@@ -365,12 +406,18 @@ export function App() {
             }}
           >
             {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>
+          </button>}
         </div>
       </header>
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        {mobileNavigationOpen && <button className="mobile-nav-backdrop" type="button" tabIndex={-1} aria-label="Dismiss navigation"
+          onClick={() => { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }} />}
         <nav
+          id="app-navigation"
+          ref={navigationRef}
+          className="app-navigation"
+          data-mobile-open={mobileNavigationOpen}
           aria-label="Main navigation"
           style={{
             width: navigationWidth,
@@ -386,6 +433,8 @@ export function App() {
             overflowY: 'auto',
           }}
         >
+          <button className="mobile-close-button" type="button"
+            onClick={() => { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }}>Close navigation ×</button>
           <button
             className="app-nav-control"
             type="button"
@@ -416,19 +465,21 @@ export function App() {
             <NavigationIcon name={navigationExpanded ? 'collapse' : 'expand'} />
             {navigationExpanded && <span style={{ whiteSpace: 'nowrap' }}>Collapse</span>}
           </button>
-          {NAV.map((n) => (
-            <Fragment key={n.id}>
-              {n.id === 'settings' && (
+          {[false, true].map((controller) => (
+            <div key={String(controller)} className={`app-nav-section ${controller ? 'app-nav-controller' : 'app-nav-primary'}`}>
+              {controller && (
                 <div
                   className="app-nav-divider"
-                  data-expanded={navigationExpanded}
+                  data-expanded={showNavigationLabels}
                   role="separator"
                   aria-label="Controller tools"
                 >
-                  {navigationExpanded && <span>Controller</span>}
+                  {showNavigationLabels && <span>Controller</span>}
                 </div>
               )}
+              {NAV.filter((n) => ['settings', 'accounts', 'logs'].includes(n.id) === controller).map((n) => (
               <button
+                key={n.id}
                 className="app-nav-item"
                 type="button"
                 title={n.label}
@@ -436,12 +487,12 @@ export function App() {
                 aria-current={screen === n.id ? 'page' : undefined}
                 onClick={() => navigate(n.id)}
                 style={{
-                  width: navigationExpanded ? 'calc(100% - 16px)' : 44,
+                  width: showNavigationLabels ? 'calc(100% - 16px)' : 44,
                   minHeight: 44,
-                  padding: navigationExpanded ? '0 10px' : 0,
+                  padding: showNavigationLabels ? '0 10px' : 0,
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: navigationExpanded ? 'flex-start' : 'center',
+                  justifyContent: showNavigationLabels ? 'flex-start' : 'center',
                   gap: 10,
                   flex: '0 0 auto',
                   borderRadius: 8,
@@ -452,13 +503,14 @@ export function App() {
                 }}
               >
                 <NavigationIcon name={n.icon} />
-                {navigationExpanded && <span style={{ whiteSpace: 'nowrap' }}>{n.label}</span>}
+                {showNavigationLabels && <span style={{ whiteSpace: 'nowrap' }}>{n.label}</span>}
               </button>
-            </Fragment>
+              ))}
+            </div>
           ))}
         </nav>
 
-        <main ref={mainRef} id="main-content" className="app-main" tabIndex={-1}>
+        <main ref={mainRef} id="main-content" className="app-main" tabIndex={-1} inert={mobileNavigationOpen || undefined}>
           {accountErr && (
             <div style={{ marginBottom: 12 }}>
               <div role="alert"><Banner tone="critical">{accountErr}</Banner></div>
@@ -485,8 +537,12 @@ export function App() {
               ? <Dashboard data={dash} onOpenTopology={() => navigate('topology')} />
               : !refreshErrors.dashboard && <div role="status">Loading dashboard…</div>)}
             {screen === 'statistics' && <Statistics />}
+            {screen === 'reports' && <Reports />}
+            {screen === 'alerts' && session && <Alerts devices={devices} session={session} />}
+            {screen === 'firmware' && session && <Firmware session={session} />}
+            {screen === 'integrations' && session && <Integrations devices={devices} session={session} />}
             {screen === 'topology' && (
-              <Topology onReviewCapabilities={() => navigate('devices')} />
+              <Topology userKey={session ? `${session.admin_id}:${session.username}` : undefined} onReviewCapabilities={() => navigate('devices')} />
             )}
             {screen === 'radios' && <Radios />}
             {screen === 'devices' && (

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { TopologySnapshot } from '../lib/api'
+import { constrainTopologyPosition, parseTopologyPositions, topologyLayoutKey } from './Topology.layout'
 
 const api = {
   topology: vi.fn(),
@@ -58,6 +59,7 @@ it('renders nested evidence without JavaScript object placeholders', () => {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  localStorage.clear()
   api.topology.mockResolvedValue(current)
   api.topologyHistory.mockResolvedValue({ ...current, complete: true, gaps: [] })
   api.device.mockResolvedValue({
@@ -228,7 +230,7 @@ describe('Topology', () => {
     render(<Topology />)
 
     const graph = await screen.findByRole('group', { name: /3 topology nodes and 2 links/ })
-    const painted = [...graph.querySelectorAll('path, text')]
+    const painted = [...graph.querySelectorAll('path, text')].filter((element) => !element.closest('.topology-node'))
     const lastPath = painted.map((element) => element.tagName.toLowerCase()).lastIndexOf('path')
     for (const label of ['lan2', 'lan3']) {
       expect(painted.findIndex((element) => element.textContent === label)).toBeGreaterThan(lastPath)
@@ -503,7 +505,170 @@ describe('Topology', () => {
   })
 })
 
+describe('editable topology layout', () => {
+  const account = '7:owner'
+  const controller = 'site-test'
+  const key = () => topologyLayoutKey(account, controller)!
+
+  it('saves keyboard adjustments for the signed-in account and restores or resets only that layout', async () => {
+    const view = render(<Topology userKey={account} controllerKey={controller} />)
+    const node = await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    const automatic = node.getAttribute('transform')
+    fireEvent.click(screen.getByRole('button', { name: 'Arrange layout' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Arrange Hall AP' }), { key: 'ArrowRight' })
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Arrange Hall AP' }), { key: 'ArrowLeft', shiftKey: true })
+    const moved = node.getAttribute('transform')
+    expect(moved).not.toBe(automatic)
+    expect(JSON.parse(localStorage.getItem(key())!)[current.nodes[1].id]).toEqual({ x: 518, y: 236, unplaced: false })
+    expect(screen.getByText('Layout saved in this browser.')).toBeTruthy()
+    expect(api.device).not.toHaveBeenCalled()
+
+    const otherKey = topologyLayoutKey('8:reader', controller)!
+    localStorage.setItem(otherKey, JSON.stringify({ other: { x: 160, y: 160, unplaced: false } }))
+    view.unmount()
+    render(<Topology userKey={account} controllerKey={controller} />)
+    const restored = await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    expect(restored.getAttribute('transform')).toBe(moved)
+    fireEvent.click(screen.getByRole('button', { name: 'Reset layout' }))
+    expect(restored.getAttribute('transform')).toBe(automatic)
+    expect(localStorage.getItem(key())).toBeNull()
+    expect(localStorage.getItem(otherKey)).not.toBeNull()
+  })
+
+  it('does not reuse another account or controller arrangement, even before a new response', async () => {
+    localStorage.setItem(key(), JSON.stringify({ [current.nodes[1].id]: { x: 700, y: 200, unplaced: false } }))
+    const view = render(<Topology userKey={account} controllerKey={controller} />)
+    expect((await screen.findByRole('button', { name: 'Open details for Hall AP' })).getAttribute('transform')).toBe('translate(700,200)')
+    view.rerender(<Topology userKey="8:reader" controllerKey={controller} />)
+    expect(screen.getByRole('button', { name: 'Open details for Hall AP' }).getAttribute('transform')).toBe('translate(500,236)')
+    view.rerender(<Topology userKey={account} controllerKey="another-site" />)
+    expect(screen.getByRole('button', { name: 'Open details for Hall AP' }).getAttribute('transform')).toBe('translate(500,236)')
+    view.rerender(<Topology userKey={account} controllerKey={controller} />)
+    expect(screen.getByRole('button', { name: 'Open details for Hall AP' }).getAttribute('transform')).toBe('translate(700,200)')
+  })
+
+  it('persists completed drags in SVG coordinates but cancels interrupted drags without opening details', async () => {
+    render(<Topology userKey={account} controllerKey={controller} />)
+    const graph = await screen.findByRole('group', { name: /topology nodes/ })
+    vi.spyOn(graph, 'getBoundingClientRect').mockReturnValue({ width: 2000 } as DOMRect)
+    fireEvent.click(screen.getByRole('button', { name: 'Arrange layout' }))
+    const node = screen.getByRole('button', { name: 'Arrange Hall AP' })
+    const automatic = node.getAttribute('transform')
+    fireEvent.pointerDown(node, { button: 0, pointerId: 9, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(node, { pointerId: 9, clientX: 180, clientY: 60 })
+    expect(node.getAttribute('transform')).toBe('translate(540,216)')
+    expect(localStorage.getItem(key())).toBeNull()
+    fireEvent.pointerCancel(node, { pointerId: 9 })
+    expect(node.getAttribute('transform')).toBe(automatic)
+    expect(localStorage.getItem(key())).toBeNull()
+
+    fireEvent.pointerDown(node, { button: 0, pointerId: 10, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(node, { pointerId: 10, clientX: 180, clientY: 60 })
+    fireEvent.pointerUp(node, { pointerId: 10 })
+    expect(JSON.parse(localStorage.getItem(key())!)[current.nodes[1].id]).toEqual({ x: 540, y: 216, unplaced: false })
+    fireEvent.click(node)
+    expect(api.device).not.toHaveBeenCalled()
+
+    fireEvent.pointerDown(node, { button: 0, pointerId: 11, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(node, { pointerId: 11, clientX: 220, clientY: 100 })
+    fireEvent.keyDown(node, { key: 'Escape' })
+    fireEvent.pointerUp(node, { pointerId: 11 })
+    expect(node.getAttribute('transform')).toBe('translate(540,216)')
+  })
+
+  it('offers standard directional controls and does not require persistence to arrange nodes', async () => {
+    render(<Topology />)
+    await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    fireEvent.click(screen.getByRole('button', { name: 'Arrange layout' }))
+    fireEvent.change(screen.getByLabelText('Node to arrange'), { target: { value: current.nodes[1].id } })
+    fireEvent.click(screen.getByRole('button', { name: 'Move selected node left' }))
+    expect(screen.getByRole('button', { name: 'Arrange Hall AP' }).getAttribute('transform')).toBe('translate(476,236)')
+    expect(localStorage.length).toBe(0)
+    expect(screen.getByText(/Sign-in identity is required/)).toBeTruthy()
+  })
+
+  it('keeps editing usable when storage is denied', async () => {
+    render(<Topology userKey={account} controllerKey={controller} />)
+    await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('denied') })
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Arrange layout' }))
+      const node = screen.getByRole('button', { name: 'Arrange Hall AP' })
+      fireEvent.keyDown(node, { key: 'ArrowLeft' })
+      expect(node.getAttribute('transform')).toBe('translate(476,236)')
+      expect(screen.getByText(/This browser could not save the layout/)).toBeTruthy()
+    } finally {
+      write.mockRestore()
+    }
+  })
+
+  it('keeps saved placement stable across confidence filters and separates History', async () => {
+    localStorage.setItem(key(), JSON.stringify({ [current.nodes[1].id]: { x: 650, y: 200, unplaced: false } }))
+    render(<Topology userKey={account} controllerKey={controller} />)
+    const node = await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    fireEvent.change(screen.getByLabelText('Filter topology by confidence'), { target: { value: 'measured' } })
+    expect(node.getAttribute('transform')).toBe('translate(650,200)')
+    expect(node.getAttribute('data-unplaced')).toBe('false')
+    fireEvent.change(screen.getByLabelText('Filter topology by confidence'), { target: { value: 'all' } })
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect((await screen.findByRole('button', { name: 'Open details for Hall AP' })).getAttribute('transform')).toBe('translate(500,236)')
+    fireEvent.click(screen.getByRole('button', { name: 'Current' }))
+    expect((await screen.findByRole('button', { name: 'Open details for Hall AP' })).getAttribute('transform')).toBe('translate(650,200)')
+  })
+
+  it('ignores removed IDs and old placement classes while keeping new disconnected nodes visible', async () => {
+    const hall = current.nodes[1]
+    localStorage.setItem(key(), JSON.stringify({
+      [hall.id]: { x: 700, y: 200, unplaced: false },
+      removed: { x: 600, y: 300, unplaced: false },
+    }))
+    api.topology.mockResolvedValueOnce({ ...current, edges: [], nodes: [...current.nodes, { id: 'new', name: 'New client', kind: 'client', synthetic: false }] })
+    render(<Topology userKey={account} controllerKey={controller} />)
+    const node = await screen.findByRole('button', { name: 'Open details for Hall AP' })
+    expect(node.getAttribute('data-unplaced')).toBe('true')
+    expect(node.getAttribute('transform')).not.toBe('translate(700,200)')
+    expect(screen.getByRole('button', { name: 'Open details for New client' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /removed/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Arrange layout' }))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Arrange Hall AP' }), { key: 'ArrowLeft' })
+    const value = JSON.parse(localStorage.getItem(key())!)
+    expect(value.removed).toBeUndefined()
+    expect(value[hall.id].unplaced).toBe(true)
+    expect(value[hall.id].x).toBeGreaterThan(760)
+  })
+
+  it('validates persisted coordinates and scopes account, controller, and mode independently', () => {
+    expect(topologyLayoutKey()).toBeNull()
+    expect(key()).not.toBe(topologyLayoutKey('8:reader', controller))
+    expect(key()).not.toBe(topologyLayoutKey(account, 'different-site'))
+    expect(key()).not.toBe(topologyLayoutKey(account, controller, 'history'))
+    for (const raw of [null, 'bad JSON', '[]', 'null', '{"bad":{"x":-1,"y":5,"unplaced":false}}']) {
+      expect(parseTopologyPositions(raw)).toEqual({})
+    }
+    expect(parseTopologyPositions(JSON.stringify({
+      okay: { x: 300, y: 100, unplaced: false, extra: 'discard' },
+      bad: { x: '300', y: 100, unplaced: false },
+      huge: { x: 300_000, y: 100, unplaced: false },
+      missing: { x: 100, y: 100 },
+    }))).toEqual({ okay: { x: 300, y: 100, unplaced: false } })
+  })
+
+  it('keeps nodes inside the canvas and unplaced nodes inside their separate lane', () => {
+    const bounds = { width: 1100, height: 520, unplacedStartX: 800 }
+    expect(constrainTopologyPosition({ x: -100, y: 1000 }, true, bounds)).toEqual({ x: 932, y: 454 })
+    expect(constrainTopologyPosition({ x: 2000, y: 0 }, false, bounds)).toEqual({ x: 668, y: 66 })
+  })
+})
+
 describe('layoutTopology', () => {
+  it('adds horizontal space for wide levels instead of overlapping node cards', () => {
+    const children = Array.from({ length: 12 }, (_, index) => ({ ...current.nodes[1], id: `child:${index}` }))
+    const edges = children.map((child, index) => ({ ...current.edges[0], id: index, child_id: child.id }))
+    const result = layoutTopology([current.nodes[0], ...children], edges)
+    const x = children.map((child) => result.positions.get(child.id)!.x).sort((a, b) => a - b)
+    expect(x.every((position, index) => index === 0 || position - x[index - 1] >= 224)).toBe(true)
+  })
+
   it('places parents above children and retains disconnected nodes', () => {
     const detached = { id: 'mac:aa:bb:cc:dd:ee:ff', kind: 'client' as const, name: 'Unknown', mac: 'aa:bb:cc:dd:ee:ff', synthetic: false }
     const result = layoutTopology([...current.nodes, detached], current.edges)
@@ -534,15 +699,15 @@ describe('layoutTopology', () => {
   it('uses separate orthogonal routes and label lanes', () => {
     const first = topologyEdgeRoute({ x: 500, y: 64 }, { x: 300, y: 214 }, -12)
     const second = topologyEdgeRoute({ x: 500, y: 64 }, { x: 300, y: 214 }, 12)
-    expect(first.path).toMatch(/^M 500 102 V .* H 300 V 176$/)
+    expect(first.path).toMatch(/^M 500 114 V .* H 300 V 164$/)
     expect(first.label.y).not.toBe(second.label.y)
     expect(first.label.x).toBe(400)
   })
 
   it('places a vertical-link label on its unique lower segment', () => {
     const route = topologyEdgeRoute({ x: 500, y: 214 }, { x: 500, y: 364 })
-    expect(route.path).toBe('M 500 252 V 289 H 500 V 326')
-    expect(route.label).toEqual({ x: 500, y: 307.5 })
+    expect(route.path).toBe('M 500 264 V 289 H 500 V 314')
+    expect(route.label).toEqual({ x: 500, y: 301.5 })
   })
 
   it('wraps long device names without hiding their second line', () => {
@@ -552,8 +717,8 @@ describe('layoutTopology', () => {
 
   it('routes last-known evidence across the unplaced divider', () => {
     const route = topologyLastKnownRoute({ x: 400, y: 214 }, { x: 960, y: 76 })
-    expect(route.path).toBe('M 488 214 H 800 V 76 H 872')
-    expect(route.label).toEqual({ x: 644, y: 214 })
+    expect(route.path).toBe('M 512 214 H 800 V 76 H 848')
+    expect(route.label).toEqual({ x: 656, y: 214 })
   })
 })
 

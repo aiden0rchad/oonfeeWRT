@@ -1,0 +1,18 @@
+.mobile-menu-button, .mobile-close-button, .mobile-nav-backdrop { display: none; }
+.app-demo-label { border: 1px solid var(--accent); border-radius: 20px; padding: 4px 10px; color: var(--accent-text); font-size: 11px; margin-left: 16px; }
+.app-nav-section { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; }
+.app-nav-primary { flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.app-nav-controller { flex: 0 0 auto; padding-top: 7px; }
+.app-nav-controller .app-nav-divider { margin: 0 0 5px; }
+@media (max-width: 720px) {
+  .mobile-menu-button { display: grid; place-items: center; flex: 0 0 40px; width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+  .app-topbar { gap: 10px; }
+  .app-brand { margin-right: auto; }
+  .app-demo-label { margin-left: 0; max-width: 170px; font-size: 10px; }
+  .app-navigation { display: none !important; }
+  .app-navigation[data-mobile-open='true'] { display: flex !important; position: fixed; top: 0; bottom: 0; left: 0; z-index: 101; width: min(290px, 86vw) !important; padding: max(12px, env(safe-area-inset-top)) 0 max(12px, env(safe-area-inset-bottom)) !important; box-shadow: 20px 0 70px #0006; }
+  .mobile-close-button { display: block; width: calc(100% - 24px); min-height: 44px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); color: var(--text-primary); text-align: left; cursor: pointer; }
+  .app-navigation .app-nav-control { display: none; }
+  .mobile-nav-backdrop { display: block; position: fixed; inset: 0; z-index: 100; border: 0; background: #0008; cursor: pointer; }
+  .app-main { padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+}

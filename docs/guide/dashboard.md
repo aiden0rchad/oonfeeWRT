@@ -5,6 +5,15 @@ fresh evidence, can the managed Gateway reach the Internet, and where should I
 investigate next?** It combines fleet counts, WAN observations, topology,
 speed-test history, and recent warnings without hiding missing sources.
 
+::: info New v0.1.6 workspaces
+v0.1.6 adds [Statistics](./statistics.md) for detailed history,
+[Reports](./reports.md) for adjacent-period comparisons/CSV, and
+[Alerts](./alerts.md) for configured sustained conditions. These are separate
+from the Dashboard's current observations and recent warning summary.
+A report is not a traffic bill, and a missing alert
+sample is not a healthy result.
+:::
+
 <div class="write-impact"><strong>Router write impact</strong><span>Opening and refreshing the Dashboard is read-only. A controller speed test uses WAN bandwidth from the controller host but makes no router management call.</span></div>
 
 ## Before you begin
@@ -33,7 +42,7 @@ not silently presented as a complete fleet total. Follow the adjacent source
 message before treating a number as authoritative.
 
 <DocScreenshot
-  src="dashboard-overview" :width="1620" :height="959"
+  src="dashboard-overview" :width="1499" :height="982"
   alt="oonfeeWRT Dashboard with fleet overview cards and the main navigation"
   caption="Start with fleet counts and source freshness, then open the workspace that answers the next question. Settings, Accounts, and Logs remain together at the bottom of the navigation."
 />
@@ -44,7 +53,7 @@ Internet health is derived from the managed Gateway, not from the browser and
 not from a cloud service.
 
 <DocScreenshot
-  src="dashboard-internet" :width="1918" :height="982"
+  src="dashboard-internet" :width="1499" :height="982"
   alt="Dashboard Internet health section with Gateway and WAN observations"
   caption="Read the Gateway path and observation times alongside Internet health. The controller-host speed test is a separate measurement, not a substitute for Gateway evidence."
 />
@@ -101,7 +110,7 @@ Coverage markers distinguish observed buckets from unavailable ones. A gap is
 not a zero. Use the table when you need exact timestamps and values; use the
 chart to correlate simultaneous changes.
 
-In current development builds after v0.1.5, open **Statistics** when you need
+In v0.1.6, open **Statistics** when you need
 the same proved WAN source over **24h**, **7d**, or **30d**, want explicit
 bucket-coverage counts, or need to compare it with the Gateway's system,
 interface, and available stable-radio history. See
@@ -125,12 +134,12 @@ controller's public IP and test requests are visible to Cloudflare.
 1. Open **Dashboard**.
 2. Open the impact and consent details and review the exact endpoint, limits,
    controller-host vantage point, and data-use disclosure.
-3. Select **Run speed test**. In v0.1.5 this action is the explicit,
+3. Select **Run speed test**. In v0.1.6 this action is the explicit,
    plan-bound acknowledgement and starts the test immediately.
 4. Leave the Dashboard open to watch progress.
 
 The result can include download, upload, idle latency, and idle jitter. Loaded
-latency and loaded jitter are not measured in v0.1.5. The controller retains
+latency and loaded jitter are not measured in v0.1.6. The controller retains
 the newest three terminal attempts, including failed or cancelled attempts, so
 a failure does not disappear from history.
 
@@ -184,7 +193,7 @@ When the Dashboard looks unhealthy:
 | Speed test fails immediately | Controller cannot reach the Cloudflare endpoints or the job was refused by current state | Check controller logs, DNS/HTTPS egress, and whether another test is active |
 | A device is online but WAN health is missing | Device management reachability and Gateway Internet evidence are separate | Verify the Gateway function, default route source, and probe result on that device |
 | PPPoE WAN traffic is unavailable | The kernel L3 route device has no matching counter series, cannot map to exactly one active logical interface, or the composite source failed | Compare the main-table route with OpenWrt interface state, correct the inconsistency, and wait for the next network/topology cycle; do not rename interfaces as a workaround |
-| Main-table route is healthy but a policy-routed path differs | v0.1.5 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
+| Main-table route is healthy but a policy-routed path differs | v0.1.6 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
 
 ## Related guides
 

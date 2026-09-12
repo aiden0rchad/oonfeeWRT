@@ -89,6 +89,8 @@ jobs:
           npm --prefix ui run test:browser
       - name: Build
         run: npm --prefix ui run build
+      - name: Build isolated demo
+        run: npm --prefix ui run build:demo
       - name: Check bundle budget
         run: ./tools/budget_check.sh
 
@@ -119,6 +121,7 @@ jobs:
         run: |
           ./tools/reproducible-build-check.sh v0.0.0-ci
           ./tools/release-build.sh v0.0.0-ci "$RUNNER_TEMP/release"
+          go test ./internal/daemon -run '^TestEmbeddedUIAppAssetsAndCaching$' -count=1
           (cd "$RUNNER_TEMP/release" && sha256sum --check SHA256SUMS)
           mkdir "$RUNNER_TEMP/release-extract"
           tar -xzf "$RUNNER_TEMP/release/oonfeewrt_0.0.0-ci_linux_amd64.tar.gz" \

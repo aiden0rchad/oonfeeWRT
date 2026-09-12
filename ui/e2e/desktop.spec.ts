@@ -261,6 +261,179 @@ interface ControllerFixtureOptions {
   accountRole?: 'owner' | 'admin' | 'operator' | 'viewer'
 }
 
+const alertFixture = () => ({
+  rules: [], incidents: [], counts: { open_incidents: 0 }, evaluated_at: Math.floor(Date.now() / 1000),
+  delivery: { configured: false, enabled: false, host: '', last_attempt_at: null, last_success_at: null, last_error: '' },
+})
+
+const firmwareFixture = {
+  devices: [{ device_id: 1, name: 'Gateway', status: 'online', management_mode: 'managed',
+    identity: { board_name: 'fixture,router', target: 'ramips/mt7621', rootfs_type: 'squashfs', release: 'OpenWrt 24.10.1' },
+    identity_source: 'stored_capability_probe' }],
+  checking: { source_url: 'https://downloads.openwrt.org/', scope: 'same-branch', note: 'Only checks the official catalogue when requested.' },
+  agent: { available: true, installed_state: 'unknown', package_path: 'deploy/openwrt-agent', note: 'No helper is installed automatically.' },
+  installation: { enabled: false, required_checks: ['Validate the exact image on the device.', 'Keep a recoverable configuration backup.'] },
+}
+
+for (const width of [320, 1280]) {
+  test(`${width}px device cards support search and a persistent list view`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    const unexpected = await installControllerFixture(page, topology, { statistics: true })
+    await page.goto('/devices')
+    const views = page.getByRole('group', { name: 'Device presentation' })
+    await expect(views.getByRole('button', { name: 'Cards' })).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByRole('button', { name: 'Open device Gateway' })).toBeVisible()
+    await page.getByLabel('Search devices').fill('does-not-exist')
+    await expect(page.getByRole('button', { name: 'Open device Gateway' })).toHaveCount(0)
+    await page.getByRole('button', { name: 'Clear filters' }).click()
+    await expect(page.getByRole('button', { name: 'Open device Gateway' })).toBeVisible()
+    await views.getByRole('button', { name: 'List' }).click()
+    await expect(page.getByRole('table', { name: 'Managed devices' })).toBeVisible()
+    await page.reload()
+    await expect(views.getByRole('button', { name: 'List' })).toHaveAttribute('aria-pressed', 'true')
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpected).toEqual([])
+  })
+
+  test(`${width}px reports expose coverage and export an actual CSV`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    const unexpected = await installControllerFixture(page, topology, { statistics: true })
+    await page.goto('/reports')
+    await expect(page.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible()
+    await expect(page.locator('.report-metric')).toHaveCount(5)
+    await expect(page.getByText('Unknown is not downtime', { exact: true })).toBeVisible()
+    for (const metric of await page.locator('.report-metric').all()) {
+      await expectWithinMain(page, metric)
+      await expect(metric.locator('.report-coverage')).toContainText(/\d+ \/ \d+ intervals observed/)
+      await expect(metric.locator('.report-value')).not.toHaveText('—')
+    }
+    await page.getByRole('button', { name: '30 days', exact: true }).click()
+    const exportButton = page.getByRole('button', { name: 'Export CSV' })
+    await expect(exportButton).toBeEnabled()
+    const downloadPromise = page.waitForEvent('download')
+    await exportButton.click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toMatch(/^oonfeewrt-report-\d{4}-\d{2}-\d{2}\.csv$/)
+    expect(await download.failure()).toBeNull()
+    const overflow = await readOverflow(page)
+    expect(overflow.document).toBeLessThanOrEqual(1)
+    expect(overflow.main).toBeLessThanOrEqual(1)
+    expect(unexpected).toEqual([])
+  })
+}
+
+test('owner creates a disabled alert rule without enabling or contacting a webhook', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { statistics: true })
+  const submitted: unknown[] = []
+  await page.route('**/api/v1/alerts/rules', async (route) => {
+    expect(route.request().method()).toBe('POST')
+    const body = route.request().postDataJSON()
+    submitted.push(body)
+    await route.fulfill({ status: 201, json: { id: 1, ...body, state: 'disabled', since: null, value: null, observed_at: null, reason: 'Rule is disabled' } })
+  })
+  await page.goto('/alerts')
+  await page.getByRole('button', { name: 'Create rule' }).click()
+  await page.getByLabel('Rule name', { exact: true }).fill('Gateway offline')
+  await expect(page.getByLabel('Enable this rule')).not.toBeChecked()
+  await page.getByRole('button', { name: 'Save rule', exact: true }).click()
+  await expect(page.getByText('Alert rule saved.', { exact: true })).toBeVisible()
+  expect(submitted).toEqual([{ name: 'Gateway offline', condition: 'device_offline', device_id: 1, threshold: 0, hold_seconds: 300, cooldown_seconds: 3600, enabled: false }])
+  expect(unexpected).toEqual([])
+})
+
+test('viewer alerts preserve open incidents when current evidence is unknown and stale', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { statistics: true, accountRole: 'viewer' })
+  await page.route('**/api/v1/alerts', (route) => route.fulfill({ json: {
+    ...alertFixture(), evaluated_at: Math.floor(Date.now() / 1000) - 600, counts: { open_incidents: 101 },
+    rules: [{ id: 1, name: 'Gateway offline', condition: 'device_offline', device_id: 1, threshold: 0,
+      hold_seconds: 300, cooldown_seconds: 3600, enabled: true, state: 'unknown', since: null, value: null, observed_at: null, reason: 'Waiting for fresh evidence' }],
+  } }))
+  await page.goto('/alerts')
+  await expect(page.getByText('Awaiting evidence', { exact: true })).toBeVisible()
+  await expect(page.locator('.alerts-summary').getByText('101', { exact: true })).toBeVisible()
+  await expect(page.getByText(/Rule evaluation is not recent/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Create rule' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Save delivery settings' })).toHaveCount(0)
+  expect(unexpected).toEqual([])
+})
+
+test('firmware catalogue checks are explicit and a failed retry removes stale success', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { statistics: true })
+  let checks = 0
+  await page.route('**/api/v1/devices/1/firmware/check', async (route) => {
+    expect(route.request().method()).toBe('POST')
+    checks++
+    await route.fulfill(checks === 1 ? { json: { device_id: 1, result: { state: 'current', checked_at: new Date().toISOString(), message: 'No newer maintenance release in this branch.', latest_version: '24.10.1' } } }
+      : { status: 503, json: { error: 'Catalogue unavailable' } })
+  })
+  await page.goto('/firmware')
+  const check = page.getByRole('button', { name: 'Check OpenWrt catalogue' })
+  await expect(check).toBeVisible()
+  expect(checks).toBe(0)
+  await expect(page.getByText('No automatic upgrades', { exact: true })).toBeVisible()
+  await check.click()
+  await expect(page.getByText('Current in this branch', { exact: true })).toBeVisible()
+  await check.click()
+  await expect(page.getByText(/Check failed: Catalogue unavailable/)).toBeVisible()
+  await expect(page.getByText('Current in this branch', { exact: true })).toHaveCount(0)
+  expect(checks).toBe(2)
+  expect(unexpected).toEqual([])
+})
+
+test('mobile navigation traps focus, supports Escape, and reaches the new workspaces', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 })
+  const unexpected = await installControllerFixture(page, topology, { statistics: true })
+  await page.goto('/')
+  const open = page.getByRole('button', { name: 'Open navigation', exact: true })
+  const nav = page.getByRole('navigation', { name: 'Main navigation' })
+  await open.click()
+  const close = nav.getByRole('button', { name: 'Close navigation ×' })
+  await expect(close).toBeFocused()
+  await expect(page.getByRole('main', { includeHidden: true })).toHaveAttribute('inert', '')
+  await page.keyboard.press('Shift+Tab')
+  await expect(nav.getByRole('button', { name: 'Logs', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(close).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(open).toBeFocused()
+  await expect(page.getByRole('main')).not.toHaveAttribute('inert')
+  for (const name of ['Reports', 'Alerts', 'Firmware', 'Settings', 'Accounts', 'Logs']) {
+    await open.click()
+    await nav.getByRole('button', { name, exact: true }).click()
+    await expect(open).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible()
+    expect((await readOverflow(page)).document).toBeLessThanOrEqual(1)
+  }
+  expect(unexpected).toEqual([])
+})
+
+test('installed app shows a static offline page without caching controller data', async ({ page, context }) => {
+  const unexpected = await installControllerFixture(page)
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+  // Vite development intentionally does not register the production worker.
+  // Register that same static worker explicitly on this isolated fixture origin.
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.register('/sw.js')
+    await navigator.serviceWorker.ready
+    if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => {
+      navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true })
+    })
+  })
+  await context.setOffline(true)
+  try {
+    const response = await page.goto('/devices')
+    expect(response?.status()).toBe(503)
+    expect(response?.headers()['cache-control']).toBe('no-store')
+    await expect(page.getByRole('heading', { name: 'Your controller is unreachable' })).toBeVisible()
+    await expect(page.getByText(/Nothing has been changed or queued while offline/)).toBeVisible()
+    expect(await page.evaluate(() => caches.keys())).toEqual([])
+    expect(unexpected).toEqual([])
+  } finally { await context.setOffline(false) }
+})
+
 const statisticsDevices = {
   devices: [{
     id: 1,
@@ -379,6 +552,8 @@ async function installControllerFixture(
         reauthenticated_until: null,
       },
       '/api/v1/dashboard': dashboard,
+      '/api/v1/alerts': alertFixture(),
+      '/api/v1/firmware': firmwareFixture,
       '/api/v1/devices': options.statistics ? statisticsDevices : { devices: [] },
       ...(options.statistics ? { '/api/v1/devices/1/series': statisticsCatalog } : {}),
       '/api/v1/clients': clientPage,
@@ -774,8 +949,10 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   await expect(navigation.getByRole('button', { name: 'Accounts' })).toBeVisible()
   await expect(adopt).toBeVisible()
   await expect(logs).toBeVisible()
+  expect(await divider.evaluate((element) =>
+    element.parentElement?.classList.contains('app-nav-controller'))).toBe(true)
   expect(await adopt.evaluate((element) =>
-    element.nextElementSibling?.getAttribute('aria-label'))).toBe('Controller tools')
+    element.parentElement?.classList.contains('app-nav-primary'))).toBe(true)
   expect(await divider.evaluate((element) =>
     element.nextElementSibling?.getAttribute('aria-label'))).toBe('Settings')
   expect(await divider.evaluate((element) =>
@@ -793,7 +970,7 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
     .toBeLessThanOrEqual(12)
 
   await page.setViewportSize({ width: 1280, height: 420 })
-  expect(await navigation.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  expect(await navigation.locator('.app-nav-primary').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await logs.scrollIntoViewIfNeeded()
   await expect(logs).toBeVisible()
   await logs.click()
@@ -881,7 +1058,9 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 
       await expect(heading).toBeFocused()
       await expect(page).toHaveTitle('Accounts — oonfeeWRT')
       const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+      if (viewport.width <= 720) await page.getByRole('button', { name: 'Open navigation', exact: true }).click()
       await expect(navigation.getByRole('button', { name: 'Accounts', exact: true })).toHaveAttribute('aria-current', 'page')
+      if (viewport.width <= 720) await page.getByRole('button', { name: 'Close navigation ×', exact: true }).click()
       const accountTab = page.getByRole('tab', { name: 'My account', exact: true })
       await expect(accountTab).toHaveAttribute('aria-selected', 'true')
       for (const label of ['Current password', 'New password', 'Repeat new password']) {
@@ -917,6 +1096,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 320, height: 568 
       expect(overflow.document).toBeLessThanOrEqual(1)
       expect(overflow.main).toBeLessThanOrEqual(1)
 
+      if (viewport.width <= 720) await page.getByRole('button', { name: 'Open navigation', exact: true }).click()
       await navigation.getByRole('button', { name: 'Settings', exact: true }).click()
       await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
       await expect(page.getByRole('tab', { name: 'My account', exact: true })).toHaveCount(0)
@@ -1032,6 +1212,49 @@ test('320px Statistics controls and charts stay within the content viewport', as
   expect(overflow.document).toBeLessThanOrEqual(1)
   expect(overflow.main).toBeLessThanOrEqual(1)
   expect(unexpectedRequests).toEqual([])
+})
+
+test.describe('Statistics axis-label gutters', () => {
+  test.use({ deviceScaleFactor: 2 })
+  for (const width of [320, 1280]) {
+    test(`${width}px high-DPI charts keep every Y-axis glyph inside the canvas`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 850 })
+      const unexpected = await installControllerFixture(page, topology, { statistics: true })
+      await page.addInitScript(() => {
+        const original = CanvasRenderingContext2D.prototype.fillText
+        CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
+          if (this.textAlign === 'right' && this.canvas.closest('.statistics-chart-card')) {
+            const left = x - this.measureText(text).actualBoundingBoxLeft
+            const previous = this.canvas.dataset.axisLabelMinLeft
+            this.canvas.dataset.axisLabelMinLeft = String(Math.min(previous == null ? Infinity : Number(previous), left))
+          }
+          if (maxWidth == null) original.call(this, text, x, y)
+          else original.call(this, text, x, y, maxWidth)
+        }
+      })
+      await page.route('**/api/v1/stats/**', async (route) => {
+        const series = statisticsSeries(new URL(route.request().url()))
+        if (series.kind.startsWith('iface_')) {
+          series.points = series.points.map((point) => ({ ...point, min: 180_000, avg: 200_000, max: 220_000 }))
+        }
+        await route.fulfill({ json: series })
+      })
+      await page.goto('/statistics')
+      await expect(page.getByRole('img', { name: /^Download traffic:/ })).toBeVisible()
+      for (const theme of ['dark', 'light']) {
+        if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/ }).click()
+        const canvases = page.locator('.statistics-chart-card canvas')
+        await expect.poll(() => canvases.evaluateAll((elements) => elements.filter((element) => (element as HTMLCanvasElement).dataset.axisLabelMinLeft != null).length)).toBeGreaterThan(0)
+        const leftEdges = await canvases.evaluateAll((elements) => elements.map((element) => Number((element as HTMLCanvasElement).dataset.axisLabelMinLeft)))
+        for (const left of leftEdges) expect(left).toBeGreaterThanOrEqual(0)
+        const overflow = await readOverflow(page)
+        expect(overflow.document).toBeLessThanOrEqual(1)
+        expect(overflow.main).toBeLessThanOrEqual(1)
+        await page.locator('.statistics-chart-card').first().screenshot({ path: testInfo.outputPath(`axis-gutter-${theme}.png`) })
+      }
+      expect(unexpected).toEqual([])
+    })
+  }
 })
 
 for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900 }]) {

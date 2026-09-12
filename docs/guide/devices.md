@@ -8,6 +8,12 @@ adoption never equals applying network configuration.
 
 ## The device lifecycle
 
+::: info Updated in v0.1.6
+v0.1.6 adds illustrated **Cards** and **List** views, device search,
+and status filtering. Adoption, management-mode fences, and configuration approval
+remain unchanged.
+:::
+
 1. **Discover or add** an address.
 2. **Inspect** model, firmware, interfaces, functions, and source gaps without
    saving a management credential.
@@ -17,6 +23,29 @@ adoption never equals applying network configuration.
 5. **Reprobe or refresh access** when firmware or capabilities change.
 6. **Un-adopt** through a reviewed cleanup plan when the device leaves the
    controller.
+
+## Find your way around the inventory
+
+In v0.1.6, start with the fleet summary, then use **Search devices**
+to match a name, address, firmware, or adopted function. Combine it with the
+status selector to narrow the loaded infrastructure inventory. The summary
+describes the fleet; **Showing … of … devices** describes the current filters.
+An unavailable inventory is not reported as an empty fleet.
+
+**Cards** emphasizes identity, status, management mode, and functions. **List**
+provides the denser column view for comparisons. The selected view is remembered
+in this browser when storage is available. It does not change the device or
+your controller permissions. Both views open the same device details.
+
+Illustrations represent known adopted functions, not detected manufacturers or
+exact physical models. A combined Gateway/Switch is still one device. Use the
+identity and stored board/capability information in its details when exact
+hardware matters.
+
+For historical comparisons open [Statistics](./statistics.md). For an explicit
+check against the official OpenWrt release catalogue open
+[Firmware](./firmware.md). A catalogue match is not installation approval; the
+controller does not download or flash an image.
 
 ## Find a device
 
@@ -170,7 +199,7 @@ The list is the fleet-level view. Use status and last-seen time together:
 Open a row for the detail workspace.
 
 <DocScreenshot
-  src="devices-inventory" :width="1620" :height="959"
+  src="devices-inventory" :width="1499" :height="982"
   alt="Devices inventory with per-device status and management information"
   caption="Use the inventory for a fleet-level check, then select a row for its evidence. An intentional Monitor only boundary is different from an offline device or an unavailable measurement."
 />
@@ -178,7 +207,7 @@ Open a row for the detail workspace.
 ## Use device detail
 
 <DocScreenshot
-  src="device-detail" :width="370" :height="935"
+  src="device-detail" :width="370" :height="926"
   alt="Device detail panel opened from the Devices inventory"
   caption="The detail panel keeps the selected device's identity and observations together. Review capability and source notes before deciding that an absent measurement needs corrective action."
 />
@@ -207,7 +236,7 @@ can remain empty until that exact interface has collected samples. Dashboard
 adds a stricter series-catalog check before labeling data as WAN throughput.
 
 If the route cannot be mapped to exactly one active logical interface, the
-current v0.1.5 API explicitly reports no proved WAN interface and the UI leaves
+current v0.1.6 API explicitly reports no proved WAN interface and the UI leaves
 the WAN series unavailable. It does not guess from the metric catalog. Route
 evidence is refreshed on the slower network/topology cycle, approximately
 every 15 minutes; opening a focused device view does not make it a rapid

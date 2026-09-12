@@ -48,6 +48,9 @@ func expectedProtectedRouteRoles() map[string]store.AccountRole {
 		"GET /api/v1/topology/history",
 		"GET /api/v1/radios",
 		"GET /api/v1/dashboard",
+		"GET /api/v1/alerts",
+		"GET /api/v1/firmware",
+		"GET /api/v1/integrations/adguard",
 		"GET /api/v1/speedtests",
 		"GET /api/v1/speedtests/{id}",
 		"GET /api/v1/live",
@@ -59,6 +62,9 @@ func expectedProtectedRouteRoles() map[string]store.AccountRole {
 		"POST /api/v1/speedtests/{id}/cancel",
 	)
 	add(store.RoleAdmin,
+		"POST /api/v1/integrations/adguard/check",
+		"POST /api/v1/devices/{id}/wireguard/check",
+		"POST /api/v1/devices/{id}/firmware/check",
 		"POST /api/v1/devices/{id}/poll-interval",
 		"POST /api/v1/devices/{id}/name",
 		"POST /api/v1/devices/adopt",
@@ -109,6 +115,12 @@ func expectedProtectedRouteRoles() map[string]store.AccountRole {
 		"GET /api/v1/diagnostics/{id}/download",
 	)
 	add(store.RoleOwner,
+		"POST /api/v1/integrations/adguard",
+		"DELETE /api/v1/integrations/adguard",
+		"POST /api/v1/alerts/rules",
+		"PUT /api/v1/alerts/rules/{id}",
+		"DELETE /api/v1/alerts/rules/{id}",
+		"POST /api/v1/alerts/delivery",
 		"GET /api/v1/accounts",
 		"GET /api/v1/backups",
 		"GET /api/v1/backups/{id}",
@@ -139,7 +151,7 @@ func TestProtectedRoutesHaveExhaustiveRoleChecks(t *testing.T) {
 	srv := &Server{}
 	routes := append(srv.protectedRoutes(), srv.reauthenticatedRoutes()...)
 	expected := expectedProtectedRouteRoles()
-	if len(routes) != len(expected) || len(routes) != 104 {
+	if len(routes) != len(expected) || len(routes) != 116 {
 		t.Fatalf("protected routes=%d expected=%d", len(routes), len(expected))
 	}
 	seen := make(map[string]bool, len(routes))
@@ -191,6 +203,8 @@ func TestProtectedRoutesHaveExhaustiveRoleChecks(t *testing.T) {
 
 func TestEveryOwnerSensitiveMutationRequiresRecentReauthentication(t *testing.T) {
 	want := map[string]bool{
+		"POST /api/v1/integrations/adguard":                  true,
+		"DELETE /api/v1/integrations/adguard":                true,
 		"POST /api/v1/accounts":                              true,
 		"PATCH /api/v1/accounts/{id}/role":                   true,
 		"PATCH /api/v1/accounts/{id}/enabled":                true,

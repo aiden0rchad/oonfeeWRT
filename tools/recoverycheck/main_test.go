@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -128,7 +129,7 @@ func TestRecoveryCheckTraversesEverySealedRecordAndPrintsCountsOnly(t *testing.T
 	if err := run(context.Background(), fixture.dbPath, &output); err != nil {
 		t.Fatal(err)
 	}
-	const want = "schema=23 devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n"
+	want := fmt.Sprintf("schema=%d devices=2 credentials=2 owned_sections=2 wlans=1 meshes=1\n", store.CurrentSchemaVersion())
 	if output.String() != want {
 		t.Fatalf("output = %q, want %q", output.String(), want)
 	}

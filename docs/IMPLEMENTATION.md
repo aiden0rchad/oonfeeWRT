@@ -1,5 +1,18 @@
 # oonfeeWRT — Implementation Specification
 
+> **v0.1.6 supersession (2026-09-12):** Dated contracts and proof below
+> remain historical evidence. v0.1.6 uses schema 25; historical
+> v0.1.5/schema-23 artifacts remain unchanged. The current
+> [engineering reference](reference/engineering.md) and
+> [capability matrix](reference/capabilities.md) describe Reports, Alerts,
+> editable topology, firmware metadata, and read-only integrations. A manually
+> installed on-demand rpcd helper is the narrow exception to old blanket
+> no-device-code wording; ordinary adoption stays agent-free. Firmware
+> execution, SNMP, Web Push, Telegram-specific delivery, localization, and VM
+> nesting are not completed features. No new screenshot or demo is hardware
+> validation of an optional operation. The helper remains experimental source;
+> SDK builds and real-router helper tests are still required.
+
 This is the build document. It is written for a coding agent (or a human) who
 will implement the system without access to the design conversations that
 produced it. Where the other documents say *what* and *why*, this one says

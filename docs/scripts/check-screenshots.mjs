@@ -51,14 +51,32 @@ export async function checkScreenshots(repoRoot) {
   const errors = []
   const stems = new Set()
   const files = new Set()
+  const declaredDimensions = []
+  const actualDimensions = new Map()
   let references = 0
   for (const path of await markdownFiles(join(repoRoot, 'docs'))) {
     const markdown = withoutCode(await readFile(path, 'utf8'))
-    for (const match of markdown.matchAll(/<DocScreenshot\b([^>]*?)>/gs)) {
-      const source = /(?:^|\s)src\s*=\s*(["'])(.*?)\1/s.exec(match[1])?.[2]
+    for (const match of markdown.matchAll(/<DocScreenshot\b((?:"[^"]*"|'[^']*'|[^'">])*)>/gs)) {
+      const attributes = [...match[1].matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)]
+        .map((attribute) => [attribute[1], attribute[2] ?? attribute[3]])
+      const source = attributes.find(([name]) => name === 'src')?.[1]
       const location = `${relative(repoRoot, path)}:${markdown.slice(0, match.index).split('\n').length}`
       if (!source || !stemPattern.test(source)) errors.push(`${location}: DocScreenshot needs a static lowercase, hyphen-separated src stem`)
-      else stems.add(source)
+      else {
+        stems.add(source)
+        const dimension = (name) => {
+          const values = attributes.filter(([key]) => [name, `:${name}`, `v-bind:${name}`].includes(key))
+          return values.length === 1 && /^[1-9]\d*$/.test(values[0][1]) && Number(values[0][1]) <= 65535
+            ? Number(values[0][1]) : null
+        }
+        const width = dimension('width')
+        const height = dimension('height')
+        if (width == null || height == null) {
+          errors.push(`${location}: DocScreenshot needs static positive-integer width and height attributes, for example :width="1620" :height="959"`)
+        } else {
+          declaredDimensions.push({ path: `docs/public/screenshots/${source}-dark.jpg`, location, width, height })
+        }
+      }
       references++
     }
   }
@@ -76,9 +94,15 @@ export async function checkScreenshots(repoRoot) {
   for (const path of files) {
     try {
       const bytes = await readFile(join(repoRoot, path))
-      if (/\.jpe?g$/i.test(path)) jpegDimensions(bytes)
+      if (/\.jpe?g$/i.test(path)) actualDimensions.set(path, jpegDimensions(bytes))
     } catch (error) {
       errors.push(`${path}: ${error.code === 'ENOENT' ? 'missing screenshot' : error.message}`)
+    }
+  }
+  for (const declared of declaredDimensions) {
+    const actual = actualDimensions.get(declared.path)
+    if (actual && (declared.width !== actual.width || declared.height !== actual.height)) {
+      errors.push(`${declared.location}: declared ${declared.width}x${declared.height} does not match ${declared.path} (${actual.width}x${actual.height})`)
     }
   }
   return { errors, references, screenshots: files.size }

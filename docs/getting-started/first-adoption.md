@@ -44,7 +44,7 @@ The administrator password and optional SSH private key exist only for this requ
 Sign in and select **Adopt a device** in the left navigation.
 
 <DocScreenshot
-  src="adoption-overview" :width="1620" :height="959"
+  src="adoption-overview" :width="1499" :height="982"
   alt="Adopt a device workspace with the connection and device-use steps"
   caption="The adoption page separates connecting, choosing how to use the device, and reviewing controller access. Opening this form does not adopt or configure a router."
 />
@@ -152,14 +152,14 @@ Switch behavior is capability-dependent:
 - `unknown` retains the uncertainty;
 - `none` means no switch capability was observed.
 
-A generic single-interface LAN is separate from legacy `swconfig`. v0.1.5
+A generic single-interface LAN is separate from legacy `swconfig`. v0.1.6
 does not create tagged VLAN attachments on that layout and leaves its existing
 LAN/VLAN configuration unchanged. See [Networks, VLANs, and DHCP](../guide/networks.md)
 before planning a tagged network.
 
 ## 5. Review the controller access payload
 
-In current development builds after v0.1.5, find **Install the oonfeeWRT
+In v0.1.6, find **Install the oonfeeWRT
 controller access payload?** in **Review access and adopt**, then expand
 **View access details**. The short explanation, full access details, and consent
 checkbox are grouped together; the checkbox is not selected automatically.
@@ -167,7 +167,7 @@ Published v0.1.5 instead uses **Review exact router changes** beside its
 separate access notice.
 
 <DocScreenshot
-  src="adoption-access" :width="1620" :height="959"
+  src="adoption-access" :width="867" :height="693"
   alt="Review access and adopt section with the controller access payload consent and details"
   caption="The concise access explanation and consent checkbox are grouped together. Open View access details before accepting; leaving the checkbox unchecked keeps Adopt unavailable."
 />

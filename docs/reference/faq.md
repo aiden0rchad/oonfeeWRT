@@ -5,7 +5,8 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.5**.
+Answers below describe **oonfeeWRT v0.1.6** unless a historical release or
+rollback target is named explicitly.
 
 ## What is oonfeeWRT?
 
@@ -17,6 +18,10 @@ radios, events, accounts, diagnostics, and controller backup/restore.
 
 No. It does not build, replace, patch, or upgrade OpenWrt firmware. Managed
 routers stay on stock OpenWrt and continue to work with LuCI.
+
+The **Firmware** page checks official same-branch release
+metadata on request. It does not download, stage, validate image bytes, or
+flash firmware. A candidate result is not approval to install it.
 
 ## Does the controller run on a router?
 
@@ -56,6 +61,12 @@ the distinct read-only `oonfeewrt-monitor` group for observation.
 The optional LLDP capability is a separate workflow. It may install official
 OpenWrt feed packages only after showing and binding an exact plan to separate
 acknowledgements.
+
+v0.1.6 also provides an optional, manually built and installed
+rpcd helper for narrow read-only integrations. It is not required for ordinary
+adoption and is never installed by it. The helper adds no daemon, listener,
+remote shell, or firmware-write method. See [Firmware](../guide/firmware.md)
+and [Integrations](../guide/integrations.md) before considering that opt-in.
 
 ## Why does adoption ask for SSH?
 
@@ -174,7 +185,7 @@ Zero is a measurement. Unavailable means the controller could not obtain or
 trust the measurement. Treating a missing driver counter or failed RPC as zero
 would produce confident but false charts and health claims.
 
-The Statistics workspace added in development after v0.1.5 applies the same
+The Statistics workspace introduced in v0.1.6 applies the same
 rule across its complete requested time window. An absent bucket breaks the
 line and lowers its observed/expected coverage; it is not converted to zero or
 joined to the next known value. See
@@ -280,11 +291,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.5.
+v0.1.6.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.5. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.6. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -343,12 +354,24 @@ OpenWrt logs for 24 hours, closed topology intervals for 31 days, 100,000
 controller/audit events, and the newest three terminal speed tests. See the
 complete [retention table](../concepts/data-retention.md).
 
-The post-v0.1.5 development Statistics page offers 6h, 24h, and 7d views at the
+The Statistics page offers 6h, 24h, and 7d views at the
 server-selected five-minute resolution and a 30d view at hourly resolution. It
 reads completed stored rollups only; opening the page does not focus devices or
 preserve raw samples.
 
-## Can I downgrade from v0.1.5?
+## Can I downgrade from v0.1.6?
+
+Yes, by restoring a matching pre-upgrade recovery unit. v0.1.6 uses schema 25;
+v0.1.5 uses schema 23 and cannot open the newer database. Stop v0.1.6, retain
+its current recovery unit separately, and restore the schema-23 database,
+keyring, runtime passphrase, and v0.1.5 binary/image together. Replacing only
+the executable or image tag is not a rollback. A pre-upgrade v0.1.5 portable
+backup can instead be restored through a clean v0.1.5 instance.
+
+For an even older target, use its own supported schema and matching recovery
+unit—not a v0.1.5 backup. The historical boundaries below still apply.
+
+### Historical v0.1.5 to v0.1.4 rollback
 
 v0.1.5 migrates the controller database from schema 20 through schemas 21 and
 22 to schema 23. The steps add management mode, reusable policy sets,
@@ -370,20 +393,66 @@ does not revert configuration that was already Applied to routers.
 
 Historical `v0.1.0-rc.1` uses schema 17. Rolling back that far requires the
 untouched pre-upgrade schema-17 database, matching keyring, prior passphrase,
-and old binary/image together. Do not open schema-19, schema-20, or schema-23 data with the
+and old binary/image together. Do not open schema-19, schema-20, schema-23, or schema-25 data with the
 RC daemon.
 
 ## What is deliberately out of scope?
 
-- controller-authored router agents/daemons;
+- required controller-authored router daemons, general remote-command services,
+  and automatic helper installation;
 - custom firmware, forks, or package feeds;
 - non-OpenWrt device adoption;
 - cloud remote access, SSO brokering, multi-site, and automatic NAT traversal;
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.5. The Phase 5
+- DPI/application flow history on constrained routers in v0.1.6. The Phase 5
   feasibility page does not install or ship a flow package.
+
+## What is new in the v0.1.6 interface?
+
+[Statistics](../guide/statistics.md), [Reports](../guide/reports.md),
+[Alerts](../guide/alerts.md), [editable topology](../guide/clients-topology.md),
+device Cards/List, firmware metadata checks, integrations, and
+[mobile/installed-app presentation](../operations/mobile-app.md) are described
+in their guides. Try the [isolated demo](../guide/demo.md) for a populated
+fictional network without controller or router access. It is not a hardware
+test and accepts no real credentials.
+
+## Do Reports measure total usage or guaranteed uptime?
+
+No. They summarize valid stored samples and disclose observed/expected buckets.
+The reachability measurement concerns the configured fixed ICMP target, not
+every Internet service. Missing history is not a successful probe or downtime.
+Rate averages are not billing-grade transferred-byte counters or per-client
+application accounting.
+
+## Can the controller send notifications?
+
+An Owner can create sustained-condition alert rules and explicitly configure
+generic webhook delivery. Nothing is sent to a third party until delivery is
+configured and enabled. Rules cover device-offline and WAN latency/loss
+conditions; CPU-load rules are not included.
+This is not built-in Telegram-specific delivery, Web Push, or automatic
+network repair. See the [Alerts guide](../guide/alerts.md) for freshness,
+hold-window, cooldown, and retry boundaries.
+
+## Does restoring a backup replay notifications?
+
+No. v0.1.6 portable restore pauses external alert delivery, cancels its pending
+outbox, and resets pending evaluation continuity. It preserves rules, incident
+history, cooldowns, and the encrypted destination without claiming recovery.
+An Owner must review the restored environment and explicitly re-enable
+delivery; cancelled history is not replayed. Router-write suppression remains
+a separate control. See [Upgrade and roll back](../installation/upgrades.md).
+
+## Does a movable topology map discover virtual machines?
+
+No. A saved arrangement changes coordinates only. Measured, inferred,
+ambiguous, unknown, and expired evidence stay distinct. The map does not infer
+VM nesting, device manufacturers, or new cables from an icon or its location.
+SNMP, firmware execution, Web Push, Telegram-specific integration, full
+localization, and VM nesting remain pending, not completed parity features.
 
 ## Where should I start?
 

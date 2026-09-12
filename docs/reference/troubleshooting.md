@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.5.
+description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.6.
 ---
 
 # Troubleshooting
@@ -8,6 +8,31 @@ description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v
 Start with the smallest read-only check that separates controller, network,
 credential, capability, and router-state failures. Do not retry a router write
 until you know the previous operation's terminal state.
+
+## Interface quick checks
+
+These symptoms concern the v0.1.6 interface. Check the executable version and
+use its matching embedded UI; earlier releases do not include every workspace.
+
+| Symptom | Explanation or safe next check |
+|---|---|
+| Reports, Alerts, Firmware, Integrations, or Cards/List are missing | These workspaces require v0.1.6, not v0.1.5. Do not copy only new UI assets onto an older daemon; use a matching build and read the schema migration boundary |
+| Device count differs from the filtered cards | Fleet summaries and filtered results have different scopes. Read **Showing … of …**; clear search/status filters before diagnosing missing inventory |
+| Client signal count is smaller than the matching total | **Signal readings** describes only this page and only measured RSSI; **Matching clients** spans all pages under the filters. Unknown connection is not proof of wired attachment |
+| A topology move is not saved | Finish the drag, check the storage notice, and use the same signed-in account, controller origin, browser, and Current/History mode. Clearing site data or blocked storage removes persistence |
+| A new/offline node is arranged differently | New nodes use automatic placement; changed placed/unplaced classification discards incompatible saved coordinates. This preserves evidence, not a cabling change |
+| Reports has a gap or unavailable comparison | Check the exact gateway/series and both periods' completed buckets. No missing traffic or uptime is estimated; shorter ranges may provide more useful coverage |
+| Alert stays unknown or does not reach its hold time | Restore fresh, consecutive evidence for its selected device and condition. A gap resets continuity; unknown is not a clear or successful interval |
+| Alert fires but delivery fails | Check the configured generic webhook and bounded delivery status as Owner. Do not retry by recreating rules or assume Telegram/Slack-specific payload compatibility |
+| Firmware check cannot identify a candidate | Re-probe changed board/target/release facts, inspect the catalogue reason, and use the [Firmware guide](../guide/firmware.md). Never force a mismatched image or interpret a match as validated flash readiness |
+| Official firmware catalogue cannot be checked | Verify DNS resolution and HTTPS access to `downloads.openwrt.org` from the controller host, then retry. A transient DNS failure is not evidence that router firmware is outdated; a failed check confirms no version status |
+| AdGuard or WireGuard check is unavailable | Confirm Administrator/Owner role, explicit connection/read grant, reachability, and the [integration-specific instructions](../guide/integrations.md). No automatic service or helper install is attempted |
+| Demo action says read-only | Intentional: it has no controller/router connection. Use synthetic data only, and do not enter real credentials or upload a backup |
+| v0.1.5 binary refuses schema 24 or 25 | Use v0.1.6 for schema 25, or restore the matching pre-upgrade schema-23 database/keyring/passphrase and v0.1.5 binary/image. Do not edit schema metadata or replace only the executable |
+
+For responsive navigation, install requirements, and theme preference, see
+[Mobile and installed app](../operations/mobile-app.md). An installed browser
+shortcut is not offline access, a native app, or Web Push support.
 
 ## First five checks
 
@@ -17,7 +42,7 @@ until you know the previous operation's terminal state.
    oonfeewrtd -version
    ```
 
-   Expected for this guide: `v0.1.5`.
+   Expected for this guide: `v0.1.6`.
 
 2. Check controller liveness using the same listener configuration as the
    running process:
@@ -177,7 +202,7 @@ Inspect can still display the ordinary result and adds a note explaining that
 the sanitized report was unavailable.
 
 1. Confirm both daemon and UI are the same v0.1.2-or-newer release; for this
-   guide, both should be v0.1.5.
+   guide, both should be v0.1.6.
 2. Repeat read-only Inspect once after confirming the target address and
    credentials. It makes a fresh probe, but do not loop it aggressively.
 3. Record the controller version, router model/OpenWrt version, the displayed
@@ -230,7 +255,7 @@ state needs a recorded plan and rollback.
 
 Saving **Disabled** changes controller desired state only. Generate a fresh
 Preview and inspect the option-level plan. On the management LAN, the sections
-remain foreign: v0.1.5 can patch only the allowlisted IPv6 options on the exact
+remain foreign: v0.1.6 can patch only the allowlisted IPv6 options on the exact
 existing LAN/DHCP and supported conventional WAN targets. It cannot create,
 claim, rename, or delete them. Resolve any missing, ambiguous, wrong-type, or
 static-IPv6 blocker deliberately, then Apply once. Static IPv6 addresses,
@@ -257,7 +282,7 @@ it simply stops oonfeeWRT from changing existing IPv6 option values.
 
 ## Understand notices without treating every gap as a fault
 
-The development UI separates routine information from conditions that need
+The v0.1.6 UI separates routine information from conditions that need
 attention. Expand a notice for the exact source, what can be done, and what the
 controller cannot establish. Historical or unsupported evidence is not erased
 to make a screen appear healthy.
@@ -424,7 +449,7 @@ same slow topology poll.
 
 Start read-only:
 
-1. Confirm the controller is v0.1.5 and the device is adopted as a managed Gateway.
+1. Confirm the controller is v0.1.6 and the device is adopted as a managed Gateway.
 2. Allow one topology cycle (normally up to 15 minutes) after startup, adoption,
    or a route change, then read the device's source/degradation reason.
 3. From an independently trusted router shell, if appropriate, inspect the two
@@ -455,7 +480,7 @@ stale evidence does not become a current Dashboard WAN path.
 
 Do not change route metrics, PPPoE, firewall, or failover configuration merely
 to populate a chart. If the route layout is intentional but outside the modeled
-scope, treat WAN selection as unavailable in v0.1.5. Re-probing capabilities
+scope, treat WAN selection as unavailable in v0.1.6. Re-probing capabilities
 does not force or repair this topology observation.
 
 ## Charts are initially empty after startup or adoption
@@ -505,7 +530,7 @@ seconds. Only one test may be active.
 - Verify the controller host/container has HTTPS and DNS access to the provider.
 - Run during a quiet period if saturation affects clients.
 - Do not interpret the result as router-local forwarding performance.
-- Loaded latency and jitter are unavailable in v0.1.5.
+- Loaded latency and jitter are unavailable in v0.1.6.
 
 ## Diagnostics or backup download expired
 
@@ -556,14 +581,19 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 ## Upgrade or rollback trouble
 
-v0.1.5 migrates schema 20 → 21 → 22 → 23 on startup. The ordered steps add
-management mode with existing devices preserved as Managed, reusable policy
-sets, source-relative client provenance, and a rebuilt one-managed-Gateway
-uniqueness guard based on canonical functions plus the legacy role. Schema 23
-also adds observation and case-insensitive global-client MAC indexes for
-bounded policy checks. Migration configures no router and does not delete user
-configuration, credentials, secrets, or topology intervals. The v0.1.4 daemon
-cannot open the migrated schema-23 database.
+v0.1.6 migrates schema **23 → 24 → 25** from v0.1.5: persistent alert state,
+then encrypted AdGuard Home settings. It does not configure a router, create
+a rule, connect a service, install a helper, or enable firmware execution.
+Older supported versions first apply their existing migrations, including
+v0.1.5's management-mode, policy-set, and provenance changes. The v0.1.5 daemon
+cannot open schema 24 or 25.
+
+To roll back to v0.1.5, stop the controller and restore its matching untouched
+schema-23 database, `keyring.json`, runtime passphrase, and executable/image.
+Keep the newer recovery unit separately. Do not change the schema number by
+hand or feed a schema-25 backup to an older controller. A portable restore
+into v0.1.6 pauses external alert delivery and cancels queued notifications;
+review the receiver and explicitly re-enable delivery after restoration.
 
 To roll back to v0.1.4, stop the controller and restore the matching
 pre-upgrade schema-20 database, `keyring.json`, runtime passphrase, and old
@@ -572,7 +602,7 @@ valid rollback. Upgrade does not require re-adoption or silently change ACLs;
 selecting Monitor only later uses the separately reviewed ACL lifecycle.
 
 Rollback to historical `v0.1.0-rc.1` is different: that daemon uses schema 17
-and must not open schema-20 or schema-23 state. Stop the controller and restore the untouched
+and must not open schema-20, schema-23, or schema-25 state. Stop the controller and restore the untouched
 pre-upgrade schema-17 database, matching keyring, passphrase file, and old
 binary/image together. Migration/rollback does not revert router configuration.
 

@@ -2,7 +2,61 @@
 
 oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safety depends on preserving a matching database/keyring/passphrase set before replacing a binary or image.
 
-> **Outcome:** The controller runs v0.1.5 with its existing state intact, and you retain a verified schema-20 recovery point for any rollback to v0.1.4.
+> **Outcome:** The controller runs v0.1.6 with its existing state intact, and you retain a verified recovery unit matching the version you may need to restore.
+
+::: warning v0.1.6 uses a newer database
+v0.1.5 uses schema **23**. v0.1.6 advances
+schema **23 → 24 → 25**: persistent alert state, then encrypted AdGuard
+connection configuration. Starting v0.1.6 against your existing data performs
+the migrations; building or previewing the isolated demo does not.
+
+Before v0.1.6 opens your data, preserve a verified, matching
+**schema-23 database + keyring + runtime passphrase + v0.1.5 binary/image**.
+Use a disposable data copy if evaluating first. A v0.1.5 binary cannot open
+schema 24 or 25. Changing only the executable or image tag is not a rollback.
+:::
+
+<span id="evaluate-development-without-losing-a-stable-rollback"></span>
+
+## Upgrade v0.1.5 to v0.1.6 {#upgrade-v015-to-v016}
+
+1. Export and verify a portable backup from v0.1.5. Keep its separate export
+   passphrase outside the backup itself.
+2. Also take the consistent raw database/keyring recovery unit described below,
+   while still on schema 23, and verify it with the **v0.1.5** recovery helper.
+   Retain the matching runtime passphrase and exact released binary/image.
+3. Stop the old daemon before copying or replacing a live data directory.
+   Never let two controllers open the same SQLite files.
+4. Start v0.1.6 only against the intended copy or upgrade target. Schema
+   24 stores alert rules, evaluation state, incidents, and bounded delivery
+   state; schema 25 stores encrypted AdGuard connection settings. Neither
+   migration installs a router helper or flashes firmware.
+5. Reauthenticate after restart. Verify devices, configuration, source
+   coverage, role gates, and backup access before enabling any new alert
+   delivery or service connection. An ordinary upgrade does not create alert
+   rules or configure an external integration for you.
+6. To return to v0.1.5, stop v0.1.6 and retain its schema-25 recovery unit
+   separately. Restore the untouched matching schema-23 unit and start the
+   v0.1.5 binary/image with its passphrase. Do not hand-edit the schema number.
+
+Restoring older state loses controller edits made after the recovery point and
+does not undo router configuration or notifications already sent. A portable
+backup created by a schema-25 controller is not a way to feed
+newer state into v0.1.5. If only a **pre-upgrade** v0.1.5 portable backup
+remains, restore it through v0.1.5's staged restore in a fresh supported data
+directory; do not point that daemon at the migrated volume.
+
+When using the v0.1.6 portable-restore path, external alert delivery is
+paused, its pending outbox is cancelled, and evaluation/hold continuity resets.
+Rules, history, cooldowns, and encrypted destination settings are retained.
+An Owner reviews the restored environment and explicitly re-enables future
+delivery; old queued notifications are not replayed. This is separate from
+the router-write suppression gate. An ordinary startup upgrade does not
+perform this restore-specific reset.
+
+For UI exploration without a database migration or router connection, use the
+[isolated demo](../guide/demo.md). The installation steps below target v0.1.6;
+historical rollback targets are documented separately at the end.
 
 ## Before you begin
 
@@ -14,10 +68,12 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
 
 **Router write impact:** Replacing the binary/image and migrating the database do not themselves contact or configure routers. After startup, read-only polling resumes and, for managed devices only when the write gate is open, automatic 802.11k neighbour reconciliation may update runtime hostapd neighbour lists. Monitor-only devices are excluded. A restore, unlike an ordinary upgrade, activates a persistent router-write safety gate.
 
-## Version facts for v0.1.5
+## Version facts for v0.1.6
 
-- v0.1.5 uses controller database schema 23. v0.1.4 uses schema 20, which
-  v0.1.5 migrates automatically at startup in three ordered steps.
+- v0.1.6 uses controller database schema **25**. From v0.1.5/schema 23,
+  startup adds schema 24's durable alert snapshot/outbox and schema 25's
+  encrypted AdGuard connection. No rules, destinations, or helpers are enabled
+  automatically. Earlier supported databases run the earlier steps first:
 - Schema 20 → 21 adds `management_mode`; every existing device becomes
   **Managed**, preserving v0.1.4 behavior. No router is silently converted to
   Monitor only.
@@ -31,8 +87,9 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
   from `functions_json` plus `role`, preventing either representation from
   bypassing the site limit. It does not infer provenance from merged global
   client rows.
-- v0.1.4 cannot open schema 23. A v0.1.5 → v0.1.4 rollback requires restoring
-  the matching pre-upgrade schema-20 database, keyring, and passphrase.
+- v0.1.5 cannot open schema 25; v0.1.4 cannot open schema 23 or 25.
+  Returning to either version requires its matching pre-upgrade database,
+  keyring, runtime passphrase, and binary/image—not only an older executable.
 - Startup migration does not contact or configure routers, install a package,
   change ownership, or create an Apply plan.
 - Existing networks decode as **Router managed**, so startup does not change
@@ -42,8 +99,8 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
   status uses newly allowlisted read-only LuCI methods; already-adopted routers
   need a separately reviewed controller-access refresh only if that clock
   status is wanted. Re-adoption is not required.
-- Historical v0.1.0-rc.1 uses schema 17. v0.1.5 can migrate supported schema-17
-  state through schemas 18–23. Returning to the RC requires
+- Historical v0.1.0-rc.1 uses schema 17. v0.1.6 can migrate supported schema-17
+  state through schemas 18–25. Returning to the RC requires
   restoring the untouched schema-17 backup, not merely replacing the executable
   or image.
 
@@ -51,10 +108,12 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
 
 Always use **Settings → Backup & Restore** to export an encrypted `.oowrtbak`,
 download it before it expires, record its separate export passphrase, and
-verify that the job completed. For the simplest direct rollback to v0.1.4,
-also retain one of the raw schema-20 recovery units below before v0.1.5 opens
+verify that the job completed. For the simplest direct rollback,
+also retain one of the raw recovery units below before v0.1.6 opens
 the live data. The public recovery helper verifies raw databases but does not
-extract `.oowrtbak` files.
+extract `.oowrtbak` files. Keep schema 23 for v0.1.5, schema 20 for v0.1.4,
+or the exact schema supported by your earlier rollback target. Verify with
+that source release's matching recovery helper before replacing it.
 
 For a standalone filesystem recovery pair while the controller is live, use SQLite's backup API:
 
@@ -88,14 +147,14 @@ For a Compose named volume, stop the service and use trusted volume-snapshot
 tooling to preserve the whole volume if you want a direct in-place rollback.
 Record the exact Compose project/volume identity and retain the matching
 passphrase file. A portable `.oowrtbak` remains the preferred off-host backup,
-but restoring it to v0.1.4 uses the separate clean-instance path below rather
+but restoring it to an older version uses that version's clean-instance path rather
 than an in-place file extraction.
 
 Never copy only the main SQLite file while WAL is active. It may omit committed state.
 
 ## 2A. Upgrade a standalone binary
 
-1. Download, checksum-verify, and extract v0.1.5 using [Install the binary](binary.md).
+1. Download, checksum-verify, and extract v0.1.6 using [Install the binary](binary.md).
 2. Stop the old daemon using the same process manager or foreground terminal that started it. Give it time to finish a graceful shutdown.
 3. Replace the executable:
 
@@ -117,25 +176,25 @@ Do not point a new process at a copied database while leaving the old process ru
 
 ## 2B. Upgrade Docker Compose
 
-Download the exact v0.1.5 Compose file beside the existing one, compare it,
+Download the exact v0.1.6 Compose file beside the existing one, compare it,
 and reapply only intentional local
 changes. Do not replace `.env`, `passphrase`, or the named volume:
 
 ```sh
 curl --fail --location \
-  --output docker-compose.yml.v0.1.5 \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
-diff -u docker-compose.yml docker-compose.yml.v0.1.5
-OONFEE_VERSION=v0.1.5 docker compose -f docker-compose.yml.v0.1.5 config --quiet
+  --output docker-compose.yml.v0.1.6 \
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.6/deploy/docker-compose.yml
+diff -u docker-compose.yml docker-compose.yml.v0.1.6
+OONFEE_VERSION=v0.1.6 docker compose -f docker-compose.yml.v0.1.6 config --quiet
 ```
 
-After reviewing the diff, replace `docker-compose.yml` with the v0.1.5 file or
+After reviewing the diff, replace `docker-compose.yml` with the v0.1.6 file or
 merge its changes deliberately. Update the existing `.env` without removing
 other intentional deployment values. Pin both the release and the publish
 address you intend to retain across future lifecycle commands:
 
 ```dotenv
-OONFEE_VERSION=v0.1.5
+OONFEE_VERSION=v0.1.6
 OONFEE_HTTP_BIND=127.0.0.1
 ```
 
@@ -177,8 +236,9 @@ In the browser:
 
 1. Sign in again; sessions are process-local and do not survive restart.
 2. Confirm the expected devices, site settings, accounts, and event history.
-3. Confirm devices resume read-only polling and every pre-upgrade device is
-   labeled **Managed**. Do not change one to Monitor only merely as an upgrade
+3. Confirm devices resume read-only polling and retain their chosen management
+   mode. Devices predating v0.1.5 become **Managed** during schema 21 migration.
+   Do not change one to Monitor only merely as an upgrade
    check. When ownership requires a different mode, use the reviewed
    un-adopt/re-adopt workflow and inspect the replacement ACL plan.
 4. On a PPPoE or multi-default-candidate Gateway, allow one network/topology
@@ -196,21 +256,32 @@ In the browser:
    does not change router time or NTP settings.
 8. For a wired multi-hop layout, confirm the live topology does not show a
    managed downstream device attached directly to multiple upstream devices.
-9. Open **Policy Engine → Object Manager** and confirm named client sets are
-   initially empty unless they were created in a v0.1.5 candidate. Creating a
+9. Open **Policy Engine → Object Manager** and confirm existing named client sets
+   are preserved. Sets are initially empty only when upgrading from before
+   their schema 22 introduction. Creating a
    test set changes controller desired state; do not do it as a health check.
 10. Generate Preview and verify Monitor-only devices are absent from the target
     fleet and set-backed rules show their exact resolved MAC members. Schema 23
-    starts source-relative provenance with the next successful managed-Gateway
-    poll, so upgraded or restored installations can temporarily fail active MAC
+    first introduced source-relative provenance with a successful managed-Gateway
+    poll. Upgrades from before schema 23, or portable restores, can temporarily fail active MAC
     intent closed until every referenced MAC has a stored local Gateway
     observation. Monitor-only observations neither satisfy nor contaminate that
     proof. Clear existing block/fixed-address intent per client if needed, or use
     network/zone or explicit IPv4 scope instead.
 11. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
 12. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
+13. Review **Statistics**, **Reports**, and the separate **Accounts** workspace.
+    Missing historical buckets must remain gaps, not zero activity.
+14. Review **Alerts**, **Firmware**, and **Integrations** without enabling a
+    webhook, checking an external service, or installing the optional helper
+    just to validate the upgrade. Fresh v0.1.5 upgrades have no alert rules or
+    AdGuard connection; firmware installation remains unavailable in v0.1.6.
 
 ## Roll back v0.1.5 to v0.1.4
+
+The following explains that earlier release transition. When rolling back
+directly from v0.1.6, retain its schema-25 recovery unit and use the same exact
+pre-v0.1.5 schema-20 target below; schema 23 is not a compatible substitute.
 
 Do not point v0.1.4 at a database that v0.1.5 migrated to schema 23. Rollback is
 a matched data restore:
@@ -239,7 +310,7 @@ before discarding either the old schema-23 data or the recovery artifact.
 
 ## Older rollback targets
 
-The v0.1.3 daemon uses schema 19 and cannot open schema 20 or 23. Reaching
+The v0.1.3 daemon uses schema 19 and cannot open schema 20, 23, or 25. Reaching
 v0.1.3 requires its own matching pre-v0.1.4 schema-19 database, keyring, and
 passphrase; do not use the v0.1.4 recovery point described above. A portable
 schema-19 backup must be restored through clean v0.1.3 state.
@@ -249,10 +320,10 @@ those rows exist in a pre-v0.1.1 backup.
 
 ## Roll back to v0.1.0-rc.1
 
-Do not point the RC daemon at a schema-19, schema-20, or schema-23 database. Rollback is a data restore:
+Do not point the RC daemon at a schema-19, schema-20, schema-23, or schema-25 database. Rollback is a data restore:
 
 1. Stop the stable controller.
-2. Retain its current schema-23 database/keyring pair separately.
+2. Retain its current database/keyring pair separately (schema 25 for v0.1.6).
 3. Restore the untouched schema-17 database and matching `keyring.json` captured before migration.
 4. Use the prior runtime passphrase file.
 5. Install the v0.1.0-rc.1 binary or image.

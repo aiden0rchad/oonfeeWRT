@@ -1,12 +1,14 @@
 {
   "name": "oonfeewrt-ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && node -e \"require('node:fs').writeFileSync('dist/.gitkeep','')\"",
     "preview": "vite preview",
+    "build:demo": "tsc -b && vite build --config vite.demo.config.ts",
+    "preview:demo": "vite preview --config vite.demo.config.ts",
     "test": "vitest run",
     "test:browser": "tsc -p tsconfig.e2e.json && playwright test",
     "test:browser:install": "playwright install --with-deps --only-shell chromium",

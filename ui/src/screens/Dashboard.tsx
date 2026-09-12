@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { api } from '../lib/api'
+import { api, isDemo } from '../lib/api'
 import type {
   Dashboard as DashboardData,
   DashboardMetric,
@@ -12,6 +12,70 @@ import type {
 import { eventLabel, ipv6RACondition } from '../lib/eventCondition'
 import { Banner, Button, Card, Notice, PageHeader, Stat, Status, Unknown } from '../components/ui'
 import { ago } from '../components/Chart'
+
+function SummaryIcon({ kind }: { kind: 'devices' | 'wireless' | 'network' | 'focus' | 'history' }) {
+  const paths = {
+    devices: <><rect x="4" y="8" width="16" height="11" rx="3" /><path d="M7 8V4m10 4V4M8 15h.01M12 15h4" /></>,
+    wireless: <><path d="M3 8a14 14 0 0 1 18 0M6 12a9 9 0 0 1 12 0M9 16a4.5 4.5 0 0 1 6 0" /><circle cx="12" cy="20" r=".6" /></>,
+    network: <><rect x="9" y="3" width="6" height="5" rx="1.5" /><rect x="3" y="16" width="6" height="5" rx="1.5" /><rect x="15" y="16" width="6" height="5" rx="1.5" /><path d="M12 8v4M6 16v-4h12v4" /></>,
+    focus: <><path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3" /><circle cx="12" cy="12" r="4" /></>,
+    history: <><path d="M4 19V5m0 14h16M8 15v-4m4 4V7m4 8v-6m4 6v-3" /></>,
+  }
+  return (
+    <span className="dashboard-summary-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        {paths[kind]}
+      </svg>
+    </span>
+  )
+}
+
+/** A distribution of reported states, never an inferred health score. */
+export function FleetStatus({ devices }: { devices: DashboardData['devices'] }) {
+  const states = ['online', 'offline', 'pending', 'unknown'] as const
+  const validCount = (value: number) => Number.isSafeInteger(value) && value >= 0
+  const complete = validCount(devices.total) && states.every((state) => validCount(devices[state])) &&
+    states.reduce((total, state) => total + devices[state], 0) === devices.total
+  let offset = 0
+  return (
+    <div className="dashboard-fleet-status">
+      <div className="dashboard-fleet-chart">
+        <svg viewBox="0 0 120 120" role="img" aria-label={complete
+          ? `Device status: ${states.map((state) => `${devices[state]} ${state}`).join(', ')}`
+          : 'Device status distribution unavailable: reported counts do not match'}>
+          <circle className="dashboard-fleet-track" cx="60" cy="60" r="48" />
+          {complete && devices.total > 0 && states.map((state) => {
+            const share = devices[state] / devices.total * 100
+            const start = offset
+            offset += share
+            return share > 0 ? (
+              <circle key={state} className="dashboard-fleet-segment" data-state={state}
+                cx="60" cy="60" r="48" pathLength="100"
+                strokeDasharray={`${share} ${100 - share}`} strokeDashoffset={-start} />
+            ) : null
+          })}
+        </svg>
+        <div className="dashboard-fleet-total" aria-hidden="true">
+          <strong>{validCount(devices.total) ? devices.total : '—'}</strong>
+          <span>{devices.total === 1 ? 'device' : 'devices'}</span>
+        </div>
+      </div>
+      <dl className="dashboard-fleet-legend">
+        {states.map((state) => (
+          <div key={state}>
+            <dt><Status value={state} /></dt>
+            <dd className="num">{validCount(devices[state]) ? devices[state] : '—'}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="dashboard-fleet-note">
+        {!complete && 'The reported state counts do not match the inventory total; distribution is unavailable. '}
+        {complete && devices.total === 0 && 'No devices in the inventory yet. '}
+        “unknown” means adopted but never successfully polled — different from offline, which means it answered once and has stopped.
+      </div>
+    </div>
+  )
+}
 
 function formatRate(value: number, unit?: string) {
   const bitsPerSecond = unit === 'B/s' ? value * 8 : value
@@ -1103,7 +1167,7 @@ export function Dashboard({
       <PageHeader
         title="Dashboard"
         purpose="Internet health, fleet status and recent controller activity."
-        actions={<span className="dashboard-freshness">Live controller view</span>}
+        actions={<span className="dashboard-freshness">{isDemo ? 'Synthetic preview' : 'Live controller view'}</span>}
       />
       {invalidGatewayConfiguration.length > 0 && (
         <div role="alert">
@@ -1127,11 +1191,6 @@ export function Dashboard({
         </div>
       )}
 
-      <div className="dashboard-operations-grid">
-        <InternetHealth data={data} />
-        <SpeedTestCard />
-      </div>
-
       <section aria-labelledby="fleet-overview-heading" className="dashboard-section">
         <div className="dashboard-section-heading">
           <h2 id="fleet-overview-heading">Fleet overview</h2>
@@ -1139,10 +1198,13 @@ export function Dashboard({
         </div>
         <div className="dashboard-stat-grid">
         <Card>
+          <SummaryIcon kind="devices" />
           <Stat label="Devices online" value={`${d.online}/${d.total}`}
-            tone={d.online === d.total && d.total > 0 ? 'good' : d.offline > 0 ? 'critical' : undefined} />
+            tone={d.online === d.total && d.total > 0 ? 'good' : d.offline > 0 ? 'critical' : undefined}
+            sub="Managed inventory" />
         </Card>
         <Card>
+          <SummaryIcon kind="wireless" />
           <Stat
             label="Wireless clients"
             value={
@@ -1161,6 +1223,7 @@ export function Dashboard({
           />
         </Card>
         <Card>
+          <SummaryIcon kind="network" />
           <Stat
             label="Devices on the LAN"
             value={data.active_devices}
@@ -1168,6 +1231,7 @@ export function Dashboard({
           />
         </Card>
         <Card>
+          <SummaryIcon kind="focus" />
           {/* Labelled for what it counts. It said "Focused polls" over
               focused_devices — a count of DEVICES under a label promising a
               count of polls, on a dashboard whose own code comment two files
@@ -1185,7 +1249,8 @@ export function Dashboard({
           />
         </Card>
         <Card>
-          <Stat label="Series collected" value={data.series_count} />
+          <SummaryIcon kind="history" />
+          <Stat label="Series collected" value={data.series_count} sub="Recorded telemetry streams" />
         </Card>
         </div>
       </section>
@@ -1237,30 +1302,17 @@ export function Dashboard({
         </Banner>
       )}
 
+      <div className="dashboard-operations-grid">
+        <InternetHealth data={data} />
+        <SpeedTestCard />
+      </div>
+
       <div className="dashboard-detail-grid">
         <div className="dashboard-topology-card">
           <TopologySummary onOpenTopology={onOpenTopology} />
         </div>
         <Card title="Device status">
-          <div style={{ display: 'grid', gap: 8 }}>
-            {(
-              [
-                ['online', d.online],
-                ['offline', d.offline],
-                ['pending', d.pending],
-                ['unknown', d.unknown],
-              ] as const
-            ).map(([k, n]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Status value={k} />
-                <span className="num">{n}</span>
-              </div>
-            ))}
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-              “unknown” means adopted but never successfully polled — different
-              from offline, which means it answered once and has stopped.
-            </div>
-          </div>
+          <FleetStatus devices={d} />
         </Card>
 
         <Card title="Recent warnings and errors">
@@ -1272,11 +1324,15 @@ export function Dashboard({
               </Banner>
             </div>
           ) : alerts.length === 0 && invalidAlerts === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              No retained warning or error events.
+            <div className="dashboard-activity-empty">
+              <SummaryIcon kind="history" />
+              <div>
+                <strong>No retained warning or error events.</strong>
+                <span>New controller events will appear here.</span>
+              </div>
             </div>
           ) : (
-            <div style={{ display: 'grid', gap: 6 }}>
+            <div className="dashboard-activity-list">
               {invalidAlerts > 0 && (
                 <Banner tone="warning">
                   {invalidAlerts} alert row{invalidAlerts === 1 ? '' : 's'} had an
@@ -1287,28 +1343,18 @@ export function Dashboard({
               {alerts.slice(0, 8).map((e) => {
                 const condition = ipv6RACondition(e)
                 return (
-                  <div key={e.ID} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
-                    <span
-                      style={{
-                        color:
-                          e.Severity === 'error'
-                            ? 'var(--critical)'
-                            : e.Severity === 'warning'
-                              ? 'var(--warning)'
-                              : 'var(--text-secondary)',
-                        minWidth: 58,
-                      }}
-                    >
+                  <div key={e.ID} className="dashboard-activity-row" data-severity={e.Severity}>
+                    <span className="dashboard-activity-severity">
                       {e.Severity}
                     </span>
-                    <span style={{ flex: 1 }}>
+                    <span className="dashboard-activity-copy">
                       {eventLabel(e)}
                       {condition && (
                         <> · {condition.occurrences.toLocaleString()} occurrence
                           {condition.occurrences === 1 ? '' : 's'}</>
                       )}
                     </span>
-                    <span style={{ color: 'var(--text-muted)' }}>{ago(e.TS)}</span>
+                    <span className="dashboard-activity-time">{ago(e.TS)}</span>
                   </div>
                 )
               })}

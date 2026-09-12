@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aiden0rchad/oonfeewrt/internal/store"
 )
 
 const (
@@ -24,6 +26,12 @@ const (
 	testExportPassphrase = "placeholder-export-passphrase"
 	testRuntimePass      = "placeholder-runtime-passphrase"
 )
+
+func TestExpectedSchemaMatchesController(t *testing.T) {
+	if expectedSchema != store.CurrentSchemaVersion() {
+		t.Fatalf("release smoke expects schema %d; controller uses schema %d", expectedSchema, store.CurrentSchemaVersion())
+	}
+}
 
 func testConfig(base string) *config {
 	return &config{
@@ -212,7 +220,7 @@ func TestRunSmokeSequence(t *testing.T) {
 			}
 			write(http.StatusAccepted, map[string]any{"preview": map[string]string{"id": previewID, "upload_id": uploadID, "state": "queued"}})
 		case "GET /api/v1/restores/previews/" + previewID:
-			write(http.StatusOK, map[string]any{"preview": map[string]any{"id": previewID, "upload_id": uploadID, "state": "completed", "plan_id": planID, "source_schema": expectedSchema, "target_schema": expectedSchema, "counts": map[string]int{"devices": 0}}})
+			write(http.StatusOK, map[string]any{"preview": map[string]any{"id": previewID, "upload_id": uploadID, "state": "completed", "plan_id": planID, "source_schema": store.CurrentSchemaVersion(), "target_schema": store.CurrentSchemaVersion(), "counts": map[string]int{"devices": 0}}})
 		case "POST /api/v1/restores/previews/" + previewID + "/confirm":
 			var body map[string]any
 			if decode(&body) && (body["plan_id"] != planID || body["export_passphrase"] != testExportPassphrase || body["destination_runtime_passphrase"] != testRuntimePass || body["typed_confirmation"] != "RESTORE CONTROLLER" || body["acknowledge_restart"] != true || body["acknowledge_session_revocation"] != true || body["acknowledge_router_writes_suppressed"] != true || body["acknowledge_no_automatic_router_apply"] != true) {

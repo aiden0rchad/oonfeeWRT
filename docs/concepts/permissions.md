@@ -5,7 +5,7 @@ description: Controller roles, step-up authentication, sessions, and the separat
 
 # Permissions and sessions
 
-oonfeeWRT v0.1.5 has local controller accounts with four enforced roles. These
+oonfeeWRT v0.1.6 has local controller accounts with four enforced roles. These
 are not OpenWrt accounts: controller authorization and router access are
 separate boundaries.
 
@@ -44,6 +44,29 @@ general event stream is readable by lower roles.
 The server enforces this matrix; hiding a control in the UI is not the security
 boundary.
 
+### Additional v0.1.6 permissions {#additional-development-permissions}
+
+The following routes were added in v0.1.6. They use the same server-enforced
+role hierarchy as the existing workspaces.
+
+| Task | Read-only | Operator | Administrator | Owner |
+|---|:---:|:---:|:---:|:---:|
+| Read Statistics, Reports, Alerts, firmware inventory, and saved integration metadata | Yes | Yes | Yes | Yes |
+| Export a report CSV in the browser or arrange your topology map | Yes | Yes | Yes | Yes |
+| Run the explicit official firmware-catalogue, AdGuard, or WireGuard check | No | No | Yes | Yes |
+| Create/edit/delete alert rules or configure webhook delivery | No | No | No | Yes |
+| Save/remove the AdGuard connection and credentials | No | No | No | Yes, recent password confirmation |
+
+Firmware and integration checks are **observations**, but they can contact an
+external service or router; therefore they are not made automatic merely
+because they do not change configuration. The optional WireGuard helper also
+requires a separate manually granted router read permission. Being an Owner
+does not make missing helper access or unavailable evidence valid.
+
+The [isolated demo](../guide/demo.md) uses a fictional Read-only account and
+refuses all checks and mutations locally. It does not grant access to a real
+controller, even if its browser UI resembles one.
+
 Inspect and its compatibility report use the same Administrator-or-Owner,
 authenticated, CSRF-protected request. Export is not a second server endpoint:
 the browser downloads the allowlisted report already returned in that response.
@@ -78,7 +101,7 @@ letting old authorization continue.
 Sessions exist only in controller memory. A controller restart signs everyone
 out, including a restart performed during restore.
 
-| Control | v0.1.5 behavior |
+| Control | v0.1.6 behavior |
 |---|---|
 | Idle expiry | 12 hours after last use |
 | Absolute expiry | 7 days after creation, even when active |
@@ -106,6 +129,11 @@ Step-up is required for:
 - uploading and previewing a restore;
 - confirming a restore; and
 - resuming router writes after restore.
+
+v0.1.6 also requires this confirmation when saving or removing
+AdGuard Home connection credentials. Alert rule/delivery editing is Owner-only
+but does not use the recent-password gate; do not assume all Owner endpoints
+have identical confirmation requirements.
 
 Step-up confirms the controller account. Restore confirmation separately asks
 for the destination controller's runtime passphrase and the backup's export
@@ -179,7 +207,7 @@ or require re-adoption.
 
 ## Deployment implications
 
-The v0.1.5 listener is plain HTTP. Cookies are marked `Secure` only when the
+The v0.1.6 listener is plain HTTP. Cookies are marked `Secure` only when the
 request is TLS or the reverse proxy supplies `X-Forwarded-Proto: https`.
 Therefore:
 

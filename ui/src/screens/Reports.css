@@ -1,0 +1,21 @@
+.reports-page { display: grid; gap: 22px; max-width: 1600px; margin: 0 auto; }
+.reports-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; color: var(--text-muted); font-size: 12px; }
+.reports-range { display: flex; gap: 5px; padding: 5px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); }
+.reports-intro { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 28px; border: 1px solid var(--border); border-radius: 16px; background: linear-gradient(115deg, var(--surface-1), var(--surface-2)); }
+.reports-eyebrow { color: var(--accent-text); font-size: 10px; font-weight: 700; letter-spacing: .14em; }
+.reports-intro h2 { margin: 8px 0; font-size: 25px; letter-spacing: -.04em; }
+.reports-intro p { color: var(--text-secondary); margin: 0; }
+.reports-intro-note { color: var(--text-muted); line-height: 1.8; text-align: right; }
+.reports-intro-note strong { color: var(--text-secondary); font-weight: 500; }
+.reports-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.report-metric { border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); padding: 21px; min-width: 0; }
+.report-metric h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 14px; font-weight: 550; }
+.report-value { font-size: clamp(24px, 2.5vw, 32px); font-weight: 650; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.report-comparison { min-height: 34px; color: var(--text-secondary); font-size: 11px; }
+.report-coverage-track { height: 4px; margin-top: 20px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.report-coverage-track span { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.report-coverage, .report-prior-coverage { font-size: 11px; color: var(--text-muted); margin: 7px 0 0; }
+.report-explanations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; padding: 6px; }
+.report-explanations h3 { font-size: 13px; margin: 0 0 8px; }
+.report-explanations p { color: var(--text-secondary); line-height: 1.7; font-size: 12px; margin: 0; }
+@media (max-width: 800px) { .report-explanations { grid-template-columns: 1fr; gap: 20px; } .reports-intro { align-items: flex-start; flex-direction: column; padding: 20px; } .reports-intro-note { text-align: left; } }

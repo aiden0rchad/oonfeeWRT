@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.5** codebase. The repository's
+This page orients contributors to the **v0.1.6**, schema-25 codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -40,6 +40,9 @@ internal/applyengine/    preview/apply/verify/confirm state machine
 internal/collector/      polling, snapshots and collection scheduling
 internal/telemetry/      counter deltas and experience calculations
 internal/topology/       route/FDB/neighbor/association/LLDP graph inference
+internal/alerts/         sustained rules, incidents and bounded webhook delivery
+internal/firmware/       official same-branch catalogue metadata checks
+internal/integrations/   bounded read-only AdGuard Home and WireGuard adapters
 internal/store/          SQLite schema, migrations, queries, retention and recovery
 internal/secrets/        keyring, sealing and password hashing
 internal/diagnostics/    bounded, redacted stored-evidence bundle generation
@@ -49,7 +52,10 @@ internal/restoreswap/    crash-safe live-state replacement and suppression
 ui/src/components/       shared accessible controls, grids and charts
 ui/src/screens/          product workspaces
 ui/src/lib/              API client, WebSocket client, columns and tokens
+ui/src/demo/             isolated synthetic API/live/PWA adapters and fixtures
+ui/public/               controller manifest, original icons and offline guidance
 deploy/                  Dockerfile, Compose, ACL template and release contracts
+deploy/openwrt-agent/    experimental manually built read-only rpcd helper source
 tools/                   probes, mocks, release checks, recovery helper, secret scans
 docs/                    user documentation, architecture, evidence and specifications
 ```
@@ -113,8 +119,9 @@ make check
 4. runs all normal Go tests;
 5. runs `go vet`;
 6. runs UI unit tests;
-7. enforces the gzipped UI bundle budget; and
-8. scans the working tree for repository-specific secret patterns.
+7. builds the isolated synthetic demo without replacing the controller UI;
+8. enforces the gzipped controller UI bundle budget; and
+9. scans the working tree for repository-specific secret patterns.
 
 It does not run the Go race detector, Playwright suite, `govulncheck`, full
 history secret scan, reproducible-build check, or physical-router tests. CI and
@@ -180,12 +187,43 @@ boundary and you have a verified backup.
 
 ## Core invariants
 
-### No controller code on routers
+### Agent-free by default; explicit optional helper boundary
 
 The controller may call stock ubus/rpcd methods and, after explicit approval,
-manage one ACL/login plus separately planned official-feed capabilities. It
-must not ship an oonfeeWRT daemon, executable, firmware, cron job, init script,
-or package feed to routers.
+manage one ACL/login plus separately planned official-feed capabilities.
+Historical v0.1.5 installs no controller executable. v0.1.6 adds
+the separately packaged `deploy/openwrt-agent` rpcd helper source as a narrow
+exception: manual SDK build, manual opt-in installation and read grant,
+on-demand allowlisted methods, no daemon or added listener. Ordinary adoption
+must not install it or widen access for it automatically. Never add a general
+shell/file/command method, firmware-write path, update loop, or package feed
+under the guise of a read helper. Matching OpenWrt SDK builds and real-router
+helper validation remain outstanding; no prebuilt helper package is included
+in the controller release archives.
+
+### Release UI, demo, and schema checks
+
+The [v0.1.6 release summary](./releases.md#development-after-v0-1-5)
+distinguishes this release from historical v0.1.5. Current schema is **25**:
+schema 24 persists bounded alert state and schema 25 encrypted integration
+configuration. Keep forward migrations, schema attestation, portable backup
+validation, restore preparation, and old-version refusal consistent. Do not
+rename the released version or change historical release notes to imply that
+schema 25 shipped in v0.1.5.
+
+Use `npm --prefix ui run build:demo` followed by
+`npm --prefix ui run preview:demo` for the separate synthetic preview on port
+4180. It must never include the production API, live-channel, or service-worker
+registration implementation;
+new unsupported methods must fail locally. Use the regular UI test command
+from `ui/` to include the no-network adapter tests. Never supply real router
+credentials or copy captured API responses into demo fixtures.
+
+Preserve evidence semantics when improving graphics: absent is not zero,
+page-level counts are not inventory totals, layout movement is not a topology
+mutation, and a generic glyph is not inferred hardware identity. Tests should
+cover stale replacement responses, scoped preferences, keyboard interaction,
+time-range boundaries, and missing data as well as populated cases.
 
 ### Capability evidence is tri-state-plus
 
@@ -387,7 +425,7 @@ publishes the GitHub release.
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.5
+make release-check RELEASE_VERSION=v0.1.6
 ```
 
 only from the exact intended clean release tree. A local build from another

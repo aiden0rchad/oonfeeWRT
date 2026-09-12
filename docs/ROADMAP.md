@@ -1,5 +1,18 @@
 # oonfeeWRT — Roadmap
 
+> **v0.1.6 checkpoint (2026-09-12):** Historical v0.1.5 remains schema
+> 23. v0.1.6 uses schema 25 and adds
+> Reports, Alerts, editable topology, inventory presentation, explicit firmware
+> metadata/integration checks, mobile presentation, and an isolated demo.
+> These features are not complete parity. Firmware execution, SNMP,
+> Web Push, Telegram-specific delivery, full localization, and VM nesting
+> remain pending. The historical no-device-code rule below is superseded only
+> for the manually installed, on-demand read-only rpcd helper; ordinary adoption
+> remains agent-free with no automatic helper installation. See
+> [v0.1.6 changes](reference/releases.md#development-after-v0-1-5) and
+> [capabilities](reference/capabilities.md) for the current boundary; numbered
+> phases below retain their original proof requirements and dated evidence.
+
 Six numbered phases, with a focused Phase 4.1 between observability and DPI.
 Each has a **proof** — the one thing that must work before the phase counts as
 done. Ship in order; the ordering is chosen so that each phase is independently
@@ -10,7 +23,7 @@ UniFi Network 10.5.67. Its Client Observability and Safe Ops work changes the
 shape of Phases 4 and 6 below, but does **not** justify skipping the safety and
 site-model work ahead of them.
 
-**Current stable patch (v0.1.5, released 2026-09-10):** v0.1.2 shipped the
+**Historical v0.1.5 checkpoint (released 2026-09-10):** v0.1.2 shipped the
 bounded, sanitized, browser-local compatibility report on successful read-only
 Inspect and corrected physical-radio/direct-Ethernet inspection for the
 externally reported Cudy M3000 v2 variant. v0.1.3 replaced WAN interface-name

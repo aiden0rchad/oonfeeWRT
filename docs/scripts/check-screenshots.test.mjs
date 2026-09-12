@@ -17,7 +17,7 @@ async function fixture(t) {
     await writeFile(target, content)
   }
   await write('README.md', '<img src="docs/public/screenshots/dashboard-dark.jpg">')
-  await write('docs/guide.md', '<DocScreenshot\n src="dashboard"\n alt="Dashboard" />')
+  await write('docs/guide.md', '<DocScreenshot\n src="dashboard"\n :width="1416" :height="925"\n alt="Dashboard" />')
   await write('docs/public/screenshots/dashboard-dark.jpg', screenshot)
   return { root, write }
 }
@@ -64,4 +64,52 @@ test('invalid and dynamic stems fail with their documentation source location', 
   assert.equal(errors.length, 2)
   assert.match(errors[0], /docs\/guide\.md:1:/)
   assert.match(errors[1], /docs\/guide\.md:2:/)
+})
+
+test('compares each reference against actual JPEG dimensions with its source location', async (t) => {
+  const { root, write } = await fixture(t)
+  await write('docs/guide.md', [
+    '# Screenshots',
+    '<DocScreenshot src="dashboard" :width="1416" :height="925" />',
+    '<DocScreenshot src="dashboard" :width="1620" :height="959" />',
+    '<DocScreenshot src="dashboard" :width="925" :height="1416" />',
+  ].join('\n'))
+  const result = await checkScreenshots(root)
+  assert.equal(result.references, 3)
+  assert.equal(result.screenshots, 1)
+  assert.deepEqual(result.errors, [
+    'docs/guide.md:3: declared 1620x959 does not match docs/public/screenshots/dashboard-dark.jpg (1416x925)',
+    'docs/guide.md:4: declared 925x1416 does not match docs/public/screenshots/dashboard-dark.jpg (1416x925)',
+  ])
+})
+
+test('accepts static numeric attributes across quote styles, line breaks, and binding forms', async (t) => {
+  const { root, write } = await fixture(t)
+  await write('docs/guide.md', [
+    '<DocScreenshot caption="A > B with :width=\'100\' inside text"',
+    " src='dashboard' v-bind:width='1416'",
+    " :height = '925' />",
+    '<DocScreenshot src="dashboard" width="1416" height="925" />',
+  ].join('\n'))
+  assert.deepEqual(await checkScreenshots(root), { errors: [], references: 2, screenshots: 1 })
+})
+
+test('rejects missing, dynamic, invalid, and duplicate dimension attributes', async (t) => {
+  const { root, write } = await fixture(t)
+  const dimensions = [
+    '', ':width="1416"', ':width="image.width" :height="925"',
+    ':width="0" :height="925"', ':width="-1416" :height="925"',
+    ':width="1416.5" :height="925"', ':width="65536" :height="925"',
+    ':width="1416" :height="NaN"', ':width="1416" :height="Infinity"',
+    ':width="1416" width="1416" :height="925"',
+    ':width="1416" :height="925" v-bind:height="925"',
+  ]
+  await write('docs/guide.md', dimensions.map((value) => `<DocScreenshot src="dashboard" ${value} />`).join('\n'))
+  const { errors, references } = await checkScreenshots(root)
+  assert.equal(references, dimensions.length)
+  assert.equal(errors.length, dimensions.length)
+  errors.forEach((error, index) => {
+    assert.ok(error.startsWith(`docs/guide.md:${index + 1}:`))
+    assert.match(error, /static positive-integer width and height/)
+  })
 })

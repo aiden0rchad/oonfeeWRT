@@ -75,6 +75,7 @@ jobs:
       - name: Build UI and check budget
         run: |
           npm --prefix ui run build
+          npm --prefix ui run build:demo
           ./tools/budget_check.sh
       - name: Install, audit, and build documentation
         run: |

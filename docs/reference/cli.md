@@ -1,12 +1,22 @@
 ---
 title: CLI and environment reference
-description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.5.
+description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.6.
 ---
 
 # CLI and environment reference
 
-This reference applies to the stable **v0.1.5** release, published September 10,
-2026, and its `oonfeewrtd` and `oonfeewrt-recoverycheck` executables.
+This reference applies to **v0.1.6** and its `oonfeewrtd` and
+`oonfeewrt-recoverycheck` executables. The completed tagged workflow and GitHub
+release establish availability of the matching artifacts.
+
+::: info Version and command boundary
+v0.1.6 adds UI/API features and migrates to schema 25; it does
+not add a CLI command for firmware flashing, installing the optional helper,
+or extracting a newer backup into v0.1.5. Use a matching executable/recovery
+helper and follow [migration and rollback](../installation/upgrades.md).
+The separate synthetic preview commands are documented in
+[Explore the isolated demo](../guide/demo.md); they never open controller data.
+:::
 
 ## `oonfeewrtd`
 
@@ -24,7 +34,7 @@ oonfeewrtd [flags]
 | `-log-level <level>` | `info` | One of `debug`, `info`, `warn`, `error` |
 | `-healthcheck` | false | Probe the configured listener's `/healthz` and exit without opening controller data |
 | `-version` | false | Print the embedded version and exit without opening controller data |
-| `-h`, `-help` | — | Print standard flag help; v0.1.5 then exits non-zero (a known CLI quirk) |
+| `-h`, `-help` | — | Print standard flag help; v0.1.6 then exits non-zero (a known CLI quirk) |
 
 Flags are parsed after environment configuration, so an explicit flag overrides
 a valid corresponding environment value. Environment loading/validation happens
@@ -78,10 +88,10 @@ starting with an empty keyring.
 oonfeewrtd -version
 ```
 
-For release v0.1.5 the output must be:
+For release v0.1.6 the output must be:
 
 ```text
-v0.1.5
+v0.1.6
 ```
 
 ### Interactive local start
@@ -148,7 +158,7 @@ application behavior; neither adds a daemon flag or environment variable.
   contains fields outside the share-safe allowlist.
 - Effective-WAN evidence is collected automatically for adopted gateways on the
   network/topology cycle. Existing v0.1.2 adoptions need no CLI migration, ACL
-  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.5.
+  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.6.
 
 v0.1.4 adds per-network IPv6 policy, router-time observation, topology
 projection fixes, and filter- and page-independent current state/action UI for
@@ -182,7 +192,7 @@ clears them. Evidence outside the 30-day age and five-minute future-skew window
 is rejected independently of cleanup. Existing blocked/fixed-address intent
 can still be cleared one client at a time.
 
-The Phase 5 flow-visibility page is a feasibility record. v0.1.5 adds no
+The Phase 5 flow-visibility page is a feasibility record. v0.1.6 adds no
 `nlbwmon`, `netifyd`, DPI, or flow-collector daemon flag and installs no such
 package.
 
@@ -190,17 +200,16 @@ package.
 host-side publish address. It is not read by `oonfeewrtd` and does not replace
 the container's `OONFEE_LISTEN=:8080`.
 
-v0.1.5 uses database schema 23. Its automatic path from v0.1.4 is schema
-20 → 21 → 22 → 23: management mode, reusable policy sets, then a rebuilt
-one-managed-Gateway uniqueness guard derived from canonical `functions_json`
-and the legacy role plus source-relative `client_observations` keyed by device
-and MAC. Observation and case-insensitive global-client MAC indexes keep the
-scope checks bounded. Migration does not itself configure routers or infer
-observation provenance from the global client row. A v0.1.4
-executable cannot open the migrated database. Before first startup, preserve
-and verify the matching schema-20 database, keyring, and runtime passphrase
-recovery unit. A rollback must restore that unit; changing only the binary or
-image tag is not a rollback. CLI compatibility does not extend the current REST/WebSocket surface
+v0.1.6 uses database schema **25**. From v0.1.5, its automatic path is
+**23 → 24 → 25**: persistent alert state, then encrypted AdGuard Home settings.
+It does not create rules, connect a service, install a helper, or configure
+routers. Older supported versions apply their existing migrations first.
+Before startup, preserve and verify the matching pre-upgrade database, keyring,
+runtime passphrase, and old executable/image. A v0.1.5 executable cannot open
+schema 24 or 25. A rollback must restore its schema-23 recovery unit; changing
+only the executable or image tag is not a rollback. Returning to v0.1.4 needs
+its own schema-20 unit. There is no CLI schema-downgrade or firmware-flashing
+override. CLI compatibility does not extend the current REST/WebSocket surface
 into a stable third-party API guarantee.
 
 ## Healthcheck

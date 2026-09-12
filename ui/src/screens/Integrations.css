@@ -1,0 +1,29 @@
+.integrations-page { display: grid; gap: 22px; max-width: 1500px; margin: 0 auto; }
+.integrations-intro { padding: 22px 26px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-1); }
+.integrations-intro p { color: var(--text-secondary); margin: 6px 0 0; line-height: 1.7; }
+.integration-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 20px; align-items: start; }
+.integration-description { color: var(--text-secondary); line-height: 1.75; margin: 0 0 20px; }
+.integration-source { display: grid; gap: 6px; padding: 18px; background: var(--surface-0); border: 1px solid var(--border); border-radius: 10px; }
+.integration-source span { color: var(--text-muted); font-size: 11px; }
+.integration-source strong { font-weight: 550; overflow-wrap: anywhere; }
+.integration-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.integration-footnote { color: var(--text-muted); font-size: 11px; line-height: 1.75; }
+.integration-form { border-top: 1px solid var(--border); margin-top: 22px; padding-top: 18px; }
+.integration-form h3, .integration-result h3 { font-size: 14px; margin: 0 0 15px; }
+.integration-form fieldset { padding: 0; border: 0; margin: 0; display: grid; gap: 14px; }
+.integration-checkbox { display: flex; align-items: center; gap: 8px; }
+.integration-device-picker { display: grid; gap: 6px; margin: 0 0 18px; font-size: 12px; color: var(--text-secondary); }
+.integration-device-picker select { min-height: 38px; }
+.integration-result { padding-top: 18px; margin-top: 20px; border-top: 1px solid var(--border); }
+.integration-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.integration-metrics > div { display: grid; gap: 8px; padding: 15px; background: var(--surface-0); border: 1px solid var(--border); border-radius: 10px; }
+.integration-metrics span { font-size: 11px; color: var(--text-muted); }
+.integration-metrics strong { font-size: 20px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.integration-error { color: var(--critical); line-height: 1.65; }
+.integration-notes { padding-left: 20px; color: var(--text-secondary); line-height: 1.75; font-size: 12px; }
+.wireguard-interface h4 { margin-bottom: 12px; color: var(--accent-text); }
+.wireguard-peer { border: 1px solid var(--border); background: var(--surface-0); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+.wireguard-peer dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; margin-bottom: 0; font-size: 11px; }
+.wireguard-peer dt { color: var(--text-muted); }
+.wireguard-peer dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 1050px) { .integration-grid { grid-template-columns: 1fr; } }

@@ -20,23 +20,35 @@ routers stay on stock OpenWrt and continue to work with LuCI.
 64-bit Linux or macOS host, or use the container/Compose setup. The controller
 does not need a dedicated machine and is not installed on the managed routers.
 
-## Current release: v0.1.5
+## v0.1.6 — clearer operations and a refreshed interface
 
-Released September 10, 2026. [Read the complete release notes](docs/releases/v0.1.5.md).
+[Read the complete v0.1.6 release notes](docs/releases/v0.1.6.md).
+Use the [tagged GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.6)
+and its completed release workflow to verify artifact availability, checksums,
+and signed container images; a source update alone is not publication proof.
 
-- **Managed** and **Monitor only** adoption modes: one managed Gateway plus
-  multiple reachable monitor-only routed devices and subnets.
-- Named exact-MAC policy sets, reusable firewall `source_set_id` rules, a
-  set-aware Master Table, and an Object Manager **Secure (IPv4)** draft workflow.
-- Consistent page headers and responsive light/dark layouts across the main
-  controller screens.
-- A documented Phase 5 flow-visibility feasibility boundary. No DPI or flow
-  package is installed or shipped.
+This release builds on v0.1.5's Managed/Monitor only modes and reusable
+exact-MAC policy sets with:
 
-### Current development after v0.1.5
-
-The current source includes these changes beyond the published release:
-
+- A refreshed dark/light interface with illustrated device cards, searchable
+  inventory, clearer dashboard summaries, and full-width mobile navigation.
+- Editable topology layouts saved per controller origin and account in the
+  browser. Placement never changes connection evidence or router settings.
+- [**Reports**](docs/guide/reports.md) with observed WAN period comparisons,
+  explicit coverage, and CSV export; [**Alerts**](docs/guide/alerts.md) with
+  sustained conditions, recovery tracking, cooldowns, and opt-in webhooks.
+- [**Firmware**](docs/guide/firmware.md) inventory and official same-branch
+  catalogue checks, plus an optional manually installed read-only router
+  helper source package. Download, staging, and flashing are **not enabled**;
+  the helper remains experimental pending SDK and hardware validation.
+- [**Integrations**](docs/guide/integrations.md) for explicitly requested
+  AdGuard Home aggregates and WireGuard interface/peer observations. Saving
+  connection settings does not contact a service or change DNS/VPN settings.
+- An [installable web app](docs/operations/mobile-app.md) with offline guidance,
+  no private-data cache, and no offline change queue.
+- A separate, populated [read-only demo build](docs/guide/demo.md) with original
+  synthetic data and no controller or router connection. Public demo hosting
+  is not included.
 - A read-only [**Statistics** workspace](docs/guide/statistics.md) for 6-hour
   through 30-day WAN, system, exact-interface, and available stable-radio
   history. Clean trend lines retain missing-data gaps and exact coverage
@@ -54,16 +66,19 @@ The current source includes these changes beyond the published release:
   that prevent late device responses or retained measurements from another AP
   being attributed to the currently selected device or client association.
 
-These changes are available in current source builds, not the published
-v0.1.5 binary or container image. See the
-[development change summary](https://aiden0rchad.github.io/oonfeeWRT/reference/releases#development-after-v0-1-5)
-for scope and limitations; this is not a new version release.
+v0.1.6 uses database **schema 25**. Upgrading from v0.1.5 applies
+**23 → 24 → 25**, adding persistent alerts and encrypted integration settings
+without configuring a router. Preserve a matching schema-23 recovery unit
+before upgrading: replacing only the executable cannot roll the data back.
+See the [release and migration guide](docs/reference/releases.md) for scope
+and limitations. This release does not claim complete feature parity with
+another controller or new physical-router certification.
 
 ## Preview
 
-Real dark-mode screenshots of the current development UI after v0.1.5.
+Real dark-mode screenshots captured while preparing the v0.1.6 interface.
 [Explore the visual tour and illustrated guides](https://aiden0rchad.github.io/oonfeeWRT/getting-started/visual-tour)
-for a screen-by-screen walkthrough; these views are not a new version release.
+for a screen-by-screen walkthrough and the capture dates and evidence limits.
 
 [![oonfeeWRT Dashboard with fleet health and Internet observations](docs/public/screenshots/dashboard-overview-dark.jpg)](docs/public/screenshots/dashboard-overview-dark.jpg)
 
@@ -84,7 +99,7 @@ for a screen-by-screen walkthrough; these views are not a new version release.
   route—including PPPoE runtime devices—and the exact runtime device exists in
   RX/TX history, plus topology, clients, radios, events, and controller-host
   speed tests.
-- On the current development branch, a dedicated Statistics workspace for
+- A dedicated Statistics workspace for
   retained WAN, system, interface, and capability-dependent radio rollups. It
   uses the proved exact WAN series, labels five-minute or hourly resolution,
   and leaves missing buckets blank instead of estimating them.
@@ -114,8 +129,10 @@ for a screen-by-screen walkthrough; these views are not a new version release.
 
 ## Project boundaries
 
-oonfeeWRT does not build or replace OpenWrt, run controller-authored software on
-routers, broker cloud access, or silently install packages.
+oonfeeWRT does not build or replace OpenWrt, broker cloud access, or silently
+install packages. Ordinary adoption and monitoring remain agent-free. The
+separate experimental read-only router helper is a manual opt-in; its source
+does not imply a validated SDK package or permission to install it automatically.
 
 Adoption can create only one scoped `oonfeewrt` login and one rpcd ACL JSON
 file after you approve the displayed plan. Managed devices use the managed ACL
@@ -202,14 +219,14 @@ umask 077
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.6/deploy/docker-compose.yml
 
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.5' \
+  'OONFEE_VERSION=v0.1.6' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
@@ -219,14 +236,14 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.5` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.6` for `linux/amd64` or `linux/arm64`.
 
-The v0.1.5 Compose file also accepts a Compose-only host bind IP. When browsers
+The release Compose file also accepts a Compose-only host bind IP. When browsers
 must connect from another machine, change `.env` to the controller's specific
 management-LAN address, then recreate the service:
 
 ```dotenv
-OONFEE_VERSION=v0.1.5
+OONFEE_VERSION=v0.1.6
 OONFEE_HTTP_BIND=192.168.1.20
 ```
 
@@ -256,19 +273,25 @@ For checksummed binaries, signature verification, reverse-proxy TLS,
 persistence, upgrades, and rollback, follow the
 [installation guide](docs/INSTALL.md).
 
-### Upgrade from v0.1.4
+### Upgrade from v0.1.5
 
 Export and verify a portable backup before upgrading. For a direct rollback,
 also retain a consistent pre-upgrade database/keyring pair or whole-volume
-snapshot and its matching runtime passphrase. v0.1.5 migrates schema 20 to
-schema 21 for device management mode, schema 22 for reusable policy sets, then
-schema 23 for per-device client provenance, bounded MAC lookup indexes, and a
-rebuilt one-managed-Gateway uniqueness guard based on canonical device
-functions plus the compatibility role. Existing devices remain Managed.
-v0.1.4 cannot open the migrated data. Replacing only the binary or image tag is
-not a valid rollback.
+snapshot and its matching runtime passphrase and v0.1.5 executable/image.
+v0.1.6 migrates schema 23 to schema 24 for persistent alert state, then schema
+25 for encrypted AdGuard Home settings. No alert rule, external connection,
+helper installation, or router configuration is created by migration.
+v0.1.5 cannot open schema 24 or 25. Restore the matching pre-upgrade schema-23
+recovery unit to roll back; replacing only the binary or image tag is not enough.
 
-Compose users should download or deliberately merge the v0.1.5 Compose file
+A portable restore into v0.1.6 pauses external alert delivery and cancels its
+queued notifications. Review the restored destination and explicitly re-enable
+delivery when ready; cancelled history is not replayed.
+
+Upgrades from v0.1.4 also apply the existing schema 20 → 21 → 22 → 23 steps.
+Keep a recovery unit matching the version you intend to return to.
+
+Compose users should download or deliberately merge the v0.1.6 Compose file
 and pin the intended image tag or digest. Follow the [upgrade and rollback
 guide](docs/installation/upgrades.md) before changing the running version.
 
@@ -412,10 +435,17 @@ passphrases.
   measured.
 - Native controller TLS, cloud remote access, multi-WAN management, manual WAN
   selection, gateway-run speed tests, DPI, and application-flow history are not
-  included in v0.1.5. The flow feasibility page is a gated research plan, not a
+  included in v0.1.6. The flow feasibility page is a gated research plan, not a
   shipped capability.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
+- Firmware checks compare official catalogue metadata only. No controller-run
+  download, image-byte verification, staging, flashing, or firmware recovery
+  engine is provided. The optional helper is manually built experimental
+  source, not an SDK- or hardware-validated release package.
+- AdGuard Home and WireGuard integration reads are on demand. This release
+  does not provision those services, add SNMP monitoring, deliver Web Push or
+  Telegram-specific messages, identify VMs, or host a public demo.
 
 Detailed hardware evidence and known gaps are in the
 [fresh-start validation record](docs/FRESH-START-VALIDATION.md) and
@@ -438,6 +468,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.6 release notes](docs/releases/v0.1.6.md)
 - [v0.1.5 release notes](docs/releases/v0.1.5.md)
 - [v0.1.4 release notes](docs/releases/v0.1.4.md)
 - [v0.1.3 release notes](docs/releases/v0.1.3.md)

@@ -1,0 +1,50 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# rpcd executes this helper on demand. No caller text is a path or command.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+case "${1-}" in
+	list)
+		printf '%s\n' '{"status":{},"board":{},"info":{},"wireguard":{}}'
+		;;
+	call)
+		case "${2-}" in
+			status)
+				sysupgrade=false
+				owut=false
+				command -v sysupgrade >/dev/null 2>&1 && sysupgrade=true
+				command -v owut >/dev/null 2>&1 && owut=true
+				printf '{"agent_version":"0.1.1","protocol_version":1,"read_only":true,"sysupgrade_present":%s,"owut_present":%s,"firmware_install_supported":false}\n' "$sysupgrade" "$owut"
+				;;
+			board)
+				exec ubus -t 5 call system board
+				;;
+			info)
+				exec ubus -t 5 call system info
+				;;
+			wireguard)
+				# Select public fields before collecting output. `dump` and
+				# configuration reads can contain private or preshared keys.
+				if ! command -v wg >/dev/null 2>&1 || [ ! -r /usr/share/libubox/jshn.sh ]; then
+					printf '%s\n' '{"protocol_version":1,"state":"unavailable"}'
+					exit 0
+				fi
+				interfaces="$(wg show interfaces)" || exit 2
+				handshakes="$(wg show all latest-handshakes)" || exit 2
+				transfers="$(wg show all transfer)" || exit 2
+				[ "${#interfaces}" -le 2048 ] && [ "${#handshakes}" -le 131072 ] && [ "${#transfers}" -le 131072 ] || exit 2
+				. /usr/share/libubox/jshn.sh
+				json_init
+				json_add_int protocol_version 1
+				json_add_string state observed
+				json_add_string interfaces "$interfaces"
+				json_add_string handshakes "$handshakes"
+				json_add_string transfers "$transfers"
+				json_dump
+				;;
+			*) exit 2 ;;
+		esac
+		;;
+	*) exit 2 ;;
+esac

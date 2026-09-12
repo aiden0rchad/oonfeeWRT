@@ -1,19 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from '../lib/api'
 import type { TopologyEdge, TopologyNode, TopologySnapshot } from '../lib/api'
 import { Banner, Button, Card, Notice, PageHeader, Stat, Status } from '../components/ui'
 import { DeviceDetailPanel } from './Devices'
+import { DeviceGlyph } from '../components/DeviceGlyph'
+import { constrainTopologyPosition, readTopologyPositions, topologyLayoutKey, type Position, type SavedPositions } from './Topology.layout'
+import './Topology.css'
 
 type Mode = 'current' | 'history'
 type HistoryPreset = '1' | '24' | '168' | '744' | 'custom'
 type HistoryRange =
   | { kind: 'preset'; hours: number }
   | { kind: 'custom'; from: number; to: number }
-
-interface Position {
-  x: number
-  y: number
-}
 
 type Confidence = TopologyEdge['confidence']
 type Medium = TopologyEdge['medium']
@@ -22,9 +20,9 @@ const hourMillis = 60 * 60 * 1000
 const maxHistoryMillis = 31 * 24 * hourMillis
 
 const edgeVisuals: Record<Confidence, { stroke: string; width: number; dash?: string }> = {
-  measured: { stroke: 'var(--accent)', width: 5 },
-  inferred: { stroke: 'var(--text-secondary)', width: 4, dash: '14 7' },
-  ambiguous: { stroke: 'var(--warning)', width: 5, dash: '2 8' },
+  measured: { stroke: 'var(--accent)', width: 3 },
+  inferred: { stroke: 'var(--text-secondary)', width: 2.5, dash: '10 7' },
+  ambiguous: { stroke: 'var(--warning)', width: 3, dash: '2 7' },
 }
 
 function ConfidenceLegendItem({ confidence }: { confidence: Confidence }) {
@@ -82,6 +80,7 @@ export function edgeLaneOffsets(edges: TopologyEdge[]) {
  * a separate lane so they cannot look like peers of the Internet root. */
 export function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
   const ids = new Set(nodes.map((node) => node.id))
+  edges = edges.filter((edge) => ids.has(edge.parent_id) && ids.has(edge.child_id))
   const connected = new Set(edges.flatMap((edge) => [edge.parent_id, edge.child_id]))
   const placedNodes = nodes.filter((node) => connected.has(node.id))
   const unplacedNodes = nodes.filter((node) => !connected.has(node.id))
@@ -118,37 +117,42 @@ export function layoutTopology(nodes: TopologyNode[], edges: TopologyEdge[]) {
     levels.set(level, [...(levels.get(level) ?? []), node])
   }
   const positions = new Map<string, Position>()
-  const unplacedStartX = unplacedNodes.length > 0 ? 820 : null
-  const placedWidth = unplacedStartX ?? 1000
-  const width = unplacedStartX == null ? 1000 : 1100
+  const widestLevel = Math.max(1, ...[...levels.values()].map((members) => members.length))
+  const placedWidth = Math.max(760, widestLevel * 264 + 80)
+  const unplacedStartX = unplacedNodes.length > 0 ? placedWidth : null
+  const width = unplacedStartX == null ? Math.max(1000, placedWidth) : placedWidth + 304
   for (const [level, members] of [...levels.entries()].sort((a, b) => a[0] - b[0])) {
-    members.sort((a, b) => a.id.localeCompare(b.id))
+    const parentCenter = (node: TopologyNode) => {
+      const parents = edges.filter((edge) => edge.child_id === node.id).flatMap((edge) => positions.get(edge.parent_id) ?? [])
+      return parents.length ? parents.reduce((sum, parent) => sum + parent.x, 0) / parents.length : width / 2
+    }
+    members.sort((a, b) => parentCenter(a) - parentCenter(b) || a.id.localeCompare(b.id))
     members.forEach((node, index) => {
       positions.set(node.id, {
-        x: 40 + ((index + 1) * (placedWidth - 80)) / (members.length + 1),
-        y: 64 + level * 150,
+        x: ((index + .5) * (unplacedStartX == null ? width : placedWidth)) / members.length,
+        y: 66 + level * 170,
       })
     })
   }
   unplacedNodes.sort((a, b) => a.id.localeCompare(b.id))
   unplacedNodes.forEach((node, index) => {
-    positions.set(node.id, { x: 960, y: 76 + index * 90 })
+    positions.set(node.id, { x: placedWidth + 152, y: 100 + index * 118 })
   })
   const maxDepth = Math.max(0, ...levels.keys())
-  const placedHeight = 128 + maxDepth * 150
-  const unplacedHeight = unplacedNodes.length > 0 ? 126 + (unplacedNodes.length - 1) * 90 : 0
+  const placedHeight = 132 + maxDepth * 170
+  const unplacedHeight = unplacedNodes.length > 0 ? 166 + (unplacedNodes.length - 1) * 118 : 0
   return {
     positions,
     width,
-    height: Math.max(190, placedHeight, unplacedHeight),
+    height: Math.max(220, placedHeight, unplacedHeight),
     unplaced: unplacedNodes.map((node) => node.id),
     unplacedStartX,
   }
 }
 
 export function topologyEdgeRoute(parent: Position, child: Position, lane = 0) {
-  const startY = parent.y + 38
-  const endY = child.y - 38
+  const startY = parent.y + 50
+  const endY = child.y - 50
   if (endY > startY + 12) {
     const middleY = (startY + endY) / 2 + lane
     const vertical = Math.abs(parent.x - child.x) < 40
@@ -160,9 +164,9 @@ export function topologyEdgeRoute(parent: Position, child: Position, lane = 0) {
       },
     }
   }
-  const sideY = Math.max(parent.y, child.y) + 48 + lane
+  const sideY = Math.max(parent.y, child.y) + 58 + Math.abs(lane)
   return {
-    path: `M ${parent.x} ${parent.y + 34} V ${sideY} H ${child.x} V ${child.y + 34}`,
+    path: `M ${parent.x} ${parent.y + 46} V ${sideY} H ${child.x} V ${child.y + 46}`,
     label: { x: (parent.x + child.x) / 2, y: sideY },
   }
 }
@@ -176,8 +180,8 @@ export function topologyNodeLabelLines(name: string) {
 }
 
 export function topologyLastKnownRoute(parent: Position, child: Position, dividerX = 820) {
-  const startX = parent.x + 88
-  const endX = child.x - 88
+  const startX = parent.x + 112
+  const endX = child.x - 112
   const bendX = Math.min(endX - 28, Math.max(startX + 28, dividerX - 20))
   return {
     path: `M ${startX} ${parent.y} H ${bendX} V ${child.y} H ${endX}`,
@@ -274,7 +278,11 @@ function lldpCapabilityDeviceCount(gaps: string[]) {
   return devices.size
 }
 
-export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () => void } = {}) {
+export function Topology({ onReviewCapabilities, userKey, controllerKey }: {
+  onReviewCapabilities?: () => void
+  userKey?: string
+  controllerKey?: string
+} = {}) {
   const [mode, setMode] = useState<Mode>('current')
   const [historyRange, setHistoryRange] = useState<HistoryRange>({ kind: 'preset', hours: 24 })
   const [rangeChoice, setRangeChoice] = useState<HistoryPreset>('24')
@@ -292,6 +300,18 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
   const [selectedNodeID, setSelectedNodeID] = useState<string | null>(null)
   const [selectedDeviceID, setSelectedDeviceID] = useState<number | null>(null)
   const [panning, setPanning] = useState(false)
+  const [arranging, setArranging] = useState(false)
+  const [layoutNodeID, setLayoutNodeID] = useState('')
+  const [layoutMessage, setLayoutMessage] = useState('')
+  const storageKey = topologyLayoutKey(userKey, controllerKey, mode)
+  const layoutScope = storageKey ?? `temporary:${mode}`
+  const [saved, setSaved] = useState(() => ({ key: layoutScope, positions: readTopologyPositions(storageKey) }))
+  const [previewPosition, setPreviewPosition] = useState<{ key: string; id: string; position: Position } | null>(null)
+  const nodeDrag = useRef<{
+    id: string; pointerID: number; x: number; y: number; start: Position; position: Position
+    scale: number; unplaced: boolean; moved: boolean; key: string
+  } | null>(null)
+  const layoutHelpID = useId()
   const generation = useRef(0)
   const activeRequest = useRef<AbortController | null>(null)
   const pan = useRef<{ pointerID: number; x: number; y: number; left: number; top: number; moved: boolean } | null>(null)
@@ -299,6 +319,15 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     ? `preset:${historyRange.hours}`
     : `custom:${historyRange.from}:${historyRange.to}`
   const query = mode === 'current' ? 'current' : `history:${rangeKey}`
+
+  useEffect(() => {
+    setSaved({ key: layoutScope, positions: readTopologyPositions(storageKey) })
+    setPreviewPosition(null)
+    nodeDrag.current = null
+    setArranging(false)
+    setLayoutNodeID('')
+    setLayoutMessage('')
+  }, [layoutScope, storageKey])
 
   const load = useCallback(async () => {
     if (activeRequest.current) return
@@ -459,10 +488,93 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     () => new Map((data?.nodes ?? []).map((node) => [node.id, node])),
     [data],
   )
-  const layout = useMemo(
-    () => layoutTopology(visibleNodes, visibleEdges),
-    [visibleEdges, visibleNodes],
-  )
+  // Filtering hides evidence; it must not turn a known placement into an
+  // unplaced node, reshuffle saved positions, or imply a new connection.
+  const automaticLayout = useMemo(() => {
+    const activeIDs = new Set(intervalEdges.flatMap((edge) => [edge.parent_id, edge.child_id]))
+    const nodes = (data?.nodes ?? []).filter((node) => mode === 'current' || activeIDs.has(node.id))
+    return layoutTopology(nodes, intervalEdges)
+  }, [data, intervalEdges, mode])
+  const positions = useMemo(() => saved.key === layoutScope ? saved.positions : {}, [saved, layoutScope])
+  const layout = useMemo(() => {
+    const result = new Map(automaticLayout.positions)
+    for (const [id, automatic] of result) {
+      const unplaced = automaticLayout.unplaced.includes(id)
+      const stored = positions[id]
+      const position = previewPosition?.key === layoutScope && previewPosition.id === id
+        ? previewPosition.position
+        : stored?.unplaced === unplaced ? stored : automatic
+      result.set(id, constrainTopologyPosition(position, unplaced, automaticLayout))
+    }
+    return { ...automaticLayout, positions: result }
+  }, [automaticLayout, positions, previewPosition, layoutScope])
+  const editableNode = visibleNodes.find((node) => node.id === layoutNodeID) ?? visibleNodes[0]
+
+  const savePositions = (next: SavedPositions) => {
+    setSaved({ key: layoutScope, positions: next })
+    if (!storageKey) {
+      setLayoutMessage('Layout changed for this view. Sign-in identity is required to save it in this browser.')
+      return
+    }
+    try {
+      if (Object.keys(next).length) localStorage.setItem(storageKey, JSON.stringify(next))
+      else localStorage.removeItem(storageKey)
+      setLayoutMessage(Object.keys(next).length ? 'Layout saved in this browser.' : 'Automatic layout restored.')
+    } catch {
+      setLayoutMessage('This browser could not save the layout. Your changes remain available in this view.')
+    }
+  }
+
+  const saveNodePosition = (id: string, position: Position) => {
+    if (!automaticLayout.positions.has(id)) return
+    const unplaced = automaticLayout.unplaced.includes(id)
+    // Drop no-longer-observed IDs when saving, but retain hidden nodes in this
+    // snapshot so a confidence filter cannot erase their arrangement.
+    const next = Object.fromEntries(Object.entries(positions).filter(([key]) => nodeByID.has(key)))
+    savePositions({ ...next, [id]: { ...constrainTopologyPosition(position, unplaced, automaticLayout), unplaced } })
+  }
+
+  const moveNode = (id: string, dx: number, dy: number) => {
+    const position = layout.positions.get(id)
+    if (position) saveNodePosition(id, { x: position.x + dx, y: position.y + dy })
+  }
+
+  const startNodeDrag = (event: ReactPointerEvent<SVGGElement>, id: string) => {
+    if (!arranging || event.button !== 0) return
+    const position = layout.positions.get(id)
+    if (!position) return
+    event.stopPropagation()
+    event.preventDefault()
+    event.currentTarget.focus()
+    setLayoutNodeID(id)
+    nodeDrag.current = {
+      id, pointerID: event.pointerId, x: event.clientX, y: event.clientY, start: position, position,
+      scale: (event.currentTarget.ownerSVGElement?.getBoundingClientRect().width ?? 0) / layout.width || 1,
+      unplaced: layout.unplaced.includes(id), moved: false, key: layoutScope,
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const moveNodeDrag = (event: ReactPointerEvent<SVGGElement>) => {
+    const drag = nodeDrag.current
+    if (!drag || drag.pointerID !== event.pointerId || drag.key !== layoutScope) return
+    const dx = event.clientX - drag.x
+    const dy = event.clientY - drag.y
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return
+    event.preventDefault()
+    drag.moved = true
+    drag.position = constrainTopologyPosition({ x: drag.start.x + dx / drag.scale, y: drag.start.y + dy / drag.scale }, drag.unplaced, layout)
+    setPreviewPosition({ key: layoutScope, id: drag.id, position: drag.position })
+  }
+
+  const finishNodeDrag = (event: ReactPointerEvent<SVGGElement>, cancel = false) => {
+    const drag = nodeDrag.current
+    if (!drag || drag.pointerID !== event.pointerId) return
+    nodeDrag.current = null
+    setPreviewPosition(null)
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture?.(event.pointerId)
+    if (!cancel && drag.moved && drag.key === layoutScope) saveNodePosition(drag.id, drag.position)
+  }
   const edgeOffsets = useMemo(() => edgeLaneOffsets(visibleEdges), [visibleEdges])
   const selectedNode = selectedNodeID ? nodeByID.get(selectedNodeID) : undefined
   const selectedNodeEdges = selectedNodeID
@@ -476,7 +588,7 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
     : 0
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
+    <div className="topology-screen" style={{ display: 'grid', gap: 12 }}>
       <PageHeader
         title="Topology"
         purpose="Infrastructure links with source provenance and historical intervals."
@@ -722,12 +834,60 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
             }).join(' · ')}
           </div>
         )}
+        {data && visibleNodes.length > 0 && (
+          <div className="topology-layout-tools">
+            <div className="topology-layout-intro">
+              <span className="topology-map-kicker">{mode === 'current' ? 'Observed network' : 'Historical network'}</span>
+              <span id={layoutHelpID}>
+                {arranging
+                  ? 'Drag a node or use its arrow keys. Shift + arrow makes a smaller move. Escape cancels a drag.'
+                  : 'Select a node to inspect it. Arrange the map to match how you think about your network.'}
+              </span>
+            </div>
+            <div className="topology-layout-actions">
+              <Button aria-pressed={arranging} kind={arranging ? 'primary' : 'default'} onClick={() => {
+                nodeDrag.current = null
+                setPreviewPosition(null)
+                setArranging((value) => !value)
+              }}>{arranging ? 'Done arranging' : 'Arrange layout'}</Button>
+              <Button disabled={Object.keys(positions).length === 0} onClick={() => {
+                nodeDrag.current = null
+                setPreviewPosition(null)
+                savePositions({})
+              }}>Reset layout</Button>
+            </div>
+            {arranging && editableNode && (
+              <div className="topology-position-controls" role="group" aria-label="Move topology node">
+                <label>
+                  Node to arrange
+                  <select aria-label="Node to arrange" value={editableNode.id} onChange={(event) => setLayoutNodeID(event.target.value)}>
+                    {visibleNodes.map((node) => <option key={node.id} value={node.id}>{node.name}{(nodeNameCounts.get(node.name) ?? 0) > 1 ? ` (${node.id})` : ''}</option>)}
+                  </select>
+                </label>
+                <div className="topology-direction-buttons">
+                  <Button aria-label="Move selected node left" onClick={() => moveNode(editableNode.id, -24, 0)}>←</Button>
+                  <Button aria-label="Move selected node up" onClick={() => moveNode(editableNode.id, 0, -24)}>↑</Button>
+                  <Button aria-label="Move selected node down" onClick={() => moveNode(editableNode.id, 0, 24)}>↓</Button>
+                  <Button aria-label="Move selected node right" onClick={() => moveNode(editableNode.id, 24, 0)}>→</Button>
+                </div>
+                <span>Appearance only · No router or link changes</span>
+              </div>
+            )}
+            <div className="topology-layout-note" role="status">
+              {layoutMessage || (storageKey
+                ? 'Arrangements are saved only for your account in this browser, separately for Current and History.'
+                : 'Arrangement is available for this view. A signed-in account is required for browser persistence.')}
+            </div>
+          </div>
+        )}
         {loading && !data ? (
           <div role="status" style={{ color: 'var(--text-secondary)' }}>Loading topology…</div>
         ) : data && data.nodes.length > 0 ? (
           <div
             role="region"
             aria-label="Topology graph viewport"
+            className="topology-canvas"
+            data-arranging={arranging}
             onPointerDown={startPan}
             onPointerMove={movePan}
             onPointerUp={stopPan}
@@ -740,11 +900,16 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
             <svg
               aria-label={`${visibleNodes.length} topology nodes and ${visibleEdges.length} links${visibleLastKnown.length ? `, plus ${visibleLastKnown.length} last-known placement` : ''}`}
               role="group"
+              className="topology-graph"
               viewBox={`0 0 ${layout.width} ${layout.height}`}
               style={{ display: 'block', width: `${zoom * 100}%`, minWidth: 620, maxWidth: 'none', height: 'auto', margin: zoom < 1 ? '0 auto' : 0 }}
             >
               {layout.unplacedStartX != null && (
                 <g aria-hidden>
+                  <rect
+                    x={layout.unplacedStartX + 8} y="8" width={layout.width - layout.unplacedStartX - 16} height={layout.height - 16}
+                    rx="18" fill="var(--surface-1)" stroke="var(--border)" strokeDasharray="5 6"
+                  />
                   <line
                     x1={layout.unplacedStartX} y1="24"
                     x2={layout.unplacedStartX} y2={layout.height - 24}
@@ -755,8 +920,9 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                     x={layout.unplacedStartX + 20} y="28"
                     fill="var(--text-secondary)" fontSize="11" fontWeight="600"
                   >
-                    Unplaced · no current link evidence
+                    Unplaced
                   </text>
+                  <text x={layout.unplacedStartX + 20} y="44" fill="var(--text-muted)" fontSize="9">No current link evidence</text>
                 </g>
               )}
               {visibleLastKnown.map((edge) => {
@@ -778,7 +944,8 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                 const visual = edgeVisuals[edge.confidence]
                 const route = topologyEdgeRoute(parent, child, edgeOffsets.get(edge.id) ?? 0)
                 return (
-                  <g key={`edge-path-${edge.id}`}>
+                  <g key={`edge-path-${edge.id}`} className="topology-link" data-confidence={edge.confidence}>
+                    <title>{nodeLabel(nodeByID, edge.parent_id)} → {nodeLabel(nodeByID, edge.child_id)} · {edge.medium} · {edge.confidence}</title>
                     <path
                       d={route.path}
                       fill="none"
@@ -837,42 +1004,90 @@ export function Topology({ onReviewCapabilities }: { onReviewCapabilities?: () =
                 const pos = layout.positions.get(node.id)
                 if (!pos) return null
                 const labelLines = topologyNodeLabelLines(node.name)
+                const unplaced = layout.unplaced.includes(node.id)
+                const connectionLabel = unplaced
+                  ? `Unplaced${node.online === false ? ' · offline' : ''}`
+                  : node.online === false ? 'Offline' : node.online === true ? 'Online' : 'Status unknown'
                 return (
                   <g
                     key={node.id}
                     transform={`translate(${pos.x},${pos.y})`}
                     role="button"
                     tabIndex={0}
-                    aria-label={`Open details for ${node.name}${(nodeNameCounts.get(node.name) ?? 0) > 1 ? ` (${node.id})` : ''}`}
-                    onClick={() => node.device_id != null ? setSelectedDeviceID(node.device_id) : setSelectedNodeID(node.id)}
+                    className="topology-node"
+                    data-kind={node.kind}
+                    data-unplaced={unplaced}
+                    data-selected={arranging && editableNode?.id === node.id}
+                    data-position={`${pos.x},${pos.y}`}
+                    aria-label={`${arranging ? 'Arrange' : 'Open details for'} ${node.name}${(nodeNameCounts.get(node.name) ?? 0) > 1 ? ` (${node.id})` : ''}`}
+                    aria-describedby={arranging ? layoutHelpID : undefined}
+                    onClick={() => {
+                      if (arranging) setLayoutNodeID(node.id)
+                      else if (node.device_id != null) setSelectedDeviceID(node.device_id)
+                      else setSelectedNodeID(node.id)
+                    }}
+                    onPointerDown={(event) => startNodeDrag(event, node.id)}
+                    onPointerMove={moveNodeDrag}
+                    onPointerUp={(event) => finishNodeDrag(event)}
+                    onPointerCancel={(event) => finishNodeDrag(event, true)}
+                    onLostPointerCapture={(event) => finishNodeDrag(event, true)}
                     onKeyDown={(event) => {
+                      if (arranging) {
+                        const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }
+                        const direction = directions[event.key]
+                        if (direction) {
+                          event.preventDefault()
+                          setLayoutNodeID(node.id)
+                          const step = event.shiftKey ? 6 : 24
+                          moveNode(node.id, direction[0] * step, direction[1] * step)
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault()
+                          nodeDrag.current = null
+                          setPreviewPosition(null)
+                        }
+                        return
+                      }
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
                         if (node.device_id != null) setSelectedDeviceID(node.device_id)
                         else setSelectedNodeID(node.id)
                       }
                     }}
-                    style={{ cursor: 'pointer' }}
+                    style={{ cursor: arranging ? 'move' : 'pointer' }}
                   >
+                    <title>{node.name} · {node.synthetic ? 'Synthetic endpoint' : node.kind} · {connectionLabel}</title>
                     <rect
-                      x="-88" y="-34" width="176" height="68" rx="9"
-                      fill={node.synthetic ? 'var(--accent-soft)' : 'var(--surface-2)'}
+                      className="topology-node-card"
+                      x="-112" y="-46" width="224" height="92" rx="14"
+                      fill="var(--surface-1)"
                       stroke={node.online === false ? 'var(--critical)' : 'var(--border-strong)'}
-                      strokeDasharray={node.kind === 'client' ? '4 3' : undefined}
+                      strokeDasharray={unplaced ? '4 4' : undefined}
                     />
-                    <text textAnchor="middle" fill="var(--text-primary)" fontSize="12" fontWeight="600">
+                    <rect x="-99" y="-32" width="36" height="36" rx="10" fill="var(--accent-soft)" />
+                    <svg x="-96" y="-29" width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="var(--accent)" strokeWidth="1.5" aria-hidden>
+                      {node.synthetic ? <>
+                        <circle cx="16" cy="16" r="11" />
+                        <ellipse cx="16" cy="16" rx="5" ry="11" />
+                        <path d="M5 16h22M7 10h18M7 22h18" />
+                      </> : node.kind === 'client' ? <DeviceGlyph kind="client" size={32} /> : <>
+                        <rect x="4" y="5" width="24" height="9" rx="3" />
+                        <rect x="4" y="18" width="24" height="9" rx="3" />
+                        <path d="M9 9.5h1m4 0h1m-6 13h1m4 0h1M23 9.5h1m-1 13h1" strokeLinecap="round" />
+                      </>}
+                    </svg>
+                    <text fill="var(--text-primary)" fontSize="11" fontWeight="600">
                       {labelLines.map((line, index) => (
-                        <tspan key={line} x="0" y={labelLines.length > 1 ? -9 + index * 14 : -2}>{line}</tspan>
+                        <tspan key={line} x="-52" y={labelLines.length > 1 ? -19 + index * 14 : -11}>{line}</tspan>
                       ))}
                     </text>
-                    <text textAnchor="middle" y={labelLines.length > 1 ? 20 : 15} fill="var(--text-secondary)" fontSize="10">
-                      {node.kind}{node.online === false ? ' · offline' : ''}
-                    </text>
+                    <line x1="-98" x2="98" y1="13" y2="13" stroke="var(--border)" />
+                    <text x="-98" y="32" fill="var(--text-secondary)" fontSize="9">{node.synthetic ? 'Synthetic endpoint' : node.kind === 'device' ? 'Device' : 'Client'}</text>
+                    <text x="98" y="32" textAnchor="end" fill={node.online === false ? 'var(--critical)' : unplaced || node.online == null ? 'var(--text-muted)' : 'var(--good)'} fontSize="9">{node.synthetic ? 'Reference node' : connectionLabel}</text>
                   </g>
                 )
               })}
             </svg>
-            <div aria-label="Topology zoom controls" style={{ display: 'flex', gap: 5, position: 'sticky', left: 8, bottom: 8, width: 'max-content' }}>
+            <div aria-label="Topology zoom controls" className="topology-zoom-controls">
               <Button aria-label="Zoom out topology" onClick={() => setZoom((value) => Math.max(.75, value - .25))}>−</Button>
               <Button aria-label="Reset topology zoom" onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</Button>
               <Button aria-label="Zoom in topology" onClick={() => setZoom((value) => Math.min(2, value + .25))}>+</Button>

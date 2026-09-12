@@ -1,71 +1,75 @@
 # Release notes
 
-The documentation covers the current stable patch release, **v0.1.5**,
-published September 10, 2026, with explicitly marked development additions.
-Release artifacts, checksums, container digests,
+The documentation covers **v0.1.6**, using database **schema 25**. Its source
+preparation date is September 12, 2026. Release artifacts, checksums, container digests,
 signatures, and attached notes on the GitHub release are the publication source
 of truth.
 
 ## Current release
 
-- [v0.1.5 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5)
-- [v0.1.5 notes in the repository](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.5.md)
+- [v0.1.6 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.6)
+- [v0.1.6 release notes](../releases/v0.1.6.md)
 - [All GitHub releases](https://github.com/aiden0rchad/oonfeeWRT/releases)
 
-v0.1.5 separates device observation from configuration authority. One managed
-Gateway continues to own site intent, while multiple reachable OpenWrt routers
-can use **Monitor only** across existing routed subnets or VPNs. Monitor-only
-devices stay in polling, inventory, telemetry, events, and topology, but use the
-distinct read-only `oonfeewrt-monitor` ACL and are fenced from Preview, Apply,
-desired/site configuration, optional LLDP install/config/remove mutations,
-wireless-neighbor mutation, and other package/config/remove operations.
-Existing LLDP observation remains available. Their scoped ACL lifecycle and
-un-adoption remain explicit controller-maintenance actions.
+v0.1.6 adds Reports, durable Alerts, firmware catalogue checks, read-only
+integrations, historical Statistics, editable topology presentation, and a
+refreshed desktop/mobile interface. The matching tagged workflow must finish
+before download links establish that these artifacts have been published.
+Historical versioned release notes and artifacts remain unchanged.
 
-Monitor only fences persistent configuration, not every active observation. A
-capability-proved RF scan remains available after its separate disruption
-acknowledgement; the serving radio can go off-channel and interrupt clients,
-but the scan has no intended persistent configuration change.
+## Changes in v0.1.6 {#development-after-v0-1-5}
 
-The Policy Engine gains named exact-MAC policy sets with CRUD, stable
-`source_set_id` firewall references, concrete resolution in the Master Table,
-and an Object Manager **Secure (IPv4)** draft. Empty/malformed sets, missing
-references, mixing `source_set_id` with direct `source_macs`, and
-deleting a referenced set fail closed. Members must be
-backed by a stored `local` observation from the currently adopted Managed
-Gateway. Schema 23 records source-relative scope and `last_seen` in
-`client_observations`, keyed by device and MAC. Monitor-only observations neither
-satisfy nor contaminate that proof, including after un-adoption. The same gate
-applies to direct or set-backed MAC Secure drafts and blocked/fixed-address
-intent. Upgrades start without this provenance, and portable restore deliberately
-clears it instead of importing source-controller write authority. Evidence older
-than 30 days or more than five minutes in the future is rejected independently
-of cleanup. Active MAC desired state blocks Preview until every
-referenced client is re-observed locally. Existing blocked/fixed-address intent
-can still be cleared one client at a time. Set edits change desired state only
-and require a new Preview and acknowledged Apply.
+This section retains its earlier development anchor so existing links continue
+to reach the changes that now form v0.1.6.
 
-The main controller screens also share consistent page headers, actions, and
-responsive light/dark treatment. Phase 5 flow visibility remains a documented
-feasibility track: this release installs no `nlbwmon`, `netifyd`, or DPI
-package and ships no application identity/history.
+### Release and migration scope
 
-The first v0.1.5 start migrates schema 20 to schema 21, adding management mode
-with all existing devices preserved as Managed, then to schema 22 for policy
-sets, and schema 23 for source-relative `client_observations` plus a rebuilt
-one-managed-Gateway uniqueness guard based on canonical device functions and
-the legacy role. Schema 23 also indexes observation and case-insensitive global
-client MAC lookups so maximum-size policy checks remain bounded. Migration
-configures no router and does not infer source provenance from global client
-rows. Preserve the complete pre-upgrade database, keyring, and runtime
-passphrase recovery unit: v0.1.4 cannot open schema 23, so changing only the
-binary or image tag is not a rollback.
+v0.1.6 uses schema **25**. The ordered
+schema **23 → 24** migration adds persistent controller alert state, and
+**24 → 25** adds encrypted AdGuard integration configuration. Neither step
+creates an alert rule, service connection, router helper, or firmware action.
+Follow the [upgrade and rollback procedure](../installation/upgrades.md)
+before letting v0.1.6 open existing data. A v0.1.5 binary cannot open schema
+24 or 25; returning to it requires its matching pre-upgrade schema-23 recovery
+unit, not just an executable or image-tag change.
 
-## Development after v0.1.5
+### Reports, alerts, firmware, and integrations
 
-The following changes are in current development source. They do not alter the
-published v0.1.5 artifacts or declare a new release. Follow a future release's
-notes before expecting them in a stable binary or image.
+- [Reports](../guide/reports.md) compares adjacent equal-length periods using
+  valid stored buckets, sample-weighted averages, coverage, and CSV export.
+- [Alerts](../guide/alerts.md) evaluates configured sustained conditions from
+  existing observations and retains incidents. Owner-configured generic
+  webhooks are opt-in; missing evidence cannot silently satisfy a hold window.
+- [Firmware](../guide/firmware.md) reads stored hardware identity and checks the
+  official same-release-branch catalogue only when requested. Firmware
+  download, staging, installation, and post-flash recovery are **not** enabled.
+- [Integrations](../guide/integrations.md) adds manually requested AdGuard
+  aggregate and WireGuard peer/counter observations. Saving credentials does
+  not contact the service. No DNS policy or VPN configuration is changed.
+- An optional on-demand rpcd helper can be built and installed manually from
+  source. It is not part of ordinary adoption, does not run a daemon or
+  listener, and exposes no general shell or firmware-write operation. It is
+  experimental source: native SDK builds and real-router helper validation
+  remain outstanding, and no prebuilt router package is shipped.
+
+### Inventory, editable topology, and mobile presentation
+
+Devices gains illustrated Cards/List views with search and status filtering.
+Client summaries distinguish all matching records from rows and signal
+readings on the loaded page. Topology adds original illustrations and a
+drag/keyboard layout editor with reset; positions remain scoped to the account,
+controller origin, browser, and Current/History mode. No new edge or virtual
+machine is inferred from a drawing or icon.
+
+The [mobile/installed-app guide](../operations/mobile-app.md) explains the
+responsive menu and install metadata. Theme preferences survive reloads when
+storage is available. The
+[separate demo build](../guide/demo.md) uses only original synthetic fixtures
+and cannot contact a real controller or router.
+
+SNMP, Web Push, Telegram-specific delivery, complete localization, virtual
+machine nesting, and firmware execution remain pending. These changes
+are not a blanket parity or new hardware-validation claim.
 
 ### Statistics and clearer history
 
@@ -128,6 +132,7 @@ broader hardware-validation claims.
 
 ## Earlier releases
 
+- [v0.1.5 notes](../releases/v0.1.5.md)
 - [v0.1.4 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.4.md)
 - [v0.1.3 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.3.md)
 - [v0.1.2 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.2.md)
@@ -136,6 +141,57 @@ broader hardware-validation claims.
 
 Before upgrading, read both the versioned notes and
 [Upgrade and roll back](../installation/upgrades.md).
+
+### v0.1.5 monitor-only and policy-set boundary
+
+v0.1.5 separates device observation from configuration authority. One managed
+Gateway continues to own site intent, while multiple reachable OpenWrt routers
+can use **Monitor only** across existing routed subnets or VPNs. Monitor-only
+devices stay in polling, inventory, telemetry, events, and topology, but use the
+distinct read-only `oonfeewrt-monitor` ACL and are fenced from Preview, Apply,
+desired/site configuration, optional LLDP install/config/remove mutations,
+wireless-neighbor mutation, and other package/config/remove operations.
+Existing LLDP observation remains available. Their scoped ACL lifecycle and
+un-adoption remain explicit controller-maintenance actions.
+
+Monitor only fences persistent configuration, not every active observation. A
+capability-proved RF scan remains available after its separate disruption
+acknowledgement; the serving radio can go off-channel and interrupt clients,
+but the scan has no intended persistent configuration change.
+
+The Policy Engine gains named exact-MAC policy sets with CRUD, stable
+`source_set_id` firewall references, concrete resolution in the Master Table,
+and an Object Manager **Secure (IPv4)** draft. Empty/malformed sets, missing
+references, mixing `source_set_id` with direct `source_macs`, and
+deleting a referenced set fail closed. Members must be
+backed by a stored `local` observation from the currently adopted Managed
+Gateway. Schema 23 records source-relative scope and `last_seen` in
+`client_observations`, keyed by device and MAC. Monitor-only observations neither
+satisfy nor contaminate that proof, including after un-adoption. The same gate
+applies to direct or set-backed MAC Secure drafts and blocked/fixed-address
+intent. Upgrades start without this provenance, and portable restore deliberately
+clears it instead of importing source-controller write authority. Evidence older
+than 30 days or more than five minutes in the future is rejected independently
+of cleanup. Active MAC desired state blocks Preview until every
+referenced client is re-observed locally. Existing blocked/fixed-address intent
+can still be cleared one client at a time. Set edits change desired state only
+and require a new Preview and acknowledged Apply.
+
+The main controller screens also share consistent page headers, actions, and
+responsive light/dark treatment. Phase 5 flow visibility remains a documented
+feasibility track: this release installs no `nlbwmon`, `netifyd`, or DPI
+package and ships no application identity/history.
+
+The first v0.1.5 start migrates schema 20 to schema 21, adding management mode
+with all existing devices preserved as Managed, then to schema 22 for policy
+sets, and schema 23 for source-relative `client_observations` plus a rebuilt
+one-managed-Gateway uniqueness guard based on canonical device functions and
+the legacy role. Schema 23 also indexes observation and case-insensitive global
+client MAC lookups so maximum-size policy checks remain bounded. Migration
+configures no router and does not infer source provenance from global client
+rows. Preserve the complete pre-upgrade database, keyring, and runtime
+passphrase recovery unit: v0.1.4 cannot open schema 23, so changing only the
+binary or image tag is not a rollback.
 
 ### v0.1.4 IPv6 and topology boundary
 
@@ -161,7 +217,7 @@ layouts such as a DrayTek modem-management network beside PPPoE, where logical
 Missing, malformed, equal-metric ambiguous, ECMP/multipath, or unmappable
 evidence remains unavailable instead of being guessed. Custom policy routing,
 `mwan3`, per-uplink health, manual selection, and bond-member monitoring remain
-out of scope in v0.1.5 as well.
+out of scope in v0.1.6 as well.
 
 ### v0.1.2 compatibility-report boundary
 
@@ -182,7 +238,7 @@ un-adoption, or broader Filogic hardware.
 ## Verify what you run
 
 For a standalone archive, verify its entry in `SHA256SUMS` before extracting
-or installing it. For the OCI image, pin `v0.1.5` or the immutable digest and
+or installing it. For the OCI image, pin `v0.1.6` or the immutable digest and
 verify the GitHub Actions keyless signature as shown in the [Docker Compose
 guide](../installation/docker.md).
 
@@ -197,7 +253,8 @@ The daemon prints its build version with:
 oonfeewrtd -version
 ```
 
-The current documentation targets database schema 23.
+v0.1.6 targets database schema **25**. Historical v0.1.5 targets schema **23**;
+these are different compatibility boundaries.
 
 | Transition | Schema/data effect | Router-access effect |
 |---|---|---|
@@ -206,10 +263,12 @@ The current documentation targets database schema 23.
 | v0.1.3 → v0.1.4 | Migrates schema 19 to 20; adds a topology index and normalizes two historical source names, retaining the newest duplicate observation | Ordinary polling needs no access change; existing adoptions need a separately acknowledged ACL refresh only for router-clock status; IPv6 remains Router managed until explicitly changed through Preview/Apply |
 | v0.1.4 → v0.1.5 | Migrates schema 20 → 21 → 22 → 23; existing devices become Managed, policy-set tables/references are added, then per-device client provenance, observation/global-client MAC indexes, and the hardened one-managed-Gateway index are added | Startup makes no router write or inferred provenance; selecting Monitor only later uses the reviewed ACL lifecycle to install the distinct read-only ACL |
 | v0.1.5 → v0.1.4 | Restore the matching pre-upgrade schema-20 database, keyring, and passphrase; v0.1.4 cannot open schema 23 | Controller rollback does not revert router configuration applied while v0.1.5 was running |
+| v0.1.5 → v0.1.6 | Schema 23 → 24 → 25; persistent alerts then encrypted integration settings | No automatic helper installation, DNS/VPN change, or firmware flash |
+| v0.1.6 → v0.1.5 | Restore the matching pre-upgrade schema-23 database, keyring, runtime passphrase, and released binary/image | A schema-24/25 database or newer portable backup cannot be opened by v0.1.5 |
 
 Preserve the matching database/keyring pair before every transition. The
 controller migrates supported older state at startup and refuses unsupported
 downgrades. A rollback across a schema boundary restores the matching
 pre-upgrade database and `keyring.json`; changing only the binary or image tag
 is not a data rollback. Historical `v0.1.0-rc.1` uses schema 17 and must not
-open schema-19, schema-20, or schema-23 state.
+open schema-19, schema-20, schema-23, or schema-25 state.

@@ -70,6 +70,15 @@ func (d *Daemon) mountUI(mux *http.ServeMux) {
 		}
 		if strings.HasPrefix(clean, "assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			// In particular, never pin a previous release's service worker or
+			// manifest across a controller upgrade.
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if clean == "manifest.webmanifest" {
+			// The scratch image has no system MIME database. Go otherwise
+			// sniffs the JSON as text/plain instead of an app manifest.
+			w.Header().Set("Content-Type", "application/manifest+json")
 		}
 		fileServer.ServeHTTP(w, r)
 	})

@@ -61,6 +61,7 @@ const api = {
 
 vi.mock('../lib/api', () => ({
   api,
+  isDemo: false,
   ApiError: class extends Error {
     status: number
     body?: unknown
@@ -3400,6 +3401,7 @@ describe('Devices — column preferences', () => {
     // header, and there is nothing to customise when there are no columns on
     // screen.
     render(<Devices devices={[device] as never} />)
+    fireEvent.click(screen.getByRole('button', { name: 'List' }))
     expect(screen.getByText(/Customize columns/)).toBeTruthy()
     for (const th of screen.getAllByRole('columnheader')) {
       expect(th.getAttribute('draggable')).toBe('true')

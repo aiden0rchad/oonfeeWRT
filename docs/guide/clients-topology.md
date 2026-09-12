@@ -4,6 +4,13 @@ The Clients and Topology workspaces connect endpoint presence with the
 infrastructure path used to observe it. Both preserve evidence confidence and
 coverage gaps so an inferred link never looks like a measured cable.
 
+::: info Updated in v0.1.6
+v0.1.6 adds a clearer client summary and illustrated topology nodes,
+plus a browser-local editable map. These are presentation changes: they do not
+add packet capture, virtual-machine discovery, new link evidence, or router
+configuration authority. Published v0.1.5 keeps its original map and inventory.
+:::
+
 <div class="write-impact"><strong>Router write impact</strong><span>Viewing, filtering, and investigating clients or topology is read-only. Optional LLDP is a separate reviewed package/configuration workflow.</span></div>
 
 ## Client Devices
@@ -12,7 +19,7 @@ The Client Devices table is scoped to managed LANs and excludes adopted
 infrastructure from the client count without deleting it from inventory.
 
 <DocScreenshot
-  src="clients-inventory" :width="1620" :height="959"
+  src="clients-inventory" :width="1499" :height="982"
   alt="Client Devices workspace with inventory and scope, presence, and connection filters"
   caption="Start with network scope and presence filters. The result count applies to the complete filtered inventory, not just the visible page."
 />
@@ -26,11 +33,22 @@ Filters operate on the complete matching result before pagination:
 - connection evidence (**Wireless**, **Unknown**, or all).
 
 The current table does not claim that an endpoint is wired merely because no
-managed AP reports it, and v0.1.5 has no client text-search or source-coverage
+managed AP reports it, and v0.1.6 has no client text-search or source-coverage
 filter.
 
 The count above the table is the filtered total, not merely the number of rows
 on the current page.
+
+The inventory summary makes the scopes explicit: **Matching clients** spans
+all pages under the current filters, while **On this page** and **Signal
+readings** describe only the loaded page. Changing a filter resets pagination.
+A delayed response for a previous page or filter is not shown under the new
+selection. The client workspace remains a paginated table; the infrastructure
+**Cards/List** switch belongs to Devices, not Client Devices.
+
+Client illustrations are generic identity aids. They do not prove that an
+endpoint is a laptop, phone, virtual machine, manufacturer, or operating system.
+Names and vendor hints are not authentication.
 
 ### Read presence carefully
 
@@ -81,7 +99,7 @@ quality, WAN health, and events. Correlation by time is more reliable than
 comparing each screen's latest value after the incident has passed.
 
 <DocScreenshot
-  src="client-observability" :width="1620" :height="959"
+  src="client-observability" :width="1280" :height="720"
   alt="Client Observability workspace with a shared investigation time cursor"
   caption="Move the shared cursor to investigate one moment across client, path, and event evidence. Empty panes or metrics remain evidence limits, not proof that nothing happened."
 />
@@ -111,7 +129,7 @@ Each edge includes a confidence and medium. Confidence describes the evidence,
 not the importance of the device.
 
 <DocScreenshot
-  src="topology-current" :width="1620" :height="959"
+  src="topology-current" :width="1499" :height="982"
   alt="Topology workspace in Current mode with infrastructure placement and evidence controls"
   caption="Current topology shows supported placement with its confidence and source coverage. An unplaced node is still part of inventory; the controller is not inventing an attachment for it."
 />
@@ -176,6 +194,36 @@ time range, confidence, port, and ambiguity evidence, use the **Accessible
 topology details** table and expand its **Evidence** cell. When duplicate names
 exist, use the stable device/node identity rather than the label alone.
 
+## Arrange the map
+
+1. Open **Topology** and choose **Current** or **History**.
+2. Select **Arrange layout**. Drag a node to move its drawing. Selecting it
+   outside arrangement mode still opens its details.
+3. For keyboard control, focus a node and use the arrow keys. Hold **Shift** for
+   a smaller step. Alternatively choose **Node to arrange** and use the four
+   labeled direction buttons below it.
+4. Press **Escape** to cancel an unfinished drag. Completed moves save locally
+   when browser storage is available; **Done arranging** returns to inspection.
+5. Use **Reset layout** to discard this account's arrangement for the selected
+   mode and restore the automatic placement.
+
+Positions belong to the authenticated account and controller origin in this
+browser, with separate Current and History arrangements. They are not shared
+with another account, synced between browsers, written to a router, or included
+in a controller backup. Clearing site data removes them. If storage is blocked,
+arranging still works for the current view and the UI explains that it cannot
+save the preference.
+
+Filters hide evidence without inventing a new placement. New nodes receive an
+automatic position; removed nodes are ignored. A saved position is discarded
+when a node changes between placed and unplaced. Unplaced nodes stay in their
+separate lane, even while arranging. Moving a node cannot make an inferred link
+measured, reconnect an offline client, or create a cable or VM relationship.
+
+The confidence legend, source details, interval table, and expired last-known
+placements remain available alongside the graphics. Node status and attachment
+evidence answer different questions: an online device can still be unplaced.
+
 ## Historical topology
 
 Historical mode answers **what links did the controller have evidence for at a
@@ -186,7 +234,7 @@ present when its evidence interval overlaps the selected time. A last-known
 placement may be shown separately from a currently supported link.
 
 <DocScreenshot
-  src="topology-history" :width="1620" :height="959"
+  src="topology-history" :width="1499" :height="982"
   alt="Topology workspace in History mode with retained interval and time controls"
   caption="Switch to History to inspect retained evidence at a selected time. Missing intervals stay missing; historical placement is not reconstructed from today's graph."
 />

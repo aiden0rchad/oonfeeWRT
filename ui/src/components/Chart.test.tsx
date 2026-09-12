@@ -52,4 +52,24 @@ describe('TimeChart presentation', () => {
     expect(drawn.data?.[1]).toEqual([null, 0, null])
     expect(drawn.data?.[2]).toEqual([null, 0, null])
   })
+
+  it('sizes the Y gutter from formatted tick widths without changing data or scales', () => {
+    const options = draw([200_000, 210_000])
+    const size = options.axes?.[1].size
+    if (typeof size !== 'function') throw new Error('Y axis must size itself from its labels')
+    const ctx = {
+      font: '22px unrelated-canvas-font', save: vi.fn(), restore: vi.fn(),
+      measureText: vi.fn((value: string) => ({ width: value === '200 kB/s' ? 94.2 : 20 })),
+    }
+    const plot = { ctx } as unknown as uPlot
+    expect(size(plot, null as unknown as string[], 1, 0)).toBe(58)
+    expect(size(plot, ['0 B/s', '200 kB/s'], 1, 1)).toBe(114)
+    expect(ctx.font).toBe('11px ui-sans-serif, system-ui, sans-serif')
+    expect(ctx.save).toHaveBeenCalledOnce()
+    expect(ctx.restore).toHaveBeenCalledOnce()
+    expect(size(plot, ['0 B/s'], 1, 2)).toBe(58)
+    expect(options.axes?.[1]).toMatchObject({ gap: 5, ticks: { size: 10 } })
+    expect(options.scales?.y).toEqual({})
+    expect(drawn.data?.[3]).toEqual([200_000, 210_000])
+  })
 })

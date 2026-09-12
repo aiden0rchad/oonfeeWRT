@@ -5,7 +5,7 @@ description: What oonfeeWRT stores, for how long, and what must be backed up tog
 
 # Data and retention
 
-oonfeeWRT v0.1.5 keeps configuration, evidence, and audit history locally. It
+oonfeeWRT v0.1.6 keeps configuration, evidence, and audit history locally. It
 does not require a cloud account or external database.
 
 ## Storage locations
@@ -27,6 +27,42 @@ Important contents include:
 
 All controller data is sensitive. Keep the data directory private and do not
 serve it as static content.
+
+### v0.1.6 schema and additional state
+
+v0.1.5 uses schema 23. v0.1.6 adds schema 24 for bounded
+alert state and schema 25 for encrypted AdGuard configuration. Alert rules,
+incidents, delivery state, and sealed destination details are controller state,
+not browser preferences. AdGuard connection credentials are sealed using the
+same matching database/keyring recovery boundary. Neither migration enables a
+service connection or installs a helper.
+
+Alert incident retention is count-bounded, not an unlimited archive: pruning
+targets 500 incidents while retaining those referenced by active rules or
+pending delivery. The encoded alert state has a 2 MiB storage bound. Export
+incident evidence through your approved support process when longer retention
+is required; do not infer a fixed number of days from this count limit.
+
+Portable restore pauses alert delivery, cancels the pending outbox, and resets
+hold/evaluation continuity while retaining rules, incident history, cooldowns,
+and the encrypted destination. An Owner must review the restored environment
+and explicitly re-enable future delivery. Restore does not replay the old
+queue or treat the loss of evidence as a recovered condition.
+
+Reports reads existing rollups rather than creating a second telemetry store.
+An exported CSV is a local downloaded copy outside controller retention and
+access controls. Firmware and integration check results shown in a browser
+are not a durable firmware history, VPN history, or AdGuard query-log archive.
+
+### Browser-local appearance state
+
+v0.1.6 saves theme, navigation expansion, Devices Cards/List selection,
+and topology coordinates in browser storage when permitted. Topology and
+navigation expansion are scoped to the account and controller origin; Current
+and History topology arrangements are separate. These preferences are not
+synced between browsers, stored in SQLite, included in portable backups, or
+configuration authority. Clearing site data removes them. The isolated demo
+uses its own origin and synthetic identities, not live controller storage.
 
 ## Compatibility reports are not retained
 
@@ -64,9 +100,9 @@ more than 14 days ago, or spanning more than seven days, use hourly data. This
 keeps responses bounded and avoids implying that old five-minute points still
 exist.
 
-### How the development Statistics page presents retained metrics
+### How Statistics presents retained metrics
 
-The **Statistics** workspace added in development after v0.1.5 offers 6-hour,
+The **Statistics** workspace added in v0.1.6 offers 6-hour,
 24-hour, 7-day, and 30-day windows. It uses the resolution returned by the
 server: the first three normally use five-minute rollups and the 30-day view
 uses hourly rollups. It does not upsample hourly history or read raw in-memory

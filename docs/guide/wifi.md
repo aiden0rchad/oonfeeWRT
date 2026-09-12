@@ -1,5 +1,15 @@
 # Wi-Fi, roaming, and overrides
 
+::: info v0.1.6 context
+The new illustrated inventories and editable topology do not change WLAN
+ownership, device functions, or radio capability gates. Use
+[Statistics](./statistics.md) for retained radio evidence and
+[client observability](./clients-topology.md#open-client-observability) for an
+association timeline; moving a map node never roams a client or changes an AP
+group. The optional experimental helper does not enable steering or install
+firmware. Wireless changes still require Preview and explicit Apply.
+:::
+
 oonfeeWRT models a WLAN once and fans it out to the selected APs. AP groups and
 bounded per-device overrides let a mixed fleet share intent without pretending
 every radio and driver behaves identically.
@@ -139,7 +149,7 @@ recovery.
 ## Per-device overrides
 
 Overrides are for bounded hardware differences. They must not fork the WLAN's
-identity or security contract across APs. The v0.1.5 UI permits per-device
+identity or security contract across APs. The v0.1.6 UI permits per-device
 publication, hidden-SSID, and client-isolation overrides. It does not permit
 SSID, passphrase, security-mode, roaming, band, or radio-channel overrides.
 

@@ -20,6 +20,8 @@ import { TimeChart, fmt, ago, duration } from '../components/Chart'
 import { live } from '../lib/live'
 import { Unadopt } from './Unadopt'
 import type { LiveStats } from '../lib/live'
+import { DeviceGlyph } from '../components/DeviceGlyph'
+import './Inventory.css'
 
 export function Devices({
   devices,
@@ -34,15 +36,23 @@ export function Devices({
   onAdopt?: () => void
   onChanged?: () => void
 }) {
-  // Column preferences, the same as Clients and Logs have.
-  //
-  // Their absence here was not a decision, and it read as a broken feature
-  // rather than a missing one: without onPrefsChange the header is not
-  // `draggable` at all, so someone who tried to drag a column on the screen
-  // they look at most got no reordering, no picker, and not even the tooltip
-  // that says dragging is possible. Nothing anywhere said why.
   const [colPrefs, setColPrefs] = useColumnPrefs('devices')
   const [openID, setOpenID] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState('')
+  const [view, setView] = useState<'cards' | 'list'>(() => {
+    try { return localStorage.getItem('oonfeewrt:devices:view') === 'list' ? 'list' : 'cards' }
+    catch { return 'cards' }
+  })
+  const selectView = (next: 'cards' | 'list') => {
+    setView(next)
+    try { localStorage.setItem('oonfeewrt:devices:view', next) } catch { /* Session-only preference. */ }
+  }
+  const term = search.trim().toLocaleLowerCase()
+  const filtered = devices.filter((device) => (!status || device.status === status)
+    && (!term || [device.name, device.mac, device.host, device.firmware, functionNames(deviceFunctions(device)), managementModeName(device.management_mode)]
+      .some((value) => value.toLocaleLowerCase().includes(term))))
+  const hasFilters = term !== '' || status !== ''
   const count = devicesLoaded
     ? devices.length.toLocaleString()
     : devicesError
@@ -67,7 +77,11 @@ export function Devices({
     {
       key: 'name',
       header: 'Name',
-      render: (d) => d.name || d.mac,
+      render: (d) => <button type="button" className="inventory-identity" aria-label={`Open device ${d.name || d.mac}`}
+        onClick={(event) => { event.stopPropagation(); setOpenID(d.id) }}>
+        <span className="inventory-identity-glyph"><DeviceGlyph kind={deviceGlyph(d)} size={25} /></span>
+        <span className="inventory-identity-copy"><strong>{d.name || d.mac}</strong></span>
+      </button>,
       sortBy: (d) => d.name,
     },
     {
@@ -126,27 +140,80 @@ export function Devices({
   ]
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div className="inventory-page">
       <PageHeader
         title="Devices"
         purpose="Managed OpenWrt inventory, adoption status, and live device details."
         actions={onAdopt && <Button onClick={onAdopt}>Adopt a device</Button>}
       />
+      <div className="inventory-summary" aria-label="Device inventory summary">
+        {[
+          ['Inventory', devices.length, 'All inventory records'],
+          ['Online now', devices.filter((d) => d.status === 'online').length, 'Responding to the controller'],
+          ['Offline', devices.filter((d) => d.status === 'offline').length, 'Not currently reachable'],
+          ['Observation only', devices.filter((d) => d.management_mode === 'monitor_only' && !d.management_mode_error).length, 'Excluded from configuration'],
+        ].map(([label, value, note]) => <div key={label} className="inventory-summary-item">
+          <span>{label}</span><strong>{devicesLoaded ? value : '—'}</strong><small>{devicesLoaded ? note : devicesError ? 'Inventory unavailable' : 'Waiting for inventory'}</small>
+        </div>)}
+      </div>
+      {devicesError && devicesLoaded && <Banner tone="warning">Showing the last successful inventory. {devicesError}</Banner>}
+      <div className="inventory-toolbar">
+        <label className="inventory-control inventory-search">Search devices
+          <input type="search" value={search} placeholder="Name, address, firmware, or function…" onChange={(event) => setSearch(event.target.value)} />
+        </label>
+        <label className="inventory-control">Status
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">All statuses</option><option value="online">Online</option><option value="offline">Offline</option>
+            <option value="pending">Pending</option><option value="unknown">Unknown</option>
+          </select>
+        </label>
+        <div className="inventory-view-toggle" role="group" aria-label="Device presentation">
+          <button type="button" aria-pressed={view === 'cards'} onClick={() => selectView('cards')}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" aria-hidden="true"><rect x="1" y="1" width="4" height="4" rx="1" /><rect x="9" y="1" width="4" height="4" rx="1" /><rect x="1" y="9" width="4" height="4" rx="1" /><rect x="9" y="9" width="4" height="4" rx="1" /></svg>Cards
+          </button>
+          <button type="button" aria-pressed={view === 'list'} onClick={() => selectView('list')}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" aria-hidden="true"><path d="M1 2h12M1 7h12M1 12h12" /></svg>List
+          </button>
+        </div>
+      </div>
       <Card
         title={`Managed devices (${count})`}
         pad={false}
       >
-        <DataGrid
+        {hasFilters && devicesLoaded && <div className="inventory-result-note" role="status">Showing {filtered.length} of {devices.length} devices</div>}
+        {filtered.length === 0 ? <div className="inventory-empty">
+          <DeviceGlyph kind="gateway" size={46} />
+          <span>{hasFilters && devicesLoaded ? 'No devices match your search and status filters.' : empty}</span>
+          {hasFilters && <Button onClick={() => { setSearch(''); setStatus('') }}>Clear filters</Button>}
+        </div> : view === 'cards' ? <div className="inventory-card-grid">
+          {filtered.map((device) => <button type="button" key={device.id} className="inventory-device-card"
+            aria-label={`Open device ${device.name || device.mac}`} onClick={() => setOpenID(device.id)}>
+            <span className="inventory-card-top">
+              <span className="inventory-device-illustration"><DeviceGlyph kind={deviceGlyph(device)} size={64} /></span>
+              <Status value={device.status ?? 'unknown'} />
+            </span>
+            <span className="inventory-card-heading"><strong>{device.name || device.mac}</strong><span>{functionNames(deviceFunctions(device))}</span></span>
+            <span className="inventory-card-facts">
+              <span>Address</span><span>{device.host || 'Not reported'}</span>
+              <span>Firmware</span><span>{device.firmware || 'Not read yet'}</span>
+              <span>Management</span><span>{device.management_mode_error
+                ? <span title={device.management_mode_error} style={{ color: 'var(--critical)', fontWeight: 600 }}>Blocked · invalid mode</span>
+                : managementModeName(device.management_mode)}</span>
+              <span>Polling</span><span>{device.quiesced ? 'Paused while applying' : device.tier || device.poll_state || 'Unknown'}</span>
+            </span>
+            <span className="inventory-card-footer"><span>{device.last_seen ? `Seen ${ago(device.last_seen)}` : 'Not polled yet'}</span><span>View details →</span></span>
+          </button>)}
+        </div> : <DataGrid
           tableLabel="Managed devices"
-          totalRows={devicesLoaded ? devices.length : undefined}
-          rows={devices}
+          totalRows={devicesLoaded ? filtered.length : undefined}
+          rows={filtered}
           columns={columns}
           rowKey={(d) => d.mac}
           onRowClick={(d) => setOpenID(d.id)}
           prefs={colPrefs}
           onPrefsChange={setColPrefs}
           empty={empty}
-        />
+        />}
       </Card>
       {openID !== null && (
         <DeviceDetailPanel
@@ -161,6 +228,11 @@ export function Devices({
       )}
     </div>
   )
+}
+
+function deviceGlyph(device: Device): 'gateway' | 'ap' | 'switch' | 'unknown' {
+  const functions = deviceFunctions(device)
+  return functions.includes('gateway') ? 'gateway' : functions.includes('ap') ? 'ap' : functions.includes('switch') ? 'switch' : 'unknown'
 }
 
 /**

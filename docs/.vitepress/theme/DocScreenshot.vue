@@ -19,7 +19,7 @@ const source = computed(() => withBase(`/screenshots/${props.src}-dark.jpg`))
     </a>
     <figcaption>
       {{ caption }}
-      <span class="docs-screenshot-meta">Development UI · Select image to open full size</span>
+      <span class="docs-screenshot-meta">Dark-mode capture · Select image to open full size</span>
     </figcaption>
   </figure>
 </template>

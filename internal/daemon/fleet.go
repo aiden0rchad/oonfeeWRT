@@ -411,7 +411,15 @@ func (d *Daemon) StartMaintenance(ctx context.Context) {
 
 	go func() {
 		defer close(done)
+		alertDone := make(chan struct{})
+		go func() {
+			defer close(alertDone)
+			if d.api != nil && d.api.Alerts != nil {
+				d.api.Alerts.Run(mctx)
+			}
+		}()
 		m.Run(mctx)
+		<-alertDone
 	}()
 	d.Log.Info("telemetry maintenance started", "interval", m.Interval)
 }

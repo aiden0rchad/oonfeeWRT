@@ -3,6 +3,8 @@ import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import type { Point } from '../lib/api'
 
+const axisFont = '11px ui-sans-serif, system-ui, sans-serif'
+
 export type TimeChartPoint = Pick<Point, 'ts' | 'cnt'> & {
   avg: number | null
   min: number | null
@@ -119,14 +121,25 @@ export function TimeChart({
           stroke: ink,
           grid: { show: false },
           ticks: { stroke: grid },
-          font: '11px ui-sans-serif, system-ui, sans-serif',
+          font: axisFont,
         },
         {
           stroke: ink,
           grid: { stroke: grid, width: 1 },
-          ticks: { stroke: grid },
-          font: '11px ui-sans-serif, system-ui, sans-serif',
-          size: 58,
+          ticks: { stroke: grid, size: 10 },
+          gap: 5,
+          font: axisFont,
+          size: (u, values) => {
+            if (!values) return 58 // Initial layout runs before tick labels exist.
+            // uPlot's axis size includes the ticks and gap. Measure the actual
+            // labels in CSS pixels, independent of the canvas's pixel ratio,
+            // then reserve another 4px so glyph edges cannot touch the crop.
+            u.ctx.save()
+            u.ctx.font = axisFont
+            const width = Math.max(0, ...values.map((value) => value == null ? 0 : u.ctx.measureText(value).width))
+            u.ctx.restore()
+            return Math.max(58, Math.ceil(width) + 10 + 5 + 4)
+          },
           values: (_u, vals) => axisLabels(vals, format),
         },
       ],

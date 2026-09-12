@@ -5,7 +5,7 @@ description: Which oonfeeWRT actions can affect routers, how Apply rollback work
 
 # Safety model
 
-oonfeeWRT v0.1.5 separates observation, controller desired state, and router
+oonfeeWRT v0.1.6 separates observation, controller desired state, and router
 mutation. A device appearing in the UI is never permission to change it.
 
 ## Know what an action can change
@@ -29,6 +29,29 @@ mutation. A device appearing in the UI is never permission to change it.
 | Optional LLDP workflow (managed devices only) | Yes, over SSH | Yes | May refresh package indexes, install official-feed packages, configure interfaces, and start a service after separate approvals; monitor-only devices are refused |
 | Un-adopt | Yes | Yes | Reverts/removes controller-owned configuration, then removes scoped access |
 | Confirmed controller restore | No router call during restore | Controller data changes only | Restarts the controller, revokes sessions, and suppresses future router writes pending review |
+
+### Additional v0.1.6 actions
+
+These actions are included in v0.1.6.
+
+| Action | Contact or change boundary |
+|---|---|
+| Statistics, Reports, CSV export, inventory filters | Reads stored observations; CSV is downloaded in the browser, not uploaded |
+| Topology arrangement/reset | Changes account-scoped browser coordinates only; never creates a link or edits controller/router state |
+| Create an alert rule | Owner changes controller state; evaluation uses existing evidence, not extra router probes or automatic remediation |
+| Enable webhook delivery | Explicitly authorizes bounded outbound notification requests to the configured destination; this is external data disclosure, not router configuration |
+| Check firmware catalogue | Administrator/Owner explicitly contacts the official OpenWrt service using stored target/release information; no router call, image download, or flash |
+| Save/remove AdGuard connection | Reauthenticated Owner changes encrypted controller configuration; saving does not contact AdGuard |
+| Check AdGuard | Administrator/Owner explicitly reads aggregate service observations; no DNS configuration change or client query-log collection |
+| Check WireGuard | Administrator/Owner requests narrow helper-backed peer/counter reads; missing access stays unavailable, with no automatic install or permission grant |
+| Build/run isolated demo | Synthetic local fixtures only; no real API/live channel, controller database, external checks, or router contact |
+
+The optional experimental rpcd helper is a manually installed, on-demand
+read-only extension, not part of the adoption payload. It adds no background
+daemon, network listener, general remote command method, or firmware-write
+operation. A stock UCI rollback window is not a firmware recovery plan. See
+[Firmware](../guide/firmware.md) before treating catalogue metadata as a next
+step toward a manual upgrade.
 
 ## Three separate permissions
 
@@ -259,9 +282,17 @@ active. An owner must review inventory and desired state, reauthenticate, and
 type `RESUME ROUTER WRITES` to remove it. Removing the gate also permits
 automatic 802.11k neighbour maintenance, so review roaming intent first.
 
+In v0.1.6, restore separately pauses external webhook delivery, cancels
+the pending outbox, and resets alert continuity. Rules/history and the
+encrypted destination remain for review. An Owner explicitly re-enables only
+future delivery after checking the restored environment; resuming router
+writes does not resume notifications. Missing observations cannot manufacture
+a recovery event. Saved AdGuard settings are not an instruction to poll it
+automatically after restore.
+
 ## Security limits to keep visible
 
-- The controller has no native TLS listener in v0.1.5. Use loopback or a
+- The controller has no native TLS listener in v0.1.6. Use loopback or a
   trusted management LAN and a trusted reverse proxy.
 - No independent security audit or penetration test has been completed.
 - Hardware support is capability-driven. The two-device end-to-end record and
@@ -271,7 +302,7 @@ automatic 802.11k neighbour maintenance, so review roaming intent first.
   or power failures.
 - A portable backup contains sensitive controller state and saved credentials.
   Anyone with the file and export passphrase can recover that content.
-- The Phase 5 flow-visibility document is a feasibility plan. v0.1.5 installs
+- The Phase 5 flow-visibility document is a feasibility plan. v0.1.6 installs
   no DPI/flow package and stores no application-flow history.
 
 See [Permissions](./permissions.md), [Troubleshooting](../reference/troubleshooting.md),

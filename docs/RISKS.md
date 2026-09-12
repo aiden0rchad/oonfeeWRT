@@ -1,5 +1,15 @@
 # oonfeeWRT — Risks
 
+> **v0.1.6 boundary (2026-09-12):** The dated risk analysis below remains
+> evidence, not proof that newer features are safe on untested hardware.
+> v0.1.6 adds opt-in webhook/service connections and an experimental,
+> manually installed on-demand read-only helper. That helper is the narrow
+> exception to historical no-device-code language; it adds no daemon, listener,
+> general command channel, or firmware execution. Apply rollback does not
+> protect firmware flashing. Use [Safety](concepts/safety.md),
+> [Firmware](guide/firmware.md), and [Integrations](guide/integrations.md) for
+> the current external-request, credential, and recovery boundaries.
+
 Ordered by how likely they are to kill the project.
 
 ---
@@ -185,7 +195,7 @@ Also retain the scoped ACL rather than root, review every exact `file.exec`
 command like code, pin device TLS certificates (TOFU, refuse on change), keep a
 full audit log, ship no default password, and write the threat model before v1.0.
 
-The daemon has no native TLS listener. The supplied v0.1.5 Compose file publishes
+The daemon has no native TLS listener. The supplied v0.1.6 Compose file publishes
 to host loopback by default; `OONFEE_HTTP_BIND` is an explicit deployment choice,
 not an authentication control. Prefer one management-interface address. A
 wildcard `0.0.0.0` bind exposes every host IPv4 interface and requires deliberate
