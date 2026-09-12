@@ -1,5 +1,16 @@
 # Driving a build session (for Opus 5 on high, or any capable coding agent)
 
+> **v0.1.6 scope (2026-09-12):** Read
+> [Engineering](reference/engineering.md), [Capabilities](reference/capabilities.md),
+> and [migration/rollback](installation/upgrades.md)
+> before using these historical session instructions. Historical v0.1.5 remains
+> schema 23; v0.1.6 uses schema 25. Preserve original assets,
+> evidence semantics, per-account browser preferences, and fail-closed demo
+> isolation. The optional manually installed read-only rpcd helper is the
+> narrow exception to old blanket no-device-code language. Do not infer
+> authority for automated installation, firmware flashing, or claiming parity
+> for pending integrations and visualizations.
+
 This repo is designed so a coding agent can build it milestone by milestone
 without inventing anything. This file is the operating manual for those
 sessions.
@@ -8,7 +19,7 @@ sessions.
 Network-10.5 current-baseline section in `PARITY-MATRIX.md` and the Current
 reference section in `UI-SPEC.md` before UI work. The milestone table below is
 the historical build order, not a live queue. For released behavior, start with
-`releases/v0.1.5.md`, `reference/capabilities.md`, and the dated banner at the
+`releases/v0.1.6.md`, `reference/capabilities.md`, and the dated banner at the
 top of `project/status.md`; the numbered status sections preserve evidence from
 their own checkpoints and must not be read as a current-version override.
 

@@ -2,7 +2,16 @@
 
 oonfeeWRT state is not one interchangeable database file. `oonfeewrt.db` and its matching `keyring.json` are a recovery unit, and the runtime passphrase is required to unlock that keyring.
 
-The recommended v0.1.5 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file. Schema-23 backups include device management modes and named policy sets.
+The recommended v0.1.6 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file. Schema-25 backups include device management modes, named policy sets, alert state, and encrypted integration settings.
+
+::: warning v0.1.6 backups are not v0.1.5 downgrade artifacts
+v0.1.6 uses schema 25: schema 24 adds persistent alerts and
+schema 25 encrypted AdGuard connection settings. Protect those credentials as
+part of the matching database/keyring recovery unit. Keep a verified raw
+schema-23 recovery unit **before** upgrading if you need to return
+to v0.1.5; that older binary cannot open schema 24/25 or restore newer state.
+See [the rollback procedure](../installation/upgrades.md#evaluate-development-without-losing-a-stable-rollback).
+:::
 
 > **Outcome:** You have an encrypted off-host controller backup, its separately recorded export passphrase, and a tested understanding of the preview-first restore safety gate.
 
@@ -26,6 +35,28 @@ The `.oowrtbak` contains:
 
 It contains sensitive controller state, including account password hashes, configuration, inventory, and encrypted saved credentials. It does not back up foreign/unmanaged router UCI, router firmware, or arbitrary router files. Schema-23 source-relative client observations may be present in the encrypted artifact, but restore treats them as nonportable evidence and clears them from the prepared destination database.
 
+In v0.1.6, alert configuration/history and encrypted integration
+configuration are also database state. Browser-only topology positions,
+theme/navigation preferences, and downloaded report CSVs are **not** included.
+The optional router helper, its manual read grant, router configuration backup,
+and any manually downloaded firmware require separate router/workstation
+recovery planning. A controller backup is not a firmware rollback image.
+
+### Restore and external delivery
+
+During disposable restore preparation, v0.1.6 pauses webhook
+delivery and cancels the pending outbox before the prepared state can replace
+the controller. Alert rules, incident history, cooldowns, and the encrypted
+destination are retained, but old hold/evaluation continuity is reset. Missing
+post-restore evidence must not create a false recovery notification.
+
+After restoring, an Owner must review the restored devices, rule targets, and
+notification destination, then explicitly re-enable delivery if appropriate.
+Only future transitions may send; cancelled historical outbox entries are not
+replayed. Resuming **router writes** is a separate decision and does not
+automatically re-enable webhooks. Review restored AdGuard connection settings
+before requesting a check; saving/restoring them does not poll the service.
+
 The export passphrase:
 
 - is separate from the controller runtime passphrase and account password;
@@ -35,6 +66,15 @@ The export passphrase:
 - cannot be recovered if lost.
 
 ## Export an encrypted backup
+
+<DocScreenshot
+  src="backup-restore" :width="1165" :height="982"
+  alt="Upper overview of Settings Backup and Restore, with export and restore introductions"
+  caption="The workspace overview introduces encrypted export and restore. Lower restore-upload controls are outside this capture; opening the page does not start an export or restore."
+/>
+
+The steps below cover export. Continue to [Preview a restore](#preview-a-restore)
+for the upload controls and the rest of the restore workflow.
 
 1. Sign in as an owner over loopback or trusted HTTPS.
 2. Open **Settings → Backup & Restore**.

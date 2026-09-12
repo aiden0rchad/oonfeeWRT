@@ -1,5 +1,15 @@
 # Policy Engine and firewall
 
+::: info Observation is not policy enforcement
+Reports and Alerts summarize evidence or send explicitly enabled
+notifications; they do not create firewall rules or remediate a condition.
+AdGuard integration does not turn DNS observations into DPI/application
+identity, and an illustrated client is not authenticated by its icon. The
+exact-MAC managed-Gateway proof, desired-state review, and Preview/Apply gates
+below remain unchanged. See [Integrations](./integrations.md) and
+[Alerts](./alerts.md) for those separate workflows.
+:::
+
 The Policy Engine turns explicit intent into reviewable firewall, forwarding,
 route, and client-policy objects. It exposes both the high-level relationship
 and the concrete draft so broad access is not hidden behind friendly labels.
@@ -19,7 +29,7 @@ and the concrete draft so broad access is not hidden behind friendly labels.
 - Begin with a narrow test rule and a known client.
 - Know how you will retain management access if the rule is wrong.
 
-The Policy Engine is IPv4-focused in v0.1.5. QoS, application/DPI identity,
+The Policy Engine is IPv4-focused in v0.1.6. QoS, application/DPI identity,
 proved priority semantics, switch ACLs, device/group routing, and advanced
 traffic classification remain unavailable or gated.
 
@@ -44,6 +54,12 @@ Display order helps reviewers understand intent, but do not assume a numeric
 priority has packet-processing semantics unless the preview/concrete backend
 proves it.
 
+<DocScreenshot
+  src="policy-rules" :width="1499" :height="982"
+  alt="Policy Engine Master Table in its empty state, with no configured policy records"
+  caption="This development controller has no configured policy records, so Master Table is empty. This does not mean the routers have no existing firewall rules."
+/>
+
 ### Zone Matrix
 
 The matrix shows effective relationships from each managed source zone to
@@ -57,10 +73,17 @@ Use it to spot broad forwarding before reading the exception rules:
 - Which directions are read-only or derived?
 - Does an allowed relationship exceed the narrow service actually needed?
 
+<DocScreenshot
+  src="policy-zones" :width="1499" :height="982"
+  alt="Policy Engine Zone Matrix in its empty state, with no managed zones configured"
+  caption="No managed zones are configured in this capture. Once present, Zone Matrix compares whole-zone forwarding; it is not a summary of every explicit firewall exception."
+/>
+
 ### Object Manager
 
 Object Manager compiles selected networks/clients and an intended action into a
-visible **unsaved draft**. Read the concrete result before saving it.
+visible **unsaved draft**. Open the **Objects** tab to find it, and read the
+concrete result before saving it.
 
 v0.1.5 also accepts a named client set as an object for **Secure (IPv4)**. The
 result is a firewall draft that keeps the set's stable ID rather than copying a
@@ -73,13 +96,19 @@ inventory is not proof that every intended endpoint is covered. Prefer stable
 network or explicit address objects when identity must survive MAC
 randomization or an offline client.
 
+<DocScreenshot
+  src="policy-objects" :width="1499" :height="982"
+  alt="Policy Engine Objects tab with the Object Manager selection controls"
+  caption="Policy Engine → Objects separates object selection from draft compilation and saving. An empty selection or draft area is not a deployed rule."
+/>
+
 ## Create and maintain a named client set
 
 Named client sets let several firewall rules share one exact-MAC membership
 list. They are controller objects, not OpenWrt address sets and not dynamic
 queries.
 
-1. Open **Policy Engine → Object Manager**.
+1. Open **Policy Engine → Objects** and find **Object Manager**.
 2. In **Named client sets**, create a set with a unique descriptive name.
 3. Select one or more clients from the observed client inventory. Each must be
    classified **This network** (`local`) for the managed Gateway. Being merely
@@ -104,7 +133,8 @@ only when the currently adopted Managed Gateway has stored it as `local`.
 
 Monitor-only AP, Switch, and routed-device observations remain visible but
 neither satisfy nor contaminate that proof—even after the observation device is
-un-adopted. An upgrade starts without schema-23 provenance; portable restore
+un-adopted. An upgrade from before schema 23 starts without that provenance;
+v0.1.5 → v0.1.6 preserves existing provenance. Portable restore
 deliberately clears it because source-controller evidence is not destination
 write authority. Authorization rejects observations older than 30 days or more
 than five minutes in the future even if asynchronous cleanup has not run. The

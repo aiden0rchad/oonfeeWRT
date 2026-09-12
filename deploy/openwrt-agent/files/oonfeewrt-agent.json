@@ -1,0 +1,10 @@
+{
+  "oonfeewrt-agent-read": {
+    "description": "Optional oonfeeWRT helper status and existing system board/info reads. No execution or write permission.",
+    "read": {
+      "ubus": {
+        "oonfeewrt-agent": ["status", "board", "info", "wireguard"]
+      }
+    }
+  }
+}

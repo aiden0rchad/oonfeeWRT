@@ -39,6 +39,7 @@ __pycache__/
 *.test
 /oonfeewrtd
 /dist/
+/node_modules/
 ui/playwright-report/
 ui/test-results/
 docs/.vitepress/cache/

@@ -216,6 +216,12 @@ func prepare(ctx context.Context, artifactPath, dataDir string, live *secrets.Ke
 		}
 		return nil, errors.New("restore preparation: portable client provenance could not be reset")
 	}
+	if err := db.PausePortableRestoreAlertDelivery(ctx); err != nil {
+		if contextErr := canceledError(err); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, errors.New("restore preparation: external alert delivery could not be paused")
+	}
 	counts, err := recovery.Validate(ctx, db, keeper)
 	if err != nil {
 		if contextErr := canceledError(err); contextErr != nil {

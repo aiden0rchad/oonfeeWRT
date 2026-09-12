@@ -1,5 +1,17 @@
 # oonfeeWRT — Feature Parity Matrix
 
+> **v0.1.6 boundary (2026-09-12):** This is a dated comparison and
+> feasibility record, not a completion claim. See the maintained
+> [capability matrix](reference/capabilities.md)
+> for v0.1.6: Reports, Alerts, editable topology, read-only firmware
+> metadata and integrations, mobile presentation, and the isolated demo.
+> Firmware execution, SNMP, Web Push, Telegram-specific delivery, full
+> localization, and VM nesting remain pending. The historical no-device-code
+> prohibition has one explicit exception: a manually installed on-demand
+> read-only rpcd helper, never an automatic adoption payload or daemon.
+> WireGuard observation does not configure a VPN or provide NAT traversal.
+> The helper remains experimental source without completed SDK/hardware proof.
+
 Originally derived from a live UniFi install running **UniFi OS 5.1.19 /
 Network 10.4.57** (July 2026), screen by screen. Re-baselined on **2026-08-18**
 against the current stable **UniFi Network 10.5.67** release and its official

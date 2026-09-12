@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Dashboard, DashboardMetric, Device, Point, Series } from '../lib/api'
 import { ReachabilityStrip, Statistics, alignChartPoints } from './Statistics'
@@ -142,12 +142,37 @@ describe('Statistics', () => {
       expect.any(Number),
       expect.any(Number),
     )
-    expect(apiMocks.deviceSeries).toHaveBeenCalledWith(7)
+    // Device selection and its catalogue load commit separately from WAN queries.
+    await waitFor(() => expect(apiMocks.deviceSeries).toHaveBeenCalledWith(7))
     expect(apiMocks.stats.mock.calls.some((call) => call[2] === 'pppoe-wan')).toBe(false)
 
     const downloadCall = apiMocks.stats.mock.calls.find((call) => call[0] === 'iface_rx_bps')
     expect(downloadCall?.[4] - downloadCall?.[3]).toBe(6 * 60 * 60)
     expect(screen.getByRole('button', { name: '6 hours' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('renders proved WAN history while waiting for the selected device catalogue', async () => {
+    let resolveCatalog!: (value: { series: Record<string, string[]> }) => void
+    apiMocks.deviceSeries.mockReturnValueOnce(new Promise((resolve) => { resolveCatalog = resolve }))
+
+    render(<Statistics />)
+
+    await waitFor(() => expect(apiMocks.deviceSeries).toHaveBeenCalledWith(7))
+    await waitFor(() => expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('1'))
+    expect(apiMocks.stats).toHaveBeenCalledWith(
+      'iface_rx_bps', 7, 'wan-proof-key', expect.any(Number), expect.any(Number),
+    )
+    expect(apiMocks.stats.mock.calls.some((call) => call[2] === 'pppoe-wan')).toBe(false)
+    expect(apiMocks.stats.mock.calls.some((call) => call[0] === 'sys_load1')).toBe(false)
+    expect(screen.queryByTestId('chart-Load average')).toBeNull()
+
+    await act(async () => { resolveCatalog({ series: { sys_load1: [''] } }) })
+
+    await waitFor(() => expect(apiMocks.stats).toHaveBeenCalledWith(
+      'sys_load1', 7, '', expect.any(Number), expect.any(Number),
+    ))
+    await waitFor(() => expect(screen.getByTestId('chart-Load average').getAttribute('data-observed')).toBe('1'))
+    expect(screen.getByTestId('chart-Download traffic').getAttribute('data-observed')).toBe('1')
   })
 
   it('keeps partial history neutral and discloses exact missing counts and remedies on demand', async () => {

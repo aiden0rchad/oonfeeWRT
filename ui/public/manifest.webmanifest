@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "oonfeeWRT Controller",
+  "short_name": "oonfeeWRT",
+  "description": "Your self-hosted OpenWrt network controller.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f1114",
+  "theme_color": "#0f1114",
+  "icons": [
+    { "src": "app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/alerts"
 	"github.com/aiden0rchad/oonfeewrt/internal/portablebackup"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
@@ -240,6 +241,53 @@ func TestPrepareClearsNonportableClientObservationProvenance(t *testing.T) {
 	})
 	if transferred || !errors.Is(err, stopTransfer) {
 		t.Fatalf("inspection transfer=(%t,%v)", transferred, err)
+	}
+	if err := prepared.Cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.assertNoResidue(t)
+}
+
+func TestPrepareResetsPortableAlertContinuity(t *testing.T) {
+	fixture := newPrepareFixture(t, store.CurrentSchemaVersion(), func(t *testing.T, db *store.DB) {
+		now := int64(10000)
+		state := alerts.PersistentState{NextRuleID: 1, EvaluatedAt: &now, Rules: []alerts.RuleRecord{{
+			Rule: alerts.Rule{ID: 1, Config: alerts.Config{Name: "Gateway", Condition: "device_offline", DeviceID: 1,
+				HoldSeconds: 60, CooldownSeconds: 60, Enabled: true}, State: "pending", Since: &now},
+			TargetIdentity: "fixture-identity", PendingSince: now, LastEvaluation: now, LastEvidence: now,
+		}}}
+		if err := db.SaveAlertState(context.Background(), state); err != nil {
+			t.Fatal(err)
+		}
+	})
+	prepared, err := Prepare(context.Background(), fixture.artifact, fixture.dataDir,
+		fixture.live, testExportPassphrase, testDestinationRuntimePassphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopTransfer := errors.New("inspection complete")
+	_, err = prepared.Transfer(context.Background(), func(pair PreparedPair) error {
+		keeper, err := secrets.Open(pair.KeyringPath, testDestinationRuntimePassphrase)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer keeper.Close()
+		db, err := store.OpenReadOnly(context.Background(), "sqlite", pair.DatabasePath, keeper)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		state, err := db.LoadAlertState(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state.EvaluatedAt != nil || len(state.Rules) != 1 || state.Rules[0].State != "unknown" || state.Rules[0].PendingSince != 0 || state.Rules[0].LastEvaluation != 0 {
+			t.Fatal("prepared portable restore retained source alert continuity")
+		}
+		return stopTransfer
+	})
+	if !errors.Is(err, stopTransfer) {
+		t.Fatal(err)
 	}
 	if err := prepared.Cleanup(); err != nil {
 		t.Fatal(err)

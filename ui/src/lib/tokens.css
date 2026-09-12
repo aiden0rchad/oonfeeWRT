@@ -13,7 +13,10 @@
 :root,
 [data-theme='dark'] {
   color-scheme: dark;
-  --app-topbar-height: 48px;
+  --app-topbar-height: 56px;
+  --radius-card: 14px;
+  --shadow-card: 0 1px 2px #0000001f, 0 6px 20px #0000000a;
+  --shadow-raised: 0 8px 28px #00000029;
   --surface-0: #0f1114;
   --surface-1: #16181c;
   --surface-2: #1e2126;
@@ -53,6 +56,8 @@
  * separately validated light-surface variant from UI-SPEC §3. */
 [data-theme='light'] {
   color-scheme: light;
+  --shadow-card: 0 1px 2px #14171c05, 0 6px 20px #14171c04;
+  --shadow-raised: 0 8px 28px #14171c0d;
   --surface-0: #f5f6f8;
   --surface-1: #ffffff;
   --surface-2: #eef0f4;
@@ -110,6 +115,7 @@
 
 .app-nav-item {
   color: var(--text-secondary);
+  letter-spacing: -0.01em;
 }
 
 .app-nav-control:hover:not(:disabled),
@@ -119,7 +125,7 @@
 }
 
 .app-nav-item[aria-current='page'] {
-  background: var(--accent-soft);
+  background: linear-gradient(100deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 62%, var(--surface-1)));
   color: var(--accent-text);
 }
 
@@ -230,15 +236,31 @@ textarea::placeholder {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 18px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-1);
 }
 
 .app-brand {
-  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.025em;
+}
+
+.app-brand::before {
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 7px 7px, var(--accent-text) 2px, transparent 2.5px),
+    radial-gradient(circle at 15px 7px, var(--accent-text) 2px, transparent 2.5px),
+    radial-gradient(circle at 11px 15px, var(--accent-text) 2px, transparent 2.5px),
+    var(--accent-soft);
+  content: '';
 }
 
 .app-account-controls {
@@ -286,7 +308,7 @@ textarea::placeholder {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 22px;
+  padding: 26px;
   outline: none;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -295,8 +317,9 @@ textarea::placeholder {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--surface-1);
+  box-shadow: var(--shadow-card);
 }
 
 .ui-card-header {
@@ -305,10 +328,11 @@ textarea::placeholder {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .ui-card-body {
@@ -316,19 +340,19 @@ textarea::placeholder {
 }
 
 .ui-card-body[data-padded='true'] {
-  padding: 16px;
+  padding: 18px;
 }
 
 .ui-button {
-  min-height: 32px;
-  padding: 5px 12px;
+  min-height: 36px;
+  padding: 7px 13px;
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 9px;
   background: var(--surface-2);
   color: var(--text-primary);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 550;
   line-height: 1.35;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
@@ -337,6 +361,7 @@ textarea::placeholder {
   border-color: var(--control-accent);
   background: var(--control-accent);
   color: #fff;
+  box-shadow: 0 1px 2px #00000014;
 }
 
 .ui-button:hover:not(:disabled) {
@@ -377,8 +402,25 @@ textarea::placeholder {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ui-button {
+  .ui-button,
+  .app-nav-control,
+  .app-nav-item {
     transition: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .app-brand {
+    gap: 7px;
+    font-size: 14px;
+  }
+
+  .app-brand::before {
+    display: none;
+  }
+
+  .app-account-name {
+    max-width: 50px;
   }
 }
 
@@ -393,8 +435,8 @@ textarea::placeholder {
   align-items: flex-end;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 4px;
+  gap: 14px;
+  padding-bottom: 8px;
 }
 
 .page-header-copy {
@@ -407,15 +449,15 @@ textarea::placeholder {
   width: fit-content;
   max-width: 100%;
   margin: 0;
-  font-size: 26px;
+  font-size: clamp(26px, 2.2vw, 32px);
   font-weight: 650;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.04em;
   line-height: 1.2;
 }
 
 .page-header-purpose {
   min-width: 0;
-  margin-top: 5px;
+  margin-top: 7px;
   overflow-wrap: anywhere;
   color: var(--text-muted);
   font-size: 12px;
@@ -1649,8 +1691,9 @@ textarea::placeholder {
 
 .dashboard-page {
   display: grid;
-  gap: 14px;
+  gap: 20px;
   min-width: 0;
+  max-width: 1800px;
 }
 
 .statistics-page {
@@ -2119,17 +2162,32 @@ textarea::placeholder {
 .dashboard-freshness,
 .dashboard-provenance,
 .dashboard-health-state {
-  padding: 3px 8px;
-  border: 1px solid var(--border-strong);
+  padding: 5px 10px;
+  border: 1px solid var(--border);
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.dashboard-freshness {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--surface-1);
+}
+
+.dashboard-freshness::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-text);
+  content: '';
 }
 
 .dashboard-operations-grid,
 .dashboard-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 20px;
 }
 
 .dashboard-operations-grid {
@@ -2192,17 +2250,18 @@ textarea::placeholder {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
-  padding: 8px 10px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
+  border-radius: 10px;
+  background: var(--surface-0);
   color: var(--text-secondary);
   font-size: 11px;
 }
 
 .dashboard-topology-stats strong {
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: 22px;
+  letter-spacing: -0.03em;
 }
 
 .dashboard-topology-links {
@@ -2219,9 +2278,9 @@ textarea::placeholder {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 7px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
 }
 
 .dashboard-topology-links li > span:first-child,
@@ -2248,7 +2307,7 @@ textarea::placeholder {
 
 .dashboard-section {
   display: grid;
-  gap: 8px;
+  gap: 12px;
 }
 
 .dashboard-section-heading h2 {
@@ -2258,7 +2317,210 @@ textarea::placeholder {
 .dashboard-stat-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(125px, 1fr));
-  gap: 10px;
+  gap: 12px;
+}
+
+.dashboard-stat-grid .ui-card-body {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  height: 100%;
+  min-height: 158px;
+  background: radial-gradient(ellipse at top right, color-mix(in srgb, var(--accent) 4%, transparent), transparent 72%);
+}
+
+.dashboard-summary-icon {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface-1));
+  color: var(--accent-text);
+}
+
+.dashboard-summary-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dashboard-fleet-status {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+}
+
+.dashboard-fleet-chart {
+  position: relative;
+  width: 140px;
+  aspect-ratio: 1;
+}
+
+.dashboard-fleet-chart svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.dashboard-fleet-track,
+.dashboard-fleet-segment {
+  fill: none;
+  stroke-width: 9;
+}
+
+.dashboard-fleet-track {
+  stroke: var(--border);
+}
+
+.dashboard-fleet-segment[data-state='online'] {
+  stroke: var(--good);
+}
+
+.dashboard-fleet-segment[data-state='offline'] {
+  stroke: var(--critical);
+}
+
+.dashboard-fleet-segment[data-state='pending'] {
+  stroke: var(--warning);
+}
+
+.dashboard-fleet-segment[data-state='unknown'] {
+  stroke: var(--text-muted);
+}
+
+.dashboard-fleet-total {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  text-align: center;
+  pointer-events: none;
+}
+
+.dashboard-fleet-total strong {
+  font-size: 34px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
+}
+
+.dashboard-fleet-total span,
+.dashboard-fleet-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-fleet-legend {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+}
+
+.dashboard-fleet-legend > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 9px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-fleet-legend > div:last-child {
+  border: 0;
+}
+
+.dashboard-fleet-legend dt {
+  color: var(--text-secondary);
+}
+
+.dashboard-fleet-legend dd {
+  margin: 0;
+  font-weight: 650;
+}
+
+.dashboard-fleet-note {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.dashboard-activity-empty {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.dashboard-activity-empty strong,
+.dashboard-activity-empty span:not(.dashboard-summary-icon) {
+  display: block;
+}
+
+.dashboard-activity-empty strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.dashboard-activity-empty span:not(.dashboard-summary-icon) {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.dashboard-activity-list {
+  display: grid;
+}
+
+.dashboard-activity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.dashboard-activity-row:first-child {
+  padding-top: 0;
+}
+
+.dashboard-activity-row:last-child {
+  padding-bottom: 0;
+  border: 0;
+}
+
+.dashboard-activity-severity {
+  min-width: 64px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.dashboard-activity-row[data-severity='error'] .dashboard-activity-severity {
+  background: color-mix(in srgb, var(--critical) 10%, transparent);
+  color: var(--critical);
+}
+
+.dashboard-activity-copy {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-activity-time {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .dashboard-health-state {
@@ -2302,7 +2564,7 @@ textarea::placeholder {
   padding: 9px 10px 9px 12px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--surface-0);
 }
 
@@ -2406,10 +2668,10 @@ textarea::placeholder {
 .dashboard-metric {
   --dashboard-trend-color: var(--series-1);
   min-width: 0;
-  padding: 10px 11px 8px;
+  padding: 14px 13px 10px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 10px;
   background: linear-gradient(180deg, color-mix(in srgb, var(--dashboard-trend-color) 7%, var(--surface-0)), var(--surface-0) 48%);
 }
 
@@ -2448,11 +2710,12 @@ textarea::placeholder {
 }
 
 .dashboard-metric-value {
-  min-height: 29px;
+  min-height: 36px;
   color: var(--text-primary);
-  font-size: 20px;
+  font-size: 25px;
   font-weight: 600;
   text-align: left;
+  letter-spacing: -0.03em;
 }
 
 .dashboard-trend-figure {
@@ -3019,6 +3282,36 @@ textarea::placeholder {
 }
 
 @media (max-width: 720px) {
+  .dashboard-page,
+  .dashboard-operations-grid,
+  .dashboard-detail-grid {
+    gap: 14px;
+  }
+
+  .dashboard-stat-grid .ui-card-body {
+    gap: 12px;
+    min-height: 145px;
+  }
+
+  .dashboard-fleet-status {
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .dashboard-fleet-chart {
+    width: 110px;
+  }
+
+  .dashboard-activity-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .dashboard-activity-time {
+    width: 100%;
+    padding-left: 72px;
+  }
+
   .dashboard-section-heading,
   .dashboard-wan-toolbar,
   .speedtest-active-heading,
@@ -3088,6 +3381,16 @@ textarea::placeholder {
 
   .speedtest-impact-popover .speedtest-plan {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 360px) {
+  .dashboard-fleet-status {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-fleet-chart {
+    justify-self: center;
   }
 }
 

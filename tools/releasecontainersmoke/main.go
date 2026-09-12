@@ -32,7 +32,7 @@ const (
 	restoreConfirmationContract = "controller-restore-confirm-v1"
 	restoreTypedConfirmation    = "RESTORE CONTROLLER"
 	restoreMediaType            = "application/vnd.oonfeewrt.backup"
-	expectedSchema              = 23
+	expectedSchema              = 25
 )
 
 type secretText []byte

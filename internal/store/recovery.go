@@ -60,6 +60,8 @@ type recoveryBound struct {
 }
 
 var recoveryBounds = []recoveryBound{
+	{"controller alerts", "controller_alert_state", "", bytesOf("state_json"), 1, 2097152, 2097152},
+	{"AdGuard Home configuration", "controller_adguard_config", "", bytesOf("config_enc"), 1, 16384, 16384},
 	{"controller accounts", "admins", "", bytesOf("id", "username", "pass_hash", "created_at", "last_login", "role", "enabled", "deleted_at"), recoveryMaxAdmins, recoveryMaxStateBytes, recoveryMaxAdminRowBytes},
 	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "management_mode", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"site", "site", "", bytesOf("id", "uuid", "name"), 1, recoveryMaxRowBytes, recoveryMaxRowBytes},
@@ -184,6 +186,12 @@ func (db *DB) InspectRecovery(ctx context.Context,
 		return counts, err
 	}
 	if err := validateRecoveryOwned(ctx, tx, db, &counts); err != nil {
+		return counts, err
+	}
+	if err := db.validateRecoveryAlerts(ctx, tx); err != nil {
+		return counts, err
+	}
+	if err := db.validateRecoveryIntegrations(ctx, tx); err != nil {
 		return counts, err
 	}
 	if err := ctx.Err(); err != nil {

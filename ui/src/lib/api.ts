@@ -10,6 +10,12 @@
 //    session and lets the app fall back to the sign-in screen rather than
 //    leaving a logged-out page showing stale data.
 
+import type { AlertDelivery, AlertResponse, AlertRule, AlertRuleInput } from './alerts'
+import type { FirmwareInventory, FirmwareResult } from './firmware'
+import type { AdGuardConfig, AdGuardResult, WireGuardResult } from './integrations'
+
+export const isDemo = false
+
 export class ApiError extends Error {
   status: number
 	  writeState?: 'none' | 'possible'
@@ -1840,6 +1846,19 @@ export type RestoreSuppression =
   | { active: true; restore_id: string; created_at: string; reason: string }
 
 export const api = {
+  adguard: () => get<AdGuardConfig>('/integrations/adguard'),
+  saveAdguard: (config: { url: string; username: string; password?: string; tls_fingerprint?: string }) => post<AdGuardConfig>('/integrations/adguard', config),
+  deleteAdguard: () => del<{ deleted: boolean }>('/integrations/adguard'),
+  checkAdguard: () => post<AdGuardResult>('/integrations/adguard/check', {}),
+  checkWireGuard: (id: number) => post<WireGuardResult>(`/devices/${id}/wireguard/check`, {}),
+  firmware: () => get<FirmwareInventory>('/firmware'),
+  checkFirmware: (id: number) => post<{ device_id: number; result: FirmwareResult }>(`/devices/${id}/firmware/check`, {}),
+  alerts: (signal?: AbortSignal) => get<AlertResponse>('/alerts', { signal }),
+  saveAlertRule: (rule: AlertRuleInput, id?: number) => id == null
+    ? post<AlertRule>('/alerts/rules', rule)
+    : request<AlertRule>(`/alerts/rules/${id}`, { method: 'PUT', body: JSON.stringify(rule) }),
+  deleteAlertRule: (id: number) => del<{ deleted: boolean }>(`/alerts/rules/${id}`),
+  saveAlertDelivery: (settings: { enabled: boolean; url?: string; bearer_token?: string }) => post<AlertDelivery>('/alerts/delivery', settings),
   setupState: () => get<{ needs_setup: boolean }>('/setup'),
   setup: (username: string, password: string) =>
     post<SessionInfo>('/setup', { username, password }),

@@ -2,6 +2,8 @@ import { defineConfig } from 'vitepress'
 
 const start = [
   { text: 'What oonfeeWRT does', link: '/getting-started/' },
+  { text: 'Visual tour', link: '/getting-started/visual-tour' },
+  { text: 'Explore the isolated demo', link: '/guide/demo' },
   { text: 'Quick start', link: '/getting-started/quick-start' },
   { text: 'Adopt your first device', link: '/getting-started/first-adoption' },
 ]
@@ -16,6 +18,8 @@ const install = [
 const use = [
   { text: 'Dashboard and speed tests', link: '/guide/dashboard' },
   { text: 'Statistics and historical telemetry', link: '/guide/statistics' },
+  { text: 'Reports and comparisons', link: '/guide/reports' },
+  { text: 'Alerts and notifications', link: '/guide/alerts' },
   { text: 'Discovery, adoption, and devices', link: '/guide/devices' },
   { text: 'Networks, VLANs, and DHCP', link: '/guide/networks' },
   { text: 'Wi-Fi, roaming, and overrides', link: '/guide/wifi' },
@@ -23,12 +27,15 @@ const use = [
   { text: 'Clients and topology', link: '/guide/clients-topology' },
   { text: 'Policy Engine and firewall', link: '/guide/policy-engine' },
   { text: 'Logs and diagnostics', link: '/guide/logs-diagnostics' },
+  { text: 'Firmware and optional helper', link: '/guide/firmware' },
+  { text: 'AdGuard Home and WireGuard', link: '/guide/integrations' },
 ]
 
 const operate = [
   { text: 'Accounts, roles, and sessions', link: '/operations/accounts' },
   { text: 'Backup and staged restore', link: '/operations/backups' },
   { text: 'Routine maintenance', link: '/operations/maintenance' },
+  { text: 'Mobile and installed app', link: '/operations/mobile-app' },
 ]
 
 const understand = [
@@ -53,7 +60,7 @@ export default defineConfig({
   lang: 'en-US',
   title: 'oonfeeWRT',
   titleTemplate: ':title | oonfeeWRT Docs',
-  description: 'Documentation for oonfeeWRT v0.1.5: install, monitor, configure, operate, and understand the OpenWrt controller.',
+  description: 'Documentation for oonfeeWRT v0.1.6: install, monitor, configure, operate, and understand the OpenWrt controller.',
   base: '/oonfeeWRT/',
   cleanUrls: true,
   srcExclude: ['project/**', 'releases/current.md'],
@@ -64,7 +71,7 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#f5f6f8', media: '(prefers-color-scheme: light)' }],
     ['meta', { name: 'theme-color', content: '#0f1114', media: '(prefers-color-scheme: dark)' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.5 Documentation' }],
+    ['meta', { property: 'og:title', content: 'oonfeeWRT v0.1.6 Documentation' }],
     ['meta', { property: 'og:description', content: 'Self-hosted management for stock OpenWrt, with monitor-only devices, safe Apply, reusable policy sets, evidence-backed topology, and recovery.' }],
     ['meta', { property: 'og:image', content: 'https://aiden0rchad.github.io/oonfeeWRT/social-card.svg' }],
   ],
@@ -84,10 +91,10 @@ export default defineConfig({
       { text: 'Operations', link: '/operations/accounts' },
       { text: 'Reference', link: '/reference/requirements' },
       {
-        text: 'v0.1.5',
+        text: 'v0.1.6',
         items: [
           { text: 'Release notes', link: '/reference/releases' },
-          { text: 'Download v0.1.5', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5' },
+          { text: 'Download v0.1.6', link: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.6' },
         ],
       },
     ],

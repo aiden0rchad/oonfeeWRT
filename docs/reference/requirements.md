@@ -1,12 +1,24 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.5.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.6.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.5**.
+v0.1.6**.
+
+::: info v0.1.6 upgrade and optional-feature requirements
+v0.1.6 uses schema **25**. Preserve a matching pre-upgrade recovery unit before
+opening existing controller data; returning to v0.1.5 requires schema 23.
+The optional rpcd helper must be built with a matching OpenWrt SDK and installed
+and granted read access manually; ordinary adoption needs no helper. Firmware
+catalogue and AdGuard checks require their explicitly chosen outbound paths,
+not a cloud account. The installed-app experience depends on browser support
+and a secure context; it does not add offline control or native TLS. See
+[Firmware](../guide/firmware.md), [Integrations](../guide/integrations.md), and
+[Mobile and installed app](../operations/mobile-app.md).
+:::
 
 ## Controller host
 
@@ -75,7 +87,7 @@ network state. Richer views may depend on existing official OpenWrt components
 such as `rpcd-mod-luci` or `rpcd-mod-iwinfo`, and on hostapd/driver methods.
 
 Missing components are reported as unavailable or unsupported. Adoption does
-not silently install them. The only shipped optional-package workflow is LLDP,
+not silently install them. The controller-managed optional-package workflow is LLDP,
 which separately plans and may install official-feed `lldpd` packages after
 explicit approval. See [Capabilities](./capabilities.md).
 
@@ -98,11 +110,11 @@ Ordinary single DHCP, static, and PPPoE uplinks satisfy the modeled shape.
 Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
 `mwan3`, unmappable runtime devices, and bond-member selection remain
 unavailable rather than guessed. Those layouts can still be managed outside
-oonfeeWRT, but v0.1.5 does not claim their Dashboard WAN path is authoritative.
+oonfeeWRT, but v0.1.6 does not claim their Dashboard WAN path is authoritative.
 
 ### Optional router-clock status prerequisites
 
-v0.1.5 can compare fresh router UTC with the controller through
+v0.1.6 can compare fresh router UTC with the controller through
 `luci.getUnixtime`, falling back to `luci.getLocaltime` only when the preferred
 method is unavailable. A new adoption's reviewed ACL includes these read-only
 methods. An adoption created by an older release keeps ordinary polling,
@@ -137,7 +149,8 @@ Common ports are:
 | Browser → controller | TCP 8080 by default | Bare daemon defaults to `:8080` on all interfaces; supplied Compose publishes host loopback unless `OONFEE_HTTP_BIND` explicitly selects a management IP or wildcard |
 | Controller → router | TCP 22 by default | Explicitly approved SSH bootstrap, cleanup, ACL refresh, or optional capability work |
 | Controller → router | Router `uhttpd` HTTP/HTTPS port | `/ubus` polling and configuration |
-| Controller host → Internet | HTTPS, when used | Operator release/image downloads and the explicitly run Cloudflare speed test |
+| Controller host → Internet | HTTPS, when used | Release/image downloads, explicit Cloudflare speed tests and official OpenWrt catalogue checks, plus an Owner-configured and enabled public webhook |
+| Controller → AdGuard Home | Configured HTTPS port, only on request | Explicit aggregate checks against the Owner-configured service; private LAN endpoints are supported subject to destination restrictions and TLS verification |
 | Router → package feed | Feed HTTP/HTTPS port, when used | Package-index/install traffic only during an explicitly approved optional-capability workflow |
 
 Router endpoints may use a non-default port when included in the management
@@ -202,15 +215,15 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.5:
+For v0.1.6:
 
-- download release archives and `SHA256SUMS` from the v0.1.5 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.6 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.5`. Stable aliases
+The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.6`. Stable aliases
 exist, but deployments should pin the exact version or digest.
 
 ## Source-build requirements
@@ -230,7 +243,7 @@ See [Engineering reference](./engineering.md).
 
 ## Verified hardware boundary
 
-The stable release's published hardware record covers:
+The existing physical-router validation record covers:
 
 - Linksys WRT3200ACM; and
 - TP-Link Archer C6 v2;
@@ -259,7 +272,7 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.5` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.6` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.

@@ -26,8 +26,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aiden0rchad/oonfeewrt/internal/alerts"
 	"github.com/aiden0rchad/oonfeewrt/internal/collector"
 	"github.com/aiden0rchad/oonfeewrt/internal/diagnostics"
+	"github.com/aiden0rchad/oonfeewrt/internal/firmware"
+	"github.com/aiden0rchad/oonfeewrt/internal/integrations"
 	"github.com/aiden0rchad/oonfeewrt/internal/restoreswap"
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/speedtest"
@@ -129,7 +132,11 @@ type Server struct {
 	RadioScan RadioScanner
 	// SpeedTests runs bounded HTTP tests from this controller process. It has no
 	// Fleet reference and therefore cannot make a router management call.
-	SpeedTests *speedtest.Manager
+	SpeedTests      *speedtest.Manager
+	Alerts          *alerts.Manager
+	FirmwareChecker FirmwareChecker
+	AdGuardChecker  AdGuardChecker
+	WireGuard       WireGuardReader
 	// Diagnostics packages bounded stored evidence only. The directory and log
 	// reader are supplied by the daemon; neither grants router access.
 	DiagnosticsDir string
@@ -228,6 +235,15 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 		instanceID: instanceID,
 	}
 	srv.Hub = NewHub(fleet, log)
+	srv.Alerts = alerts.New(db, srv.alertEvidence, func() alerts.Keeper {
+		if srv.Keys == nil {
+			return nil
+		}
+		return srv.Keys
+	})
+	srv.Alerts.Now = srv.now
+	srv.FirmwareChecker = firmware.NewChecker()
+	srv.AdGuardChecker = integrations.NewAdGuardChecker()
 	runner, err := speedtest.NewHTTPRunner(speedtest.DefaultHTTPConfig())
 	if err != nil {
 		panic("api: invalid built-in speed-test configuration: " + err.Error())
@@ -366,6 +382,16 @@ func (s *Server) protectedRoutes() []protectedRoute {
 		{"GET /api/v1/radios", store.RoleViewer, s.handleRadios},
 		{"POST /api/v1/devices/{id}/radios/{radio}/scan", store.RoleOperator, s.handleRadioScan},
 		{"GET /api/v1/dashboard", store.RoleViewer, s.handleDashboard},
+		{"GET /api/v1/alerts", store.RoleViewer, s.handleAlerts},
+		{"POST /api/v1/alerts/rules", store.RoleOwner, s.handleSaveAlertRule},
+		{"PUT /api/v1/alerts/rules/{id}", store.RoleOwner, s.handleSaveAlertRule},
+		{"DELETE /api/v1/alerts/rules/{id}", store.RoleOwner, s.handleDeleteAlertRule},
+		{"POST /api/v1/alerts/delivery", store.RoleOwner, s.handleAlertDelivery},
+		{"GET /api/v1/firmware", store.RoleViewer, s.handleFirmware},
+		{"POST /api/v1/devices/{id}/firmware/check", store.RoleAdmin, s.handleFirmwareCheck},
+		{"GET /api/v1/integrations/adguard", store.RoleViewer, s.handleAdGuardConfig},
+		{"POST /api/v1/integrations/adguard/check", store.RoleAdmin, s.handleAdGuardCheck},
+		{"POST /api/v1/devices/{id}/wireguard/check", store.RoleAdmin, s.handleWireGuardCheck},
 		{"GET /api/v1/speedtests", store.RoleViewer, s.handleSpeedTests},
 		{"POST /api/v1/speedtests", store.RoleOperator, s.handleStartSpeedTest},
 		{"GET /api/v1/speedtests/{id}", store.RoleViewer, s.handleSpeedTest},
@@ -389,6 +415,8 @@ func (s *Server) protectedRoutes() []protectedRoute {
 // it is not registered at all.
 func (s *Server) reauthenticatedRoutes() []protectedRoute {
 	return []protectedRoute{
+		{"POST /api/v1/integrations/adguard", store.RoleOwner, s.handleSaveAdGuard},
+		{"DELETE /api/v1/integrations/adguard", store.RoleOwner, s.handleDeleteAdGuard},
 		{"POST /api/v1/accounts", store.RoleOwner, s.handleCreateAccount},
 		{"PATCH /api/v1/accounts/{id}/role", store.RoleOwner, s.handleSetAccountRole},
 		{"PATCH /api/v1/accounts/{id}/enabled", store.RoleOwner, s.handleSetAccountEnabled},

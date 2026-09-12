@@ -6,22 +6,28 @@ Controller accounts are local to oonfeeWRT. They are separate from router logins
 
 ## Find account controls
 
-Current development builds after v0.1.5 have a dedicated **Accounts** workspace
+v0.1.6 has a dedicated **Accounts** workspace
 at `/accounts`. It sits between **Settings** and **Logs** in the bottom
 **Controller** sidebar group. Opening it shows **My account** for every signed-in
 role; only owners also see **Manage accounts**.
 
-The procedures below use this development navigation. Published v0.1.5 keeps
+The procedures below use v0.1.6 navigation. Older v0.1.5 keeps
 the same account controls inside Settings:
 
-| Task | Current development | Published v0.1.5 |
+| Task | v0.1.6 | v0.1.5 |
 |---|---|---|
 | Own identity, password, and sessions | **Accounts → My account** | **Settings → My account** |
 | Create or manage other accounts and sessions | **Accounts → Manage accounts** | **Settings → Accounts** |
 
-This move changes navigation only, not permissions or account data. Development
+This move changes navigation only, not permissions or account data. v0.1.6
 **Settings** retains **Network**, **Diagnostics** for administrators/owners, and
 **Backup & Restore** for owners.
+
+<DocScreenshot
+  src="accounts-profile" :width="1165" :height="982"
+  alt="Accounts My account tab with profile, password, and active-session controls"
+  caption="Accounts → My account keeps your own identity, password, and sessions together. The Manage accounts tab is available only to owners."
+/>
 
 ## Prerequisites and impact
 
@@ -43,6 +49,17 @@ Roles are hierarchical: each higher role includes the lower role's permissions.
 | **Owner** | Controller custody | Administrator access plus controller-account administration and encrypted backup/restore, including the post-restore write gate. |
 
 Audit events are more sensitive than ordinary General events. The API applies additional authorization after it knows an event's scope.
+
+In v0.1.6, every signed-in role can read Statistics, Reports,
+Alerts, firmware inventory, and saved integration metadata. Administrator or
+Owner is required to run firmware-catalogue, AdGuard, or WireGuard checks.
+Only the Owner edits alert rules/delivery or saves/removes AdGuard credentials;
+the latter connection changes also require recent password confirmation.
+See the [permission matrix](../concepts/permissions.md#additional-development-permissions).
+
+Browser appearance preferences are not account privileges. Topology layout
+and navigation expansion are scoped to the account in that browser; resetting
+a layout does not change another user's drawing, permissions, or router state.
 
 ## Account rules
 
@@ -67,11 +84,17 @@ Use a unique password for each person. Do not create one shared “admin” acco
 
 ## Create an account
 
+<DocScreenshot
+  src="accounts-manage" :width="1165" :height="982"
+  alt="Accounts Manage accounts tab with the account form and role selector"
+  caption="Accounts → Manage accounts starts new users at Read-only. The description below Role changes with the selection so owners can compare privileges before creating an account."
+/>
+
 1. Sign in as an owner.
 2. Open **Accounts → Manage accounts**.
 3. In **Create account**, enter the username.
 4. Choose **Read-only**, **Operator**, **Administrator**, or **Owner**. New
-   accounts default to Read-only. In development builds, the description below
+   accounts default to Read-only. In v0.1.6, the description below
    the role selector updates with the selection; compare it with the role
    matrix before granting more access.
 5. Enter and repeat a password of at least 12 characters.

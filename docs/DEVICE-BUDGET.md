@@ -1,5 +1,13 @@
 # oonfeeWRT — Device Resource Budget
 
+> **v0.1.6 note (2026-09-12):** These budgets and dated hardware results
+> still apply. The optional experimental rpcd helper is manually installed and
+> runs only on demand; it adds no daemon or listener and carries no new hardware
+> budget proof merely because its source tests pass. Ordinary adoption remains
+> agent-free. Reports/Statistics reuse stored observations; topology layout is
+> browser-local. See [current capabilities](reference/capabilities.md) before
+> interpreting a historical prohibition or proposed package as current scope.
+
 The wrapper promise is worthless if the wrapper degrades the router. A management
 tool that costs you 15% of your routing throughput is not a management tool, it's
 a tax.
@@ -8,7 +16,7 @@ This document sets hard budgets, explains where the cost actually comes from
 (it is not where most people assume), and lists the design rules that hit the
 budget.
 
-**v0.1.5 boundary:** Phase 5 produced a
+**v0.1.5–v0.1.6 boundary:** Phase 5 produced a
 [flow-visibility feasibility review](reference/flows-feasibility.md), not a
 runtime feature. The release installs no `nlbwmon`, `netifyd`, or DPI package
 and claims no application identity or flow history. Any future pilot remains

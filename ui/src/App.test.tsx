@@ -357,7 +357,7 @@ describe('App session boundaries', () => {
     }
     const divider = screen.getByRole('separator', { name: 'Controller tools' })
     expect(divider.getAttribute('data-expanded')).toBe('false')
-    expect(screen.getByRole('button', { name: 'Adopt a device' }).nextElementSibling).toBe(divider)
+    expect(screen.getByRole('button', { name: 'Adopt a device' }).parentElement?.nextElementSibling).toBe(divider.parentElement)
     expect(divider.nextElementSibling).toBe(screen.getByRole('button', { name: 'Settings' }))
     expect(divider.nextElementSibling?.nextElementSibling).toBe(screen.getByRole('button', { name: 'Accounts' }))
     expect(screen.getByRole('button', { name: 'Accounts' }).nextElementSibling).toBe(screen.getByRole('button', { name: 'Logs' }))

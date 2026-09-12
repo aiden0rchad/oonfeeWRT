@@ -10,11 +10,21 @@ It is **not firmware**. The controller runs on a Linux or macOS computer, NAS, m
 
 | If you want… | Start here |
 |---|---|
+| A populated read-only preview without connecting a router | [Isolated demo](../guide/demo.md) |
 | The shortest supported setup | [Quick start](quick-start.md) |
 | A standalone Linux or macOS executable | [Install the binary](../installation/binary.md) |
 | A container on a NAS, server, or Docker Desktop | [Install with Docker](../installation/docker.md) |
 | HTTPS access through an existing host | [Put a reverse proxy in front](../installation/reverse-proxy.md) |
 | To connect the first router | [First adoption](first-adoption.md) |
+
+::: info v0.1.6 and schema 25
+Installation examples target **v0.1.6**, schema **25**, including Statistics,
+Reports, Alerts, editable topology, Firmware catalogue checks, Integrations,
+Accounts, and mobile improvements. Preserve a matching pre-upgrade recovery
+unit before opening existing controller data; returning to v0.1.5 requires
+its schema-23 database, keyring, runtime passphrase, and binary/image.
+The isolated demo has no database or router connection and performs no migration.
+:::
 
 ## What you need
 
@@ -103,15 +113,24 @@ overwritten.
 ## What the interface covers
 
 - **Dashboard:** fleet state, clients, Internet reachability and traffic history, topology summary, warnings, and controller-host speed tests.
-- **Statistics (development after v0.1.5):** 6-hour through 30-day stored WAN,
+- **Statistics:** 6-hour through 30-day stored WAN,
   system, interface, and available stable-radio rollups, with exact series
   provenance and visible missing-bucket coverage.
+- **Reports:** comparable periods, sample-weighted WAN summaries, coverage,
+  and CSV export; not billing-grade usage or a complete uptime guarantee.
+- **Alerts:** sustained device-offline and WAN latency/loss conditions, durable
+  incidents, and optional explicitly enabled HTTPS webhook delivery.
 - **Topology:** current and historical links with source and confidence information. v0.1.4 uses fresh multi-hop FDB/LLDP evidence to avoid presenting one managed device as directly attached to several upstream devices; raw intervals remain available in history.
 - **Radios:** radio inventory, channel plans, utilization evidence, and explicit RF scans.
 - **Devices:** management mode, health, capabilities, collection overhead, polling, ACL refresh, mode-appropriate optional actions, and un-adoption. Older adoptions need a separately reviewed ACL refresh only if you want router-clock status; ordinary management continues without re-adoption.
 - **Client Devices:** client inventory, filters, and a time-aligned observability workspace.
 - **Policy Engine:** objects, named exact-MAC policy sets, firewall/NAT/route records, whole-zone forwarding, concrete set resolution, and inspectable desired state.
-- **Settings:** networks, DHCP, WLANs, AP groups, roaming, mesh backhauls, wireless uplinks, accounts, diagnostics, and backup/restore.
+- **Firmware:** stored identity and manual official same-branch catalogue checks;
+  no download, staging, flashing, or automatic helper installation.
+- **Integrations:** explicitly requested AdGuard Home aggregate checks and
+  optional-helper WireGuard peer/counter reads, without service configuration.
+- **Accounts:** your password and sessions; Owners can also administer accounts.
+- **Settings:** networks, DHCP, WLANs, AP groups, roaming, mesh backhauls, wireless uplinks, diagnostics, and backup/restore.
 - **Logs:** General and Audit events with provenance and coverage information, an active IPv6 no-default-route condition, and fresh router-clock skew warnings.
 
 Unavailable features are capability-gated. For example, a legacy `swconfig` device may provide port observations without supporting managed per-port VLAN changes.
@@ -135,10 +154,10 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
   not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
 - Existing networks upgrade to **Router managed** IPv6 and receive no IPv6
-  router write merely from installing v0.1.5. Prefix delegation and Disabled
+  router write merely from installing v0.1.6. Prefix delegation and Disabled
   remain explicit Preview-and-Apply choices.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
-- Cloud remote access, automatic NAT traversal, native mobile apps, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.5. Flow visibility is documented as a gated feasibility track only.
+- Cloud remote access, automatic NAT traversal, native mobile apps, firmware execution, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.6. Flow visibility is documented as a gated feasibility track only.
 
 ## Next steps
 

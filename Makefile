@@ -39,6 +39,7 @@ check: ui
 	go test -count=1 ./...
 	go vet ./...
 	npm --prefix ui test
+	npm --prefix ui run build:demo
 	./tools/budget_check.sh
 	./tools/secret-scan.sh --tree
 

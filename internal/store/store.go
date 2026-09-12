@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 23
+const schemaVersion = 25
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -41,6 +41,8 @@ const secretSchemaVersion = 14
 // NOT EXISTS, so a changed column list is silently ignored on a database that
 // already exists. Anything that changes an existing table has to appear here.
 var migrations = map[int][]string{
+	24: {alertSchemaSQL},
+	25: {integrationSchemaSQL},
 	2: {
 		// The address a client was last seen at, as observed. Distinct from
 		// fixed_ip, which is a reservation an operator asked for — conflating

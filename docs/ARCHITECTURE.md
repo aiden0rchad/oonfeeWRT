@@ -1,5 +1,17 @@
 # oonfeeWRT — Architecture
 
+> **v0.1.6 supersession (2026-09-12):** This document preserves dated
+> architecture and hardware evidence. v0.1.6 uses schema 25
+> (23 → 24 alerts → 25 encrypted integrations). The
+> historical absolute prohibition on controller-authored device code is
+> superseded only by the explicitly opt-in, manually installed, on-demand
+> read-only rpcd helper; no daemon, listener, general command channel, automatic
+> adoption install, or firmware execution is authorized. Ordinary management
+> remains agent-free. See [current architecture](concepts/architecture.md),
+> [capability boundaries](reference/capabilities.md), and
+> [v0.1.6 changes](reference/releases.md#development-after-v0-1-5). The helper
+> remains experimental source, without completed SDK or hardware validation.
+
 > Target platform assumption: **stock OpenWrt**, current stable (the 25.12 series
 > at time of writing; 24.10 also supported). Verify ubus/package specifics against
 > your actual target release before relying on them — this document flags uncertain

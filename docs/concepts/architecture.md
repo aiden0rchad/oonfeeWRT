@@ -5,10 +5,19 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture shipped in **oonfeeWRT v0.1.5**. For the
+This page describes the architecture of **oonfeeWRT v0.1.6**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
+
+::: info v0.1.6 extensions
+v0.1.6 adds Reports, Alerts, firmware-catalogue and
+integration readers, browser-local topology layout, an isolated demo, and
+mobile presentation. Schema 24 persists alerts; schema 25 persists encrypted
+AdGuard settings. The optional manually installed rpcd helper is an explicit
+extension to the historical no-controller-code-on-router rule. It does not
+replace ordinary agent-free adoption or add a daemon or firmware-write path.
+:::
 
 ## The short version
 
@@ -24,7 +33,8 @@ oonfeeWRT is a self-hosted controller for stock OpenWrt. One Go process:
 - previews, applies, verifies, and confirms those changes.
 
 The controller runs on a Linux or macOS computer, NAS, mini-PC, or server. No
-oonfeeWRT executable runs on a managed router.
+oonfeeWRT executable is required on a router for ordinary adoption or polling.
+The separate experimental helper is optional and runs on demand through rpcd.
 
 ```text
 Browser
@@ -63,9 +73,10 @@ The React/TypeScript interface is built into `ui/dist` and embedded in the Go
 binary. It talks to the controller over same-origin REST and WebSocket
 connections, so a normal deployment has no cross-origin configuration.
 
-The stable v0.1.5 workspaces are Dashboard, Topology, Radios, Devices, Client
-Devices, Policy Engine, Settings, Adopt a device, and Logs. Current development
-source adds Statistics after Dashboard and a dedicated Accounts workspace.
+The existing workspaces are Dashboard, Topology, Radios, Devices, Client
+Devices, Policy Engine, Settings, Adopt a device, and Logs. v0.1.6
+adds Statistics, Reports, Alerts, Firmware, Integrations, and a dedicated
+Accounts workspace.
 Settings, Accounts, and Logs form the Controller group, in that order, at the
 foot of the sidebar. Accounts opens My account for every signed-in role, with
 an additional Manage accounts tab for owners. These controls remain under
@@ -75,6 +86,19 @@ polling tier. What appears in each workspace depends on measured device
 capabilities; unavailable evidence is not silently replaced with zeroes.
 Principal routes share one PageHeader/action pattern and have responsive
 light/dark browser coverage.
+
+Browser preferences are not controller desired state. Theme,
+navigation expansion, inventory view, and topology arrangement live locally
+when storage is available. Navigation expansion and topology arrangement use
+an account-scoped key; Current and History maps have separate positions.
+These preferences do not synchronize to another browser or survive clearing
+site data, and they never change router links or permissions.
+
+The [isolated demo](../guide/demo.md) is built into `ui/demo-dist`, not the
+embedded `ui/dist`. Compile-time replacement excludes the real API, live
+channel, and service-worker registration; a connection-blocking policy and fail-closed adapters keep it synthetic
+and read-only. The installed-app metadata adds no offline API cache or push
+notification service.
 
 ### Store and keyring
 
@@ -137,7 +161,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.5
+failed topology read from looking like an empty network. The exact v0.1.6
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ### Shareable compatibility evidence
@@ -318,8 +342,8 @@ access. Review [Requirements](../reference/requirements.md) before deployment.
 
 The architecture excludes:
 
-- controller-authored agents, daemons, services, firmware, or package feeds on
-  routers;
+- a required controller-authored router daemon, listener, general command
+  service, custom firmware, or package feed;
 - a cloud relay, NAT traversal service, or multi-site broker;
 - a separate database server;
 - automatic package installation during adoption; and
@@ -327,6 +351,11 @@ The architecture excludes:
 
 Those exclusions define the trust and support boundary; they are not missing
 boxes in the diagram.
+
+The experimental [optional helper](../guide/firmware.md) is a narrow, explicitly
+installed read-only rpcd exception. Firmware catalogue results do not execute
+an upgrade. [Integration checks](../guide/integrations.md) do not configure DNS
+or VPNs, and [Alerts](../guide/alerts.md) does not perform automatic remediation.
 
 ## Continue reading
 

@@ -1,6 +1,6 @@
 # Install with Docker
 
-The v0.1.5 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
+The v0.1.6 container is a multi-platform Linux image containing one static controller binary, CA roots, licenses, and release material. The final image has no shell or package manager.
 
 > **Outcome:** oonfeeWRT runs as non-root in a hardened container, publishes
 > HTTP on host loopback by default (or one explicitly selected management
@@ -31,7 +31,7 @@ Keep `docker-compose.yml` and `passphrase` in this private directory. The contro
 ```sh
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.5/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.6/deploy/docker-compose.yml
 ```
 
 The file pins the image version through the required `OONFEE_VERSION` value instead of silently following `latest`.
@@ -48,14 +48,14 @@ The Compose service runs as UID/GID 65532, so the bind-mounted mode-`0600` file 
 
 This is the controller runtime/boot passphrase, not an owner account password. Store a protected recovery copy separately.
 
-## 4. Pin and start v0.1.5
+## 4. Pin and start v0.1.6
 
 Store the image tag and host publish address in `.env` so every Compose
 lifecycle command uses the same values:
 
 ```sh
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.5' \
+  'OONFEE_VERSION=v0.1.6' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
@@ -64,7 +64,7 @@ docker compose up -d
 The release image is:
 
 ```text
-ghcr.io/aiden0rchad/oonfeewrt:v0.1.5
+ghcr.io/aiden0rchad/oonfeewrt:v0.1.6
 ```
 
 The supplied service hardening includes:
@@ -97,7 +97,7 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080) on the controller host and c
 
 ## Choose where Docker publishes HTTP
 
-The v0.1.5 Compose file keeps loopback as the safe default and accepts
+The v0.1.6 Compose file keeps loopback as the safe default and accepts
 `OONFEE_HTTP_BIND`, a Compose-only host publish IP. It does not replace
 `OONFEE_LISTEN`; the container must continue listening on `:8080` internally.
 
@@ -156,16 +156,16 @@ Host mode exposes the daemon directly according to its listen address. Review ho
 
 ## Optional: verify the published image signature
 
-Install `cosign` using Sigstore's official instructions, then verify the v0.1.5 GitHub Actions identity:
+Install `cosign` using Sigstore's official instructions, then verify the v0.1.6 GitHub Actions identity:
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.5" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.6" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.5
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.6
 ```
 
-Deployments should pin `v0.1.5` or the reported digest. The `0.1.5`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
+Deployments should pin `v0.1.6` or the reported digest. The `0.1.6`, `0.1`, and `latest` aliases may resolve to the same manifest but are not immutable deployment intent.
 
 ## Optional: run without Compose
 
@@ -195,7 +195,7 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.5
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.6
 ```
 
 ## Stop and restart safely

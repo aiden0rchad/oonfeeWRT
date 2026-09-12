@@ -1,5 +1,17 @@
 # oonfeeWRT — UI Specification
 
+> **v0.1.6 presentation update (2026-09-12):** The current interface uses
+> original illustrations, Devices Cards/List, explicit client count scopes,
+> editable account-scoped browser topology layout, Reports, Alerts, Firmware,
+> Integrations, and responsive navigation. Consult the
+> [visual tour](getting-started/visual-tour.md) and
+> [current capability matrix](reference/capabilities.md), not a historical
+> mockup, for available behavior. Missing evidence remains unavailable; icons
+> do not imply hardware identity or VM nesting. The optional on-demand read
+> helper is an experimental, manual exception to blanket no-device-code
+> claims, not automatic installation or firmware execution. Historical v0.1.5
+> artifacts and historical validation claims below are unchanged.
+
 Modeled originally on UniFi OS 5.1.19 / Network 10.4.57 (July 2026), dark
 theme, and re-baselined on **2026-08-18** against the stable **UniFi Network
 10.5.67** Client Observability and Safe Ops screens.

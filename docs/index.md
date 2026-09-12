@@ -29,30 +29,33 @@ features:
   - title: Preview, rollback, confirm
     details: Configuration is reviewed first, staged through UCI, protected by OpenWrt's rollback timer, and confirmed only after the controller reads the expected state.
   - title: Useful fleet visibility
-    details: See Internet health and throughput when one usable main-table WAN is proved and its exact runtime device has RX/TX history, including PPPoE, plus clients, device telemetry, topology history, radios, events, management overhead, and controller-host speed tests. Development builds add 6-hour through 30-day Statistics.
+    details: See Internet health and throughput from a proved WAN path, retained Statistics, coverage-aware Reports, sustained Alerts, clients, device telemetry, topology history, radios, events, and controller-host speed tests.
   - title: Local security boundaries
-    details: Local accounts and roles, scoped router access, encrypted stored secrets, redacted diagnostics, and no cloud broker or controller-authored router package.
+    details: Local accounts and roles, scoped router access, encrypted stored secrets, redacted diagnostics, no cloud broker, and no required custom router agent.
   - title: Recovery designed in
     details: Export encrypted portable backups, validate them in staging, restore through a controlled restart, and keep router writes suppressed until an owner reviews the result.
 ---
 
-<p class="doc-kicker">Documentation for v0.1.5</p>
+<p class="doc-kicker">Documentation for v0.1.6</p>
 
-::: tip Current release — v0.1.5
-Published September 10, 2026. This release adds managed and monitor-only
-adoption, multi-subnet observation, reusable exact-MAC policy sets, and a
-consistent responsive UI. Phase 5 flow visibility remains feasibility work;
-no DPI package is installed. [See what changed](/reference/releases) or
-[follow the schema-safe upgrade guide](/installation/upgrades).
+::: tip Current release — v0.1.6
+This release adds a read-only, gap-aware
+[Statistics workspace](/guide/statistics) for retained WAN and device
+telemetry, [Reports](/guide/reports), [Alerts](/guide/alerts), illustrated
+inventories and editable topology, a separate [Accounts workspace](/operations/accounts),
+[Firmware catalogue checks](/guide/firmware), [Integrations](/guide/integrations),
+and [mobile/installed-app improvements](/operations/mobile-app). Explore the
+[isolated synthetic demo](/guide/demo) without connecting a controller or router.
+Firmware checks do not download or flash images; the optional read-only router
+helper remains a manual opt-in. Flow visibility, SNMP, Web Push, and complete
+feature parity are not claimed. [See what changed](/reference/releases).
 :::
 
-::: info Current development
-Source after v0.1.5 adds a read-only, gap-aware
-[Statistics workspace](/guide/statistics) for retained WAN and device
-telemetry, a separate [Accounts workspace](/operations/accounts), clearer
-adoption consent, compact source explanations, and empty-state/telemetry
-reliability fixes. These changes are not included in the published v0.1.5
-artifacts. [Read the development change summary](/reference/releases#development-after-v0-1-5).
+::: info Schema-safe upgrades
+v0.1.6 uses **schema 25**, up from v0.1.5's schema 23. Preserve the matching
+pre-upgrade database, keyring, runtime passphrase, and old binary/image before
+starting the new controller. A binary-only downgrade cannot restore older
+state. [Follow the migration and rollback guide](/installation/upgrades).
 :::
 
 ## One control plane, explicit boundaries
@@ -66,8 +69,12 @@ It is **not firmware**. Nothing is installed on a router when you start the
 controller, discover a device, or add an address. Adoption can create one
 scoped `oonfeewrt` login and one reviewable rpcd ACL after consent. Managed and
 Monitor only modes install different ACL content; `oonfeewrt-monitor` grants
-observation reads only. The only optional package workflow in v0.1.5 is LLDP,
+observation reads only. The controller-managed optional package workflow is LLDP,
 with a separate plan and rollback.
+
+v0.1.6 also includes source for a separately opt-in, manually packaged rpcd helper.
+It is not installed by adoption and does not add a daemon, listener, arbitrary
+command channel, or firmware flashing. Ordinary management remains agent-free.
 
 <div class="status-strip">
   <span class="status-pill">OpenWrt 21.02+</span>
@@ -112,7 +119,7 @@ with a separate plan and rollback.
   </div>
   <div class="capability-card">
     <h3>Devices and clients</h3>
-    <p>Firmware, load, memory, throughput, radio series, management overhead, adjustable polling, client presence and attribution, and a joined observability workspace. Current development adds gap-aware historical Statistics.</p>
+    <p>Firmware identity, load, memory, throughput, radio series, management overhead, adjustable polling, client presence and attribution, clearer inventories, and gap-aware historical Statistics.</p>
   </div>
   <div class="capability-card">
     <h3>Topology and RF</h3>
@@ -140,15 +147,16 @@ with a separate plan and rollback.
 
 ## See the controller
 
-<figure class="docs-screenshot">
-  <img src="./images/dashboard-overview.jpg" alt="oonfeeWRT dashboard showing Internet health, speed tests, fleet status, topology, and recent events" loading="lazy">
-  <figcaption>The live dashboard keeps health, provenance, trends, and gaps together instead of reducing the network to a single status color.</figcaption>
-</figure>
+These screenshots show the v0.1.6 interface using
+a real development controller in dark mode. The documentation supports both
+light and dark themes; screenshots remain dark. Select any image to see it at
+full size.
 
-<figure class="docs-screenshot">
-  <img src="./images/radios-channel-plan.jpg" alt="oonfeeWRT radio inventory and channel planning screen" loading="lazy">
-  <figcaption>Radio inventory and evidence-aware channel planning. Disruptive scans stay explicit and acknowledged.</figcaption>
-</figure>
+<DocScreenshot src="dashboard-overview" :width="1499" :height="982" alt="oonfeeWRT Dashboard with fleet health, Internet observations, and sidebar navigation" caption="Start with fleet health, then follow a device, client, or historical trend for more detail." />
+
+<DocScreenshot src="statistics-internet" :width="1499" :height="982" alt="Statistics workspace showing the 24-hour range and Internet history charts" caption="Statistics brings retained traffic and ICMP observations into a dedicated workspace. This capture uses the 24-hour range, with gaps kept visible." />
+
+[Take the visual tour of every workspace →](/getting-started/visual-tour)
 
 ## What runs where
 
@@ -159,8 +167,10 @@ with a separate plan and rollback.
 | Stock OpenWrt | Each managed router or AP | Networking, wireless, firewall, DHCP, ubus/rpcd, rollback |
 | Optional reverse proxy | Usually the controller host | Trusted TLS and secure remote access over an existing routed network or VPN |
 
-The controller does not provide cloud access, NAT traversal, firmware, or a
-router-hosted agent. Remote sites need an existing management route or VPN.
+The controller does not provide cloud access, NAT traversal, or custom firmware.
+Remote sites need an existing management route or VPN. The optional
+helper is a separate read-only integration component, not the controller
+running on a router or a remote-access tunnel.
 
 ## A workflow designed for safe changes
 
@@ -182,7 +192,7 @@ router-hosted agent. Remote sites need an existing management route or VPN.
 
 ## Current boundaries
 
-oonfeeWRT v0.1.5 deliberately does not claim capabilities it cannot prove.
+oonfeeWRT v0.1.6 deliberately does not claim capabilities it cannot prove.
 
 - One managed Gateway; multiple reachable monitor-only routers are allowed but
   are not failover gateways or configuration targets. No controller high
@@ -197,7 +207,7 @@ oonfeeWRT v0.1.5 deliberately does not claim capabilities it cannot prove.
   Preview with active MAC intent. Existing block/fixed-address intent can still
   be cleared per client. Portable restore deliberately clears this nonportable
   evidence; stale or implausibly future-dated observations are rejected.
-- No native TLS, SSO, cloud broker, mobile app, DPI, application identity,
+- No native TLS, SSO, cloud broker, native mobile app, firmware flashing, DPI, application identity,
   PoE control, switch ACL management, or gateway-run speed test. The published
   flow feasibility plan does not ship or install a flow package.
 - IPv4 on-demand discovery probes eligible local subnets no wider than `/22`

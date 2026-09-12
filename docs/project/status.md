@@ -1,63 +1,38 @@
 # Where this project is
 
-> **Current release status — reviewed 2026-09-11**
+> **v0.1.6 release preparation — 2026-09-12:** The approved release target is
+> v0.1.6, using database schema **25**. Its exact tagged workflow and GitHub
+> release establish publication, not this source banner. Historical v0.1.5
+> remains schema 23 and its immutable notes/artifacts are unchanged.
 >
-> The current public release is
-> [`v0.1.5`](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.5),
-> using database schema 23. It adds Managed/Monitor only device authority,
-> reusable exact-MAC policy sets, and consistent responsive page treatment.
-> The tag workflow and GitHub release are authoritative for checksummed
-> standalone archives and the signed `linux/amd64`/`linux/arm64` image.
+> v0.1.6 adds Reports, durable Alerts, illustrated inventory, editable
+> browser-local topology, Statistics, a separate Accounts workspace, official
+> firmware catalogue checks, read-only AdGuard/WireGuard integrations, mobile
+> presentation, and an isolated local demo. Ordinary adoption remains
+> agent-free. The optional manually installed read-only rpcd helper is
+> experimental source; matching SDK and real-router validation remain pending.
 >
-> The automatic schema path is 20 → 21 → 22 → 23. Existing devices remain
-> Managed; policy-set storage is added; then source-relative client provenance
-> with bounded MAC lookup indexes and the hardened one-managed-Gateway
-> uniqueness guard are added.
-> Migration configures no router. Monitor-only devices use the distinct
-> read-only `oonfeewrt-monitor` ACL and stay observable while desired/site
-> configuration and optional mutation paths are fenced.
-> A capability-proved, separately acknowledged RF scan remains available as a
-> transient active observation with client-disruption risk, not persistent
-> configuration authority.
-> MAC policy requires a stored local observation from the currently adopted
-> Managed Gateway. Monitor-only observations neither satisfy nor contaminate
-> that proof. Missing proof gates set creation/update and MAC drafts and makes
-> active MAC intent block Preview rather than render an ineffective rule.
-> Existing block/fixed-address intent remains clearable one client at a time.
+> Upgrade follows **23 → 24 → 25**: persistent alert state, then encrypted
+> integration settings. Migration creates no rules, service connection,
+> helper installation, or router configuration. Preserve the matching
+> pre-upgrade schema-23 database, keyring, runtime passphrase, and v0.1.5
+> executable/image for rollback. A v0.1.5 binary cannot open schema 24 or 25.
+> Portable restore pauses external alert delivery and cancels queued
+> notifications until an Owner reviews and explicitly enables delivery again.
 >
-> Phase 5 remains feasibility work: no DPI or flow package ships. The final
-> issue #25 multi-router topology retest and the documented IPv6, third-AP,
-> mesh/uplink, Filogic/class-B, and literal peer-isolation hardware proofs
-> remain pending; source/release checks are not presented as physical evidence.
+> Firmware execution, SNMP, Web Push, Telegram-specific delivery, full
+> localization, VM inventory, public demo hosting, and DPI remain outside
+> this release. A catalogue match is not a security or flash-readiness test.
+> Existing issue #25, IPv6, third-AP, mesh/uplink, Filogic/class-B, and
+> peer-isolation hardware proofs remain pending. No visual refresh promotes
+> earlier lab evidence to a new hardware certification.
 >
-> The detailed handoff below records historical development and physical-lab
-> checkpoints through August 23. Statements using “current” inside that record
-> are relative to their documented checkpoint unless this banner explicitly
-> supersedes them. The active public release and schema are v0.1.5/schema 23;
-> §5br remains the historical schema-19 live-lab checkpoint.
-
-## Current development after v0.1.5 — 2026-09-11
-
-Current source adds the read-only Statistics workspace with a six-hour default,
-gap-preserving trends, exact history coverage, and per-source limitations.
-Accounts moves out of Settings into its own bottom-sidebar workspace, between
-Settings and Logs. It retains My account for all signed-in users and
-owner-only Manage accounts; the role selector has aligned fields and
-accessible contextual help.
-
-The adoption flow groups its scoped-access explanation with explicit consent.
-Routine historical/source limitations have compact expandable explanations
-and recovery guidance, while current failures and write-risk gates remain
-visible. Backend/frontend fixes preserve empty collection contracts, prevent
-late device-overhead responses from crossing device selection, keep current
-client association and retry attribution consistent, and expose series lookup
-failures rather than presenting them as no data.
-
-These are source changes after the public v0.1.5 tag, not a new release or
-replacement for its immutable artifacts. They add no router-write authority
-and do not close the outstanding hardware proofs above. See the
-[development change summary](../reference/releases.md#development-after-v0-1-5)
-and linked operating guides; the historical handoff below remains unchanged.
+> See [v0.1.6 notes](../releases/v0.1.6.md), the
+> [release summary](../reference/releases.md#development-after-v0-1-5),
+> [capabilities](../reference/capabilities.md), and
+> [release checklist](./PRODUCT-REFRESH.md). Dated sections below retain their
+> original checkpoint and schema. In particular, §5br remains the historical
+> schema-19 live-lab checkpoint, not the current release state.
 
 ---
 

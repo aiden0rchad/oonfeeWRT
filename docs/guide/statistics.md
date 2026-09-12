@@ -5,9 +5,8 @@ description: Read WAN, system, interface, and radio history without hiding missi
 
 # Statistics and historical telemetry
 
-::: warning Development feature
-Statistics was added after the v0.1.5 release. It is available in the current
-development source, not in the published v0.1.5 binary or container image.
+::: info Added in v0.1.6
+Statistics is included in the v0.1.6 binary and container image.
 The underlying rollup API and retention described here already exist in
 v0.1.5; this workspace is the new presentation layer.
 :::
@@ -53,6 +52,12 @@ silently increase management traffic. The newest-bucket time tells you when
 the stored evidence was last populated; it is not the browser refresh time.
 
 ## Read the Internet history
+
+<DocScreenshot
+  src="statistics-internet" :width="1499" :height="982"
+  alt="Statistics Internet traffic, latency, and loss charts with retained observations and collection gaps"
+  caption="Use one time range to compare traffic and ICMP evidence. History gaps describe missing stored observations; they do not establish downtime or measured zero traffic."
+/>
 
 The Internet section combines four related—but distinct—kinds of evidence:
 
@@ -106,11 +111,23 @@ ordinary Internet uplink, receive normally corresponds to download and
 transmit to upload, but unusual routing, tunnelling, or interface layouts can
 change how that should be interpreted.
 
+For an equal-length period comparison and an exportable summary, use
+[Reports](./reports.md). Reports uses valid completed rollups and explicit
+coverage too; it is not a billing counter or SLA certificate. For sustained
+conditions, use [Alerts](./alerts.md), whose hold windows require continuous
+fresh evidence rather than visual interpolation across chart gaps.
+
 ## Read device history
 
 Choose an adopted managed or monitor-only device in **Device detail**. The
 controller first asks for that device's series catalog, then requests only the
 series keys proven to exist.
+
+<DocScreenshot
+  src="statistics-device" :width="1499" :height="982"
+  alt="Statistics Device history section with interface and stable-radio controls"
+  caption="Device history follows the selected device, interface, and stable radio. Changing this selection does not change the managed Gateway or request new router collection."
+/>
 
 ### System
 

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vitepress .",
-    "build": "vitepress build .",
+    "build": "npm run check:screenshots && vitepress build .",
+    "check:screenshots": "node scripts/check-screenshots.mjs",
     "preview": "vitepress preview ."
   },
   "devDependencies": {
