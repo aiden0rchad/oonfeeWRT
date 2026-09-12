@@ -268,7 +268,10 @@ In the browser:
     observation. Monitor-only observations neither satisfy nor contaminate that
     proof. Clear existing block/fixed-address intent per client if needed, or use
     network/zone or explicit IPv4 scope instead.
-11. Open **Settings → Backup & Restore** and confirm no restore-based router-write suppression is active after an ordinary upgrade.
+11. Open **Settings → Backup & Restore** and confirm the pre-upgrade router-write
+    gate state is preserved. Existing restore-based suppression must remain
+    active until its separate recovery review is complete. Do not resume
+    router writes merely to validate an upgrade.
 12. Run Preview before the next Apply; do not assume desired and observed state still match after downtime.
 13. Review **Statistics**, **Reports**, and the separate **Accounts** workspace.
     Missing historical buckets must remain gaps, not zero activity.

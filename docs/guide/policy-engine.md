@@ -133,7 +133,8 @@ only when the currently adopted Managed Gateway has stored it as `local`.
 
 Monitor-only AP, Switch, and routed-device observations remain visible but
 neither satisfy nor contaminate that proof—even after the observation device is
-un-adopted. An upgrade starts without schema-23 provenance; portable restore
+un-adopted. An upgrade from before schema 23 starts without that provenance;
+v0.1.5 → v0.1.6 preserves existing provenance. Portable restore
 deliberately clears it because source-controller evidence is not destination
 write authority. Authorization rejects observations older than 30 days or more
 than five minutes in the future even if asynchronous cleanup has not run. The
