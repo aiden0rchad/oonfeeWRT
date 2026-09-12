@@ -171,7 +171,7 @@ Schema-25 tests cover direct migration, bounded records, malformed-check
 rejection, encrypted recovery validation, and refusal to downgrade. The app
 manifest is served with an explicit MIME type for minimal containers.
 
-Local pre-publication checks on September 12 passed 539 UI unit tests, 47
+Local pre-publication checks on September 12 passed 543 UI unit tests, 47
 browser tests, production/demo builds, the bundle budget, full Go tests, vet,
 module checks, focused race reruns, and the earlier full race suite. An isolated
 arm64 container passed backup/restore smoke validation. Documentation checks

@@ -51,11 +51,44 @@ describe('Alerts', () => {
     await screen.findByText('Alerts could not refresh: storage unavailable')
     expect(screen.queryByText('No retained incidents.')).toBeNull()
   })
+  it('shows the loaded delivery setting immediately and preserves an unsaved choice through refresh', async () => {
+    mocks.alerts.mockResolvedValue({ ...response(), delivery: { ...response().delivery, configured: true, enabled: true, host: 'notify.example' } })
+    render(<Alerts devices={devices} session={session()} />)
+    const enabled = await screen.findByRole('checkbox', { name: 'Enable external notification delivery' }) as HTMLInputElement
+    expect(enabled.checked).toBe(true)
+    fireEvent.click(enabled)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(mocks.alerts).toHaveBeenCalledTimes(2))
+    expect(enabled.checked).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Save delivery settings' }))
+    await waitFor(() => expect(mocks.saveAlertDelivery).toHaveBeenCalledWith({ enabled: false }))
+  })
   it('retains unresolved incident counts when evidence is unavailable or evaluation stops', async () => {
     mocks.alerts.mockResolvedValue({ ...response(), counts: { open_incidents: 4 }, evaluated_at: Date.now() / 1000 - 600 })
     render(<Alerts devices={devices} session={session()} />)
     await screen.findByText('Open retained incidents')
     expect(screen.getByText('4')).toBeTruthy()
     expect(screen.getByText(/Rule evaluation is not recent/)).toBeTruthy()
+  })
+  it.each(['disable', 'remove'] as const)('retains the acknowledged delivery %s when the following refresh fails', async (operation) => {
+    const delivery = { ...response().delivery, configured: true, enabled: true, host: 'notify.example' }
+    mocks.alerts.mockResolvedValueOnce({ ...response(), delivery }).mockRejectedValue(new Error('refresh unavailable'))
+    mocks.saveAlertDelivery.mockResolvedValue(operation === 'remove' ? response().delivery : { ...delivery, enabled: false })
+    render(<Alerts devices={devices} session={session()} />)
+    const enabled = await screen.findByRole('checkbox', { name: 'Enable external notification delivery' }) as HTMLInputElement
+    expect(enabled.checked).toBe(true)
+    if (operation === 'remove') {
+      fireEvent.click(screen.getByRole('button', { name: 'Remove webhook' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm removal' }))
+    } else {
+      fireEvent.click(enabled)
+      fireEvent.click(screen.getByRole('button', { name: 'Save delivery settings' }))
+    }
+    await screen.findByText(/Alerts could not refresh: refresh unavailable/)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save delivery settings' }).hasAttribute('disabled')).toBe(false))
+    expect(enabled.checked).toBe(false)
+    if (operation === 'remove') expect(screen.queryByRole('button', { name: 'Remove webhook' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save delivery settings' }))
+    await waitFor(() => expect(mocks.saveAlertDelivery).toHaveBeenLastCalledWith({ enabled: false }))
   })
 })

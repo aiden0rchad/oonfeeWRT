@@ -63,7 +63,7 @@ must be recorded separately from source/fixture tests.
 
 ## Recorded pre-publication evidence — September 12, 2026
 
-- UI: 539 unit tests, 47 browser tests, production/demo builds, and bundle budget passed.
+- UI: 543 unit tests, 47 browser tests, production/demo builds, and bundle budget passed.
 - Backend: full Go tests, vet, module checks, key-package race reruns, and the
   earlier full race suite passed. Schema 23 → 25 migration and recovery checks
   passed; a stale schema expectation in container smoke validation was corrected

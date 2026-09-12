@@ -25,7 +25,8 @@ export function Alerts({ devices, session }: { devices: Device[]; session: Sessi
   const [showForm, setShowForm] = useState(false)
   const [draft, setDraft] = useState<AlertRuleInput>(newRule)
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null)
-  const [deliveryEnabled, setDeliveryEnabled] = useState(false)
+  const [deliveryEnabledDraft, setDeliveryEnabled] = useState<boolean | null>(null)
+  const deliveryEnabled = deliveryEnabledDraft ?? data?.delivery.enabled ?? false
   const [url, setURL] = useState('')
   const [token, setToken] = useState('')
   const [clearToken, setClearToken] = useState(false)
@@ -52,13 +53,19 @@ export function Alerts({ devices, session }: { devices: Device[]; session: Sessi
     const timer = window.setInterval(() => { setNow(Date.now() / 1000); void refresh() }, 30_000)
     return () => { clearInterval(timer); generation.current++; request.current?.abort() }
   }, [refresh])
-  useEffect(() => { setDeliveryEnabled(data?.delivery.enabled ?? false) }, [data?.delivery.enabled])
 
   async function mutate(action: () => Promise<unknown>, message: string) {
     setBusy(true); setError(''); setNotice('')
     try { await action(); setNotice(message); await refresh(); return true }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false }
     finally { setBusy(false) }
+  }
+
+  async function saveDelivery(settings: Parameters<typeof api.saveAlertDelivery>[0]) {
+    const delivery = await api.saveAlertDelivery(settings)
+    generation.current++
+    request.current?.abort()
+    setData((current) => current ? { ...current, delivery } : current)
   }
 
   function edit(rule?: AlertRule) {
@@ -145,8 +152,8 @@ export function Alerts({ devices, session }: { devices: Device[]; session: Sessi
         {owner && <form onSubmit={async (event) => {
           event.preventDefault()
           const settings = { enabled: deliveryEnabled, ...(url ? { url } : {}), ...(clearToken ? { bearer_token: '' } : token ? { bearer_token: token } : {}) }
-          const saved = await mutate(() => api.saveAlertDelivery(settings), 'Notification delivery saved.')
-          setToken(''); setURL(''); if (saved) setClearToken(false)
+          const saved = await mutate(() => saveDelivery(settings), 'Notification delivery saved.')
+          setToken(''); setURL(''); if (saved) { setClearToken(false); setDeliveryEnabled(null) }
         }}>
           <fieldset className="alerts-fields" disabled={busy}>
             <Field label={data.delivery.configured ? 'Replace webhook URL (optional)' : 'HTTPS webhook URL'} type="url" value={url} placeholder="https://notifications.example/webhook" autoComplete="off" onChange={(event) => setURL(event.target.value)} />
@@ -157,7 +164,7 @@ export function Alerts({ devices, session }: { devices: Device[]; session: Sessi
           <label className="alerts-checkbox"><input type="checkbox" checked={deliveryEnabled} disabled={busy} onChange={(event) => setDeliveryEnabled(event.target.checked)} />Enable external notification delivery</label>
           <div className="alerts-actions"><Button type="submit" kind="primary" disabled={busy}>Save delivery settings</Button>
             {data.delivery.configured && (confirmClear ? <><span>Remove this destination?</span><Button disabled={busy} onClick={async () => {
-              if (await mutate(() => api.saveAlertDelivery({ enabled: false, url: '', bearer_token: '' }), 'Webhook removed.')) { setConfirmClear(false); setURL(''); setToken('') }
+              if (await mutate(() => saveDelivery({ enabled: false, url: '', bearer_token: '' }), 'Webhook removed.')) { setConfirmClear(false); setURL(''); setToken(''); setDeliveryEnabled(null) }
             }}>Confirm removal</Button><Button disabled={busy} onClick={() => setConfirmClear(false)}>Cancel</Button></> : <Button disabled={busy} onClick={() => setConfirmClear(true)}>Remove webhook</Button>)}
           </div>
         </form>}
