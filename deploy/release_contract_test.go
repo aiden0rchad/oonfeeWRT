@@ -96,7 +96,7 @@ func TestReleaseBuildContract(t *testing.T) {
 	}
 	for _, required := range []string{
 		`"GOROOT"`, `"GOVERSION"`, "GO_LICENSE_SHA256", "VETTED_SHA256",
-		"ca-certificates-bundle", "20260611-r0",
+		"ca-certificates-bundle", "20260611-r0", "LUCIDE_ORBIT_SHA256", "lucide-orbit",
 	} {
 		if !strings.Contains(string(licenseGenerator), required) {
 			t.Errorf("license generator lost pinned runtime inventory %q", required)
@@ -161,6 +161,8 @@ func TestReleaseBuildContract(t *testing.T) {
 		"License expression: MPL-2.0 AND MIT",
 		"Mozilla Public License Version 2.0",
 		"Copyright (c) 2013-2014 Timo Teräs",
+		"Project mark: Lucide Orbit (ISC)", "ISC License",
+		"Copyright (c) 2026 Lucide Icons and Contributors",
 	} {
 		if !strings.Contains(string(thirdPartyLicenses), required) {
 			t.Errorf("third-party license artifact lost %q", required)
@@ -185,6 +187,43 @@ func TestReleaseBuildContract(t *testing.T) {
 	for _, line := range strings.Split(string(compose), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "network_mode:") {
 			t.Error("compose must keep host networking as a documented opt-in")
+		}
+	}
+}
+
+func TestReleaseMetadataVersions(t *testing.T) {
+	var pkg struct{ Version string }
+	if err := json.Unmarshal([]byte(readWorkflow(t, "../ui/package.json")), &pkg); err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Version == "" {
+		t.Fatal("UI package version is empty")
+	}
+	var lock struct {
+		Version  string
+		Packages map[string]struct{ Version string }
+	}
+	if err := json.Unmarshal([]byte(readWorkflow(t, "../ui/package-lock.json")), &lock); err != nil {
+		t.Fatal(err)
+	}
+	if lock.Version != pkg.Version || lock.Packages[""].Version != pkg.Version {
+		t.Fatal("UI package and lockfile root versions differ")
+	}
+	tag := "v" + pkg.Version
+	current := readWorkflow(t, "../docs/releases/current.md")
+	if !strings.HasPrefix(current, "# oonfeeWRT "+tag+"\n") {
+		t.Fatalf("current release notes do not name %s", tag)
+	}
+	if versioned := readWorkflow(t, "../docs/releases/"+tag+".md"); versioned != current {
+		t.Fatal("versioned and current release notes differ")
+	}
+	for path, required := range map[string]string{
+		"../README.md":                  "## " + tag + " —",
+		"../docs/index.md":              "Documentation for " + tag,
+		"../docs/.vitepress/config.mts": "text: '" + tag + "'",
+	} {
+		if !strings.Contains(readWorkflow(t, path), required) {
+			t.Errorf("%s does not advertise current release %s", path, tag)
 		}
 	}
 }

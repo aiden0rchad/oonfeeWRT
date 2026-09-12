@@ -1,8 +1,8 @@
 # Reports and period comparisons
 
 ::: info Added in v0.1.6
-Reports is included in v0.1.6. The screenshot was captured on 12 September
-2026 from the release-candidate source before tagging, using retained data
+Reports was introduced in v0.1.6. The screenshot was captured on 12 September
+2026 from the v0.1.7 release-candidate UI source before tagging, using retained data
 from a development network.
 :::
 
@@ -13,11 +13,12 @@ time-series exploration.
 
 <div class="write-impact"><strong>Router write impact</strong><span>This page reads stored controller data only. It does not increase polling, run probes, contact a router, or change network configuration.</span></div>
 
-<DocScreenshot src="reports-overview" :width="1499" :height="982" alt="Reports workspace with period selection, WAN summaries, and observed-interval coverage" caption="Compare the selected and previous periods together with their coverage. These are retained observations from one development network, not uptime or traffic-accounting guarantees." />
+<DocScreenshot src="reports-overview" :width="1600" :height="1000" alt="Reports workspace with period selection, WAN summaries, and observed-interval coverage" caption="Compare the selected and previous periods together with their coverage. These are retained observations from one development network, not uptime or traffic-accounting guarantees." />
 
 ## Generate a report
 
-1. Open **Reports** from the sidebar. Any signed-in role can read it.
+1. Open **Insights → Reports** from the sidebar, or use `/reports`.
+   Any signed-in role can read it.
 2. Select **24 hours**, **7 days**, or **30 days**. Seven days is the default.
 3. Confirm the gateway name and displayed start/end times.
 4. Read each value together with its observed-interval count and the previous
@@ -28,7 +29,11 @@ time-series exploration.
 The end time is rounded down to a completed hour. Both periods have the same
 length and aligned boundaries. The previous period ends exactly where the
 selected period starts. The page does not silently keep old-period values
-under a new period selector while a request loads.
+under a new period selector while a request loads. In v0.1.7, a period change
+or refresh immediately invalidates the previous result for display and export.
+Wait for the requested report to finish before exporting; the CSV's UTC dates
+come from that completed report, not from an older selection. A late response
+from an earlier request cannot replace the current report.
 
 ## Understand the five summaries
 
@@ -80,7 +85,7 @@ identify your environment, so review the file before sharing it publicly.
 
 Blank CSV values mean unavailable. They must not be imported as zero when
 building a spreadsheet or downstream dashboard. Export is disabled when no
-usable metric is present.
+usable metric is present or the requested period/refresh has not finished.
 
 ## If the report is empty
 

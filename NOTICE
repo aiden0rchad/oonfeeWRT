@@ -17,6 +17,11 @@ locked source material. The source-tree record is
 third_party/THIRD_PARTY_LICENSES; release archives and container images package
 it as THIRD_PARTY_LICENSES.
 
+The project orbit mark adapts the Lucide Orbit icon, copyright 2026 Lucide
+Icons and Contributors, under the ISC License. Its source and full license
+are retained in third_party/lucide-orbit and included in THIRD_PARTY_LICENSES.
+This is a nonexclusive icon-based mark, not original or exclusive artwork.
+
 Nothing in this repository is copied from OpenWrt, LuCI, or any vendor
 firmware. Where the documentation quotes ACL fragments or ubus method names,
 those are interface facts about the system being managed — the shape of an API

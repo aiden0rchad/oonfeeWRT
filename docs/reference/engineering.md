@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.6**, schema-25 codebase. The repository's
+This page orients contributors to the **v0.1.7**, schema-25 codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -53,7 +53,7 @@ ui/src/components/       shared accessible controls, grids and charts
 ui/src/screens/          product workspaces
 ui/src/lib/              API client, WebSocket client, columns and tokens
 ui/src/demo/             isolated synthetic API/live/PWA adapters and fixtures
-ui/public/               controller manifest, original icons and offline guidance
+ui/public/               controller manifest, orbit icons and offline guidance
 deploy/                  Dockerfile, Compose, ACL template and release contracts
 deploy/openwrt-agent/    experimental manually built read-only rpcd helper source
 tools/                   probes, mocks, release checks, recovery helper, secret scans
@@ -68,28 +68,65 @@ an assumption, update the implementation and documentation together.
 
 ## Build and test
 
+### Project mark and application icons
+
+The Precision interface uses the **oonfeeWRT orbit mark** consistently in the
+controller, sign-in screen, documentation, and installed application. Keep the
+project name's casing as `oonfeeWRT` and the mark's proportions unchanged.
+Use `BrandMark` from `ui/src/components/BrandMark.tsx` in the application;
+it inherits the surrounding text color and is decorative beside the name.
+An icon-only link or button must still have its own accessible name.
+
+The thin-line mark adapts [Lucide's Orbit icon](https://github.com/lucide-icons/lucide/blob/a79b2d131dab2bf20cb224bd0937b439a9c4fa99/icons/orbit.svg),
+with its original geometry and a 1.5-unit stroke. It is an icon-based,
+**nonexclusive** project identity, not a claim of original or exclusive artwork.
+The applicable ISC copyright and license are retained in
+`third_party/lucide-orbit/` and the generated release license bundle; preserve
+the notice when redistributing the assets.
+
+`docs/public/logo-light.svg` and `logo-dark.svg` are transparent vector marks
+for their respective backgrounds. `ui/public/app-icon.svg` is the square,
+dark-background master for installed-app icons; its padded mark fits within
+the maskable safe zone. `favicon.svg` is shared by the controller and docs.
+To regenerate the 192- and 512-pixel PNGs, install ImageMagick 7, then run:
+
+```sh
+go run tools/generate-app-icons.go
+```
+
+This local artwork task uses no network service or image generation. The
+PNG encoder excludes timestamps and preserves the icon license as a comment.
+The normal application build uses checked-in assets and does not require
+ImageMagick.
+
 ### Refresh documentation screenshots
 
 The [visual tour](../getting-started/visual-tour.md) and individual guides use
 real development-controller screenshots, not UI mockups. Keep them in step
 with the code that readers will actually run:
 
-1. Build the UI and controller from the intended revision, start the
-   development controller, and sign in through the normal browser flow.
+1. Build the UI from the intended revision and sign in to the development
+   controller through the normal browser flow. A frontend-only capture may
+   use an existing compatible development backend; record that distinction
+   and do not describe it as testing the finished release binary. Validate
+   release artifacts separately with their matching embedded UI.
 2. Visit the relevant workspace or local tab. Let loading finish and keep
    source, freshness, missing-data, and safety labels visible. Open editors
    without saving; do not run scans, Apply, adoption, account changes, or
    recovery operations just to stage a picture.
-3. Capture the app in **dark mode only** at the native browser viewport size;
-   focused panels may use a clipped capture instead of the entire viewport.
-   Keep enough context to identify the screen and its controls. Save JPEGs in
+3. Capture the app in **dark mode only**, using a **1600 × 1000 CSS-pixel
+   viewport at device scale 1** to produce a native **1600 × 1000**, **16:10**
+   image. Publish the complete viewport, not a clipped panel, stretched image,
+   or a resized substitute. For a detail view, open the relevant panel inside
+   that viewport and retain its surrounding screen context. Save JPEGs in
    `docs/public/screenshots/` as `<screen>-dark.jpg`. Cover every visible MAC
    address with an opaque solid mask, not blur, while preserving measurements,
    source notes, and safety labels. Review the final exported image at full
-   size to verify that no MAC address remains readable.
+   size to verify that no MAC address remains readable. Apply masks directly
+   to the original screenshot; do not use AI generation to recreate or alter the UI.
 4. Add or update the nearby `<DocScreenshot src="<screen>" alt="..."
    caption="..." />`. Set its `:width` and `:height` to the final JPEG's pixel
-   dimensions, including any crop, so space is reserved before loading.
+   dimensions (`1600` and `1000`), so space is reserved before loading.
    The component handles the deployed base path, lazy
    loading, and full-size image link; the image stays dark in either docs
    theme. Describe what is actually visible, not an operation that was never
@@ -100,7 +137,8 @@ with the code that readers will actually run:
 6. Run `npm --prefix docs run check:screenshots` and
    `npm --prefix docs run build`, then inspect the rendered guides in both
    documentation themes. Check the README's linked dark JPEG previews when
-   replacing its images.
+   replacing its images. The screenshot check rejects non-16:10 images in
+   the current screenshot collection, including README-only references.
 
 Screenshots supplement the written instructions: all essential steps, source
 limitations, role restrictions, and warnings must remain available as text.
@@ -204,7 +242,8 @@ in the controller release archives.
 ### Release UI, demo, and schema checks
 
 The [v0.1.6 release summary](./releases.md#development-after-v0-1-5)
-distinguishes this release from historical v0.1.5. Current schema is **25**:
+records the capabilities introduced after historical v0.1.5. v0.1.7 retains
+that schema **25** without a new migration:
 schema 24 persists bounded alert state and schema 25 encrypted integration
 configuration. Keep forward migrations, schema attestation, portable backup
 validation, restore preparation, and old-version refusal consistent. Do not
@@ -425,7 +464,7 @@ publishes the GitHub release.
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.6
+make release-check RELEASE_VERSION=v0.1.7
 ```
 
 only from the exact intended clean release tree. A local build from another

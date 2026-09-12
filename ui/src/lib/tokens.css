@@ -13,9 +13,9 @@
 :root,
 [data-theme='dark'] {
   color-scheme: dark;
-  --app-topbar-height: 56px;
-  --radius-card: 14px;
-  --shadow-card: 0 1px 2px #0000001f, 0 6px 20px #0000000a;
+  --app-topbar-height: 48px;
+  --radius-card: 6px;
+  --shadow-card: none;
   --shadow-raised: 0 8px 28px #00000029;
   --surface-0: #0f1114;
   --surface-1: #16181c;
@@ -56,7 +56,7 @@
  * separately validated light-surface variant from UI-SPEC §3. */
 [data-theme='light'] {
   color-scheme: light;
-  --shadow-card: 0 1px 2px #14171c05, 0 6px 20px #14171c04;
+  --shadow-card: none;
   --shadow-raised: 0 8px 28px #14171c0d;
   --surface-0: #f5f6f8;
   --surface-1: #ffffff;
@@ -125,7 +125,7 @@
 }
 
 .app-nav-item[aria-current='page'] {
-  background: linear-gradient(100deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 62%, var(--surface-1)));
+  background: var(--accent-soft);
   color: var(--accent-text);
 }
 
@@ -136,22 +136,18 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 7px;
-  /* Keep Controller tools at the foot of a roomy sidebar. When the viewport is
-   * short, the auto margin collapses and the existing nav scroller keeps every
-   * destination reachable. */
-  margin: auto 0 5px;
+  margin: 10px 0 6px;
   background: var(--border);
 }
 
 .app-nav-divider[data-expanded='true'] {
-  height: 18px;
-  padding-left: 2px;
+  height: 24px;
+  padding-left: 7px;
   background: transparent;
   color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.015em;
 }
 
 .app-nav-divider[data-expanded='true']::after {
@@ -245,22 +241,9 @@ textarea::placeholder {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 500;
   letter-spacing: -0.025em;
-}
-
-.app-brand::before {
-  width: 24px;
-  height: 24px;
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at 7px 7px, var(--accent-text) 2px, transparent 2.5px),
-    radial-gradient(circle at 15px 7px, var(--accent-text) 2px, transparent 2.5px),
-    radial-gradient(circle at 11px 15px, var(--accent-text) 2px, transparent 2.5px),
-    var(--accent-soft);
-  content: '';
 }
 
 .app-account-controls {
@@ -308,7 +291,7 @@ textarea::placeholder {
   flex: 1;
   min-width: 0;
   overflow: auto;
-  padding: 26px;
+  padding: 22px 26px;
   outline: none;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -328,10 +311,10 @@ textarea::placeholder {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 18px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   letter-spacing: -0.01em;
 }
 
@@ -340,19 +323,23 @@ textarea::placeholder {
 }
 
 .ui-card-body[data-padded='true'] {
-  padding: 18px;
+  padding: 14px;
 }
 
+.ui-stat-label { font-size: 12px; color: var(--text-secondary); }
+.ui-stat-value { font-size: 30px; font-weight: 600; text-align: left; line-height: 1.15; }
+.ui-stat-note { font-size: 11px; color: var(--text-muted); margin-top: 3px; overflow-wrap: anywhere; }
+
 .ui-button {
-  min-height: 36px;
-  padding: 7px 13px;
+  min-height: 32px;
+  padding: 5px 11px;
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: 5px;
   background: var(--surface-2);
   color: var(--text-primary);
   cursor: pointer;
   font-size: 12px;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.35;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
@@ -361,7 +348,7 @@ textarea::placeholder {
   border-color: var(--control-accent);
   background: var(--control-accent);
   color: #fff;
-  box-shadow: 0 1px 2px #00000014;
+  box-shadow: none;
 }
 
 .ui-button:hover:not(:disabled) {
@@ -449,9 +436,9 @@ textarea::placeholder {
   width: fit-content;
   max-width: 100%;
   margin: 0;
-  font-size: clamp(26px, 2.2vw, 32px);
-  font-weight: 650;
-  letter-spacing: -0.04em;
+  font-size: clamp(24px, 2vw, 28px);
+  font-weight: 500;
+  letter-spacing: -0.035em;
   line-height: 1.2;
 }
 
@@ -477,7 +464,7 @@ textarea::placeholder {
 .page-header-actions a,
 .page-header-actions [role='button'] {
   max-width: 100%;
-  min-height: 44px;
+  min-height: 32px;
   overflow-wrap: anywhere;
   white-space: normal;
 }
@@ -833,31 +820,34 @@ textarea::placeholder {
 
 .settings-tabs {
   display: flex;
-  gap: 3px;
-  padding: 3px;
-  width: fit-content;
+  gap: 14px;
+  padding: 0;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-1);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
 }
 
 .settings-tabs button {
   flex: 0 0 auto;
-  min-height: 32px;
-  padding: 0 13px;
+  min-height: 36px;
+  padding: 6px 1px 9px;
   border: 0;
-  border-radius: 6px;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .settings-tabs button[aria-selected='true'] {
-  background: var(--accent-soft);
+  background: transparent;
+  border-bottom-color: var(--accent-text);
   color: var(--accent-text);
 }
 
@@ -1691,10 +1681,14 @@ textarea::placeholder {
 
 .dashboard-page {
   display: grid;
-  gap: 20px;
+  gap: 14px;
   min-width: 0;
   max-width: 1800px;
 }
+
+.dashboard-page > .page-header { padding-bottom: 0; }
+.dashboard-page > .page-header h1 { font-size: 24px; }
+.dashboard-page > .page-header .page-header-purpose { margin-top: 5px; }
 
 .statistics-page {
   display: grid;
@@ -2316,29 +2310,62 @@ textarea::placeholder {
 
 .dashboard-stat-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(125px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-1);
+}
+
+.dashboard-stat-grid > .ui-card {
+  position: relative;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.dashboard-stat-grid > .ui-card + .ui-card::before {
+  content: '';
+  position: absolute;
+  top: 16px;
+  bottom: 16px;
+  left: 0;
+  width: 1px;
+  background: var(--border);
 }
 
 .dashboard-stat-grid .ui-card-body {
   position: relative;
   display: grid;
-  align-content: start;
-  gap: 16px;
+  padding: 16px 14px;
   height: 100%;
-  min-height: 158px;
-  background: radial-gradient(ellipse at top right, color-mix(in srgb, var(--accent) 4%, transparent), transparent 72%);
+  min-height: 80px;
 }
+
+.dashboard-stat-grid .dashboard-summary-icon { position: absolute; top: 19px; left: 14px; width: 14px; height: 14px; color: var(--text-muted); }
+.dashboard-stat-grid .dashboard-summary-icon svg { width: 14px; height: 14px; }
+.dashboard-stat-grid .ui-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(21px, auto) minmax(19px, 1fr);
+  column-gap: 10px;
+  padding-left: 23px;
+}
+.dashboard-stat-grid .ui-stat-label { grid-column: 1; grid-row: 1; font-size: 15px; font-weight: 600; line-height: 1.4; color: #fff; overflow-wrap: anywhere; }
+[data-theme='light'] .dashboard-stat-grid .ui-stat-label { color: var(--text-primary); }
+.dashboard-stat-grid .ui-stat-value { grid-column: 2; grid-row: 1 / 3; align-self: center; font-size: 28px; font-weight: 500; letter-spacing: -0.03em; text-align: right; }
+.dashboard-stat-grid .ui-stat-note { grid-column: 1; grid-row: 2; align-self: start; margin-top: 3px; line-height: 1.45; }
 
 .dashboard-summary-icon {
   display: inline-grid;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent-soft) 40%, var(--surface-1));
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--accent-text);
 }
 
@@ -3270,6 +3297,13 @@ textarea::placeholder {
   }
 }
 
+@media (min-width: 1101px) and (max-width: 1400px) {
+  .dashboard-stat-grid { grid-template-columns: 1fr 1fr 1.15fr 1fr 1fr; }
+  .dashboard-stat-grid .ui-card-body { padding: 11px 10px; }
+  .dashboard-stat-grid .dashboard-summary-icon { display: none; }
+  .dashboard-stat-grid .ui-stat { padding-left: 0; column-gap: 8px; }
+}
+
 @media (max-width: 1100px) {
   .dashboard-operations-grid,
   .dashboard-detail-grid {
@@ -3277,8 +3311,26 @@ textarea::placeholder {
   }
 
   .dashboard-stat-grid {
-    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .dashboard-stat-grid > .ui-card:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .dashboard-stat-grid > .ui-card:nth-child(odd)::before {
+    display: none;
+  }
+
+  .dashboard-stat-grid > .ui-card:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 600px) {
+  .dashboard-stat-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-stat-grid > .ui-card + .ui-card { border-top: 1px solid var(--border); }
+  .dashboard-stat-grid > .ui-card::before { display: none; }
 }
 
 @media (max-width: 720px) {
@@ -3286,11 +3338,6 @@ textarea::placeholder {
   .dashboard-operations-grid,
   .dashboard-detail-grid {
     gap: 14px;
-  }
-
-  .dashboard-stat-grid .ui-card-body {
-    gap: 12px;
-    min-height: 145px;
   }
 
   .dashboard-fleet-status {

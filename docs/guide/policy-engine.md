@@ -29,7 +29,7 @@ and the concrete draft so broad access is not hidden behind friendly labels.
 - Begin with a narrow test rule and a known client.
 - Know how you will retain management access if the rule is wrong.
 
-The Policy Engine is IPv4-focused in v0.1.6. QoS, application/DPI identity,
+The Policy Engine is IPv4-focused in v0.1.7. QoS, application/DPI identity,
 proved priority semantics, switch ACLs, device/group routing, and advanced
 traffic classification remain unavailable or gated.
 
@@ -55,7 +55,7 @@ priority has packet-processing semantics unless the preview/concrete backend
 proves it.
 
 <DocScreenshot
-  src="policy-rules" :width="1499" :height="982"
+  src="policy-rules" :width="1600" :height="1000"
   alt="Policy Engine Master Table in its empty state, with no configured policy records"
   caption="This development controller has no configured policy records, so Master Table is empty. This does not mean the routers have no existing firewall rules."
 />
@@ -74,7 +74,7 @@ Use it to spot broad forwarding before reading the exception rules:
 - Does an allowed relationship exceed the narrow service actually needed?
 
 <DocScreenshot
-  src="policy-zones" :width="1499" :height="982"
+  src="policy-zones" :width="1600" :height="1000"
   alt="Policy Engine Zone Matrix in its empty state, with no managed zones configured"
   caption="No managed zones are configured in this capture. Once present, Zone Matrix compares whole-zone forwarding; it is not a summary of every explicit firewall exception."
 />
@@ -97,7 +97,7 @@ network or explicit address objects when identity must survive MAC
 randomization or an offline client.
 
 <DocScreenshot
-  src="policy-objects" :width="1499" :height="982"
+  src="policy-objects" :width="1600" :height="1000"
   alt="Policy Engine Objects tab with the Object Manager selection controls"
   caption="Policy Engine → Objects separates object selection from draft compilation and saving. An empty selection or draft area is not a deployed rule."
 />
@@ -134,7 +134,7 @@ only when the currently adopted Managed Gateway has stored it as `local`.
 Monitor-only AP, Switch, and routed-device observations remain visible but
 neither satisfy nor contaminate that proof—even after the observation device is
 un-adopted. An upgrade from before schema 23 starts without that provenance;
-v0.1.5 → v0.1.6 preserves existing provenance. Portable restore
+v0.1.5 → v0.1.7 preserves existing provenance. Portable restore
 deliberately clears it because source-controller evidence is not destination
 write authority. Authorization rejects observations older than 30 days or more
 than five minutes in the future even if asynchronous cleanup has not run. The

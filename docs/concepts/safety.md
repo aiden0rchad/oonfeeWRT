@@ -5,7 +5,7 @@ description: Which oonfeeWRT actions can affect routers, how Apply rollback work
 
 # Safety model
 
-oonfeeWRT v0.1.6 separates observation, controller desired state, and router
+oonfeeWRT v0.1.7 separates observation, controller desired state, and router
 mutation. A device appearing in the UI is never permission to change it.
 
 ## Know what an action can change
@@ -30,9 +30,12 @@ mutation. A device appearing in the UI is never permission to change it.
 | Un-adopt | Yes | Yes | Reverts/removes controller-owned configuration, then removes scoped access |
 | Confirmed controller restore | No router call during restore | Controller data changes only | Restarts the controller, revokes sessions, and suppresses future router writes pending review |
 
-### Additional v0.1.6 actions
+### Optional actions retained in v0.1.7
 
-These actions are included in v0.1.6.
+These actions were introduced in v0.1.6 and are retained in v0.1.7.
+The Precision navigation and compact presentation do not relax their gates.
+Opening Settings → Firmware or Settings → Integrations loads stored state;
+it does not perform an external catalogue or service check.
 
 | Action | Contact or change boundary |
 |---|---|
@@ -282,7 +285,7 @@ active. An owner must review inventory and desired state, reauthenticate, and
 type `RESUME ROUTER WRITES` to remove it. Removing the gate also permits
 automatic 802.11k neighbour maintenance, so review roaming intent first.
 
-In v0.1.6, restore separately pauses external webhook delivery, cancels
+In v0.1.7, restore separately pauses external webhook delivery, cancels
 the pending outbox, and resets alert continuity. Rules/history and the
 encrypted destination remain for review. An Owner explicitly re-enables only
 future delivery after checking the restored environment; resuming router
@@ -292,7 +295,7 @@ automatically after restore.
 
 ## Security limits to keep visible
 
-- The controller has no native TLS listener in v0.1.6. Use loopback or a
+- The controller has no native TLS listener in v0.1.7. Use loopback or a
   trusted management LAN and a trusted reverse proxy.
 - No independent security audit or penetration test has been completed.
 - Hardware support is capability-driven. The two-device end-to-end record and
@@ -302,7 +305,7 @@ automatically after restore.
   or power failures.
 - A portable backup contains sensitive controller state and saved credentials.
   Anyone with the file and export passphrase can recover that content.
-- The Phase 5 flow-visibility document is a feasibility plan. v0.1.6 installs
+- The Phase 5 flow-visibility document is a feasibility plan. v0.1.7 installs
   no DPI/flow package and stores no application-flow history.
 
 See [Permissions](./permissions.md), [Troubleshooting](../reference/troubleshooting.md),

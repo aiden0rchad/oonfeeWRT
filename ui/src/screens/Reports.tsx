@@ -17,6 +17,7 @@ const metrics = [
 
 interface Result { current?: ReportSummary; previous?: ReportSummary; error?: string; previousError?: string }
 interface Report {
+  days: number; revision: number
   from: number; to: number; previousFrom: number; gateway: Dashboard['wan']['gateway']; target: string
   results: Record<string, Result>
 }
@@ -26,7 +27,8 @@ const dateTime = (seconds: number) => new Date(seconds * 1000).toLocaleString()
 export function Reports() {
   const [days, setDays] = useState(7)
   const [revision, setRevision] = useState(0)
-  const [report, setReport] = useState<Report | null>(null)
+  const [loadedReport, setReport] = useState<Report | null>(null)
+  const report = loadedReport?.days === days && loadedReport.revision === revision ? loadedReport : null
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -69,7 +71,7 @@ export function Reports() {
           } catch (e) { result.previousError = e instanceof Error ? e.message : String(e) }
           results[metric.id] = result
         }))
-        if (active) setReport({ from, to, previousFrom, gateway, target: dashboard.wan.target, results })
+        if (active) setReport({ days, revision, from, to, previousFrom, gateway, target: dashboard.wan.target, results })
       } catch (e) {
         if (active) setError(e instanceof Error ? e.message : String(e))
       } finally { if (active) setLoading(false) }

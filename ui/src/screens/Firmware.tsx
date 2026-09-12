@@ -19,7 +19,7 @@ export function officialFirmwareURL(value: string) {
   } catch { return undefined }
 }
 
-export function Firmware({ session }: { session: SessionInfo }) {
+export function Firmware({ session, embedded = false }: { session: SessionInfo; embedded?: boolean }) {
   const [inventory, setInventory] = useState<FirmwareInventory | null>(null)
   const [error, setError] = useState('')
   const [results, setResults] = useState<Record<number, FirmwareResult>>({})
@@ -49,8 +49,10 @@ export function Firmware({ session }: { session: SessionInfo }) {
     } finally { if (current === generation.current) setChecking(null) }
   }
   return <div className="firmware-page">
-    <PageHeader title="Firmware" purpose="Know what your routers run and review official maintenance updates."
-      actions={<Button disabled={checking != null} onClick={() => setRevision((value) => value + 1)}>Refresh inventory</Button>} />
+    {embedded
+      ? <div className="page-header-actions"><Button disabled={checking != null} onClick={() => setRevision((value) => value + 1)}>Refresh inventory</Button></div>
+      : <PageHeader title="Firmware" purpose="Know what your routers run and review official maintenance updates."
+          actions={<Button disabled={checking != null} onClick={() => setRevision((value) => value + 1)}>Refresh inventory</Button>} />}
     {error && <div role="alert"><Banner tone="critical">Firmware inventory unavailable: {error}</Banner></div>}
     {!inventory && !error && <div role="status">Loading stored firmware identity…</div>}
     {inventory && <>

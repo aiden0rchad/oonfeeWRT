@@ -57,6 +57,34 @@ describe('Reports', () => {
     await act(async () => { resolveOld({ wan: { gateway: null } }) })
     await waitFor(() => expect(screen.queryByText('No gateway evidence yet')).toBeNull())
   })
+  it.each([
+    ['30 days', 30], ['Refresh report', 7],
+  ] as const)('invalidates the previous report immediately after %s until fresh data is ready', async (selection, expectedDays) => {
+    const createURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fixture-report')
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      render(<Reports />)
+      await screen.findByRole('heading', { name: 'Gateway' })
+      let resolveNext!: (value: unknown) => void
+      mocks.dashboard.mockReturnValueOnce(new Promise((resolve) => { resolveNext = resolve }))
+
+      fireEvent.click(screen.getByRole('button', { name: selection }))
+      const exportButton = screen.getByRole('button', { name: 'Export CSV' })
+      expect(exportButton.hasAttribute('disabled')).toBe(true)
+      expect(screen.queryByRole('heading', { name: 'Gateway' })).toBeNull()
+      fireEvent.click(exportButton)
+      expect(createURL).not.toHaveBeenCalled()
+
+      await act(async () => { resolveNext(dashboard()) })
+      await screen.findByRole('heading', { name: 'Gateway' })
+      expect(screen.getAllByText(`1 / ${expectedDays * 288} intervals observed`)).toHaveLength(5)
+      expect(exportButton.hasAttribute('disabled')).toBe(false)
+      fireEvent.click(exportButton)
+      const csv = await (createURL.mock.calls[0][0] as Blob).text()
+      const row = csv.split(/\r?\n/)[1].split(',')
+      expect(Date.parse(JSON.parse(row[4])) - Date.parse(JSON.parse(row[3]))).toBe(expectedDays * 86_400_000)
+    } finally { createURL.mockRestore(); click.mockRestore() }
+  })
   it('replaces positive, negative, and exact zero comparisons at display precision without rounding CSV values', async () => {
     const values: Record<string, [number, number]> = {
       site_wan_up: [0.900001, 0.9], site_wan_latency_ms: [9.999, 10], site_wan_loss_pct: [0.9999, 1],

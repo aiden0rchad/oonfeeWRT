@@ -8,8 +8,9 @@ hero:
   text: OpenWrt management without replacing OpenWrt
   tagline: One self-hosted controller for visibility, adoption, safe configuration, radio planning, policy, backups, and operations across stock OpenWrt devices.
   image:
-    src: /logo-light.svg
-    alt: oonfeeWRT signal mark
+    light: /logo-light.svg
+    dark: /logo-dark.svg
+    alt: oonfeeWRT orbit mark
   actions:
     - theme: brand
       text: Get started
@@ -36,23 +37,25 @@ features:
     details: Export encrypted portable backups, validate them in staging, restore through a controlled restart, and keep router writes suppressed until an owner reviews the result.
 ---
 
-<p class="doc-kicker">Documentation for v0.1.6</p>
+<p class="doc-kicker">Documentation for v0.1.7</p>
 
-::: tip Current release — v0.1.6
-This release adds a read-only, gap-aware
-[Statistics workspace](/guide/statistics) for retained WAN and device
-telemetry, [Reports](/guide/reports), [Alerts](/guide/alerts), illustrated
-inventories and editable topology, a separate [Accounts workspace](/operations/accounts),
-[Firmware catalogue checks](/guide/firmware), [Integrations](/guide/integrations),
-and [mobile/installed-app improvements](/operations/mobile-app). Explore the
-[isolated synthetic demo](/guide/demo) without connecting a controller or router.
-Firmware checks do not download or flash images; the optional read-only router
-helper remains a manual opt-in. Flow visibility, SNMP, Web Push, and complete
-feature parity are not claimed. [See what changed](/reference/releases).
+::: tip Current release — v0.1.7 · Precision
+A slimmer dark/light interface brings collapsible **Workspace** and
+**Insights** navigation, a unified fleet summary strip, compact cards and topology, a smaller account footer,
+and the orbit project mark. **Firmware** and **Integrations** now live inside
+**Settings**; their previous direct links still work. Reports waits for the
+selected period's measurements before enabling CSV export.
+
+v0.1.6's [Statistics](/guide/statistics), [Reports](/guide/reports),
+[Alerts](/guide/alerts), [Accounts](/operations/accounts), and
+[isolated synthetic demo](/guide/demo) remain available. This is a presentation
+and navigation release, not a new router agent or firmware execution engine.
+[See the v0.1.7 changes](/reference/releases#changes-in-v0-1-7).
 :::
 
 ::: info Schema-safe upgrades
-v0.1.6 uses **schema 25**, up from v0.1.5's schema 23. Preserve the matching
+v0.1.7 retains **schema 25** from v0.1.6, with no new migration between those
+versions. Older v0.1.5 data still migrates **23 → 24 → 25**. Preserve the matching
 pre-upgrade database, keyring, runtime passphrase, and old binary/image before
 starting the new controller. A binary-only downgrade cannot restore older
 state. [Follow the migration and rollback guide](/installation/upgrades).
@@ -72,7 +75,8 @@ Monitor only modes install different ACL content; `oonfeewrt-monitor` grants
 observation reads only. The controller-managed optional package workflow is LLDP,
 with a separate plan and rollback.
 
-v0.1.6 also includes source for a separately opt-in, manually packaged rpcd helper.
+The source tree also includes a separately opt-in, manually packaged rpcd helper
+introduced in v0.1.6 and unchanged in v0.1.7.
 It is not installed by adoption and does not add a daemon, listener, arbitrary
 command channel, or firmware flashing. Ordinary management remains agent-free.
 
@@ -147,14 +151,14 @@ command channel, or firmware flashing. Ordinary management remains agent-free.
 
 ## See the controller
 
-These screenshots show the v0.1.6 interface using
+These screenshots show the v0.1.7 interface using
 a real development controller in dark mode. The documentation supports both
 light and dark themes; screenshots remain dark. Select any image to see it at
 full size.
 
-<DocScreenshot src="dashboard-overview" :width="1499" :height="982" alt="oonfeeWRT Dashboard with fleet health, Internet observations, and sidebar navigation" caption="Start with fleet health, then follow a device, client, or historical trend for more detail." />
+<DocScreenshot src="dashboard-overview" :width="1600" :height="1000" alt="oonfeeWRT Dashboard with fleet health, Internet observations, and sidebar navigation" caption="Start with fleet health, then follow a device, client, or historical trend for more detail." />
 
-<DocScreenshot src="statistics-internet" :width="1499" :height="982" alt="Statistics workspace showing the 24-hour range and Internet history charts" caption="Statistics brings retained traffic and ICMP observations into a dedicated workspace. This capture uses the 24-hour range, with gaps kept visible." />
+<DocScreenshot src="statistics-internet" :width="1600" :height="1000" alt="Statistics workspace showing the 24-hour range and Internet history charts" caption="Statistics brings retained traffic and ICMP observations into a dedicated workspace. This capture uses the 24-hour range, with gaps kept visible." />
 
 [Take the visual tour of every workspace →](/getting-started/visual-tour)
 
@@ -192,7 +196,7 @@ running on a router or a remote-access tunnel.
 
 ## Current boundaries
 
-oonfeeWRT v0.1.6 deliberately does not claim capabilities it cannot prove.
+oonfeeWRT v0.1.7 deliberately does not claim capabilities it cannot prove.
 
 - One managed Gateway; multiple reachable monitor-only routers are allowed but
   are not failover gateways or configuration targets. No controller high

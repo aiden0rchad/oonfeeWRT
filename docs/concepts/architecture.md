@@ -5,13 +5,14 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture of **oonfeeWRT v0.1.6**. For the
+This page describes the architecture of **oonfeeWRT v0.1.7**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
 
-::: info v0.1.6 extensions
-v0.1.6 adds Reports, Alerts, firmware-catalogue and
+::: info v0.1.7 presentation, unchanged schema and authority
+v0.1.7 refines the shell and navigation while keeping schema 25. v0.1.6 introduced
+Reports, Alerts, firmware-catalogue and
 integration readers, browser-local topology layout, an isolated demo, and
 mobile presentation. Schema 24 persists alerts; schema 25 persists encrypted
 AdGuard settings. The optional manually installed rpcd helper is an explicit
@@ -73,12 +74,16 @@ The React/TypeScript interface is built into `ui/dist` and embedded in the Go
 binary. It talks to the controller over same-origin REST and WebSocket
 connections, so a normal deployment has no cross-origin configuration.
 
-The existing workspaces are Dashboard, Topology, Radios, Devices, Client
-Devices, Policy Engine, Settings, Adopt a device, and Logs. v0.1.6
-adds Statistics, Reports, Alerts, Firmware, Integrations, and a dedicated
-Accounts workspace.
+The v0.1.7 Precision sidebar groups Dashboard, Devices, Client Devices,
+Topology, Radios, Policy Engine, and Adopt a device under **Workspace**.
+Statistics, Reports, and Alerts form **Insights**. Firmware and Integrations
+are **Settings** tabs: canonical URLs use `/settings?section=firmware` and
+`/settings?section=integrations`, with legacy standalone aliases retained.
+Network is the default Settings tab; Diagnostics and Backup & Restore retain
+their role gates. Settings navigation never automatically runs an optional check.
 Settings, Accounts, and Logs form the Controller group, in that order, at the
-foot of the sidebar. Accounts opens My account for every signed-in role, with
+foot of the sidebar, followed by a compact profile shortcut to Accounts.
+Accounts opens My account for every signed-in role, with
 an additional Manage accounts tab for owners. These controls remain under
 Settings in v0.1.5; the move does not change their permissions. Statistics reads
 retained WAN, system, exact-interface, and stable-radio rollups without raising a device's
@@ -161,7 +166,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.6
+failed topology read from looking like an empty network. The exact v0.1.7
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ### Shareable compatibility evidence

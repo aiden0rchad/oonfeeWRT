@@ -7,24 +7,24 @@ import { Dashboard } from './screens/Dashboard'
 import { Statistics } from './screens/Statistics'
 import { Reports } from './screens/Reports'
 import { Alerts } from './screens/Alerts'
-import { Firmware } from './screens/Firmware'
-import { Integrations } from './screens/Integrations'
 import { Devices } from './screens/Devices'
 import { Clients } from './screens/Clients'
 import { Logs } from './screens/Logs'
 import { Adopt } from './screens/Adopt'
 import { Settings } from './screens/Settings'
+import type { SettingsTab } from './screens/Settings'
 import { AccountsPage } from './screens/AccountsPage'
 import { PolicyEngine } from './screens/PolicyEngine'
 import { Topology } from './screens/Topology'
 import { Radios } from './screens/Radios'
 import { Banner, Button } from './components/ui'
 import { NavigationIcon } from './components/icons'
+import { BrandMark } from './components/BrandMark'
 import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
 import './Shell.css'
 
-type Screen = 'dashboard' | 'statistics' | 'reports' | 'alerts' | 'firmware' | 'integrations' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'accounts' | 'logs'
+type Screen = 'dashboard' | 'statistics' | 'reports' | 'alerts' | 'topology' | 'radios' | 'devices' | 'clients' | 'policy' | 'adopt' | 'settings' | 'accounts' | 'logs'
 type SettingsIntent = 'ipv6' | null
 type Theme = 'dark' | 'light'
 
@@ -40,21 +40,33 @@ function readThemePreference(): Theme {
 
 const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'devices', label: 'Devices', icon: 'devices' },
+  { id: 'clients', label: 'Client Devices', icon: 'clients' },
+  { id: 'topology', label: 'Topology', icon: 'topology' },
+  { id: 'radios', label: 'Radios', icon: 'radios' },
+  { id: 'policy', label: 'Policy Engine', icon: 'policy' },
+  { id: 'adopt', label: 'Adopt a device', icon: 'adopt' },
   { id: 'statistics', label: 'Statistics', icon: 'statistics' },
   { id: 'reports', label: 'Reports', icon: 'reports' },
   { id: 'alerts', label: 'Alerts', icon: 'alerts' },
-  { id: 'topology', label: 'Topology', icon: 'topology' },
-  { id: 'radios', label: 'Radios', icon: 'radios' },
-  { id: 'devices', label: 'Devices', icon: 'devices' },
-  { id: 'clients', label: 'Client Devices', icon: 'clients' },
-  { id: 'policy', label: 'Policy Engine', icon: 'policy' },
-  { id: 'adopt', label: 'Adopt a device', icon: 'adopt' },
-  { id: 'firmware', label: 'Firmware', icon: 'firmware' },
-  { id: 'integrations', label: 'Integrations', icon: 'integrations' },
   { id: 'settings', label: 'Settings', icon: 'settings' },
   { id: 'accounts', label: 'Accounts', icon: 'accounts' },
   { id: 'logs', label: 'Logs', icon: 'logs' },
 ]
+
+const insightScreens: Screen[] = ['statistics', 'reports', 'alerts']
+const controllerScreens: Screen[] = ['settings', 'accounts', 'logs']
+const settingsLabels: Record<SettingsTab, string> = {
+  network: 'Network', firmware: 'Firmware', integrations: 'Integrations',
+  diagnostics: 'Diagnostics', backups: 'Backup & Restore',
+}
+
+function settingsTabFromLocation(): SettingsTab {
+  const legacy = window.location.pathname.replace(/^\/+|\/+$/g, '')
+  if (legacy === 'firmware' || legacy === 'integrations') return legacy
+  const section = new URLSearchParams(window.location.search).get('section')
+  return section && Object.hasOwn(settingsLabels, section) ? section as SettingsTab : 'network'
+}
 
 function navigationPreferenceKey(username: string) {
   return `oonfeewrt:navigation:expanded:${encodeURIComponent(window.location.origin)}:${encodeURIComponent(username)}`
@@ -78,10 +90,12 @@ function writeNavigationPreference(username: string, expanded: boolean) {
 
 function screenFromPath(pathname: string): Screen {
   const id = pathname.replace(/^\/+|\/+$/g, '')
+  if (id === 'firmware' || id === 'integrations') return 'settings'
   return NAV.some((item) => item.id === id) ? id as Screen : 'dashboard'
 }
 
-function screenPath(screen: Screen) {
+function screenPath(screen: Screen, tab: SettingsTab = 'network') {
+  if (screen === 'settings' && tab !== 'network') return `/settings?section=${tab}`
   return screen === 'dashboard' ? '/' : `/${screen}`
 }
 
@@ -117,7 +131,10 @@ export function App() {
       .filter((el) => getComputedStyle(el).display !== 'none')
     focusable()[0]?.focus()
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }
+      if (event.key === 'Escape') {
+        setMobileNavigationOpen(false)
+        requestAnimationFrame(() => menuButtonRef.current?.focus())
+      }
       if (event.key !== 'Tab') return
       const items = focusable()
       const first = items[0], last = items.at(-1)
@@ -137,6 +154,7 @@ export function App() {
   const username = session?.username ?? null
   const [screen, setScreen] = useState<Screen>(() => screenFromPath(window.location.pathname))
   const [settingsIntent, setSettingsIntent] = useState<SettingsIntent>(null)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(settingsTabFromLocation)
   const [theme, setTheme] = useState<Theme>(readThemePreference)
   const [navigationExpanded, setNavigationExpanded] = useState(false)
 
@@ -167,10 +185,14 @@ export function App() {
     setSettingsIntent(null)
   }, [])
 
-  const navigate = useCallback((next: Screen, intent: SettingsIntent = null) => {
+  const navigate = useCallback((next: Screen, intent: SettingsIntent = null, tab: SettingsTab = 'network', replace = false) => {
     setMobileNavigationOpen(false)
-    const path = screenPath(next)
-    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    const path = screenPath(next, tab)
+    if (window.location.pathname + window.location.search !== path) {
+      if (replace) window.history.replaceState(null, '', path)
+      else window.history.pushState(null, '', path)
+    }
+    if (next === 'settings') setSettingsTab(tab)
     setSettingsIntent(next === 'settings' ? intent : null)
     setScreen(next)
   }, [])
@@ -201,6 +223,7 @@ export function App() {
   useEffect(() => {
     const followHistory = () => {
       setSettingsIntent(null)
+      setSettingsTab(settingsTabFromLocation())
       setScreen(screenFromPath(window.location.pathname))
     }
     window.addEventListener('popstate', followHistory)
@@ -325,7 +348,14 @@ export function App() {
   const headingReady = screen !== 'dashboard' || dash != null
   useEffect(() => {
     if (!username) return
-    document.title = `${NAV.find((item) => item.id === screen)?.label ?? 'oonfeeWRT'} — oonfeeWRT`
+    const title = screen === 'settings' && settingsTab !== 'network'
+      ? `${settingsLabels[settingsTab]} · Settings`
+      : NAV.find((item) => item.id === screen)?.label ?? 'oonfeeWRT'
+    document.title = `${title} — oonfeeWRT`
+  }, [screen, settingsTab, username])
+
+  useEffect(() => {
+    if (!username) return
     if (!headingReady) return
     const timer = window.setTimeout(() => {
       const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current
@@ -363,79 +393,66 @@ export function App() {
   }
 
   const showNavigationLabels = navigationExpanded || mobileNavigationOpen
-  const navigationWidth = showNavigationLabels ? 208 : 64
+  const navigationWidth = showNavigationLabels ? 184 : 56
+  const currentLabel = screen === 'settings' && settingsTab !== 'network'
+    ? settingsLabels[settingsTab]
+    : NAV.find((item) => item.id === screen)?.label
+  const groupLabel = controllerScreens.includes(screen) ? 'Controller' : insightScreens.includes(screen) ? 'Insights' : 'Workspace'
+  const navButton = (item: typeof NAV[number]) => <button
+    key={item.id}
+    className="app-nav-item"
+    type="button"
+    title={item.label}
+    aria-label={item.label}
+    aria-current={screen === item.id ? 'page' : undefined}
+    onClick={() => navigate(item.id)}
+  >
+    <NavigationIcon name={item.icon} />
+    {showNavigationLabels && <span>{item.label}</span>}
+  </button>
+  const signOut = async () => {
+    setSigningOut(true)
+    setAccountErr('')
+    try {
+      const result = await api.logout()
+      if (!result.ok) throw new Error('the controller did not confirm logout')
+      dropSession()
+    } catch (e) {
+      // A 401 already fired onUnauthorized and cleared local state.
+      if (!(e instanceof ApiError && e.status === 401)) {
+        setAccountErr(`Sign out failed: ${e instanceof Error ? e.message : String(e)}. You are still signed in.`)
+      }
+    } finally {
+      setSigningOut(false)
+    }
+  }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to main content</a>
-      <header className="app-topbar">
-        <button ref={menuButtonRef} className="mobile-menu-button" type="button" aria-label="Open navigation"
-          aria-expanded={mobileNavigationOpen} aria-controls="app-navigation" onClick={() => setMobileNavigationOpen(true)}>
-          <NavigationIcon name="expand" />
-        </button>
-        <strong className="app-brand">oonfeeWRT</strong>
-        {isDemo && <span className="app-demo-label">Demo · synthetic data · read only</span>}
-        <div className="app-account-controls">
-          <button
-            className="app-theme-control"
-            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
-            aria-label={`${theme === 'dark' ? 'Dark' : 'Light'} theme active; switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          >
-            ◐
-          </button>
-          <span className="app-account-name" title={username}>{username}</span>
-          {!isDemo && <button
-            className="app-signout-control"
-            disabled={signingOut}
-            onClick={async () => {
-              setSigningOut(true)
-              setAccountErr('')
-              try {
-                const result = await api.logout()
-                if (!result.ok) throw new Error('the controller did not confirm logout')
-                dropSession()
-              } catch (e) {
-                // A 401 already fired onUnauthorized and cleared local state.
-                if (!(e instanceof ApiError && e.status === 401)) {
-                  setAccountErr(`Sign out failed: ${e instanceof Error ? e.message : String(e)}. You are still signed in.`)
-                }
-              } finally {
-                setSigningOut(false)
-              }
-            }}
-          >
-            {signingOut ? 'Signing out…' : 'Sign out'}
-          </button>}
-        </div>
-      </header>
-
-      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+      <div className="app-layout">
         {mobileNavigationOpen && <button className="mobile-nav-backdrop" type="button" tabIndex={-1} aria-label="Dismiss navigation"
-          onClick={() => { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }} />}
+          onClick={() => { setMobileNavigationOpen(false); requestAnimationFrame(() => menuButtonRef.current?.focus()) }} />}
         <nav
           id="app-navigation"
           ref={navigationRef}
           className="app-navigation"
           data-mobile-open={mobileNavigationOpen}
+          data-expanded={showNavigationLabels}
           aria-label="Main navigation"
           style={{
             width: navigationWidth,
             flex: `0 0 ${navigationWidth}px`,
-            background: 'var(--surface-1)',
-            borderRight: '1px solid var(--border)',
-            padding: '8px 0',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 4,
-            overflowX: 'hidden',
-            overflowY: 'auto',
           }}
         >
           <button className="mobile-close-button" type="button"
-            onClick={() => { setMobileNavigationOpen(false); menuButtonRef.current?.focus() }}>Close navigation ×</button>
-          <button
+            onClick={() => { setMobileNavigationOpen(false); requestAnimationFrame(() => menuButtonRef.current?.focus()) }}>Close navigation ×</button>
+          <div className="app-nav-brand">
+            <span className="app-brand" aria-label="oonfeeWRT" title="oonfeeWRT">
+              <BrandMark size={22} />
+              {showNavigationLabels && <span>oonfee<span className="app-brand-suffix">WRT</span></span>}
+            </span>
+            <button
             className="app-nav-control"
             type="button"
             aria-label={navigationExpanded ? 'Collapse navigation' : 'Expand navigation'}
@@ -446,70 +463,51 @@ export function App() {
               setNavigationExpanded(next)
               writeNavigationPreference(username, next)
             }}
-            style={{
-              width: navigationExpanded ? 'calc(100% - 16px)' : 44,
-              minHeight: 44,
-              padding: navigationExpanded ? '0 10px' : 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: navigationExpanded ? 'flex-start' : 'center',
-              gap: 10,
-              flex: '0 0 auto',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              marginBottom: 4,
-            }}
           >
             <NavigationIcon name={navigationExpanded ? 'collapse' : 'expand'} />
-            {navigationExpanded && <span style={{ whiteSpace: 'nowrap' }}>Collapse</span>}
           </button>
-          {[false, true].map((controller) => (
-            <div key={String(controller)} className={`app-nav-section ${controller ? 'app-nav-controller' : 'app-nav-primary'}`}>
-              {controller && (
-                <div
-                  className="app-nav-divider"
-                  data-expanded={showNavigationLabels}
-                  role="separator"
-                  aria-label="Controller tools"
-                >
-                  {showNavigationLabels && <span>Controller</span>}
+          </div>
+          <div className="app-nav-primary">
+            {[false, true].map((insights) => <div key={String(insights)} className="app-nav-section" role="group" aria-label={insights ? 'Insights' : 'Workspace'}>
+                <div className="app-nav-divider" data-expanded={showNavigationLabels} role="separator" aria-label={insights ? 'Insights' : 'Workspace'}>
+                  {showNavigationLabels && <span>{insights ? 'Insights' : 'Workspace'}</span>}
                 </div>
-              )}
-              {NAV.filter((n) => ['settings', 'accounts', 'logs'].includes(n.id) === controller).map((n) => (
-              <button
-                key={n.id}
-                className="app-nav-item"
-                type="button"
-                title={n.label}
-                aria-label={n.label}
-                aria-current={screen === n.id ? 'page' : undefined}
-                onClick={() => navigate(n.id)}
-                style={{
-                  width: showNavigationLabels ? 'calc(100% - 16px)' : 44,
-                  minHeight: 44,
-                  padding: showNavigationLabels ? '0 10px' : 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: showNavigationLabels ? 'flex-start' : 'center',
-                  gap: 10,
-                  flex: '0 0 auto',
-                  borderRadius: 8,
-                  border: 'none',
-                  cursor: 'pointer',
-                  boxShadow: screen === n.id ? 'inset 3px 0 0 var(--accent)' : 'none',
-                  fontWeight: screen === n.id ? 650 : 500,
-                }}
-              >
-                <NavigationIcon name={n.icon} />
-                {showNavigationLabels && <span style={{ whiteSpace: 'nowrap' }}>{n.label}</span>}
-              </button>
-              ))}
-            </div>
-          ))}
+                {NAV.filter((item) => !controllerScreens.includes(item.id) && insightScreens.includes(item.id) === insights).map(navButton)}
+              </div>)}
+          </div>
+          <div className="app-nav-section app-nav-controller">
+            <div className="app-nav-divider" role="separator" aria-label="Controller tools" />
+            {NAV.filter((item) => controllerScreens.includes(item.id)).map(navButton)}
+          </div>
+          <button type="button" className="app-profile" onClick={() => navigate('accounts')}
+            aria-label={`My account: ${username}, ${session?.role_label ?? session?.role}`} title={`${username} · ${session?.role_label ?? session?.role}`}>
+            <span className="app-profile-avatar" aria-hidden="true">{Array.from(username)[0]?.toUpperCase()}</span>
+            <span className="app-profile-copy">
+              <span className="app-account-name">{username}</span>
+              <span className="app-profile-role">{session?.role_label ?? session?.role}</span>
+            </span>
+          </button>
         </nav>
 
+        <div className="app-workspace">
+          <header className="app-topbar" inert={mobileNavigationOpen || undefined}>
+            <button ref={menuButtonRef} className="mobile-menu-button" type="button" aria-label="Open navigation"
+              aria-expanded={mobileNavigationOpen} aria-controls="app-navigation" onClick={() => setMobileNavigationOpen(true)}>
+              <NavigationIcon name="expand" />
+            </button>
+            <span className="app-mobile-brand"><BrandMark size={22} /></span>
+            <div className="app-breadcrumb"><span>{groupLabel}</span><span aria-hidden="true">/</span><strong>{currentLabel}</strong></div>
+            {isDemo && <span className="app-demo-label">Demo · synthetic data · read only</span>}
+            <div className="app-account-controls">
+              <button className="app-theme-control" type="button"
+                onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+                aria-label={`${theme === 'dark' ? 'Dark' : 'Light'} theme active; switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+                title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>◐</button>
+              {!isDemo && <button className="app-signout-control" type="button" disabled={signingOut} onClick={signOut}>
+                {signingOut ? 'Signing out…' : 'Sign out'}
+              </button>}
+            </div>
+          </header>
         <main ref={mainRef} id="main-content" className="app-main" tabIndex={-1} inert={mobileNavigationOpen || undefined}>
           {accountErr && (
             <div style={{ marginBottom: 12 }}>
@@ -539,8 +537,6 @@ export function App() {
             {screen === 'statistics' && <Statistics />}
             {screen === 'reports' && <Reports />}
             {screen === 'alerts' && session && <Alerts devices={devices} session={session} />}
-            {screen === 'firmware' && session && <Firmware session={session} />}
-            {screen === 'integrations' && session && <Integrations devices={devices} session={session} />}
             {screen === 'topology' && (
               <Topology userKey={session ? `${session.admin_id}:${session.username}` : undefined} onReviewCapabilities={() => navigate('devices')} />
             )}
@@ -564,6 +560,8 @@ export function App() {
                 devicesLoaded={devicesLoaded}
                 devicesError={refreshErrors.devices}
                 session={session}
+                initialTab={settingsTab}
+                onTabChange={(tab, navigation) => navigate('settings', null, tab, navigation === 'replace')}
                 initialNetworkSection={settingsIntent}
                 onInitialNetworkSectionHandled={() => setSettingsIntent(null)}
               />
@@ -583,6 +581,7 @@ export function App() {
             )}
           </ScreenBoundary>
         </main>
+        </div>
       </div>
     </div>
   )

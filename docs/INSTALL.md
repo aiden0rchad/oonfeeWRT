@@ -1,6 +1,6 @@
 # Install oonfeeWRT
 
-> **Upgrade caution:** v0.1.6 uses schema **25**. Before opening existing state,
+> **Upgrade caution:** v0.1.7 keeps v0.1.6's schema **25**. Before opening existing state,
 > preserve a matching database, keyring, runtime passphrase, and old binary/image.
 > Returning to v0.1.5 requires its pre-upgrade schema-23 recovery unit. Follow
 > [migration and rollback](installation/upgrades.md#upgrade-v015-to-v016).
@@ -11,8 +11,8 @@
 oonfeeWRT is a controller that runs on a computer, NAS, or server. It does not
 replace OpenWrt firmware and no controller binary runs on a router.
 
-This guide targets `v0.1.6`, with controller schema **25**. The
-[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.6)
+This guide targets `v0.1.7`, with controller schema **25**. The
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.7)
 and its completed tag workflow are the publication source of truth. Back up both the
 controller and each router before using it on a network you cannot afford to
 interrupt. Upgrade and rollback from historical `v0.1.0-rc.1` are documented
@@ -80,7 +80,7 @@ Set the release and platform. On macOS, `uname -m` reports `x86_64` rather than
 the archive's `amd64`, so normalize it:
 
 ```sh
-VERSION=v0.1.6
+VERSION=v0.1.7
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -142,7 +142,7 @@ first run and once after each restart.
 ## Run the container
 
 The published immutable release image is
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.6`. It is multi-platform, defaults to
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.7`. It is multi-platform, defaults to
 UID `65532`, and has no shell or package manager. The command below instead uses
 your non-root host UID with bind-mounted state, which keeps permissions and
 backups straightforward on both Linux and Docker Desktop.
@@ -150,8 +150,8 @@ backups straightforward on both Linux and Docker Desktop.
 Install `cosign` from the
 [official Sigstore instructions](https://docs.sigstore.dev/cosign/system_config/installation/),
 then verify the GitHub Actions keyless identity before first use. Stable aliases
-`0.1.6`, `0.1`, and `latest` resolve to the same final manifest, but deployments
-should pin `v0.1.6` or its reported digest.
+`0.1.7`, `0.1`, and `latest` resolve to the same final manifest, but deployments
+should pin `v0.1.7` or its reported digest.
 
 ```sh
 [ "$(id -u)" -ne 0 ] || { echo "run Docker as a non-root user" >&2; exit 1; }
@@ -170,9 +170,9 @@ by address.
 
 ```sh
 cosign verify \
-  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.6" \
+  --certificate-identity "https://github.com/aiden0rchad/oonfeeWRT/.github/workflows/release.yml@refs/tags/v0.1.7" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.6
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.7
 
 docker run -d \
   --name oonfeewrt \
@@ -189,11 +189,11 @@ docker run -d \
   -e OONFEE_DATA_DIR=/data \
   -e OONFEE_LISTEN=:8080 \
   -e OONFEE_PASSPHRASE_FILE=/run/secrets/oonfee-passphrase \
-  ghcr.io/aiden0rchad/oonfeewrt:v0.1.6
+  ghcr.io/aiden0rchad/oonfeewrt:v0.1.7
 ```
 
 To use Compose instead of the direct `docker run` command, create a private
-deployment directory, download the exact v0.1.6 file, and create its dedicated
+deployment directory, download the exact v0.1.7 file, and create its dedicated
 mode-0600 passphrase. The service uses the same release image, a named data
 volume, and a loopback-default bridge mapping. Its `OONFEE_HTTP_BIND` override
 can select one deliberate management address; host networking remains an
@@ -205,19 +205,19 @@ cd oonfeewrt-compose
 umask 077
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.6/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.7/deploy/docker-compose.yml
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.6' \
+  'OONFEE_VERSION=v0.1.7' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
 ```
 
-The v0.1.6 Compose file keeps the loopback default but accepts
+The v0.1.7 Compose file keeps the loopback default but accepts
 `OONFEE_HTTP_BIND=<controller-LAN-IP>` when browsers must connect directly from
 a trusted management LAN. This changes only host-side publishing.
 `OONFEE_HTTP_BIND=0.0.0.0` explicitly publishes on every host IPv4 interface;
@@ -285,7 +285,7 @@ docker start oonfeewrt
 ```
 
 For a Compose named volume, stop the service and use trusted volume-snapshot
-tooling to preserve the whole volume before v0.1.6 opens it. Record the exact
+tooling to preserve the whole volume before v0.1.7 opens it. Record the exact
 Compose project/volume identity and retain the matching passphrase file. This
 raw snapshot is the simplest direct rollback path; never copy only the main
 SQLite file while WAL may be active.
@@ -297,23 +297,39 @@ To upgrade, retain that backup, stop the old process cleanly, replace the binary
 or container tag, and restart with the same data volume and passphrase file. The
 controller migrates its database on startup and refuses an unsupported downgrade.
 
+### Upgrade from v0.1.6
+
+v0.1.7 introduces no database migration over v0.1.6. Preserve and verify the
+matching recovery unit, stop the controller cleanly, replace its binary/image,
+and restart using the same data volume and runtime passphrase. Reauthenticate
+and verify inventory, health, and the router-write gate before resuming work.
+No re-adoption, router helper installation, or new router permission is required.
+
+The Precision interface groups Statistics, Reports, and Alerts under
+**Insights** and moves Firmware and Integrations into **Settings**. Their old
+`/firmware` and `/integrations` links remain valid; new bookmarks use
+`/settings?section=firmware` and `/settings?section=integrations`.
+For recovery checks and a controlled return to the prior deployment, use the
+[complete upgrade checklist](installation/upgrades.md#upgrade-v016-to-v017).
+
 ### Upgrade from v0.1.5 and roll back
 
-v0.1.6 migrates schema **23 → 24 → 25**. Schema 24 stores alert rules,
+v0.1.7 applies the schema **23 → 24 → 25** migrations introduced in v0.1.6.
+Schema 24 stores alert rules,
 incidents, evaluation state, cooldowns, and a bounded notification outbox;
 schema 25 stores encrypted AdGuard connection configuration. It does not
 create rules, enable a webhook, contact AdGuard, install a router helper, or
 flash firmware. Existing inventory, management modes, configuration, and
 history are retained.
 
-v0.1.5 cannot open the migrated database. To return to it, stop v0.1.6,
+v0.1.5 cannot open the migrated database. To return to it, stop v0.1.7,
 preserve its schema-25 data separately, restore the matching pre-upgrade
 schema-23 database and keyring, and run v0.1.5 with that pair's runtime
 passphrase. A pre-upgrade portable backup must be restored through a separate
-clean v0.1.5 instance; a v0.1.6 portable backup cannot be imported into the
+clean v0.1.5 instance; a v0.1.7 portable backup cannot be imported into the
 older release. See the [complete upgrade checklist](installation/upgrades.md).
 
-Portable restores performed by v0.1.6 separately pause external alert
+Portable restores performed by v0.1.7 separately pause external alert
 delivery, cancel queued notifications, and reset evaluation continuity.
 Rules, incidents, cooldown history, and encrypted destination are preserved;
 an Owner must review and explicitly re-enable delivery. This does not replay
@@ -321,7 +337,7 @@ cancelled history or replace the independent router-write suppression gate.
 
 ### Upgrade from v0.1.4 and roll back
 
-v0.1.4 uses schema 20; v0.1.6 first applies the three migrations introduced in
+v0.1.4 uses schema 20; v0.1.7 first applies the three migrations introduced in
 v0.1.5, then the schema 24 and 25 additions described above.
 Schema 21 adds device `management_mode` and assigns all existing devices
 **Managed**, preserving prior authority. Schema 22 adds named policy sets,
@@ -335,7 +351,7 @@ migration invents no sets, does not infer provenance from merged global client
 rows, and preserves existing policies, configuration, credentials, secrets,
 telemetry, and topology intervals.
 
-The v0.1.4 daemon cannot open schema 23 or 25. To roll back, stop v0.1.6, retain its
+The v0.1.4 daemon cannot open schema 23 or 25. To roll back, stop v0.1.7, retain its
 schema-25 data separately, restore the matching pre-upgrade schema-20 database
 and keyring, install v0.1.4, and start it with the corresponding passphrase.
 Changing only the binary or `OONFEE_VERSION` is not a valid rollback.
@@ -353,21 +369,21 @@ changes authority. A monitor-only selection installs the distinct read-only
 `oonfeewrt-monitor` ACL through the reviewed ACL lifecycle; it is not a silent
 startup change.
 
-Stable v0.1.1 through v0.1.3 use schema 19 and can migrate forward to v0.1.6,
+Stable v0.1.1 through v0.1.3 use schema 19 and can migrate forward to v0.1.7,
 but rollback to one of those releases requires that version's matching
 pre-upgrade schema-19 database, keyring, and passphrase. Do not use a schema-20
 schema-23, or schema-25 volume with a schema-19 daemon.
 
 ### Upgrade from v0.1.0-rc.1 and roll back
 
-`v0.1.0-rc.1` uses schema 17; v0.1.6 migrates supported state through schemas
+`v0.1.0-rc.1` uses schema 17; v0.1.7 migrates supported state through schemas
 18–25. Before the upgrade, stop the RC cleanly and copy its
 database and matching keyring. Verify
 that pair with the RC archive's `oonfeewrt-recoverycheck`, then retain it without
-opening it with the final daemon. Start v0.1.6 with a copy of the same data pair
+opening it with the final daemon. Start v0.1.7 with a copy of the same data pair
 and unchanged passphrase file.
 
-Rollback is a data restore, not merely an image-tag change: stop v0.1.6, retain
+Rollback is a data restore, not merely an image-tag change: stop v0.1.7, retain
 the schema-25 state separately, restore the untouched schema-17 database and
 matching keyring, then restart `v0.1.0-rc.1` with its prior passphrase. Never
 point the RC daemon at a schema-19, schema-20, schema-23, or schema-25 database. Controller migration

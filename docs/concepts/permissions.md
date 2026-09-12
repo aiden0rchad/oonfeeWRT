@@ -5,7 +5,7 @@ description: Controller roles, step-up authentication, sessions, and the separat
 
 # Permissions and sessions
 
-oonfeeWRT v0.1.6 has local controller accounts with four enforced roles. These
+oonfeeWRT v0.1.7 has local controller accounts with four enforced roles. These
 are not OpenWrt accounts: controller authorization and router access are
 separate boundaries.
 
@@ -44,9 +44,11 @@ general event stream is readable by lower roles.
 The server enforces this matrix; hiding a control in the UI is not the security
 boundary.
 
-### Additional v0.1.6 permissions {#additional-development-permissions}
+### Permissions introduced in v0.1.6 {#additional-development-permissions}
 
-The following routes were added in v0.1.6. They use the same server-enforced
+The following routes were added in v0.1.6 and retain their permissions in
+v0.1.7. Moving Firmware and Integrations into Settings does not grant access
+or run checks automatically. They use the same server-enforced
 role hierarchy as the existing workspaces.
 
 | Task | Read-only | Operator | Administrator | Owner |
@@ -101,7 +103,7 @@ letting old authorization continue.
 Sessions exist only in controller memory. A controller restart signs everyone
 out, including a restart performed during restore.
 
-| Control | v0.1.6 behavior |
+| Control | v0.1.7 behavior |
 |---|---|
 | Idle expiry | 12 hours after last use |
 | Absolute expiry | 7 days after creation, even when active |
@@ -130,7 +132,7 @@ Step-up is required for:
 - confirming a restore; and
 - resuming router writes after restore.
 
-v0.1.6 also requires this confirmation when saving or removing
+v0.1.7 also requires this confirmation when saving or removing
 AdGuard Home connection credentials. Alert rule/delivery editing is Owner-only
 but does not use the recent-password gate; do not assume all Owner endpoints
 have identical confirmation requirements.
@@ -207,7 +209,7 @@ or require re-adoption.
 
 ## Deployment implications
 
-The v0.1.6 listener is plain HTTP. Cookies are marked `Secure` only when the
+The v0.1.7 listener is plain HTTP. Cookies are marked `Secure` only when the
 request is TLS or the reverse proxy supplies `X-Forwarded-Proto: https`.
 Therefore:
 

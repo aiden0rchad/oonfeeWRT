@@ -1,18 +1,26 @@
 # Read-only integrations
 
+::: info Find Integrations in v0.1.7
+Open **Settings → Integrations**, or bookmark `/settings?section=integrations`
+on your controller. The older `/integrations` URL remains an alias for this
+tab. The page heading is **Settings**; the selected **Integrations** tab
+identifies its content. Opening it reads saved connection metadata without
+contacting AdGuard Home or a router.
+:::
+
 The Integrations workspace adds focused visibility into an existing
 AdGuard Home service and WireGuard interfaces on an adopted OpenWrt router. It
 does not install services, create tunnels, change DNS protection, import
 configuration, or run arbitrary commands.
 
 ::: info Added in v0.1.6
-These integrations are included in v0.1.6. Checks are explicit snapshots, not
+These integrations were introduced in v0.1.6. Checks are explicit snapshots, not
 background polling or scheduled monitoring. Missing evidence remains unknown.
-The screenshots were captured on 12 September 2026 from the release-candidate
-source before tagging. No service was connected for these captures.
+The screenshots were captured on 12 September 2026 from the v0.1.7 release-candidate
+UI source before tagging. No service was connected for these captures.
 :::
 
-<DocScreenshot src="integrations-overview" :width="1499" :height="982" alt="Integrations overview before connecting AdGuard Home or requesting a WireGuard observation" caption="Not connected means no AdGuard Home connection is configured; it is not evidence that DNS or a VPN is failing. No external service was connected for this capture." />
+<DocScreenshot src="integrations-overview" :width="1600" :height="1000" alt="Integrations overview before connecting AdGuard Home or requesting a WireGuard observation" caption="Not connected means no AdGuard Home connection is configured; it is not evidence that DNS or a VPN is failing. No external service was connected for this capture." />
 
 ## Permissions and effects
 
@@ -32,7 +40,8 @@ and include the observation time.
 
 ### Connect an existing server
 
-1. Open **Integrations** and enter the AdGuard Home **HTTPS origin**, for
+1. Open **Settings → Integrations**, select **Connect AdGuard**, and enter the
+   AdGuard Home **HTTPS origin**, for
    example `https://dns.example.net:3000`. Enter only scheme, host, and optional
    port—not `/control`, a reverse-proxy subpath, or a login URL.
 2. Enter its API username and password. These belong to the existing AdGuard
@@ -45,7 +54,7 @@ and include the observation time.
 5. Explicitly check the service. Review the endpoint and check time next to the
    results before comparing them with another source.
 
-<DocScreenshot src="integrations-connection" :width="1499" :height="982" alt="Unsaved AdGuard Home connection form with HTTPS origin, account credentials, and optional certificate fingerprint" caption="The connection form was opened for illustration and left unsaved. No credentials were stored, no service was contacted, and no DNS configuration was changed." />
+<DocScreenshot src="integrations-connection" :width="1600" :height="1000" alt="Unsaved AdGuard Home connection form with HTTPS origin, account credentials, and optional certificate fingerprint" caption="The connection form was opened for illustration and left unsaved. No credentials were stored, no service was contacted, and no DNS configuration was changed." />
 
 For a certificate file obtained through a trusted channel, its fingerprint can
 be inspected locally:
@@ -134,7 +143,8 @@ rights within AdGuard Home itself. Restrict access to that credential accordingl
    wanted. The helper does not install or configure them for you.
 3. Explicitly grant only `oonfeewrt-agent-read` to the controller's rpcd login.
    Default adoption ACLs are not expanded automatically.
-4. In Integrations, select the adopted router and request a WireGuard check.
+4. In **Settings → Integrations**, select the adopted router and request a
+   WireGuard check.
 
 The controller opens its existing authenticated router channel and reads the
 helper's fixed `wireguard` method. Reads are coordinated with per-device

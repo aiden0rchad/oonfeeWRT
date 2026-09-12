@@ -2,7 +2,8 @@
 
 ::: info Added in v0.1.6
 The installable-app manifest, offline guidance, and mobile navigation drawer
-are included in v0.1.6. Installation does not add offline access to private data.
+were introduced in v0.1.6 and remain available in v0.1.7. Installation does not
+add offline access to private data.
 :::
 
 oonfeeWRT remains a responsive web application. Installing it adds a launcher
@@ -16,7 +17,19 @@ sidebar. Choose a workspace, select **Close navigation**, tap the backdrop, or
 press Escape to close it. Keyboard focus stays inside the open navigation and
 returns to the menu button when dismissed. Pages use the full available width
 when the drawer is closed. Settings, Accounts, and Logs remain in the
-Controller group at the end of the navigation.
+Controller group at the end of the navigation, followed by your compact
+profile shortcut to Accounts.
+
+In the v0.1.7 Precision layout, **Workspace** contains network tools and
+**Insights** contains Statistics, Reports, and Alerts. Open **Settings** for
+the Firmware and Integrations tabs; they are no longer separate sidebar
+buttons. Existing bookmarked `/firmware` and `/integrations` URLs still work.
+The mobile drawer has visible labels and touch-sized targets regardless of
+the desktop sidebar's saved collapsed or expanded preference.
+
+The Dashboard fleet strip reflows from five desktop columns to two on tablets
+and one on narrow phones. Counts remain beside their labels; unavailable
+values and source explanations are not removed to make the layout smaller.
 
 ## Install on a supported browser
 
@@ -25,7 +38,7 @@ Controller group at the end of the navigation.
    controller on another machine; loopback URLs work for local development.
 3. Use the browser's **Install app**, **Add to Home Screen**, or **Add to Dock**
    action when available. Browser and operating-system support vary.
-4. Launch oonfeeWRT from its new icon and sign in normally.
+4. Launch oonfeeWRT from its orbit-mark icon and sign in normally.
 
 The app includes 192px/512px icons and a standalone-display manifest. HTTP on a
 remote LAN IP can still serve the ordinary UI, but does not meet installability

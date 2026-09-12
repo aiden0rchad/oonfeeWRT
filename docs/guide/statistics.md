@@ -6,9 +6,9 @@ description: Read WAN, system, interface, and radio history without hiding missi
 # Statistics and historical telemetry
 
 ::: info Added in v0.1.6
-Statistics is included in the v0.1.6 binary and container image.
+Statistics was introduced in v0.1.6 and remains available in v0.1.7.
 The underlying rollup API and retention described here already exist in
-v0.1.5; this workspace is the new presentation layer.
+v0.1.5; this workspace is the presentation layer for those observations.
 :::
 
 The **Statistics** workspace turns oonfeeWRT's stored metric rollups into a
@@ -32,7 +32,8 @@ whole-network total.
   if you want the Internet section to identify WAN traffic.
 - Treat an empty chart as missing history, not a measured zero.
 
-Open **Statistics** from the main navigation. The default range is **6h**, so
+Open **Insights → Statistics** in the sidebar. The direct route remains
+`/statistics`. The default range is **6h**, so
 recent collection is easier to read without compressing it into a full day.
 The available ranges are **6h**, **24h**, **7d**, and **30d**.
 
@@ -54,7 +55,7 @@ the stored evidence was last populated; it is not the browser refresh time.
 ## Read the Internet history
 
 <DocScreenshot
-  src="statistics-internet" :width="1499" :height="982"
+  src="statistics-internet" :width="1600" :height="1000"
   alt="Statistics Internet traffic, latency, and loss charts with retained observations and collection gaps"
   caption="Use one time range to compare traffic and ICMP evidence. History gaps describe missing stored observations; they do not establish downtime or measured zero traffic."
 />
@@ -124,7 +125,7 @@ controller first asks for that device's series catalog, then requests only the
 series keys proven to exist.
 
 <DocScreenshot
-  src="statistics-device" :width="1499" :height="982"
+  src="statistics-device" :width="1600" :height="1000"
   alt="Statistics Device history section with interface and stable-radio controls"
   caption="Device history follows the selected device, interface, and stable radio. Changing this selection does not change the managed Gateway or request new router collection."
 />

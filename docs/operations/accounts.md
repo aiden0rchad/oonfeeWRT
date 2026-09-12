@@ -6,25 +6,34 @@ Controller accounts are local to oonfeeWRT. They are separate from router logins
 
 ## Find account controls
 
-v0.1.6 has a dedicated **Accounts** workspace
+v0.1.7 keeps the dedicated **Accounts** workspace introduced in v0.1.6
 at `/accounts`. It sits between **Settings** and **Logs** in the bottom
 **Controller** sidebar group. Opening it shows **My account** for every signed-in
 role; only owners also see **Manage accounts**.
 
-The procedures below use v0.1.6 navigation. Older v0.1.5 keeps
+The compact profile below **Logs** is a second shortcut to Accounts. It shows
+the signed-in username and role when the sidebar is expanded, and an initial
+when collapsed; its accessible name still identifies the account and role.
+It does not switch users or create an additional session. On mobile, open
+the navigation drawer to reach this profile.
+
+The procedures below use v0.1.7 navigation. Older v0.1.5 keeps
 the same account controls inside Settings:
 
-| Task | v0.1.6 | v0.1.5 |
+| Task | v0.1.6–v0.1.7 | v0.1.5 |
 |---|---|---|
 | Own identity, password, and sessions | **Accounts → My account** | **Settings → My account** |
 | Create or manage other accounts and sessions | **Accounts → Manage accounts** | **Settings → Accounts** |
 
-This move changes navigation only, not permissions or account data. v0.1.6
-**Settings** retains **Network**, **Diagnostics** for administrators/owners, and
-**Backup & Restore** for owners.
+These navigation refinements do not change permissions or account data.
+In v0.1.7, **Settings** contains **Network**, **Firmware**, **Integrations**,
+**Diagnostics** for administrators/owners, and **Backup & Restore** for owners.
+Firmware and Integrations were standalone workspaces in v0.1.6. A direct link
+to an unauthorized Settings section returns to Network; it does not grant
+access or leave the browser's Back button in a redirect loop.
 
 <DocScreenshot
-  src="accounts-profile" :width="1165" :height="982"
+  src="accounts-profile" :width="1600" :height="1000"
   alt="Accounts My account tab with profile, password, and active-session controls"
   caption="Accounts → My account keeps your own identity, password, and sessions together. The Manage accounts tab is available only to owners."
 />
@@ -50,7 +59,7 @@ Roles are hierarchical: each higher role includes the lower role's permissions.
 
 Audit events are more sensitive than ordinary General events. The API applies additional authorization after it knows an event's scope.
 
-In v0.1.6, every signed-in role can read Statistics, Reports,
+In v0.1.7, every signed-in role can read Statistics, Reports,
 Alerts, firmware inventory, and saved integration metadata. Administrator or
 Owner is required to run firmware-catalogue, AdGuard, or WireGuard checks.
 Only the Owner edits alert rules/delivery or saves/removes AdGuard credentials;
@@ -85,7 +94,7 @@ Use a unique password for each person. Do not create one shared “admin” acco
 ## Create an account
 
 <DocScreenshot
-  src="accounts-manage" :width="1165" :height="982"
+  src="accounts-manage" :width="1600" :height="1000"
   alt="Accounts Manage accounts tab with the account form and role selector"
   caption="Accounts → Manage accounts starts new users at Read-only. The description below Role changes with the selection so owners can compare privileges before creating an account."
 />
@@ -94,7 +103,7 @@ Use a unique password for each person. Do not create one shared “admin” acco
 2. Open **Accounts → Manage accounts**.
 3. In **Create account**, enter the username.
 4. Choose **Read-only**, **Operator**, **Administrator**, or **Owner**. New
-   accounts default to Read-only. In v0.1.6, the description below
+   accounts default to Read-only. The description below
    the role selector updates with the selection; compare it with the role
    matrix before granting more access.
 5. Enter and repeat a password of at least 12 characters.
@@ -108,7 +117,8 @@ The account mutation and its audit event are committed together. If the mutation
 Use a separate private browser window so you do not disturb the owner session:
 
 1. Sign in as the new user.
-2. Confirm the header shows the correct username.
+2. Expand the sidebar, or open its mobile drawer, and confirm the bottom
+   profile shows the correct username and role.
 3. Open **Accounts → My account** and verify the role.
 4. Confirm the navigation and controls match the role matrix. A forbidden API operation remains forbidden even if stale UI state displayed a control.
 5. Sign out of the test window.
