@@ -13,10 +13,11 @@
 .inventory-summary-item {
   display: grid;
   gap: 4px;
-  padding: 17px 20px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface-1);
+  padding: 12px 16px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
 }
 
 .inventory-summary-item > span,
@@ -26,8 +27,8 @@
 }
 
 .inventory-summary-item > strong {
-  font-size: 27px;
-  font-weight: 650;
+  font-size: 25px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1.3;
   letter-spacing: -.04em;
@@ -62,12 +63,13 @@
 
 .inventory-result-note { color: var(--text-secondary); font-size: 12px; padding: 12px 18px 0; }
 .inventory-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 285px), 1fr)); gap: 16px; padding: 18px; }
-.inventory-device-card { display: flex; flex-direction: column; gap: 18px; min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-0); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; transition: border-color 160ms ease, box-shadow 160ms ease; }
-.inventory-device-card:hover { border-color: var(--accent); box-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 9%, transparent); }
+.inventory-device-card { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--surface-0); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; transition: border-color 160ms ease; }
+.inventory-device-card:hover { border-color: var(--accent); }
 .inventory-card-top { display: flex; justify-content: space-between; align-items: start; gap: 12px; font-size: 12px; }
-.inventory-device-illustration { display: grid; place-items: center; width: 80px; height: 80px; border-radius: 20px; color: var(--accent-text); background: linear-gradient(135deg, var(--accent-soft), var(--surface-1)); }
+.inventory-device-illustration { display: grid; place-items: center; width: 48px; height: 48px; color: var(--accent-text); }
+.inventory-device-illustration > svg { width: 44px; height: 44px; }
 .inventory-card-heading { display: grid; gap: 5px; min-width: 0; }
-.inventory-card-heading > strong { font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+.inventory-card-heading > strong { font-size: 15px; font-weight: 500; overflow-wrap: anywhere; }
 .inventory-card-heading > span { color: var(--text-secondary); font-size: 12px; }
 .inventory-card-facts { display: grid; grid-template-columns: 85px minmax(0, 1fr); gap: 9px 12px; font-size: 12px; }
 .inventory-card-facts > span:nth-child(odd) { color: var(--text-secondary); }

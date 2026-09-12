@@ -1,4 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="oonfeeWRT v0.1.5 Documentation">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="oonfeeWRT Documentation">
+<!-- Lucide Orbit, adapted stroke and colors.
+ISC License
+Copyright (c) 2026 Lucide Icons and Contributors
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+-->
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop stop-color="#0f1114"/>
@@ -11,13 +25,15 @@
   </defs>
   <rect width="1200" height="630" fill="url(#bg)"/>
   <circle cx="980" cy="120" r="430" fill="url(#glow)"/>
-  <g transform="translate(86 88)">
-    <rect width="92" height="92" rx="22" fill="#18569f"/>
-    <path d="M23 56h10v14H23zm21-20h10v34H44zm21-15h10v49H65z" fill="#fff"/>
-    <path d="M18 20h58" stroke="#63d0c7" stroke-width="7" stroke-linecap="round"/>
+  <g transform="translate(86 88) scale(3.8333333333)" fill="none" stroke="#8fb8ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M20.341 6.484A10 10 0 0 1 10.266 21.85" />
+  <path d="M3.659 17.516A10 10 0 0 1 13.74 2.152" />
+  <circle cx="12" cy="12" r="3" />
+  <circle cx="19" cy="5" r="2" />
+  <circle cx="5" cy="19" r="2" />
   </g>
   <text x="86" y="277" fill="#f2f4f7" font-family="system-ui,sans-serif" font-size="72" font-weight="740">oonfeeWRT</text>
-  <text x="86" y="359" fill="#62a8f6" font-family="system-ui,sans-serif" font-size="48" font-weight="650">Documentation · v0.1.5</text>
+  <text x="86" y="359" fill="#8fb8ff" font-family="system-ui,sans-serif" font-size="48" font-weight="650">Documentation</text>
   <text x="86" y="432" fill="#aeb4be" font-family="system-ui,sans-serif" font-size="29">Self-hosted management for stock OpenWrt.</text>
   <text x="86" y="478" fill="#aeb4be" font-family="system-ui,sans-serif" font-size="29">Install. Adopt. Observe. Configure safely.</text>
   <g fill="none" stroke="#54cbc2" stroke-width="5">

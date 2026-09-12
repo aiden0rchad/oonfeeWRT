@@ -6,7 +6,7 @@ import test from 'node:test'
 import { checkScreenshots } from './check-screenshots.mjs'
 
 // Copy an existing JPEG into isolated fixtures; no image codec or capture is needed.
-const screenshot = await readFile(new URL('../images/dashboard-overview.jpg', import.meta.url))
+const screenshot = await readFile(new URL('../public/screenshots/dashboard-overview-dark.jpg', import.meta.url))
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'oonfeewrt-screenshot-check-'))
@@ -17,7 +17,7 @@ async function fixture(t) {
     await writeFile(target, content)
   }
   await write('README.md', '<img src="docs/public/screenshots/dashboard-dark.jpg">')
-  await write('docs/guide.md', '<DocScreenshot\n src="dashboard"\n :width="1416" :height="925"\n alt="Dashboard" />')
+  await write('docs/guide.md', '<DocScreenshot\n src="dashboard"\n :width="1600" :height="1000"\n alt="Dashboard" />')
   await write('docs/public/screenshots/dashboard-dark.jpg', screenshot)
   return { root, write }
 }
@@ -39,6 +39,16 @@ test('missing dark screenshot fails when referenced only by README', async (t) =
   await write('docs/guide.md', '# No screenshot components')
   await rm(join(root, 'docs/public/screenshots/dashboard-dark.jpg'))
   assert.match((await checkScreenshots(root)).errors.join('\n'), /dashboard-dark\.jpg: missing screenshot/)
+})
+
+test('rejects non-16:10 screenshots even when referenced only by README', async (t) => {
+  const { root, write } = await fixture(t)
+  const legacy = await readFile(new URL('../images/dashboard-overview.jpg', import.meta.url))
+  await write('docs/guide.md', '# No screenshot components')
+  await write('docs/public/screenshots/dashboard-dark.jpg', legacy)
+  assert.deepEqual((await checkScreenshots(root)).errors, [
+    'docs/public/screenshots/dashboard-dark.jpg: screenshots must use a 16:10 aspect ratio (1416x925)',
+  ])
 })
 
 test('rejects truncated JPEG segments', async (t) => {
@@ -70,16 +80,16 @@ test('compares each reference against actual JPEG dimensions with its source loc
   const { root, write } = await fixture(t)
   await write('docs/guide.md', [
     '# Screenshots',
-    '<DocScreenshot src="dashboard" :width="1416" :height="925" />',
+    '<DocScreenshot src="dashboard" :width="1600" :height="1000" />',
     '<DocScreenshot src="dashboard" :width="1620" :height="959" />',
-    '<DocScreenshot src="dashboard" :width="925" :height="1416" />',
+    '<DocScreenshot src="dashboard" :width="1000" :height="1600" />',
   ].join('\n'))
   const result = await checkScreenshots(root)
   assert.equal(result.references, 3)
   assert.equal(result.screenshots, 1)
   assert.deepEqual(result.errors, [
-    'docs/guide.md:3: declared 1620x959 does not match docs/public/screenshots/dashboard-dark.jpg (1416x925)',
-    'docs/guide.md:4: declared 925x1416 does not match docs/public/screenshots/dashboard-dark.jpg (1416x925)',
+    'docs/guide.md:3: declared 1620x959 does not match docs/public/screenshots/dashboard-dark.jpg (1600x1000)',
+    'docs/guide.md:4: declared 1000x1600 does not match docs/public/screenshots/dashboard-dark.jpg (1600x1000)',
   ])
 })
 
@@ -87,9 +97,9 @@ test('accepts static numeric attributes across quote styles, line breaks, and bi
   const { root, write } = await fixture(t)
   await write('docs/guide.md', [
     '<DocScreenshot caption="A > B with :width=\'100\' inside text"',
-    " src='dashboard' v-bind:width='1416'",
-    " :height = '925' />",
-    '<DocScreenshot src="dashboard" width="1416" height="925" />',
+    " src='dashboard' v-bind:width='1600'",
+    " :height = '1000' />",
+    '<DocScreenshot src="dashboard" width="1600" height="1000" />',
   ].join('\n'))
   assert.deepEqual(await checkScreenshots(root), { errors: [], references: 2, screenshots: 1 })
 })
@@ -97,12 +107,12 @@ test('accepts static numeric attributes across quote styles, line breaks, and bi
 test('rejects missing, dynamic, invalid, and duplicate dimension attributes', async (t) => {
   const { root, write } = await fixture(t)
   const dimensions = [
-    '', ':width="1416"', ':width="image.width" :height="925"',
-    ':width="0" :height="925"', ':width="-1416" :height="925"',
-    ':width="1416.5" :height="925"', ':width="65536" :height="925"',
-    ':width="1416" :height="NaN"', ':width="1416" :height="Infinity"',
-    ':width="1416" width="1416" :height="925"',
-    ':width="1416" :height="925" v-bind:height="925"',
+    '', ':width="1600"', ':width="image.width" :height="1000"',
+    ':width="0" :height="1000"', ':width="-1600" :height="1000"',
+    ':width="1600.5" :height="1000"', ':width="65536" :height="1000"',
+    ':width="1600" :height="NaN"', ':width="1600" :height="Infinity"',
+    ':width="1600" width="1600" :height="1000"',
+    ':width="1600" :height="1000" v-bind:height="1000"',
   ]
   await write('docs/guide.md', dimensions.map((value) => `<DocScreenshot src="dashboard" ${value} />`).join('\n'))
   const { errors, references } = await checkScreenshots(root)

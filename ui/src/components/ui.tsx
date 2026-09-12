@@ -99,22 +99,16 @@ export function Stat({
 }) {
   const colour = tone ? `var(--${tone === 'muted' ? 'text-muted' : tone})` : undefined
   return (
-    <div>
-      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{label}</div>
+    <div className="ui-stat">
+      <div className="ui-stat-label">{label}</div>
       <div
-        className="num"
-        style={{
-          fontSize: 30,
-          fontWeight: 600,
-          textAlign: 'left',
-          color: colour,
-          lineHeight: 1.15,
-        }}
+        className="ui-stat-value num"
+        style={{ color: colour }}
       >
         {value}
       </div>
       {sub != null && (
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 3 }}>
+        <div className="ui-stat-note">
           {sub}
         </div>
       )}

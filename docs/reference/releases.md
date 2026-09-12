@@ -1,21 +1,88 @@
 # Release notes
 
-The documentation covers **v0.1.6**, using database **schema 25**. Its source
+The documentation covers **v0.1.7**, using database **schema 25**. Its source
 preparation date is September 12, 2026. Release artifacts, checksums, container digests,
 signatures, and attached notes on the GitHub release are the publication source
 of truth.
 
 ## Current release
 
-- [v0.1.6 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.6)
-- [v0.1.6 release notes](../releases/v0.1.6.md)
+- [v0.1.7 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.7)
+- [v0.1.7 release notes](../releases/v0.1.7.md)
 - [All GitHub releases](https://github.com/aiden0rchad/oonfeeWRT/releases)
 
-v0.1.6 adds Reports, durable Alerts, firmware catalogue checks, read-only
-integrations, historical Statistics, editable topology presentation, and a
-refreshed desktop/mobile interface. The matching tagged workflow must finish
+v0.1.7 refines the v0.1.6 controller with the Precision interface, a slimmer
+collapsible sidebar, Workspace/Insights groups, compact device and topology
+presentation, Settings-based Firmware and Integrations, and the orbit mark.
+It retains schema 25 and introduces no new router authority. The matching tagged workflow must finish
 before download links establish that these artifacts have been published.
 Historical versioned release notes and artifacts remain unchanged.
+
+## Changes in v0.1.7 {#changes-in-v0-1-7}
+
+### Precision shell and project identity
+
+The dark/light controller now uses a 56-pixel collapsed rail or 184-pixel
+labeled sidebar. The existing account-and-origin-scoped navigation preference
+continues to work. **Workspace** holds daily network tools; **Insights** holds
+Statistics, Reports, and Alerts. **Settings**, **Accounts**, and **Logs** stay
+at the bottom, above a compact signed-in account shortcut.
+
+Thinner borders, restrained surfaces, slimmer desktop controls, compact device
+cards, and quieter topology nodes give the observations more space. Keyboard
+focus, mobile/coarse-pointer targets, source limitations, and action warnings
+remain available. Topology layout changes still alter only browser-local
+presentation, not connection evidence or router configuration.
+
+The Dashboard fleet summary becomes one shared strip with inset dividers,
+readable labels, and right-aligned values. It reflows into fewer columns on
+narrow screens without clipping freshness, missing-data, or observation notes.
+The strip presents the existing fleet measurements; it adds no new telemetry.
+
+The consistent orbit mark appears in the application, sign-in/setup screen,
+README, docs, favicon, and installed-app icons. It adapts Lucide Orbit under
+ISC; the project retains copyright, license, and pinned provenance. It is a
+nonexclusive icon-based identity, not a claim of original or exclusive artwork.
+See [Project mark and application icons](./engineering.md#project-mark-and-application-icons).
+
+### Settings, direct links, and keyboard navigation
+
+[Firmware](../guide/firmware.md) and [Integrations](../guide/integrations.md)
+move into Settings beside Network, permission-gated Diagnostics, and owner-only
+Backup & Restore. Accounts stays separate. Existing `/firmware` and
+`/integrations` bookmarks still select the right section; new direct links are
+`/settings?section=firmware` and `/settings?section=integrations`.
+
+Section changes follow browser history. Tab selection keeps keyboard focus
+in the tablist, and unauthorized section fallbacks replace the invalid entry
+instead of repeatedly adding history. Session, role, recent-reauthentication,
+and explicit-check requirements are unchanged. Viewing either section does
+not install software, flash firmware, or configure DNS/VPN services.
+
+### Reports and documented workflows
+
+A loaded report must match the selected period and refresh revision before
+its measurements appear or become exportable. A pending replacement cannot
+relabel an old period as the new selection. CSV retains exact sample-weighted
+values, UTC period boundaries, and observed/expected coverage; the visible
+display precision does not round the export.
+
+The README and guides describe the current routes and show dark-mode captures
+with visible MAC addresses covered by solid masks. Older versioned release
+notes remain historical; the v0.1.6 feature additions are summarized below.
+
+### No new database migration
+
+v0.1.6 and v0.1.7 both use **schema 25**. Preserve a verified backup and matching
+recovery unit before upgrading, replace the controller with the verified
+release, and refresh the browser. No re-adoption or access expansion is needed.
+Older v0.1.5 data still follows **23 → 24 → 25**; a rollback to v0.1.5 still
+requires its matching pre-upgrade schema-23 recovery unit. Ordinary upgrades
+do not clear existing restored-controller write suppression. Portable restore
+continues to pause external alert delivery until reviewed by an Owner.
+
+Firmware execution, automatic helper deployment, SNMP, Web Push, DPI, and new
+physical-router validation are not added by this release.
 
 ## Changes in v0.1.6 {#development-after-v0-1-5}
 
@@ -132,6 +199,7 @@ broader hardware-validation claims.
 
 ## Earlier releases
 
+- [v0.1.6 notes](../releases/v0.1.6.md)
 - [v0.1.5 notes](../releases/v0.1.5.md)
 - [v0.1.4 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.4.md)
 - [v0.1.3 notes](https://github.com/aiden0rchad/oonfeeWRT/blob/main/docs/releases/v0.1.3.md)
@@ -238,7 +306,7 @@ un-adoption, or broader Filogic hardware.
 ## Verify what you run
 
 For a standalone archive, verify its entry in `SHA256SUMS` before extracting
-or installing it. For the OCI image, pin `v0.1.6` or the immutable digest and
+or installing it. For the OCI image, pin `v0.1.7` or the immutable digest and
 verify the GitHub Actions keyless signature as shown in the [Docker Compose
 guide](../installation/docker.md).
 
@@ -253,7 +321,7 @@ The daemon prints its build version with:
 oonfeewrtd -version
 ```
 
-v0.1.6 targets database schema **25**. Historical v0.1.5 targets schema **23**;
+v0.1.7 and v0.1.6 target database schema **25**. Historical v0.1.5 targets schema **23**;
 these are different compatibility boundaries.
 
 | Transition | Schema/data effect | Router-access effect |
@@ -265,6 +333,8 @@ these are different compatibility boundaries.
 | v0.1.5 → v0.1.4 | Restore the matching pre-upgrade schema-20 database, keyring, and passphrase; v0.1.4 cannot open schema 23 | Controller rollback does not revert router configuration applied while v0.1.5 was running |
 | v0.1.5 → v0.1.6 | Schema 23 → 24 → 25; persistent alerts then encrypted integration settings | No automatic helper installation, DNS/VPN change, or firmware flash |
 | v0.1.6 → v0.1.5 | Restore the matching pre-upgrade schema-23 database, keyring, runtime passphrase, and released binary/image | A schema-24/25 database or newer portable backup cannot be opened by v0.1.5 |
+| v0.1.6 → v0.1.7 | Schema 25; no new migration; keep a verified pre-upgrade recovery unit | Presentation/navigation changes only; no re-adoption, automatic helper installation, or firmware execution |
+| v0.1.7 → v0.1.6 | Schema 25; no schema boundary crossed; retain the matching recovery unit and old binary/image | Replacing the controller does not undo router configuration applied while either version ran |
 
 Preserve the matching database/keyring pair before every transition. The
 controller migrates supported older state at startup and refuses unsupported

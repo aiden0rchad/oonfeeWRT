@@ -4,7 +4,7 @@ The Radios workspace combines inventory, measured RF data, source gaps, and an
 evidence-aware channel plan. It helps you decide what to investigate; it does
 not claim spectrum knowledge the hardware did not report.
 
-In v0.1.6, compare the exact stable-radio series in
+In v0.1.7, compare the exact stable-radio series in
 [Statistics](./statistics.md) when one current RF value needs historical
 context. A cleaner chart or compact channel-classification note does not fill
 missing measurements or remove DFS restrictions. The [isolated demo](./demo.md)
@@ -21,10 +21,10 @@ The channel plan lays out known radios, bands, current channels, and evidence
 that can support a placement decision. The per-radio table adds utilization,
 interference, airtime, retry/failure, signal, and a scan-derived channel score
 when those sources are available. The latest scan row shows its outcome and BSS
-count; v0.1.6 does not display the raw BSS inventory.
+count; v0.1.7 does not display the raw BSS inventory.
 
 <DocScreenshot
-  src="radios-channel-plan" :width="1499" :height="982"
+  src="radios-channel-plan" :width="1600" :height="1000"
   alt="Radios workspace showing the Channel Plan and channel classification information"
   caption="Compare radios within the same band and consider channel width and source freshness. A channel placement is not a promise that the surrounding spectrum is clear."
 />
@@ -41,7 +41,7 @@ Treat it as a plan, not an automatic optimizer:
 
 ### Per-radio observability
 
-The v0.1.6 UI presents **Channel classification** as compact information,
+The v0.1.7 UI presents **Channel classification** as compact information,
 not a router fault. OpenWrt's `freqlist.restricted` flag does not prove DFS
 status, and the current controller does not persist explicit DFS or configured
 channel-exclusion evidence. Channels stay **Restricted** or unknown where
@@ -78,7 +78,7 @@ numbers.
 8. Refresh oonfeeWRT and compare client experience and new measurements after
    the change.
 
-oonfeeWRT v0.1.6 does not include spectrum analysis or an automatic channel
+oonfeeWRT v0.1.7 does not include spectrum analysis or an automatic channel
 change loop, and it has no radio-channel editor or Apply path. Its planner is
 read-only; only the separately acknowledged RF scan can disrupt a serving
 radio.
@@ -100,7 +100,7 @@ backhaul radio without a recovery and timing plan.
 6. Start the scan once and wait for its terminal state.
 
 <DocScreenshot
-  src="radios-details" :width="1499" :height="982"
+  src="radios-details" :width="1600" :height="1000"
   alt="RF scan confirmation dialog with a client-disruption warning and acknowledgement"
   caption="Confirm the device and stable radio before acknowledging possible client disruption. This capture stops at the confirmation dialog; no scan was executed."
 />

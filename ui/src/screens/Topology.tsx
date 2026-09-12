@@ -1058,12 +1058,11 @@ export function Topology({ onReviewCapabilities, userKey, controllerKey }: {
                     <title>{node.name} · {node.synthetic ? 'Synthetic endpoint' : node.kind} · {connectionLabel}</title>
                     <rect
                       className="topology-node-card"
-                      x="-112" y="-46" width="224" height="92" rx="14"
+                      x="-112" y="-46" width="224" height="92" rx="6"
                       fill="var(--surface-1)"
                       stroke={node.online === false ? 'var(--critical)' : 'var(--border-strong)'}
                       strokeDasharray={unplaced ? '4 4' : undefined}
                     />
-                    <rect x="-99" y="-32" width="36" height="36" rx="10" fill="var(--accent-soft)" />
                     <svg x="-96" y="-29" width="30" height="30" viewBox="0 0 32 32" fill="none" stroke="var(--accent)" strokeWidth="1.5" aria-hidden>
                       {node.synthetic ? <>
                         <circle cx="16" cy="16" r="11" />
@@ -1075,7 +1074,7 @@ export function Topology({ onReviewCapabilities, userKey, controllerKey }: {
                         <path d="M9 9.5h1m4 0h1m-6 13h1m4 0h1M23 9.5h1m-1 13h1" strokeLinecap="round" />
                       </>}
                     </svg>
-                    <text fill="var(--text-primary)" fontSize="11" fontWeight="600">
+                    <text fill="var(--text-primary)" fontSize="11" fontWeight="500">
                       {labelLines.map((line, index) => (
                         <tspan key={line} x="-52" y={labelLines.length > 1 ? -19 + index * 14 : -11}>{line}</tspan>
                       ))}

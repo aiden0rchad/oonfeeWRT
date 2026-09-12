@@ -1,6 +1,14 @@
 # oonfeeWRT — UI Specification
 
-> **v0.1.6 presentation update (2026-09-12):** The current interface uses
+> **v0.1.7 Precision refinement (2026-09-12):** The interface uses a 56px
+> collapsed / 184px expanded sidebar, separate Workspace and Insights groups,
+> a compact account footer, and the attributed Lucide orbit project mark.
+> Firmware and Integrations live inside Settings. Cards and controls are
+> flatter and more compact; existing v0.1.6 downloads retain their earlier
+> presentation. No router permissions or collection behavior
+> changed as part of this visual refinement.
+
+> **Introduced in v0.1.6, retained in v0.1.7:** The interface includes
 > original illustrations, Devices Cards/List, explicit client count scopes,
 > editable account-scoped browser topology layout, Reports, Alerts, Firmware,
 > Integrations, and responsive navigation. Consult the
@@ -173,7 +181,7 @@ mobile browser coverage now runs in light and dark themes; tokens, focus,
 status-without-color, and responsive no-overflow behavior remain release
 gates.
 
-The current development UI also preserves the selected light/dark theme across
+The v0.1.7 UI also preserves the selected light/dark theme across
 reloads, including native form controls and scrollbars. Shared cards and form
 controls use a consistent spacing scale. Adoption is grouped into connection,
 device responsibility, and access review, with discovery alongside the form on
@@ -209,18 +217,18 @@ not health-warning colours, while retaining exact missing-interval counts.
 └──┴──────────────────────┴──────────────────────────────────────────────┘
 ```
 
-**Navigation rail (64px collapsed).** The landed route list is split into a
-primary group—Dashboard, Statistics, Topology, Radios, Devices, Client Devices,
-Policy, and Adopt—and a **Controller** group containing Settings, Accounts, and
-Logs, in that order. The Controller divider uses the remaining vertical space
-to keep that group at the
-foot of a normal-height sidebar; on a short viewport the rail scrolls so every
-route remains reachable. Future routes in §2 do not get empty placeholders.
-Use one project-owned inline SVG set—never font glyphs or raster icons. Icons
-are 22–24px in controls at least 44px square, with a consistent stroke, visible
-focus/active states, accessible names and tooltips. The rail expands to show
-text labels and stores its preference locally, namespaced by controller and
-account; collapsed mode remains keyboard-usable.
+**Navigation rail (56px collapsed / 184px expanded).** Workspace contains
+Dashboard, Devices, Client Devices, Topology, Radios, Policy Engine, and Adopt
+a device. Insights contains Statistics, Reports, and Alerts. Settings,
+Accounts, and Logs remain at the foot, followed by the signed-in account's
+initial, username, and role. The profile opens Accounts; it is not a second
+account switcher. On short viewports the workspace list scrolls without
+pushing the controller tools away. Desktop navigation rows are 34px high with
+18px thin-stroke SVG icons; touch targets are at least 44px. Expanded section
+labels become separators in the icon rail, while accessible names, titles,
+active states, and keyboard focus remain available. Collapse preference is
+stored locally per controller origin and username. The mobile drawer keeps
+visible labels, traps focus, and returns focus when dismissed.
 
 **Context rail (264px).** Screen-specific. Two personalities:
 - *Filter rail* (Topology, Clients, Devices, Observability, Insights, Flows,
@@ -264,15 +272,30 @@ their warnings or controls.
 
 ## 2. Navigation map
 
-Current development source exposes **Dashboard**, **Statistics**, **Topology**,
+The v0.1.7 interface exposes **Dashboard**, **Statistics**, **Reports**,
+**Alerts**, **Topology**,
 **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Adopt a
 device**, **Settings**, **Accounts**, and **Logs**. The stable v0.1.5 artifacts do
 not contain Statistics, the standalone Accounts route, or the bottom-anchored Controller
-group; account controls remain inside Settings in that release. Current
-development `/accounts` opens **My account** for every signed-in role and adds
-the owner-only **Manage accounts** tab. `/settings` retains **Network**,
-**Diagnostics** for owner/admin, and **Backup & Restore** for owner. The larger
-map below is the long-term target; entries absent from current development
+group; account controls remain inside Settings in that release. In v0.1.7,
+`/accounts` opens **My account** for every signed-in role and adds
+the owner-only **Manage accounts** tab. `/settings` contains **Network**,
+**Firmware**, **Integrations**, **Diagnostics** for owner/admin, and **Backup &
+Restore** for owner. Settings deep links use `?section=firmware`,
+`?section=integrations`, `?section=diagnostics`, or `?section=backups`;
+the older `/firmware` and `/integrations` URLs still open the matching section.
+Moving sections does not change authorization or automatically run checks.
+Reload and browser Back/Forward preserve the chosen section. A forbidden
+maintenance section falls back to Network using history replacement, so Back
+does not return repeatedly to a denied tab. Keyboard tab selection retains
+focus rather than moving it to the page heading.
+
+Workspace groups Dashboard, Devices, Client Devices, Topology, Radios, Policy
+Engine, and Adopt a device. Insights groups Statistics, Reports, and Alerts.
+Settings, Accounts, and Logs stay at the bottom, followed by the compact
+signed-in profile shortcut to Accounts. The profile is not an account switcher.
+
+The larger map below is the long-term target; entries absent from v0.1.7
 remain specifications only.
 
 ```
@@ -401,11 +424,22 @@ tabular-nums`. System font stack — do not ship Ubiquiti's typeface.
 
 ### Shape
 
-Shared cards: 10px radius, 1px `--border`, no drop shadow. Headers use 12px ×
-16px padding and bodies use 16px, reduced to 12px on small screens. The main
-workspace uses 22px padding on desktop and 14px on mobile. Charts retain their
-compact 8px cards. Chips/pills: 4px radius, 11px text. Shared buttons: 7px radius,
-at least 32px tall; page-header and navigation actions retain a 44px minimum.
+Shared cards: 6px radius, 1px `--border`, no drop shadow. Headers use 11px ×
+14px padding and bodies use 14px, reduced to 12px on small screens. The main
+workspace uses 22px vertical / 26px horizontal padding on desktop and 14px on
+mobile. Fleet metrics share one quiet surface with a single outer border and
+inset vertical dividers, rather than five individually outlined cards. Muted
+14px icons align with the first line of semibold 15px labels; labels are white
+in dark mode and dark in light mode. Right-aligned 28px values provide the
+primary emphasis. A reserved helper-text row keeps labels aligned even when
+no explanation is needed; longer evidence explanations remain untruncated.
+Ordinary metric cells are approximately 80px high and expand for wrapped text.
+On narrower five-column desktop layouts, decorative icons are hidden to give
+labels more room without reducing their type size.
+At narrow widths, the strip becomes two columns with a full-width final metric,
+then a single column on phones, using horizontal row separators.
+Shared buttons use a 5px radius and 32px desktop minimum; touch controls retain
+a 44px minimum.
 Text inputs are 36px tall and native selects follow the active color scheme.
 Hover transitions are brief and respect reduced-motion preferences.
 
@@ -776,12 +810,12 @@ middleware, My Account and owner account-management screens are implemented.
 Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
 Sweep close affected `/live` sockets and cancel in-flight requests.
 
-**Accounts → My account (development); Settings → My account (v0.1.5).**
+**Accounts → My account (v0.1.6–v0.1.7); Settings → My account (v0.1.5).**
 Every signed-in user can change their own password and list/revoke their own
 in-memory sessions. Sessions state plainly that
 controller restart invalidates them.
 
-**Accounts → Manage accounts (development); Settings → Accounts (v0.1.5).**
+**Accounts → Manage accounts (v0.1.6–v0.1.7); Settings → Accounts (v0.1.5).**
 Owner-only management lists accounts, canonical role (`owner`, `admin`,
 `operator` or `viewer`), enabled state and recent login without
 exposing password material. Owner can create, change role, enable/disable,
@@ -800,7 +834,8 @@ members, a manifest and checksums. Stored evidence gaps do not fail the whole
 bundle.
 
 **Settings → Backup & Restore.** Implemented for `owner`; current restore
-previews migrate supported artifacts to schema 23. The historical schema-19
+previews migrate supported artifacts to schema 25, unchanged from v0.1.6.
+The historical schema-19
 owner screen passed route/render smoke, but its workflow actions are not
 claimed by that smoke.
 The existing export UI remains available and explains that its native

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vitepress .",
     "build": "npm run check:screenshots && vitepress build .",
-    "check:screenshots": "node scripts/check-screenshots.mjs",
+    "check:screenshots": "node --test scripts/check-screenshots.test.mjs && node scripts/check-screenshots.mjs",
     "preview": "vitepress preview ."
   },
   "devDependencies": {

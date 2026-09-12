@@ -70,9 +70,9 @@
 
 .topology-canvas {
   border: 1px solid var(--border);
-  border-radius: 14px;
-  background-color: var(--surface-2);
-  background-image: radial-gradient(var(--border-strong) .6px, transparent .6px);
+  border-radius: var(--radius-card);
+  background-color: var(--surface-0);
+  background-image: radial-gradient(var(--border) .6px, transparent .6px);
   background-size: 20px 20px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
@@ -88,8 +88,7 @@
 }
 
 .topology-node-card {
-  filter: drop-shadow(0 3px 5px rgb(0 0 0 / .12));
-  transition: stroke .15s ease, filter .15s ease;
+  transition: stroke .15s ease;
 }
 
 .topology-node:hover .topology-node-card,
@@ -97,7 +96,6 @@
 .topology-node[data-selected="true"] .topology-node-card {
   stroke: var(--accent);
   stroke-width: 2;
-  filter: drop-shadow(0 3px 7px rgb(0 0 0 / .18));
 }
 
 .topology-node:focus-visible .topology-node-card {
@@ -120,9 +118,9 @@
   margin: 10px;
   padding: 5px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 5px;
   background: var(--surface-1);
-  box-shadow: 0 2px 8px rgb(0 0 0 / .08);
+  box-shadow: none;
 }
 
 .topology-zoom-controls > span { padding: 0 5px; }

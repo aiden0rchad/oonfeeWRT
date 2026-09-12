@@ -72,7 +72,7 @@ export async function checkScreenshots(repoRoot) {
         const width = dimension('width')
         const height = dimension('height')
         if (width == null || height == null) {
-          errors.push(`${location}: DocScreenshot needs static positive-integer width and height attributes, for example :width="1620" :height="959"`)
+          errors.push(`${location}: DocScreenshot needs static positive-integer width and height attributes, for example :width="1600" :height="1000"`)
         } else {
           declaredDimensions.push({ path: `docs/public/screenshots/${source}-dark.jpg`, location, width, height })
         }
@@ -94,7 +94,13 @@ export async function checkScreenshots(repoRoot) {
   for (const path of files) {
     try {
       const bytes = await readFile(join(repoRoot, path))
-      if (/\.jpe?g$/i.test(path)) actualDimensions.set(path, jpegDimensions(bytes))
+      if (/\.jpe?g$/i.test(path)) {
+        const size = jpegDimensions(bytes)
+        actualDimensions.set(path, size)
+        if (path.startsWith('docs/public/screenshots/') && size.width * 10 !== size.height * 16) {
+          errors.push(`${path}: screenshots must use a 16:10 aspect ratio (${size.width}x${size.height})`)
+        }
+      }
     } catch (error) {
       errors.push(`${path}: ${error.code === 'ENOENT' ? 'missing screenshot' : error.message}`)
     }

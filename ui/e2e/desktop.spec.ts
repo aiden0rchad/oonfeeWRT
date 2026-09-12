@@ -310,6 +310,7 @@ for (const width of [320, 1280]) {
       await expect(metric.locator('.report-value')).not.toHaveText('—')
     }
     await page.getByRole('button', { name: '30 days', exact: true }).click()
+    await expect(page.locator('.report-coverage')).toHaveText(Array(5).fill('719 / 720 intervals observed'))
     const exportButton = page.getByRole('button', { name: 'Export CSV' })
     await expect(exportButton).toBeEnabled()
     const downloadPromise = page.waitForEvent('download')
@@ -369,6 +370,8 @@ test('firmware catalogue checks are explicit and a failed retry removes stale su
       : { status: 503, json: { error: 'Catalogue unavailable' } })
   })
   await page.goto('/firmware')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Settings')
+  await expect(page.getByRole('tab', { name: 'Firmware', exact: true })).toHaveAttribute('aria-selected', 'true')
   const check = page.getByRole('button', { name: 'Check OpenWrt catalogue' })
   await expect(check).toBeVisible()
   expect(checks).toBe(0)
@@ -393,20 +396,190 @@ test('mobile navigation traps focus, supports Escape, and reaches the new worksp
   await expect(close).toBeFocused()
   await expect(page.getByRole('main', { includeHidden: true })).toHaveAttribute('inert', '')
   await page.keyboard.press('Shift+Tab')
-  await expect(nav.getByRole('button', { name: 'Logs', exact: true })).toBeFocused()
+  const profile = nav.getByRole('button', { name: 'My account: operator, Owner', exact: true })
+  await expect(profile).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(close).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(open).toBeFocused()
   await expect(page.getByRole('main')).not.toHaveAttribute('inert')
-  for (const name of ['Reports', 'Alerts', 'Firmware', 'Settings', 'Accounts', 'Logs']) {
+  for (const name of ['Reports', 'Alerts', 'Settings', 'Accounts', 'Logs']) {
     await open.click()
     await nav.getByRole('button', { name, exact: true }).click()
     await expect(open).toHaveAttribute('aria-expanded', 'false')
     await expect(page.getByRole('heading', { name, exact: true, level: 1 })).toBeVisible()
     expect((await readOverflow(page)).document).toBeLessThanOrEqual(1)
   }
+  await open.click()
+  await expect(nav.getByRole('button', { name: 'Firmware', exact: true })).toHaveCount(0)
+  await expect(nav.getByRole('button', { name: 'Integrations', exact: true })).toHaveCount(0)
+  for (const theme of ['dark', 'light'] as const) {
+    if (theme === 'light') {
+      await close.click()
+      await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await open.click()
+    }
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+    for (const control of [profile, nav.getByRole('button', { name: 'Settings', exact: true }), nav.getByRole('button', { name: 'Accounts', exact: true }), nav.getByRole('button', { name: 'Logs', exact: true })]) {
+      const box = await control.boundingBox()
+      expect(box!.height).toBeGreaterThanOrEqual(44)
+      expect(box!.width).toBeGreaterThanOrEqual(44)
+    }
+  }
+  await profile.click()
+  await expect(open).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('heading', { name: 'Accounts', exact: true, level: 1 })).toBeVisible()
   expect(unexpected).toEqual([])
+})
+
+test('Settings preserves firmware and integration deep links, history, and explicit checks', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { statistics: true })
+  const serviceRequests: string[] = []
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname
+    if (path.includes('/firmware/check') || path.includes('/integrations/') && request.method() !== 'GET') {
+      serviceRequests.push(`${request.method()} ${path}`)
+    }
+  })
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+  for (const [path, label] of [
+    ['/firmware', 'Firmware'], ['/integrations', 'Integrations'],
+    ['/settings?section=firmware', 'Firmware'], ['/settings?section=integrations', 'Integrations'],
+  ]) {
+    await page.goto(path)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Settings')
+    await expect(page.getByRole('tab', { name: label, exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(page).toHaveTitle(`${label} · Settings — oonfeeWRT`)
+    await expect(navigation.getByRole('button', { name: 'Settings', exact: true })).toHaveAttribute('aria-current', 'page')
+    await expect(navigation.getByRole('button', { name: label, exact: true })).toHaveCount(0)
+    if (label === 'Firmware') await expect(page.getByRole('button', { name: 'Check OpenWrt catalogue' })).toBeVisible()
+    else await expect(page.getByText('https://dns.example', { exact: true })).toBeVisible()
+  }
+
+  await page.getByRole('tab', { name: 'Firmware', exact: true }).click()
+  await expect(page).toHaveURL(/\/settings\?section=firmware$/)
+  await page.getByRole('tab', { name: 'Network', exact: true }).click()
+  await expect(page).toHaveURL(/\/settings$/)
+  await page.goBack()
+  await expect(page.getByRole('tab', { name: 'Firmware', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.goBack()
+  await expect(page.getByRole('tab', { name: 'Integrations', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.goForward()
+  await expect(page.getByRole('tab', { name: 'Firmware', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.reload()
+  await expect(page.getByRole('tab', { name: 'Firmware', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.getByRole('tab', { name: 'Firmware', exact: true }).focus()
+  await page.getByRole('tab', { name: 'Firmware', exact: true }).press('ArrowRight')
+  await expect(page).toHaveURL(/\/settings\?section=integrations$/)
+  await expect(page.getByText('https://dns.example', { exact: true })).toBeVisible()
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect(page.getByRole('tab', { name: 'Integrations', exact: true })).toBeFocused()
+  expect(serviceRequests).toEqual([])
+  expect(unexpected).toEqual([])
+})
+
+test('viewer Settings links retain read-only firmware and integration controls', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { statistics: true, accountRole: 'viewer' })
+  await page.goto('/settings?section=firmware')
+  await expect(page.getByRole('heading', { name: 'Gateway', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Check OpenWrt catalogue' })).toHaveCount(0)
+  await page.getByRole('tab', { name: 'Integrations', exact: true }).click()
+  await expect(page.getByText('https://dns.example', { exact: true })).toBeVisible()
+  for (const name of ['Edit connection', 'Check AdGuard', 'Check WireGuard']) {
+    await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
+  }
+  for (const name of ['Diagnostics', 'Backup & Restore']) {
+    await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0)
+  }
+  expect(unexpected).toEqual([])
+})
+
+test('denied Settings links replace history so Back does not trap viewers', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, { accountRole: 'viewer' })
+  await page.goto('/topology')
+  await expect(page.getByRole('heading', { level: 1, name: 'Topology' })).toBeVisible()
+  const previousHistoryLength = await page.evaluate(() => history.length)
+  await page.goto('/settings?section=backups')
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page.getByRole('tab', { name: 'Network', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: 'Backup & Restore', exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => history.length)).toBe(previousHistoryLength + 1)
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/topology$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Topology' })).toBeVisible()
+  await page.goForward()
+  await expect(page).toHaveURL(/\/settings$/)
+  await expect(page.getByRole('tab', { name: 'Network', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await page.goBack()
+  await expect(page).toHaveURL(/\/topology$/)
+  expect(unexpected).toEqual([])
+})
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`${theme} Precision navigation keeps a compact profile, orbit brand, and persistent collapse`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 })
+    const unexpected = await installControllerFixture(page)
+    await page.goto('/topology')
+    if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+    const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+    const profile = navigation.getByRole('button', { name: 'My account: operator, Owner', exact: true })
+    const mark = navigation.locator('.app-brand > svg')
+    await expect(mark).toBeVisible()
+    await expect(mark).toHaveAttribute('viewBox', '0 0 24 24')
+    await expect(mark).toHaveAttribute('aria-hidden', 'true')
+    await expect(mark.locator('circle')).toHaveCount(3)
+    await expect(navigation).toHaveAttribute('data-expanded', 'false')
+    expect((await navigation.boundingBox())!.width).toBe(56)
+    expect((await profile.boundingBox())!.height).toBe(42)
+
+    await navigation.getByRole('button', { name: 'Expand navigation' }).click()
+    await expect(navigation).toHaveAttribute('data-expanded', 'true')
+    expect((await navigation.boundingBox())!.width).toBe(184)
+    await expect(navigation.locator('.app-brand')).toHaveText('oonfeeWRT')
+    await expect(profile.locator('.app-account-name')).toHaveText('operator')
+    await expect(profile.locator('.app-profile-role')).toHaveText('Owner')
+    expect((await profile.boundingBox())!.height).toBe(42)
+    const insights = navigation.getByRole('group', { name: 'Insights', exact: true })
+    await expect(insights.getByRole('separator', { name: 'Insights', exact: true })).toBeVisible()
+    expect(await insights.getByRole('button').allTextContents()).toEqual(['Statistics', 'Reports', 'Alerts'])
+    const workspace = navigation.getByRole('group', { name: 'Workspace', exact: true })
+    expect(await workspace.getByRole('button').allTextContents()).toEqual(['Dashboard', 'Devices', 'Client Devices', 'Topology', 'Radios', 'Policy Engine', 'Adopt a device'])
+    expect((await workspace.getByRole('button', { name: 'Topology', exact: true }).boundingBox())!.height).toBe(34)
+    await page.reload()
+    await expect(navigation).toHaveAttribute('data-expanded', 'true')
+    await navigation.getByRole('button', { name: 'Collapse navigation' }).click()
+    await page.reload()
+    await expect(navigation).toHaveAttribute('data-expanded', 'false')
+    await expect(profile).toHaveAccessibleName('My account: operator, Owner')
+    await profile.click()
+    await expect(page.getByRole('heading', { name: 'Accounts', exact: true, level: 1 })).toBeVisible()
+    expect((await readOverflow(page)).document).toBeLessThanOrEqual(1)
+    expect(unexpected).toEqual([])
+  })
+}
+
+test.describe('coarse-pointer Precision shell', () => {
+  test.use({ hasTouch: true, viewport: { width: 1280, height: 720 } })
+
+  test('collapsed navigation and profile retain 44px touch targets', async ({ page }) => {
+    const unexpected = await installControllerFixture(page)
+    await page.goto('/topology')
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true)
+    const navigation = page.getByRole('navigation', { name: 'Main navigation' })
+    await expect(navigation).toHaveAttribute('data-expanded', 'false')
+    for (const control of [
+      navigation.getByRole('button', { name: 'Expand navigation', exact: true }),
+      navigation.getByRole('button', { name: 'Settings', exact: true }),
+      navigation.getByRole('button', { name: 'My account: operator, Owner', exact: true }),
+    ]) {
+      const box = await control.boundingBox()
+      expect(box!.height).toBeGreaterThanOrEqual(44)
+      expect(box!.width).toBeGreaterThanOrEqual(44)
+    }
+    expect(unexpected).toEqual([])
+  })
 })
 
 test('installed app shows a static offline page without caching controller data', async ({ page, context }) => {
@@ -554,6 +727,10 @@ async function installControllerFixture(
       '/api/v1/dashboard': dashboard,
       '/api/v1/alerts': alertFixture(),
       '/api/v1/firmware': firmwareFixture,
+      '/api/v1/integrations/adguard': {
+        configured: true, url: 'https://dns.example', username: 'service',
+        has_password: true, tls_fingerprint: '',
+      },
       '/api/v1/devices': options.statistics ? statisticsDevices : { devices: [] },
       ...(options.statistics ? { '/api/v1/devices/1/series': statisticsCatalog } : {}),
       '/api/v1/clients': clientPage,
@@ -653,6 +830,45 @@ async function expectWithinMain(page: Page, locator: Locator) {
   expect(element!.x + element!.width).toBeLessThanOrEqual(main!.x + main!.width + 1)
 }
 
+async function expectFleetValuesOnRight(cards: Locator) {
+  const baselines: Array<{ label: number; icon: number | null }> = []
+  for (const card of await cards.all()) {
+    const layout = await card.evaluate((element) => {
+      const value = element.querySelector('.ui-stat-value')!
+      const label = element.querySelector('.ui-stat-label')!
+      const note = element.querySelector('.ui-stat-note')
+      const range = document.createRange()
+      range.selectNodeContents(value)
+      const bounds = element.getBoundingClientRect()
+      const number = range.getBoundingClientRect()
+      const style = getComputedStyle(element)
+      const icon = element.querySelector('.dashboard-summary-icon')!.getBoundingClientRect()
+      return {
+        left: value.getBoundingClientRect().left, labelRight: label.getBoundingClientRect().right,
+        noteRight: note?.getBoundingClientRect().right,
+        labelTop: label.getBoundingClientRect().top - bounds.top,
+        iconTop: icon.height > 0 ? icon.top - bounds.top : null,
+        borders: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth],
+        rightGap: bounds.right - number.right,
+        contained: number.left >= bounds.left && number.right <= bounds.right
+          && number.top >= bounds.top && number.bottom <= bounds.bottom,
+      }
+    })
+    expect(layout.left).toBeGreaterThanOrEqual(layout.labelRight - 1)
+    if (layout.noteRight != null) expect(layout.left).toBeGreaterThanOrEqual(layout.noteRight - 1)
+    expect(layout.rightGap).toBeLessThanOrEqual(18)
+    expect(layout.contained).toBe(true)
+    expect(['0px', '1px']).toContain(layout.borders[0])
+    expect(layout.borders.slice(1)).toEqual(['0px', '0px', '0px'])
+    if (layout.iconTop != null) expect(Math.abs(layout.labelTop - layout.iconTop)).toBeLessThanOrEqual(5)
+    baselines.push({ label: layout.labelTop, icon: layout.iconTop })
+  }
+  for (const key of ['label', 'icon'] as const) {
+    const offsets = baselines.map((baseline) => baseline[key]).filter((offset): offset is number => offset != null)
+    if (offsets.length > 0) expect(Math.max(...offsets) - Math.min(...offsets)).toBeLessThanOrEqual(1)
+  }
+}
+
 async function contrastRatio(locator: Locator) {
   return locator.evaluate((element) => {
     const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
@@ -683,6 +899,24 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
       await expect(page.getByText('fixture.warning')).toBeVisible()
       await expect(page.getByText('Complete coverage')).toBeVisible()
+
+      const summaryCards = page.locator('.dashboard-stat-grid > .ui-card')
+      await expect(summaryCards).toHaveCount(5)
+      for (const [index, label] of ['Devices online', 'Wireless clients', 'Devices on the LAN', 'Devices in focus', 'Series collected'].entries()) {
+        const card = summaryCards.nth(index)
+        expect((await card.boundingBox())!.height).toBeLessThanOrEqual(100)
+        const caption = card.getByText(label, { exact: true })
+        await expect(caption).toBeVisible()
+        await expect(caption).toHaveCSS('font-size', '15px')
+        await expect(caption).toHaveCSS('font-weight', '600')
+        await expect(caption).toHaveCSS('color', theme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(20, 23, 28)')
+        if (viewport.width === 1280) {
+          expect(await caption.evaluate((element) => element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight))).toBeLessThanOrEqual(1.05)
+        }
+        await expect(card.locator('.num')).toBeVisible()
+        await expect(card.locator('.num')).not.toHaveText('')
+      }
+      await expectFleetValuesOnRight(summaryCards)
 
       const health = page.getByRole('region', { name: 'Internet health details' })
       const healthCharts = health.locator('.dashboard-wan-metrics')
@@ -742,6 +976,84 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
       expect(unexpectedRequests).toEqual([])
     })
   }
+}
+
+for (const [width, columns] of [[320, 1], [768, 2], [1280, 5]]) {
+  test(`${width}px fleet strip uses ${columns} columns without separate card borders or clipped content`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    const unexpected = await installControllerFixture(page)
+    await page.goto('/')
+    if (width === 1280) await page.getByRole('button', { name: 'Expand navigation' }).click()
+    const strip = page.locator('.dashboard-stat-grid')
+    const cards = strip.locator(':scope > .ui-card')
+    await expect(cards).toHaveCount(5)
+    for (const theme of ['dark', 'light'] as const) {
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(strip).toHaveCSS('border-top-width', '1px')
+      await expect(strip).toHaveCSS('border-bottom-width', '1px')
+      expect(await strip.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(/\s+/).length)).toBe(columns)
+      for (let index = 0; index < 5; index++) {
+        await expect(cards.nth(index)).toHaveCSS('border-top-width', index < columns ? '0px' : '1px')
+      }
+      await expectFleetValuesOnRight(cards)
+      await expectWithinMain(page, strip)
+      expect((await readOverflow(page)).document).toBeLessThanOrEqual(1)
+      expect((await readOverflow(page)).main).toBeLessThanOrEqual(1)
+    }
+    expect(unexpected).toEqual([])
+  })
+}
+
+for (const width of [320, 1280]) {
+  test(`${width}px compact fleet cards preserve missing-evidence and exclusion details`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    const unexpected = await installControllerFixture(page)
+    await page.route('**/api/v1/dashboard', (route) => route.fulfill({ json: {
+      ...dashboard, wireless_clients: 123456, wireless_clients_complete: false,
+      upstream_devices: 123456, unscoped_devices: 789012, series_count: 1234567,
+    } }))
+    await page.goto('/')
+
+    const cards = page.locator('.dashboard-stat-grid > .ui-card')
+    const wireless = cards.filter({ hasText: 'Wireless clients' })
+    const unknown = wireless.getByRole('button', { name: 'Unknown: one or more devices did not report their current station set' })
+    const missing = wireless.getByText('123456 matching rows identified; full total unavailable', { exact: true })
+    const excluded = cards.filter({ hasText: 'Devices on the LAN' }).getByText('123456 upstream, 789012 unplaced not counted', { exact: true })
+    for (const theme of ['dark', 'light'] as const) {
+      if (theme === 'light') await page.getByRole('button', { name: /switch to light theme/i }).click()
+      await expect(unknown).toBeVisible()
+      await expect(cards.filter({ hasText: 'Series collected' }).locator('.ui-stat-value')).toHaveText('1234567')
+      await expectFleetValuesOnRight(cards)
+      for (const detail of [missing, excluded]) {
+        await expect(detail).toBeVisible()
+        await expectWithinMain(page, detail)
+        const layout = await detail.evaluate((element) => {
+          const card = element.closest('.ui-card')!.getBoundingClientRect()
+          const rect = element.getBoundingClientRect()
+          const range = document.createRange()
+          range.selectNodeContents(element)
+          const text = range.getBoundingClientRect()
+          return {
+            card: { top: card.top, bottom: card.bottom, left: card.left, right: card.right },
+            detail: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+            text: { top: text.top, bottom: text.bottom, left: text.left, right: text.right },
+            overflow: element.scrollHeight - element.clientHeight,
+          }
+        })
+        expect(layout.detail.top).toBeGreaterThanOrEqual(layout.card.top)
+        expect(layout.detail.bottom).toBeLessThanOrEqual(layout.card.bottom)
+        expect(layout.text.left).toBeGreaterThanOrEqual(layout.card.left)
+        expect(layout.text.right).toBeLessThanOrEqual(layout.card.right)
+        expect(layout.text.bottom).toBeLessThanOrEqual(layout.card.bottom)
+        expect(layout.overflow).toBeLessThanOrEqual(1)
+      }
+      await unknown.focus()
+      await expect(page.getByRole('tooltip').filter({ hasText: 'one or more devices did not report their current station set' })).toBeVisible()
+      await unknown.press('Escape')
+      expect((await readOverflow(page)).document).toBeLessThanOrEqual(1)
+    }
+    expect(unexpected).toEqual([])
+  })
 }
 
 for (const viewport of [
@@ -944,6 +1256,7 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   const divider = navigation.getByRole('separator', { name: 'Controller tools' })
   const adopt = navigation.getByRole('button', { name: 'Adopt a device' })
   const logs = navigation.getByRole('button', { name: 'Logs' })
+  const profile = navigation.getByRole('button', { name: 'My account: operator, Owner', exact: true })
   await expect(divider).toBeVisible()
   await expect(navigation.getByRole('button', { name: 'Settings' })).toBeVisible()
   await expect(navigation.getByRole('button', { name: 'Accounts' })).toBeVisible()
@@ -952,7 +1265,7 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   expect(await divider.evaluate((element) =>
     element.parentElement?.classList.contains('app-nav-controller'))).toBe(true)
   expect(await adopt.evaluate((element) =>
-    element.parentElement?.classList.contains('app-nav-primary'))).toBe(true)
+    element.closest('.app-nav-primary') !== null)).toBe(true)
   expect(await divider.evaluate((element) =>
     element.nextElementSibling?.getAttribute('aria-label'))).toBe('Settings')
   expect(await divider.evaluate((element) =>
@@ -960,13 +1273,16 @@ test('Controller tools sit at the sidebar foot and remain reachable when navigat
   expect(await navigation.getByRole('button', { name: 'Accounts' }).evaluate((element) =>
     element.nextElementSibling?.getAttribute('aria-label'))).toBe('Logs')
 
-  const [navigationBox, logsBox] = await Promise.all([
+  const [navigationBox, logsBox, profileBox] = await Promise.all([
     navigation.boundingBox(),
     logs.boundingBox(),
+    profile.boundingBox(),
   ])
   expect(navigationBox).not.toBeNull()
   expect(logsBox).not.toBeNull()
-  expect(navigationBox!.y + navigationBox!.height - logsBox!.y - logsBox!.height)
+  expect(profileBox).not.toBeNull()
+  expect(profileBox!.y).toBeGreaterThanOrEqual(logsBox!.y + logsBox!.height)
+  expect(navigationBox!.y + navigationBox!.height - profileBox!.y - profileBox!.height)
     .toBeLessThanOrEqual(12)
 
   await page.setViewportSize({ width: 1280, height: 420 })

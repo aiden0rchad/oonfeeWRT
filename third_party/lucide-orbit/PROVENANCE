@@ -1,0 +1,14 @@
+Component: Lucide Orbit icon
+Source revision: a79b2d131dab2bf20cb224bd0937b439a9c4fa99
+Source: https://github.com/lucide-icons/lucide/blob/a79b2d131dab2bf20cb224bd0937b439a9c4fa99/icons/orbit.svg
+License: https://github.com/lucide-icons/lucide/blob/a79b2d131dab2bf20cb224bd0937b439a9c4fa99/LICENSE
+License expression: ISC
+
+The orbit icon is not among the Feather-derived icons listed under the
+upstream license's separate MIT section. The applicable ISC text is retained
+in LICENSE next to this file.
+
+oonfeeWRT preserves the Orbit path and circle geometry, uses a 1.5-unit stroke,
+and adds project colors, sizing, and a background for installed-app icons.
+The icon is used as a nonexclusive, icon-based project mark, not original or
+exclusive artwork. Application and documentation copies retain its notice.

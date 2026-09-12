@@ -1,6 +1,6 @@
 # Explore the isolated demo
 
-The demo is a separate, read-only build of the v0.1.6 interface.
+The demo is a separate, read-only build of the v0.1.7 Precision interface.
 It contains an original fictional studio network: four infrastructure devices,
 eight clients, historical traffic, a topology map, radio channel plans, and
 sample alert rules. No controller or router is connected.
@@ -33,25 +33,31 @@ publish the real controller. Stop the preview with **Ctrl+C**.
 
 - **Dashboard:** synthetic Internet health, recent traffic, fleet counts, and
   illustrative speed-test results.
-- **Statistics and Reports:** deterministic traffic and system history across
+- **Insights → Statistics and Reports:** deterministic traffic and system history across
   bounded time ranges. Deliberate collection gaps remain gaps, not zeros.
 - **Topology:** inspect connections and arrange the fictional network. Layout
   edits affect only this browser; they never change connectivity.
 - **Devices and Client Devices:** inspect the fictional inventory, filter
   clients, and open their detail views.
 - **Radios:** compare example channels on two access points. No RF scan runs.
-- **Alerts:** review sample rules and a resolved incident. No notifications
+- **Insights → Alerts:** review sample rules and a resolved incident. No notifications
   are delivered.
-- **Settings, Accounts, and Firmware:** inspect the available read-only
+- **Settings → Network / Firmware** and **Accounts:** inspect the available read-only
   information. The demo account is a viewer, not a controller administrator.
-- **Integrations:** review the connection boundaries for AdGuard Home and
+- **Settings → Integrations:** review the connection boundaries for AdGuard Home and
   WireGuard. No service is connected and no external check can run.
+
+The demo uses the same collapsible Workspace/Insights sidebar, compact fleet
+strip, and bottom profile shortcut as the controller. Settings tab links use
+`/settings?section=firmware` and `/settings?section=integrations`; the older
+standalone URLs still work. Changing layout or navigation is local to this
+browser and does not make the demo capable of real controller operations.
 
 ## Safety boundaries and limitations
 
-<DocScreenshot src="demo-devices" :width="1280" :height="720" alt="Synthetic demo inventory with four fictional infrastructure devices in list view" caption="Demo only: four fictional devices illustrate the compact List view. These identities and statuses are not measurements from a real network." />
+<DocScreenshot src="demo-devices" :width="1600" :height="1000" alt="Synthetic demo inventory with four fictional infrastructure devices in list view" caption="Demo only: four fictional devices illustrate the compact List view. These identities and statuses are not measurements from a real network." />
 
-<DocScreenshot src="demo-topology" :width="1280" :height="720" alt="Synthetic demo topology showing gateway, switch, access points, clients, and an expired placement" caption="Demo only: the fictional graph illustrates supported links, inferred placements, and an unplaced offline client. It is not live router or switch validation." />
+<DocScreenshot src="demo-topology" :width="1600" :height="1000" alt="Synthetic demo topology showing gateway, switch, access points, clients, and an expired placement" caption="Demo only: the fictional graph illustrates supported links, inferred placements, and an unplaced offline client. It is not live router or switch validation." />
 
 Never enter real router credentials, account passwords, backup files, or
 private keys in the demo. They are unnecessary: the demo signs into its
@@ -74,5 +80,5 @@ administered MAC addresses. Screenshot redaction is a separate publishing
 choice: label demo screenshots as synthetic and do not present them as live
 network validation.
 
-This page describes the separately built local demo. v0.1.6 does not include a
+This page describes the separately built local demo. v0.1.7 does not include a
 publicly hosted demo service, and demo fixtures are never router validation.

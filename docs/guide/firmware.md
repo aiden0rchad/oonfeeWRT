@@ -1,26 +1,33 @@
 # Firmware and optional router helper
 
+::: info Find Firmware in v0.1.7
+Open **Settings → Firmware**, or bookmark `/settings?section=firmware` on your
+controller. The older `/firmware` URL remains an alias for this tab. The page
+heading is **Settings**; the selected **Firmware** tab identifies its content.
+Opening the tab reads stored inventory only—it does not check the catalogue.
+:::
+
 The Firmware workspace answers a focused question: **does the
 official OpenWrt catalogue list a newer maintenance release for this device's
 reported board, target, and filesystem?** It includes matching download metadata
 and a clear explanation when the controller cannot choose an image safely.
 
 ::: info Added in v0.1.6
-This workspace and the optional helper source are included in v0.1.6.
+This workspace and the optional helper source were introduced in v0.1.6.
 They do not add automatic flashing, scheduled upgrades, or a router-side remote
 command service. Existing adoption continues to work without a custom agent.
-The screenshots were captured on 12 September 2026 from the release-candidate
-source before tagging. The helper remains experimental and requires separate
+The screenshots were captured on 12 September 2026 from the v0.1.7 release-candidate
+UI source before tagging. The helper remains experimental and requires separate
 OpenWrt SDK and hardware validation before deployment.
 :::
 
 <div class="write-impact"><strong>Router write impact</strong><span>Viewing inventory and checking the official release catalogue do not contact or change a router. Installing the optional helper is a separate, manual opt-in. Firmware installation remains an external, explicitly reviewed OpenWrt operation.</span></div>
 
-<DocScreenshot src="firmware-overview" :width="1499" :height="982" alt="Firmware inventory showing reported versions and stored device identity facts" caption="Start with the reported firmware and stored board, target, and filesystem facts. Viewing this inventory does not query or change router firmware." />
+<DocScreenshot src="firmware-overview" :width="1600" :height="1000" alt="Firmware inventory showing reported versions and stored device identity facts" caption="Start with the reported firmware and stored board, target, and filesystem facts. Viewing this inventory does not query or change router firmware." />
 
 ## Check for a maintenance update
 
-1. Open **Firmware** and identify the intended device by its name and reported
+1. Open **Settings → Firmware** and identify the intended device by its name and reported
    firmware. Only adopted devices appear.
 2. Review the board name, target, and root filesystem. These facts come from the
    stored capability probe, not a new hardware query performed by this page.
@@ -33,7 +40,7 @@ OpenWrt SDK and hardware validation before deployment.
 5. Read the result and check time. Checks are on demand. Leaving the page open
    does not enable periodic downloads or upgrades.
 
-<DocScreenshot src="firmware-check" :width="1499" :height="982" alt="Successful Current in branch catalogue result for a Linksys WRT3200ACM reporting OpenWrt 25.12.5" caption="On 12 September 2026, this device matched the catalogue's latest 25.12 maintenance release. Current in branch is a version-metadata result, not a security assessment or approval to flash." />
+<DocScreenshot src="firmware-check" :width="1600" :height="1000" alt="Successful Current in branch catalogue result for a Linksys WRT3200ACM reporting OpenWrt 25.12.5" caption="On 12 September 2026, this device matched the catalogue's latest 25.12 maintenance release. Current in branch is a version-metadata result, not a security assessment or approval to flash." />
 
 This check matched the Linksys WRT3200ACM's stored `linksys,wrt3200acm` board,
 `mvebu/cortexa9` target, and `squashfs` filesystem to the official OpenWrt
@@ -83,7 +90,7 @@ current stored probe does not capture. See the
 The displayed checksum is the checksum **published in the HTTPS catalogue**.
 oonfeeWRT has not downloaded the firmware, checked its bytes, validated a
 signature, executed `sysupgrade -T`, or confirmed that settings can migrate.
-There is no enabled Install button in v0.1.6.
+There is no enabled Install button in v0.1.7.
 
 Before using an image outside the controller:
 

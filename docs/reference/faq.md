@@ -5,7 +5,7 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.6** unless a historical release or
+Answers below describe **oonfeeWRT v0.1.7** unless a historical release or
 rollback target is named explicitly.
 
 ## What is oonfeeWRT?
@@ -62,7 +62,7 @@ The optional LLDP capability is a separate workflow. It may install official
 OpenWrt feed packages only after showing and binding an exact plan to separate
 acknowledgements.
 
-v0.1.6 also provides an optional, manually built and installed
+Since v0.1.6, the controller also provides an optional, manually built and installed
 rpcd helper for narrow read-only integrations. It is not required for ordinary
 adoption and is never installed by it. The helper adds no daemon, listener,
 remote shell, or firmware-write method. See [Firmware](../guide/firmware.md)
@@ -291,11 +291,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.6.
+v0.1.7.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.6. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.7. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -359,10 +359,15 @@ server-selected five-minute resolution and a 30d view at hourly resolution. It
 reads completed stored rollups only; opening the page does not focus devices or
 preserve raw samples.
 
-## Can I downgrade from v0.1.6?
+## Can I downgrade from v0.1.7?
 
-Yes, by restoring a matching pre-upgrade recovery unit. v0.1.6 uses schema 25;
-v0.1.5 uses schema 23 and cannot open the newer database. Stop v0.1.6, retain
+Yes, using a verified matching recovery unit. v0.1.7 retains v0.1.6's schema 25,
+so returning to v0.1.6 crosses no schema boundary. Still preserve the exact
+pre-upgrade binary/image, database, keyring, and runtime passphrase and follow
+the [controlled recovery procedure](../installation/upgrades.md#upgrade-v016-to-v017).
+
+Returning to v0.1.5 or earlier is different:
+v0.1.5 uses schema 23 and cannot open the newer database. Stop v0.1.7, retain
 its current recovery unit separately, and restore the schema-23 database,
 keyring, runtime passphrase, and v0.1.5 binary/image together. Replacing only
 the executable or image tag is not a rollback. A pre-upgrade v0.1.5 portable
@@ -406,11 +411,24 @@ RC daemon.
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.6. The Phase 5
+- DPI/application flow history on constrained routers in v0.1.7. The Phase 5
   feasibility page does not install or ship a flow package.
 
-## What is new in the v0.1.6 interface?
+## What is new in the v0.1.7 interface?
 
+The **Precision** shell uses a slim collapsible sidebar, a compact profile
+shortcut, and the attributed Lucide orbit project mark. Operational screens
+sit under **Workspace**; **Statistics**, **Reports**, and **Alerts** sit under
+**Insights**. **Firmware** and **Integrations** are now Settings tabs, with
+bookmarkable query URLs and working legacy links. Accounts remains a separate
+bottom navigation item. The Dashboard uses one compact responsive fleet strip,
+with evidence notes left and values right; missing data is not hidden.
+
+Reports now blocks the previous result and CSV while a changed period or
+refresh is loading. Router permissions, collection behavior, and schema 25
+are unchanged from v0.1.6.
+
+Capabilities introduced in v0.1.6 are retained:
 [Statistics](../guide/statistics.md), [Reports](../guide/reports.md),
 [Alerts](../guide/alerts.md), [editable topology](../guide/clients-topology.md),
 device Cards/List, firmware metadata checks, integrations, and
@@ -439,7 +457,7 @@ hold-window, cooldown, and retry boundaries.
 
 ## Does restoring a backup replay notifications?
 
-No. v0.1.6 portable restore pauses external alert delivery, cancels its pending
+No. v0.1.7 portable restore pauses external alert delivery, cancels its pending
 outbox, and resets pending evaluation continuity. It preserves rules, incident
 history, cooldowns, and the encrypted destination without claiming recovery.
 An Owner must review the restored environment and explicitly re-enable

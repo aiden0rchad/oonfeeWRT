@@ -25,6 +25,8 @@ import {
 import { ago } from '../components/Chart'
 import { Diagnostics } from './Diagnostics'
 import { Backups } from './Backups'
+import { Firmware } from './Firmware'
+import { Integrations } from './Integrations'
 
 const applyOperationStorageKey = 'oonfee_last_apply_operation'
 const applyOperationPollMs = 1000
@@ -106,13 +108,15 @@ function applyWriteSummary(
   return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
 }
 
-type SettingsTab = 'network' | 'diagnostics' | 'backups'
+export type SettingsTab = 'network' | 'firmware' | 'integrations' | 'diagnostics' | 'backups'
 
 export function Settings({
   devices,
   devicesLoaded = true,
   devicesError = '',
   session,
+  initialTab = 'network',
+  onTabChange,
   initialNetworkSection = null,
   onInitialNetworkSectionHandled,
 }: {
@@ -120,33 +124,51 @@ export function Settings({
   devicesLoaded?: boolean
   devicesError?: string
   session?: SessionInfo
+  initialTab?: SettingsTab
+  onTabChange?: (tab: SettingsTab, navigation?: 'replace') => void
   initialNetworkSection?: 'ipv6' | null
   onInitialNetworkSectionHandled?: () => void
 }) {
-  const [tab, setTab] = useState<SettingsTab>('network')
+  const [selectedTab, setTab] = useState<SettingsTab>(initialTab)
   const diagnosticsTab = session?.role === 'owner' || session?.role === 'admin'
   const backupsTab = session?.role === 'owner'
 
-  useEffect(() => {
-    if ((!diagnosticsTab && tab === 'diagnostics') || (!backupsTab && tab === 'backups')) {
-      setTab('network')
-    }
-  }, [backupsTab, diagnosticsTab, tab])
-
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'network', label: 'Network' },
+    ...(session ? [
+      { id: 'firmware' as const, label: 'Firmware' },
+      { id: 'integrations' as const, label: 'Integrations' },
+    ] : []),
     ...(diagnosticsTab ? [{ id: 'diagnostics' as const, label: 'Diagnostics' }] : []),
     ...(backupsTab ? [{ id: 'backups' as const, label: 'Backup & Restore' }] : []),
   ]
+  const tab = tabs.some((item) => item.id === selectedTab) ? selectedTab : 'network'
+
+  useEffect(() => { setTab(initialTab) }, [initialTab])
+  useEffect(() => {
+    if (selectedTab !== tab) {
+      setTab(tab)
+      onTabChange?.(tab, 'replace')
+    }
+  }, [selectedTab, tab, onTabChange])
+
+  function selectTab(next: SettingsTab) {
+    setTab(next)
+    onTabChange?.(next)
+  }
+
+  const purposes: Record<SettingsTab, string> = {
+    network: 'Desired network state and controller operations.',
+    firmware: 'Stored firmware identity and official maintenance updates.',
+    integrations: 'Explicit connections and read-only checks for adjacent services.',
+    diagnostics: 'Redacted, stored-only support bundles.',
+    backups: 'Encrypted controller backup, preview, and restore.',
+  }
 
   return <div className="settings-page">
     <PageHeader
       title="Settings"
-      purpose={tab === 'network'
-        ? 'Desired network state and controller operations.'
-        : tab === 'diagnostics'
-          ? 'Redacted, stored-only support bundles.'
-          : 'Encrypted controller backup, preview, and restore.'}
+      purpose={purposes[tab]}
     />
     <div className="settings-tabs" role="tablist" aria-label="Settings sections">
       {tabs.map((item) => <button
@@ -157,7 +179,7 @@ export function Settings({
         aria-selected={tab === item.id}
         aria-controls={`settings-panel-${item.id}`}
         tabIndex={tab === item.id ? 0 : -1}
-        onClick={() => setTab(item.id)}
+        onClick={() => selectTab(item.id)}
         onKeyDown={(event) => {
           const index = tabs.findIndex((candidate) => candidate.id === item.id)
           let next = index
@@ -167,7 +189,7 @@ export function Settings({
           else if (event.key === 'End') next = tabs.length - 1
           else return
           event.preventDefault()
-          setTab(tabs[next].id)
+          selectTab(tabs[next].id)
           requestAnimationFrame(() => document.getElementById(`settings-tab-${tabs[next].id}`)?.focus())
         }}
       >
@@ -193,6 +215,8 @@ export function Settings({
           : <div role="status">Loading device inventory…</div>)}
       {tab === 'diagnostics' && diagnosticsTab && <Diagnostics />}
       {tab === 'backups' && backupsTab && session && <Backups session={session} />}
+      {tab === 'firmware' && session && <Firmware session={session} embedded />}
+      {tab === 'integrations' && session && <Integrations devices={devices} session={session} embedded />}
     </div>
   </div>
 }

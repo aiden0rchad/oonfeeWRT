@@ -8,8 +8,8 @@ adoption never equals applying network configuration.
 
 ## The device lifecycle
 
-::: info Updated in v0.1.6
-v0.1.6 adds illustrated **Cards** and **List** views, device search,
+::: info Device views retained in v0.1.7
+v0.1.6 introduced illustrated **Cards** and **List** views, device search,
 and status filtering. Adoption, management-mode fences, and configuration approval
 remain unchanged.
 :::
@@ -26,7 +26,7 @@ remain unchanged.
 
 ## Find your way around the inventory
 
-In v0.1.6, start with the fleet summary, then use **Search devices**
+In v0.1.7, start with the fleet summary, then use **Search devices**
 to match a name, address, firmware, or adopted function. Combine it with the
 status selector to narrow the loaded infrastructure inventory. The summary
 describes the fleet; **Showing … of … devices** describes the current filters.
@@ -199,7 +199,7 @@ The list is the fleet-level view. Use status and last-seen time together:
 Open a row for the detail workspace.
 
 <DocScreenshot
-  src="devices-inventory" :width="1499" :height="982"
+  src="devices-inventory" :width="1600" :height="1000"
   alt="Devices inventory with per-device status and management information"
   caption="Use the inventory for a fleet-level check, then select a row for its evidence. An intentional Monitor only boundary is different from an offline device or an unavailable measurement."
 />
@@ -207,7 +207,7 @@ Open a row for the detail workspace.
 ## Use device detail
 
 <DocScreenshot
-  src="device-detail" :width="370" :height="926"
+  src="device-detail" :width="1600" :height="1000"
   alt="Device detail panel opened from the Devices inventory"
   caption="The detail panel keeps the selected device's identity and observations together. Review capability and source notes before deciding that an absent measurement needs corrective action."
 />
@@ -236,7 +236,7 @@ can remain empty until that exact interface has collected samples. Dashboard
 adds a stricter series-catalog check before labeling data as WAN throughput.
 
 If the route cannot be mapped to exactly one active logical interface, the
-current v0.1.6 API explicitly reports no proved WAN interface and the UI leaves
+current v0.1.7 API explicitly reports no proved WAN interface and the UI leaves
 the WAN series unavailable. It does not guess from the metric catalog. Route
 evidence is refreshed on the slower network/topology cycle, approximately
 every 15 minutes; opening a focused device view does not make it a rapid

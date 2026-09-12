@@ -6,8 +6,8 @@ description: Configure sustained offline, WAN latency, and WAN loss conditions w
 # Alerts and webhook notifications
 
 ::: info Added in v0.1.6
-Alerts is included in v0.1.6. The screenshots were captured on 12 September
-2026 from the release-candidate source, before tagging; no rule or external
+Alerts was introduced in v0.1.6. The screenshots were captured on 12 September
+2026 from the v0.1.7 release-candidate UI source, before tagging; no rule or external
 notification destination was enabled for the captures.
 :::
 
@@ -22,17 +22,18 @@ and not confirmation that an existing incident recovered.
 
 <div class="write-impact"><strong>Router write impact</strong><span>Alert rules are controller-local. Evaluation uses existing inventory and stored telemetry; it does not contact, reconfigure, restart, or install software on a router. Optional webhook delivery makes outbound HTTPS requests only after an Owner explicitly configures and enables it.</span></div>
 
-<DocScreenshot src="alerts-overview" :width="1499" :height="982" alt="Alerts workspace with rule, incident, and notification-delivery sections" caption="Rules, incidents, and optional external delivery are separate. No rule was saved and no notification delivery was configured for this capture." />
+<DocScreenshot src="alerts-overview" :width="1600" :height="1000" alt="Alerts workspace with rule, incident, and notification-delivery sections" caption="Rules, incidents, and optional external delivery are separate. No rule was saved and no notification delivery was configured for this capture." />
 
 ## Create a rule
 
-1. Sign in as an **Owner** and open **Alerts** in the sidebar.
+1. Sign in as an **Owner** and open **Insights → Alerts** in the sidebar
+   (direct route: `/alerts`).
 2. Choose an adopted device and one of the conditions below.
 3. Give the rule a short, recognizable name.
 4. Set its threshold, sustained duration, and notification cooldown.
 5. Enable and save the rule. Allow the next one-minute evaluation to run.
 
-<DocScreenshot src="alerts-rule" :width="1499" :height="982" alt="Unsaved alert rule form with device, condition, sustained-duration, and cooldown controls" caption="Review the target, condition, sustained duration, and cooldown before saving. This form was left unsaved; it did not create a rule or send a notification." />
+<DocScreenshot src="alerts-rule" :width="1600" :height="1000" alt="Unsaved alert rule form with device, condition, sustained-duration, and cooldown controls" caption="Review the target, condition, sustained duration, and cooldown before saving. This form was left unsaved; it did not create a rule or send a notification." />
 
 All signed-in roles can read rules and incidents. Only Owners can create,
 change, or remove rules and configure notification delivery. The endpoints

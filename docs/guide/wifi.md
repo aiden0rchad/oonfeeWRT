@@ -1,6 +1,6 @@
 # Wi-Fi, roaming, and overrides
 
-::: info v0.1.6 context
+::: info v0.1.7 context
 The new illustrated inventories and editable topology do not change WLAN
 ownership, device functions, or radio capability gates. Use
 [Statistics](./statistics.md) for retained radio evidence and
@@ -64,7 +64,7 @@ controller to display it.
 ## Create or update a WLAN
 
 <DocScreenshot
-  src="wireless-networks" :width="1165" :height="982"
+  src="wireless-networks" :width="1600" :height="1000"
   alt="WLAN editor with SSID, security, network, AP group, and roaming controls"
   caption="Select Edit under Settings → Network → Wireless networks to review this WLAN form. Choose the intended network and AP group, then review security and roaming before saving desired state."
 />
@@ -149,7 +149,7 @@ recovery.
 ## Per-device overrides
 
 Overrides are for bounded hardware differences. They must not fork the WLAN's
-identity or security contract across APs. The v0.1.6 UI permits per-device
+identity or security contract across APs. The v0.1.7 UI permits per-device
 publication, hidden-SSID, and client-isolation overrides. It does not permit
 SSID, passphrase, security-mode, roaming, band, or radio-channel overrides.
 

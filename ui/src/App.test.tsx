@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './lib/api'
 import { App } from './App'
@@ -34,6 +34,8 @@ vi.mock('./screens/Dashboard', () => ({
   ),
 }))
 vi.mock('./screens/Statistics', () => ({ Statistics: () => <h1>Statistics</h1> }))
+vi.mock('./screens/Firmware', () => ({ Firmware: () => <h2>Firmware inventory</h2> }))
+vi.mock('./screens/Integrations', () => ({ Integrations: () => <h2>Integration connections</h2> }))
 vi.mock('./screens/Topology', () => ({ Topology: () => <h1>Topology</h1> }))
 vi.mock('./screens/Radios', () => ({ Radios: () => {
   if (mocks.radioCrash) throw new Error('radio fixture failed')
@@ -343,7 +345,7 @@ describe('App session boundaries', () => {
     render(<App />)
 
     const navigation = await screen.findByRole('navigation', { name: 'Main navigation' })
-    expect(navigation.style.width).toBe('64px')
+    expect(navigation.style.width).toBe('56px')
     const routeNames = [
       'Dashboard', 'Statistics', 'Topology', 'Radios', 'Devices', 'Client Devices',
       'Policy Engine', 'Adopt a device', 'Settings', 'Accounts', 'Logs',
@@ -352,12 +354,15 @@ describe('App session boundaries', () => {
       const button = screen.getByRole('button', { name })
       expect(button.querySelector('svg')?.getAttribute('width')).toBe('24')
       expect(button.getAttribute('title')).toBe(name)
-      expect(button.style.minHeight).toBe('44px')
       expect(button.classList.contains('app-nav-item')).toBe(true)
     }
     const divider = screen.getByRole('separator', { name: 'Controller tools' })
-    expect(divider.getAttribute('data-expanded')).toBe('false')
-    expect(screen.getByRole('button', { name: 'Adopt a device' }).parentElement?.nextElementSibling).toBe(divider.parentElement)
+    expect(navigation.getAttribute('data-expanded')).toBe('false')
+    expect(within(navigation).getByRole('group', { name: 'Workspace' }).contains(screen.getByRole('button', { name: 'Adopt a device' }))).toBe(true)
+    const insights = within(navigation).getByRole('group', { name: 'Insights' })
+    expect(within(insights).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual(['Statistics', 'Reports', 'Alerts'])
+    expect(within(navigation).queryByRole('button', { name: 'Firmware' })).toBeNull()
+    expect(within(navigation).queryByRole('button', { name: 'Integrations' })).toBeNull()
     expect(divider.nextElementSibling).toBe(screen.getByRole('button', { name: 'Settings' }))
     expect(divider.nextElementSibling?.nextElementSibling).toBe(screen.getByRole('button', { name: 'Accounts' }))
     expect(screen.getByRole('button', { name: 'Accounts' }).nextElementSibling).toBe(screen.getByRole('button', { name: 'Logs' }))
@@ -367,13 +372,50 @@ describe('App session boundaries', () => {
     expect(expand.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(expand)
 
-    expect(navigation.style.width).toBe('208px')
+    expect(navigation.style.width).toBe('184px')
     expect(screen.getByRole('button', { name: 'Collapse navigation' }).getAttribute('aria-expanded')).toBe('true')
-    expect(divider.getAttribute('data-expanded')).toBe('true')
-    expect(divider.textContent).toBe('Controller')
-    expect(screen.getByText('Dashboard')).toBeTruthy()
+    expect(navigation.getAttribute('data-expanded')).toBe('true')
+    expect(within(navigation).getByText('Workspace')).toBeTruthy()
+    expect(within(navigation).getByText('Insights')).toBeTruthy()
+    expect(within(navigation).getByText('Dashboard')).toBeTruthy()
+    expect(within(navigation).getByRole('button', { name: 'My account: admin, Owner' })).toBeTruthy()
     const key = `oonfeewrt:navigation:expanded:${encodeURIComponent(window.location.origin)}:admin`
     expect(window.localStorage.getItem(key)).toBe('true')
+  })
+
+  it.each([
+    ['/firmware', 'Firmware', 'Firmware inventory'],
+    ['/integrations', 'Integrations', 'Integration connections'],
+    ['/settings?section=firmware', 'Firmware', 'Firmware inventory'],
+    ['/settings?section=integrations', 'Integrations', 'Integration connections'],
+  ])('opens %s inside Settings without restoring a standalone sidebar item', async (path, tab, heading) => {
+    signedIn()
+    window.history.replaceState(null, '', path)
+    render(<App />)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: tab }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Settings' }).getAttribute('aria-current')).toBe('page')
+    await waitFor(() => expect(document.title).toBe(`${tab} · Settings — oonfeeWRT`))
+    expect(screen.queryByRole('button', { name: tab })).toBeNull()
+  })
+
+  it('updates Settings URLs and follows history without losing the selected section', async () => {
+    signedIn()
+    window.history.replaceState(null, '', '/settings?section=firmware')
+    render(<App />)
+    fireEvent.click(await screen.findByRole('tab', { name: 'Integrations' }))
+    expect(window.location.pathname + window.location.search).toBe('/settings?section=integrations')
+    expect(await screen.findByRole('heading', { name: 'Integration connections' })).toBeTruthy()
+    act(() => {
+      window.history.replaceState(null, '', '/settings?section=firmware')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(await screen.findByRole('heading', { name: 'Firmware inventory' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Firmware' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'My account: admin, Owner' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Accounts' })).toBeTruthy()
+    expect(window.location.pathname).toBe('/accounts')
   })
 
   it('restores only the signed-in account navigation preference', async () => {

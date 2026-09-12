@@ -4,7 +4,8 @@ Logs explain controller and network events; diagnostics package a bounded,
 redacted subset of stored controller evidence for support. Diagnostics do not
 poll or change routers while generating a bundle.
 
-v0.1.6 adds a separate [Alerts](./alerts.md) workspace for
+The [Alerts](./alerts.md) workspace introduced in v0.1.6 remains available
+under **Insights → Alerts** in v0.1.7 for
 configured sustained conditions, incident history, and opt-in webhook delivery.
 It does not replace General/Audit logs or their coverage record. A delivery
 failure describes the notification path, not necessarily the router; use the
@@ -27,13 +28,13 @@ The exact detail panel preserves source provenance and fields that would be too
 dense for the table.
 
 <DocScreenshot
-  src="logs-general" :width="1499" :height="982"
+  src="logs-general" :width="1600" :height="1000"
   alt="Logs General view with event filters, source information, and the event table"
-  caption="Logs → General combines operational events with source and coverage information. Use the filters, then open a row for its exact evidence."
+  caption="Logs → General combines operational events with source and coverage information. The optional Detail column is hidden here for a cleaner overview; use View to inspect a row's exact evidence."
 />
 
 <DocScreenshot
-  src="logs-audit" :width="1499" :height="982"
+  src="logs-audit" :width="1600" :height="1000"
   alt="Logs Audit view for controller administrative and security events"
   caption="Logs → Audit is the separate view for administrative and security-relevant actions. Access depends on the signed-in role."
 />
@@ -54,7 +55,7 @@ A useful incident filter sequence:
 6. note source gaps and timestamps;
 7. correlate with Dashboard, Client Observability, or Topology at the same time.
 
-v0.1.6 does not provide a device or free-text search filter on the Logs page.
+v0.1.7 does not provide a device or free-text search filter on the Logs page.
 
 ## Understand router-log coverage
 
@@ -62,7 +63,7 @@ Coverage describes which router-log intervals the controller can establish.
 It is not a warning that logs grow without a limit, and a stored cursor alone
 does not prove that a router is currently reachable.
 
-In v0.1.6, **Router log coverage** separates two cases:
+In v0.1.7, **Router log coverage** separates two cases:
 
 - **Current collection is up to date; earlier history is unavailable.** The
   compact information disclosure preserves the affected routers and gap
@@ -158,7 +159,7 @@ Users with the required administrative permission can open **Settings →
 Diagnostics**.
 
 <DocScreenshot
-  src="diagnostics" :width="1165" :height="982"
+  src="diagnostics" :width="1600" :height="1000"
   alt="Settings Diagnostics tab with the stored-only bundle disclosure"
   caption="Open More information in Settings → Diagnostics to review included sections and excluded secret classes before generation. Opening this page does not create or download a bundle."
 />

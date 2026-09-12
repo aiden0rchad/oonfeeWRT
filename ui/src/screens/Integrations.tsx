@@ -14,7 +14,7 @@ const bytes = (value: number | null) => {
 }
 const flag = (value: boolean | null) => value === true ? 'Enabled' : value === false ? 'Disabled' : 'Unavailable'
 
-export function Integrations({ devices, session }: { devices: Device[]; session: SessionInfo }) {
+export function Integrations({ devices, session, embedded = false }: { devices: Device[]; session: SessionInfo; embedded?: boolean }) {
   const owner = session.role === 'owner' && !isDemo
   const canCheck = !isDemo && (session.role === 'owner' || session.role === 'admin')
   const [config, setConfig] = useState<AdGuardConfig | null>(null)
@@ -89,7 +89,7 @@ export function Integrations({ devices, session }: { devices: Device[]; session:
   }
 
   return <div className="integrations-page">
-    <PageHeader title="Integrations" purpose="A clear view of adjacent services, with explicit connections and read-only checks." />
+    {!embedded && <PageHeader title="Integrations" purpose="A clear view of adjacent services, with explicit connections and read-only checks." />}
     <div className="integrations-intro"><strong>Visibility without service changes</strong><p>These checks do not create VPN tunnels, change DNS protection, install packages, or alter your network. Nothing is polled automatically.</p></div>
     <div className="integration-grid">
       <Card title="AdGuard Home">
