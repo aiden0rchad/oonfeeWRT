@@ -70,8 +70,8 @@ The export passphrase:
 
 <DocScreenshot
   src="backup-restore" :width="1600" :height="1000"
-  alt="Upper overview of Settings Backup and Restore, with export and restore introductions"
-  caption="The workspace overview introduces encrypted export and restore. Lower restore-upload controls are outside this capture; opening the page does not start an export or restore."
+  alt="Settings Backup and Restore with encrypted export, router-write status, and restore-upload controls"
+  caption="The overview shows encrypted export, the router-write gate, and the start of restore upload. Opening the page does not start an export or restore."
 />
 
 The steps below cover export. Continue to [Preview a restore](#preview-a-restore)
