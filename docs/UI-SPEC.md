@@ -434,8 +434,9 @@ in dark mode and dark in light mode. Right-aligned 28px values provide the
 primary emphasis. A reserved helper-text row keeps labels aligned even when
 no explanation is needed; longer evidence explanations remain untruncated.
 Ordinary metric cells are approximately 80px high and expand for wrapped text.
-On narrower five-column desktop layouts, decorative icons are hidden to give
-labels more room without reducing their type size.
+On narrower five-column desktop layouts, decorative icons are hidden and the
+LAN metric gets slightly more width to accommodate wider native system fonts
+without reducing label size or clipping text.
 At narrow widths, the strip becomes two columns with a full-width final metric,
 then a single column on phones, using horizontal row separators.
 Shared buttons use a 5px radius and 32px desktop minimum; touch controls retain
