@@ -3298,9 +3298,9 @@ textarea::placeholder {
 }
 
 @media (min-width: 1101px) and (max-width: 1400px) {
-  .dashboard-stat-grid .ui-card-body { padding-block: 11px; }
+  .dashboard-stat-grid .ui-card-body { padding: 11px 10px; }
   .dashboard-stat-grid .dashboard-summary-icon { display: none; }
-  .dashboard-stat-grid .ui-stat { padding-left: 0; }
+  .dashboard-stat-grid .ui-stat { padding-left: 0; column-gap: 8px; }
 }
 
 @media (max-width: 1100px) {

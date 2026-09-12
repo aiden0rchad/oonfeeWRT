@@ -911,7 +911,7 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
         await expect(caption).toHaveCSS('font-weight', '600')
         await expect(caption).toHaveCSS('color', theme === 'dark' ? 'rgb(255, 255, 255)' : 'rgb(20, 23, 28)')
         if (viewport.width === 1280) {
-          expect(await caption.evaluate((element) => element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight))).toBeLessThanOrEqual(1.05)
+          expect(await caption.evaluate((element) => element.getBoundingClientRect().height / parseFloat(getComputedStyle(element).lineHeight)), `${label} stays on one line`).toBeLessThanOrEqual(1.05)
         }
         await expect(card.locator('.num')).toBeVisible()
         await expect(card.locator('.num')).not.toHaveText('')
