@@ -209,6 +209,9 @@ func (r *Reconciler) PlanDevice(ctx context.Context, c *ubus.Client, site model.
 	if err != nil {
 		return nil, err
 	}
+	if err := doc.Validate(); err != nil {
+		return nil, fmt.Errorf("reconcile: rejected invalid desired document: %w", err)
+	}
 	if conflict := explicitFirewallPolicyConflict(ctx, c, site, dev, existing); conflict != nil {
 		report.Conflicts = append(report.Conflicts, *conflict)
 	}
@@ -337,6 +340,9 @@ func detectDrift(doc render.Doc, existing render.Existing, appliedHash map[strin
 func (r *Reconciler) Apply(ctx context.Context, c *ubus.Client, deviceID int64,
 	p *DevicePlan, health applyengine.HealthCheck) (applyengine.Result, error) {
 
+	if err := p.Doc.Validate(); err != nil {
+		return applyengine.Result{}, fmt.Errorf("reconcile: rejected invalid desired document: %w", err)
+	}
 	if p.Blocked() {
 		return applyengine.Result{}, fmt.Errorf(
 			"reconcile: device has %d unresolved conflict(s); refusing to apply: %s",

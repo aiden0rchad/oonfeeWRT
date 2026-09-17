@@ -52,12 +52,11 @@ const (
 	// EffectChanged: a value that is not three-state — a radio, the class, the
 	// port map, the firmware string.
 	EffectChanged Effect = "changed"
-	// EffectAmbiguous: an identifier that is no longer present, where the
-	// earlier record carries no evidence to say whether the thing was removed
-	// or merely renamed.
+	// EffectAmbiguous: the available identity or capability evidence cannot
+	// determine which concrete change occurred.
 	//
-	// Deliberately NOT actionable. It is the honest answer when the rename
-	// pairing has nothing to pair on, and calling it a loss puts "WLANs
+	// Deliberately NOT actionable. It is the honest answer when matching
+	// evidence cannot establish unique continuity, and calling it a loss puts "WLANs
 	// targeted at its band will not render on this device" against hardware
 	// that is present and broadcasting.
 	EffectAmbiguous Effect = "ambiguous"
@@ -205,12 +204,12 @@ func featureChange(f Feature, before, after State) (Change, bool) {
 	return c, true
 }
 
-// radioChanges reports radios appearing, disappearing, or changing band.
+// radioChanges reports radios appearing, disappearing, or changing supported modes.
 //
-// Keyed on Phy rather than on the interface name: `phy0-ap0` is an interface
-// this controller may itself create or remove, while the phy is the hardware.
-// Keying on the interface would report a radio as lost every time an SSID was
-// removed from it.
+// Explicit configured section identity wins per record. Unmatched keyed and
+// legacy records bridge by PHY only when the correspondence is unique; two
+// authoritative sections never become the same radio merely because they share
+// a PHY. Section and PHY identities occupy separate internal namespaces.
 //
 // # What is deliberately NOT compared
 //
@@ -230,27 +229,151 @@ func radioChanges(old, new *Registry) []Change {
 	if old == nil {
 		return nil
 	}
-	before := map[string]Radio{}
-	for _, r := range old.Radios {
-		before[r.Phy] = r
+	before, after := old.Radios, new.Radios
+	beforeMatch := make([]int, len(before))
+	afterMatch := make([]int, len(after))
+	for i := range beforeMatch {
+		beforeMatch[i] = -1
 	}
-	after := map[string]Radio{}
-	for _, r := range new.Radios {
-		after[r.Phy] = r
+	for i := range afterMatch {
+		afterMatch[i] = -1
+	}
+	type pair struct{ before, after int }
+	var pairs []pair
+	match := func(bi, ai int) {
+		beforeMatch[bi], afterMatch[ai] = ai, bi
+		pairs = append(pairs, pair{before: bi, after: ai})
 	}
 
-	phys := map[string]bool{}
-	for p := range before {
-		phys[p] = true
+	// Authoritative identity is exact and takes precedence over every
+	// compatibility path. Pair records rather than putting them in a map so a
+	// malformed duplicate cannot silently overwrite another record.
+	for bi, b := range before {
+		if b.Section == "" {
+			continue
+		}
+		bkey, _ := radioComparisonIdentity(b)
+		for ai, a := range after {
+			if afterMatch[ai] >= 0 || a.Section == "" {
+				continue
+			}
+			akey, _ := radioComparisonIdentity(a)
+			if bkey == akey {
+				match(bi, ai)
+				break
+			}
+		}
 	}
-	for p := range after {
-		phys[p] = true
+
+	// Compatibility bridge for records captured before Section existed, or
+	// from an interface-only fallback. Mutual uniqueness is required: with two
+	// configured radios on one PHY, PHY alone does not say which is which.
+	beforeCandidate, beforeCandidates := make([]int, len(before)), make([]int, len(before))
+	afterCandidate, afterCandidates := make([]int, len(after)), make([]int, len(after))
+	for bi, b := range before {
+		if beforeMatch[bi] >= 0 {
+			continue
+		}
+		beforeCandidate[bi] = -1
+		for ai, a := range after {
+			if afterMatch[ai] >= 0 || !radioPHYCompatible(b, a) {
+				continue
+			}
+			beforeCandidate[bi] = ai
+			beforeCandidates[bi]++
+		}
 	}
-	keys := make([]string, 0, len(phys))
-	for p := range phys {
-		keys = append(keys, p)
+	for ai, a := range after {
+		if afterMatch[ai] >= 0 {
+			continue
+		}
+		afterCandidate[ai] = -1
+		for bi, b := range before {
+			if beforeMatch[bi] >= 0 || !radioPHYCompatible(b, a) {
+				continue
+			}
+			afterCandidate[ai] = bi
+			afterCandidates[ai]++
+		}
 	}
-	sort.Strings(keys)
+	for bi, ai := range beforeCandidate {
+		if beforeMatch[bi] < 0 && beforeCandidates[bi] == 1 &&
+			afterCandidates[ai] == 1 && afterCandidate[ai] == bi {
+			match(bi, ai)
+		}
+	}
+
+	var out []Change
+	for _, p := range pairs {
+		b, a := before[p.before], after[p.after]
+		// An absent mode list is unresolved evidence, not proof that the
+		// hardware changed its supported modes.
+		if len(b.HWModes) == 0 || len(a.HWModes) == 0 || sameModes(b.HWModes, a.HWModes) {
+			continue
+		}
+		name := radioPairName(b, a)
+		out = append(out, Change{
+			Kind: "radio", Name: name, Effect: EffectChanged,
+			From: strings.Join(b.HWModes, ","), To: strings.Join(a.HWModes, ","),
+			Detail: fmt.Sprintf("radio %s changed the modes it reports, "+
+				"from %s to %s, which can change which band it serves", name,
+				strings.Join(b.HWModes, ","), strings.Join(a.HWModes, ",")),
+		})
+	}
+
+	// A shared PHY with unmatched legacy records on both sides has persisted,
+	// but its configured radios cannot be paired uniquely. Report that once as
+	// uncertainty; definite per-record loss/gain claims would be invented.
+	type phyGroup struct{ before, after []int }
+	groups := map[string]*phyGroup{}
+	group := func(phy string) *phyGroup {
+		if groups[phy] == nil {
+			groups[phy] = &phyGroup{}
+		}
+		return groups[phy]
+	}
+	for bi, b := range before {
+		if beforeMatch[bi] < 0 && b.Phy != "" {
+			g := group(b.Phy)
+			g.before = append(g.before, bi)
+		}
+	}
+	for ai, a := range after {
+		if afterMatch[ai] < 0 && a.Phy != "" {
+			g := group(a.Phy)
+			g.after = append(g.after, ai)
+		}
+	}
+	ambiguousBefore := make([]bool, len(before))
+	ambiguousAfter := make([]bool, len(after))
+	phys := make([]string, 0, len(groups))
+	for phy := range groups {
+		phys = append(phys, phy)
+	}
+	sort.Strings(phys)
+	for _, phy := range phys {
+		g := groups[phy]
+		if len(g.before) == 0 || len(g.after) == 0 ||
+			!radioGroupHasLegacy(before, after, g.before, g.after) {
+			continue
+		}
+		for _, bi := range g.before {
+			ambiguousBefore[bi] = true
+		}
+		for _, ai := range g.after {
+			ambiguousAfter[ai] = true
+		}
+		from, to := radioGroupNames(before, g.before), radioGroupNames(after, g.after)
+		out = append(out, Change{
+			Kind: "radio", Name: phy, Effect: EffectAmbiguous,
+			From: strings.Join(from, ","), To: strings.Join(to, ","),
+			Detail: fmt.Sprintf("radios on %s cannot be matched uniquely across probes "+
+				"(before: [%s], now: [%s]). The PHY is still present, so this does "+
+				"not prove radio hardware was lost or gained — re-probe to settle "+
+				"configured section identity", phy, strings.Join(from, ", "),
+				strings.Join(to, ", ")),
+		})
+	}
 
 	// Pair a radio that vanished with one that appeared carrying the same
 	// modes, and call it what it is: a rename.
@@ -263,102 +386,129 @@ func radioChanges(old, new *Registry) []Change {
 	// do the same to any user.
 	//
 	// Modes are the evidence: a radio that reports the same modes under a new
-	// name is the same radio. Anything left unpaired is still reported as a
-	// genuine loss or gain, because that is what it looks like.
-	renamedFrom := map[string]string{}
-	renamedTo := map[string]bool{}
-	for _, p := range keys {
-		if _, hadBefore := before[p]; !hadBefore {
+	// name is the same radio. Remaining records are classified below according
+	// to whether their evidence proves loss, gain, or only uncertainty.
+	renamedBefore := make([]bool, len(before))
+	renamedAfter := make([]bool, len(after))
+	type renamePair struct{ before, after int }
+	var renames []renamePair
+	for bi, b := range before {
+		if beforeMatch[bi] >= 0 || ambiguousBefore[bi] {
 			continue
 		}
-		if _, hasNow := after[p]; hasNow {
-			continue
-		}
-		for _, q := range keys {
-			if _, had := before[q]; had {
+		for ai, a := range after {
+			if afterMatch[ai] >= 0 || ambiguousAfter[ai] || renamedAfter[ai] || len(a.HWModes) == 0 {
 				continue
 			}
-			a, hasNow := after[q]
-			if !hasNow || renamedTo[q] || len(a.HWModes) == 0 {
-				continue
-			}
-			if sameModes(before[p].HWModes, a.HWModes) {
-				renamedFrom[q] = p
-				renamedTo[q] = true
+			if sameModes(b.HWModes, a.HWModes) {
+				renamedBefore[bi], renamedAfter[ai] = true, true
+				renames = append(renames, renamePair{before: bi, after: ai})
 				break
 			}
 		}
 	}
-	renamedAway := map[string]bool{}
-	for _, from := range renamedFrom {
-		renamedAway[from] = true
+	for _, rename := range renames {
+		b, a := before[rename.before], after[rename.after]
+		fromName, toName := radioDisplayName(b), radioDisplayName(a)
+		out = append(out, Change{
+			Kind: "radio", Name: toName, Effect: EffectRenamed,
+			From: fromName, To: toName,
+			Detail: fmt.Sprintf("radio %s is now called %s. It reports the "+
+				"same modes (%s), so this is the same hardware under a new "+
+				"name and nothing about what it can carry has changed",
+				fromName, toName, strings.Join(a.HWModes, ",")),
+		})
 	}
-
-	var out []Change
-	for _, p := range keys {
-		b, hadBefore := before[p]
-		a, hasNow := after[p]
-		if from, isRename := renamedFrom[p]; isRename {
-			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectRenamed,
-				From: from, To: p,
-				Detail: fmt.Sprintf("radio %s is now called %s. It reports the "+
-					"same modes (%s), so this is the same hardware under a new "+
-					"name and nothing about what it can carry has changed",
-					from, p, strings.Join(a.HWModes, ",")),
-			})
+	for bi, b := range before {
+		if beforeMatch[bi] >= 0 || ambiguousBefore[bi] || renamedBefore[bi] {
 			continue
 		}
-		if renamedAway[p] {
-			continue // reported above, from the new name's side
-		}
-		switch {
-		case !hadBefore && hasNow:
+		name := radioDisplayName(b)
+		if len(b.HWModes) == 0 {
 			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectGained,
-				To: strings.Join(a.HWModes, ","),
-				Detail: fmt.Sprintf("radio %s appeared (%s). It can carry "+
-					"WLANs once the site is applied", p,
-					strings.Join(a.HWModes, ",")),
-			})
-		case hadBefore && !hasNow && len(b.HWModes) == 0:
-			// No modes on the OLD record, so the rename pairing above had
-			// nothing to compare and could not fire. That is not evidence of a
-			// loss.
-			//
-			// The guard there tests len(a.HWModes) — the new side — and this is
-			// the other half of the same problem. Seen on the reference
-			// WRT3200ACM: an earlier probe recorded radios as radio0/radio1
-			// with a band and no modes, a later one recorded phy0/phy1 with
-			// modes, and the preview then told the operator "radio radio0 is
-			// gone. WLANs targeted at its band will not render on this device"
-			// about a radio that was up and carrying fixture-roam — offered as
-			// the probable cause of unrelated omissions.
-			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectAmbiguous,
+				Kind: "radio", Name: name, Effect: EffectAmbiguous,
 				Detail: fmt.Sprintf("radio %s is no longer listed under that "+
 					"name. Its earlier record carries no mode information, so "+
 					"whether it was removed or renamed cannot be told from "+
-					"here — re-probe to settle it", p),
+					"here — re-probe to settle it", name),
 			})
-		case hadBefore && !hasNow:
-			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectLost,
-				From: strings.Join(b.HWModes, ","),
-				Detail: fmt.Sprintf("radio %s is gone. WLANs targeted at its "+
-					"band will not render on this device", p),
-			})
-		case !sameModes(b.HWModes, a.HWModes):
-			out = append(out, Change{
-				Kind: "radio", Name: p, Effect: EffectChanged,
-				From: strings.Join(b.HWModes, ","), To: strings.Join(a.HWModes, ","),
-				Detail: fmt.Sprintf("radio %s changed the modes it reports, "+
-					"from %s to %s, which can change which band it serves", p,
-					strings.Join(b.HWModes, ","), strings.Join(a.HWModes, ",")),
-			})
+			continue
 		}
+		out = append(out, Change{
+			Kind: "radio", Name: name, Effect: EffectLost,
+			From: strings.Join(b.HWModes, ","),
+			Detail: fmt.Sprintf("radio %s is gone. WLANs targeted at its "+
+				"band will not render on this device", name),
+		})
+	}
+	for ai, a := range after {
+		if afterMatch[ai] >= 0 || ambiguousAfter[ai] || renamedAfter[ai] {
+			continue
+		}
+		name := radioDisplayName(a)
+		out = append(out, Change{
+			Kind: "radio", Name: name, Effect: EffectGained,
+			To: strings.Join(a.HWModes, ","),
+			Detail: fmt.Sprintf("radio %s appeared (%s). It can carry "+
+				"WLANs once the site is applied", name, strings.Join(a.HWModes, ",")),
+		})
 	}
 	return out
+}
+
+func radioPHYCompatible(before, after Radio) bool {
+	return before.Phy != "" && before.Phy == after.Phy &&
+		(before.Section == "" || after.Section == "")
+}
+
+func radioComparisonIdentity(radio Radio) (key, display string) {
+	if radio.Section != "" {
+		return "section\x00" + radio.Section, radio.Section
+	}
+	return "phy\x00" + radio.Phy, radio.Phy
+}
+
+func radioDisplayName(radio Radio) string {
+	_, name := radioComparisonIdentity(radio)
+	if name == "" {
+		return radio.Device
+	}
+	return name
+}
+
+func radioPairName(before, after Radio) string {
+	if after.Section != "" {
+		return after.Section
+	}
+	if before.Section != "" {
+		return before.Section
+	}
+	if after.Phy != "" {
+		return after.Phy
+	}
+	return radioDisplayName(before)
+}
+
+func radioGroupHasLegacy(before, after []Radio, beforeIndexes, afterIndexes []int) bool {
+	for _, i := range beforeIndexes {
+		if before[i].Section == "" {
+			return true
+		}
+	}
+	for _, i := range afterIndexes {
+		if after[i].Section == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func radioGroupNames(radios []Radio, indexes []int) []string {
+	names := make([]string, 0, len(indexes))
+	for _, i := range indexes {
+		names = append(names, radioDisplayName(radios[i]))
+	}
+	return names
 }
 
 // portChanges reports the wired layout moving.

@@ -435,6 +435,7 @@ WIRELESS_DEVICES = {
     "radio1": _radio("2g", "6", "HT20", "pci0000:00/0000:00:01.0",
                      "wlan1", "default_radio1", "OpenWrt"),
 }
+IWINFO_PHY_OVERRIDES = {}
 
 DEFAULT_BOARD = {
     "kernel": "6.6.52", "hostname": "wrt3200acm",
@@ -523,6 +524,7 @@ def reset_fixture(sid):
         acl_gaps.clear()
         rollback.clear()
         NR_LISTS.clear()
+        IWINFO_PHY_OVERRIDES.clear()
         WIRELESS_DEVICES.clear()
         WIRELESS_DEVICES.update(copy.deepcopy(INITIAL_WIRELESS_DEVICES))
         board.clear()
@@ -1143,6 +1145,16 @@ def handle_one(req):
     if obj == "__test" and meth == "written":
         return ok(rid, {"paths": sorted(written_files),
                         "content": written_files.get(args.get("path"), "")})
+    if obj == "__test" and meth == "set_iwinfo_phys":
+        phys = args.get("phys")
+        if not isinstance(phys, dict) or any(
+                not isinstance(name, str) or not isinstance(phy, str)
+                for name, phy in phys.items()):
+            return err(rid, 2)
+        with lock:
+            IWINFO_PHY_OVERRIDES.clear()
+            IWINFO_PHY_OVERRIDES.update(phys)
+        return ok(rid, {"phys": copy.deepcopy(IWINFO_PHY_OVERRIDES)})
     if obj == "__test" and meth == "add_wifi_iface":
         # Add an interface to a radio, so a test can exercise a mesh point or a
         # 4-address station without a second real router. Pass ifname="" to
@@ -1227,7 +1239,8 @@ def handle_one(req):
             noise = -92
             if not g5 and info_calls % 2 == 0:
                 noise = -58
-            return ok(rid, {"phy": "phy0" if g5 else "phy1",
+            return ok(rid, {"phy": IWINFO_PHY_OVERRIDES.get(
+                                dev, "phy0" if g5 else "phy1"),
                             "ssid": "OpenWrt", "mode": "Master",
                             "channel": 36 if g5 else 6,
                             "frequency": 5180 if g5 else 2437,
