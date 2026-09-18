@@ -5,7 +5,7 @@ description: What oonfeeWRT stores, for how long, and what must be backed up tog
 
 # Data and retention
 
-oonfeeWRT v0.1.7 keeps configuration, evidence, and audit history locally. It
+oonfeeWRT v0.1.8 keeps configuration, evidence, and audit history locally. It
 does not require a cloud account or external database.
 
 ## Storage locations
@@ -28,9 +28,11 @@ Important contents include:
 All controller data is sensitive. Keep the data directory private and do not
 serve it as static content.
 
-### v0.1.7 retains schema 25
+<span id="v0-1-7-retains-schema-25"></span>
 
-v0.1.7 adds no migration over v0.1.6. v0.1.5 uses schema 23;
+### v0.1.8 retains schema 25
+
+v0.1.8 adds no migration over v0.1.6 or v0.1.7. v0.1.5 uses schema 23;
 v0.1.6 introduced schema 24 for bounded
 alert state and schema 25 for encrypted AdGuard configuration. Alert rules,
 incidents, delivery state, and sealed destination details are controller state,
@@ -57,8 +59,8 @@ are not a durable firmware history, VPN history, or AdGuard query-log archive.
 
 ### Browser-local appearance state
 
-v0.1.7 saves theme, navigation expansion, Devices Cards/List selection,
-and topology coordinates in browser storage when permitted. Topology and
+Since v0.1.7, the browser saves theme, navigation expansion, Devices Cards/List
+selection, and topology coordinates when permitted; v0.1.8 retains that state. Topology and
 navigation expansion are scoped to the account and controller origin; Current
 and History topology arrangements are separate. These preferences are not
 synced between browsers, stored in SQLite, included in portable backups, or

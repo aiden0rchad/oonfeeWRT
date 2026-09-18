@@ -7,7 +7,7 @@ speed-test history, and recent warnings without hiding missing sources.
 
 ::: info History and alerts in Insights
 The workspaces introduced in v0.1.6 remain available under **Insights** in the
-v0.1.7 sidebar: [Statistics](./statistics.md) for detailed history,
+v0.1.8 sidebar: [Statistics](./statistics.md) for detailed history,
 [Reports](./reports.md) for adjacent-period comparisons/CSV, and
 [Alerts](./alerts.md) for configured sustained conditions. These are separate
 from the Dashboard's current observations and recent warning summary.
@@ -149,7 +149,7 @@ controller's public IP and test requests are visible to Cloudflare.
 4. Leave the Dashboard open to watch progress.
 
 The result can include download, upload, idle latency, and idle jitter. Loaded
-latency and loaded jitter are not measured in v0.1.7. The controller retains
+latency and loaded jitter are not measured in v0.1.8. The controller retains
 the newest three terminal attempts, including failed or cancelled attempts, so
 a failure does not disappear from history.
 
@@ -203,7 +203,7 @@ When the Dashboard looks unhealthy:
 | Speed test fails immediately | Controller cannot reach the Cloudflare endpoints or the job was refused by current state | Check controller logs, DNS/HTTPS egress, and whether another test is active |
 | A device is online but WAN health is missing | Device management reachability and Gateway Internet evidence are separate | Verify the Gateway function, default route source, and probe result on that device |
 | PPPoE WAN traffic is unavailable | The kernel L3 route device has no matching counter series, cannot map to exactly one active logical interface, or the composite source failed | Compare the main-table route with OpenWrt interface state, correct the inconsistency, and wait for the next network/topology cycle; do not rename interfaces as a workaround |
-| Main-table route is healthy but a policy-routed path differs | v0.1.7 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
+| Main-table route is healthy but a policy-routed path differs | v0.1.8 does not model policy routing, `mwan3`, per-uplink health, or manual WAN selection | Treat the Dashboard path as main-table evidence only and use the policy/failover system's own status for that traffic |
 
 ## Related guides
 

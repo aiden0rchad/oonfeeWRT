@@ -5,13 +5,15 @@ description: How oonfeeWRT is divided, where it runs, and how controller intent 
 
 # Architecture
 
-This page describes the architecture of **oonfeeWRT v0.1.7**. For the
+This page describes the architecture of **oonfeeWRT v0.1.8**. For the
 implementation record and historical design decisions, see
 [`ARCHITECTURE.md`](../ARCHITECTURE.md) and
 [`IMPLEMENTATION.md`](../IMPLEMENTATION.md).
 
-::: info v0.1.7 presentation, unchanged schema and authority
-v0.1.7 refines the shell and navigation while keeping schema 25. v0.1.6 introduced
+::: info v0.1.8 patch, unchanged schema and authority
+v0.1.8 keeps schema 25 while normalizing null LLDP package lists and preserving
+authoritative UCI radio section keys on shared-PHY devices. v0.1.7 introduced
+the Precision shell and navigation; v0.1.6 introduced
 Reports, Alerts, firmware-catalogue and
 integration readers, browser-local topology layout, an isolated demo, and
 mobile presentation. Schema 24 persists alerts; schema 25 persists encrypted
@@ -74,7 +76,7 @@ The React/TypeScript interface is built into `ui/dist` and embedded in the Go
 binary. It talks to the controller over same-origin REST and WebSocket
 connections, so a normal deployment has no cross-origin configuration.
 
-The v0.1.7 Precision sidebar groups Dashboard, Devices, Client Devices,
+The Precision sidebar introduced in v0.1.7 and retained in v0.1.8 groups Dashboard, Devices, Client Devices,
 Topology, Radios, Policy Engine, and Adopt a device under **Workspace**.
 Statistics, Reports, and Alerts form **Insights**. Firmware and Integrations
 are **Settings** tabs: canonical URLs use `/settings?section=firmware` and
@@ -166,7 +168,7 @@ The important state distinction is:
 - **unknown:** the controller has not established the fact.
 
 This prevents an unsupported driver counter from looking like a real `0`, or a
-failed topology read from looking like an empty network. The exact v0.1.7
+failed topology read from looking like an empty network. The exact v0.1.8
 feature and evidence boundary is in [Capabilities](../reference/capabilities.md).
 
 ### Shareable compatibility evidence

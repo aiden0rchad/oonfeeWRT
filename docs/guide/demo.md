@@ -1,6 +1,6 @@
 # Explore the isolated demo
 
-The demo is a separate, read-only build of the v0.1.7 Precision interface.
+The demo is a separate, read-only build of the v0.1.8 Precision interface.
 It contains an original fictional studio network: four infrastructure devices,
 eight clients, historical traffic, a topology map, radio channel plans, and
 sample alert rules. No controller or router is connected.
@@ -80,5 +80,5 @@ administered MAC addresses. Screenshot redaction is a separate publishing
 choice: label demo screenshots as synthetic and do not present them as live
 network validation.
 
-This page describes the separately built local demo. v0.1.7 does not include a
+This page describes the separately built local demo. v0.1.8 does not include a
 publicly hosted demo service, and demo fixtures are never router validation.

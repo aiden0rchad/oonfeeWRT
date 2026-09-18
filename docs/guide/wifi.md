@@ -1,6 +1,6 @@
 # Wi-Fi, roaming, and overrides
 
-::: info v0.1.7 context
+::: info v0.1.8 context
 The new illustrated inventories and editable topology do not change WLAN
 ownership, device functions, or radio capability gates. Use
 [Statistics](./statistics.md) for retained radio evidence and
@@ -149,7 +149,7 @@ recovery.
 ## Per-device overrides
 
 Overrides are for bounded hardware differences. They must not fork the WLAN's
-identity or security contract across APs. The v0.1.7 UI permits per-device
+identity or security contract across APs. The v0.1.8 UI permits per-device
 publication, hidden-SSID, and client-isolation overrides. It does not permit
 SSID, passphrase, security-mode, roaming, band, or radio-channel overrides.
 
@@ -189,6 +189,10 @@ Some MediaTek devices expose multiple configured radios, such as `radio0` and
 those targets, use this recovery sequence once for each already-adopted affected
 device:
 
+v0.1.8 preserves each configured UCI `wifi-device` section key as the radio's
+authoritative identity, even when several sections share one PHY. It does not
+derive configured identity from a runtime PHY or BSS name.
+
 1. Do not retry the failed Apply automatically. The old operation may already
    have changed router configuration before ownership recording failed; inspect
    the device's current wireless state and the durable Apply outcome first.
@@ -201,6 +205,10 @@ device:
 If the Preview still reports ambiguous radio targets or tells you to re-probe,
 stop rather than retrying. Do not clear ownership, delete the controller
 database, re-adopt the device, or use repeated Apply attempts as recovery.
+Invalid, duplicate, or ambiguous section identities are rejected before any
+router write. If support is needed, share only a sanitized compatibility
+report plus redacted Preview/error text; remove addresses, MACs, SSIDs, and
+credentials.
 
 | Symptom | Likely cause | Action |
 |---|---|---|

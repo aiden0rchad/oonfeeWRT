@@ -5,7 +5,7 @@ description: Repository layout, build/test commands, invariants, evidence, and r
 
 # Engineering reference
 
-This page orients contributors to the **v0.1.7**, schema-25 codebase. The repository's
+This page orients contributors to the **v0.1.8**, schema-25 codebase. The repository's
 long-form specifications remain authoritative for invariants and measured
 hardware behavior.
 
@@ -242,7 +242,7 @@ in the controller release archives.
 ### Release UI, demo, and schema checks
 
 The [v0.1.6 release summary](./releases.md#development-after-v0-1-5)
-records the capabilities introduced after historical v0.1.5. v0.1.7 retains
+records the capabilities introduced after historical v0.1.5. v0.1.8 retains
 that schema **25** without a new migration:
 schema 24 persists bounded alert state and schema 25 encrypted integration
 configuration. Keep forward migrations, schema attestation, portable backup
@@ -464,7 +464,7 @@ publishes the GitHub release.
 Use:
 
 ```sh
-make release-check RELEASE_VERSION=v0.1.7
+make release-check RELEASE_VERSION=v0.1.8
 ```
 
 only from the exact intended clean release tree. A local build from another

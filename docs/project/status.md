@@ -1,38 +1,39 @@
 # Where this project is
 
-> **v0.1.6 release preparation — 2026-09-12:** The approved release target is
-> v0.1.6, using database schema **25**. Its exact tagged workflow and GitHub
-> release establish publication, not this source banner. Historical v0.1.5
-> remains schema 23 and its immutable notes/artifacts are unchanged.
+> **v0.1.8 release preparation — 2026-09-17:** The approved patch target is
+> v0.1.8, using database schema **25**. Publication is established only by the
+> completed exact-tag workflow and GitHub release, not this source banner.
+> Historical releases, dated evidence below, and their immutable notes remain
+> identified by their original versions.
 >
-> v0.1.6 adds Reports, durable Alerts, illustrated inventory, editable
-> browser-local topology, Statistics, a separate Accounts workspace, official
-> firmware catalogue checks, read-only AdGuard/WireGuard integrations, mobile
-> presentation, and an isolated local demo. Ordinary adoption remains
-> agent-free. The optional manually installed read-only rpcd helper is
-> experimental source; matching SDK and real-router validation remain pending.
+> v0.1.8 fixes a Devices crash when an LLDP ownership ledger contains a null
+> package list and preserves each configured UCI `wifi-device` section key on
+> shared-PHY hardware. Empty LLDP package history now says **none recorded**;
+> invalid, duplicate, or ambiguous radio targets fail before router writes.
+> Existing LLDP errors/ownership, permissions, package actions, and router
+> authority are unchanged.
 >
-> Upgrade follows **23 → 24 → 25**: persistent alert state, then encrypted
-> integration settings. Migration creates no rules, service connection,
-> helper installation, or router configuration. Preserve the matching
-> pre-upgrade schema-23 database, keyring, runtime passphrase, and v0.1.5
-> executable/image for rollback. A v0.1.5 binary cannot open schema 24 or 25.
-> Portable restore pauses external alert delivery and cancels queued
-> notifications until an Owner reviews and explicitly enables delivery again.
+> Upgrades from v0.1.6 or v0.1.7 stay on schema 25. They require no migration,
+> re-adoption, ACL expansion, or automatic router Apply. v0.1.5 still upgrades
+> through **23 → 24 → 25**. Before any upgrade, preserve the matching database,
+> keyring, runtime passphrase, and old binary/image; never run two controllers
+> against one data directory.
 >
-> Firmware execution, SNMP, Web Push, Telegram-specific delivery, full
-> localization, VM inventory, public demo hosting, and DPI remain outside
-> this release. A catalogue match is not a security or flash-readiness test.
-> Existing issue #25, IPv6, third-AP, mesh/uplink, Filogic/class-B, and
-> peer-isolation hardware proofs remain pending. No visual refresh promotes
-> earlier lab evidence to a new hardware certification.
+> PR #41's exact head was independently confirmed against a genuine null LLDP
+> ledger. Reporter @flubba confirmed PR #42's exact head on a Tenda BE12 Pro
+> with MT7996/MT7992E through probe, Preview, no-op Apply, and unique ownership
+> rows; its configuration was already corrected, so this is not fresh-write
+> hardware proof. September 17 WRT3200ACM and Archer C6 v2 checks were read-only,
+> separate-PHY regression coverage with one omission each, not shared-PHY
+> physical testing. Both pull-request heads passed CI before merge; the tagged
+> release workflow remains the independent final gate.
 >
-> See [v0.1.6 notes](../releases/v0.1.6.md), the
-> [release summary](../reference/releases.md#development-after-v0-1-5),
-> [capabilities](../reference/capabilities.md), and
-> [release checklist](./PRODUCT-REFRESH.md). Dated sections below retain their
-> original checkpoint and schema. In particular, §5br remains the historical
-> schema-19 live-lab checkpoint, not the current release state.
+> See [v0.1.8 notes](../releases/v0.1.8.md), the
+> [release summary](../reference/releases.md#changes-in-v0-1-8), and
+> [capabilities](../reference/capabilities.md). The September 12 v0.1.7
+> screenshots remain representative. Dated sections below retain their
+> original checkpoints, schemas, and validation limits; §5br remains the
+> historical schema-19 live-lab checkpoint, not the current release state.
 
 ---
 

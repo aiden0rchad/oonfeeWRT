@@ -1,22 +1,59 @@
 # Release notes
 
-The documentation covers **v0.1.7**, using database **schema 25**. Its source
-preparation date is September 12, 2026. Release artifacts, checksums, container digests,
-signatures, and attached notes on the GitHub release are the publication source
-of truth.
+The documentation covers **v0.1.8**, using database **schema 25**. Its source
+preparation date is September 17, 2026. The completed exact-tag workflow and
+GitHub release—not source preparation or a tag alone—establish publication and
+artifact availability.
 
 ## Current release
 
-- [v0.1.7 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.7)
-- [v0.1.7 release notes](../releases/v0.1.7.md)
+- [v0.1.8 release and downloads](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.8)
+- [v0.1.8 release notes](../releases/v0.1.8.md)
 - [All GitHub releases](https://github.com/aiden0rchad/oonfeeWRT/releases)
 
-v0.1.7 refines the v0.1.6 controller with the Precision interface, a slimmer
-collapsible sidebar, Workspace/Insights groups, compact device and topology
-presentation, Settings-based Firmware and Integrations, and the orbit mark.
-It retains schema 25 and introduces no new router authority. The matching tagged workflow must finish
-before download links establish that these artifacts have been published.
+v0.1.8 fixes LLDP null-ledger rendering and shared-PHY radio targeting. It
+retains the v0.1.7 Precision interface, schema 25, and existing router authority.
 Historical versioned release notes and artifacts remain unchanged.
+
+## Changes in v0.1.8 {#changes-in-v0-1-8}
+
+### LLDP null-ledger rendering
+
+The Devices page now accepts a null or omitted LLDP package list and shows an
+empty controller-added list as **none recorded**. It does not call the package
+“already installed.” Upgrade and refresh the browser; do not reinstall LLDP,
+reset the controller, re-adopt, or edit its database for this display case.
+Existing error reporting, ownership, rollback, and un-adoption behaviors are unchanged, so
+this correction does not claim to solve every LLDP installation failure.
+
+### Authoritative shared-PHY radio targets
+
+Probe and rendering now preserve each configured UCI `wifi-device` section key
+when multiple configured radios share one physical PHY. Invalid, duplicate, or
+ambiguous targets are rejected before router writes instead of being guessed.
+
+On an affected device, first inspect the current wireless state and any prior
+Apply outcome because an earlier failed Apply may already have changed
+configuration. Re-probe the device, generate a fresh Preview, and confirm
+distinct section targets before separately authorizing Apply. If ambiguity
+remains, stop and provide sanitized evidence; do not clear ownership, edit the
+database, or re-adopt as recovery.
+
+### Scope and upgrade boundary
+
+v0.1.6, v0.1.7, and v0.1.8 use schema **25**. Upgrading either prior version
+adds no migration, permission, package action, or automatic router Apply. Keep
+the same data volume and runtime passphrase, preserve a matching recovery unit
+and old binary/image, then refresh the browser. Upgrades from v0.1.5 still run
+the existing **23 → 24 → 25** migrations.
+
+The exact pull-request heads passed CI before merging; final publication is
+still gated by the completed exact-tag workflow. Reporter validation confirmed
+shared-PHY probe, Preview, no-op Apply, and unique ownership on a Tenda BE12
+Pro, but the configuration was already corrected, so it is not fresh-write
+proof. September 17 WRT3200ACM and Archer C6 v2 checks were read-only,
+separate-PHY regression coverage, not shared-PHY physical validation. See the
+[full release notes](../releases/v0.1.8.md) for exact commits and evidence links.
 
 ## Changes in v0.1.7 {#changes-in-v0-1-7}
 
@@ -306,7 +343,7 @@ un-adoption, or broader Filogic hardware.
 ## Verify what you run
 
 For a standalone archive, verify its entry in `SHA256SUMS` before extracting
-or installing it. For the OCI image, pin `v0.1.7` or the immutable digest and
+or installing it. For the OCI image, pin `v0.1.8` or the immutable digest and
 verify the GitHub Actions keyless signature as shown in the [Docker Compose
 guide](../installation/docker.md).
 
@@ -321,7 +358,7 @@ The daemon prints its build version with:
 oonfeewrtd -version
 ```
 
-v0.1.7 and v0.1.6 target database schema **25**. Historical v0.1.5 targets schema **23**;
+v0.1.8, v0.1.7, and v0.1.6 target database schema **25**. Historical v0.1.5 targets schema **23**;
 these are different compatibility boundaries.
 
 | Transition | Schema/data effect | Router-access effect |
@@ -335,6 +372,9 @@ these are different compatibility boundaries.
 | v0.1.6 → v0.1.5 | Restore the matching pre-upgrade schema-23 database, keyring, runtime passphrase, and released binary/image | A schema-24/25 database or newer portable backup cannot be opened by v0.1.5 |
 | v0.1.6 → v0.1.7 | Schema 25; no new migration; keep a verified pre-upgrade recovery unit | Presentation/navigation changes only; no re-adoption, automatic helper installation, or firmware execution |
 | v0.1.7 → v0.1.6 | Schema 25; no schema boundary crossed; retain the matching recovery unit and old binary/image | Replacing the controller does not undo router configuration applied while either version ran |
+| v0.1.6/v0.1.7 → v0.1.8 | Schema 25; no new migration; retain the matching recovery unit and old binary/image | No automatic ACL, package, or router configuration action; refresh the browser after upgrade |
+| v0.1.8 → v0.1.6/v0.1.7 | Schema 25; no schema boundary crossed; restore the matching target recovery unit and binary/image | Replacing the controller does not undo router configuration applied while v0.1.8 ran |
+| v0.1.5 → v0.1.8 | Schema 23 → 24 → 25; retain the matching schema-23 recovery unit for rollback | Migration creates no router rule, service connection, helper installation, or Apply |
 
 Preserve the matching database/keyring pair before every transition. The
 controller migrates supported older state at startup and refuses unsupported

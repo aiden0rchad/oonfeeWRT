@@ -2,7 +2,11 @@
 
 The standalone release contains one static controller executable with the web UI embedded. Docker is not required.
 
-> **Outcome:** A checksum-verified oonfeeWRT v0.1.7 binary runs on a supported Linux or macOS host, stores private state outside the program directory, and answers only on loopback.
+Use these artifact instructions only after the completed exact `v0.1.8` tag
+workflow and GitHub release establish publication. Source preparation, a
+version string, or a tag alone does not prove that the archives are available.
+
+> **Outcome:** A checksum-verified oonfeeWRT v0.1.8 binary runs on a supported Linux or macOS host, stores private state outside the program directory, and answers only on loopback.
 
 ## Prerequisites
 
@@ -20,7 +24,7 @@ The release is built with Go 1.26.6 and includes the UI; the host does not need 
 Run the following in a clean download directory:
 
 ```sh
-VERSION=v0.1.7
+VERSION=v0.1.8
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$(uname -m)" in
   x86_64) ARCH=amd64 ;;
@@ -49,7 +53,7 @@ fi
 
 Continue only when the command reports that the archive is valid. Do not bypass a mismatch or use an archive whose filename is absent from the release checksum file.
 
-The macOS binaries are not Developer ID signed or notarized. The checksum-verified GitHub release is the authenticity path documented for v0.1.7.
+The macOS binaries are not Developer ID signed or notarized. The checksum-verified GitHub release is the authenticity path documented for v0.1.8.
 
 ## 3. Extract and inspect the version
 
@@ -61,7 +65,7 @@ tar -xzf "$NAME.tar.gz"
 Expected output:
 
 ```text
-v0.1.7
+v0.1.8
 ```
 
 The archive also includes `oonfeewrt-recoverycheck`, installation/validation documentation, notices, and the release Compose file.

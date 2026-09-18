@@ -27,7 +27,7 @@ capabilities, and collected history.
 
 Visible MAC addresses are covered with solid masks for sharing.
 
-::: info Find your way around v0.1.7
+::: info Find your way around v0.1.8
 The Precision sidebar separates **Workspace** network tools from **Insights**:
 Statistics, Reports, and Alerts. **Settings**, **Accounts**, and **Logs** stay
 at the bottom, above a compact signed-in profile that also opens Accounts.
@@ -98,7 +98,7 @@ coverage, device selection, and collection limitations.
 
 ## Compare history and review optional services
 
-These workspaces were introduced in v0.1.6 and remain available in v0.1.7 without making every
+These workspaces were introduced in v0.1.6 and remain available in v0.1.8 without making every
 page a live router operation. Reports reads retained measurements, Alerts
 evaluates existing evidence, Firmware checks official release metadata, and
 Integrations contacts an explicitly selected service only when you request a

@@ -25,49 +25,35 @@ routers stay on stock OpenWrt and continue to work with LuCI.
 64-bit Linux or macOS host, or use the container/Compose setup. The controller
 does not need a dedicated machine and is not installed on the managed routers.
 
-## v0.1.7 — the Precision interface
+<span id="v017--the-precision-interface"></span>
 
-[Read the complete v0.1.7 release notes](docs/releases/v0.1.7.md).
-Use the [tagged GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.7)
-and its completed release workflow to verify artifact availability, checksums,
-and signed container images; a source update alone is not publication proof.
+## v0.1.8 — LLDP and shared-PHY reliability
 
-This release makes the existing controller slimmer and easier to navigate:
+[Read the complete v0.1.8 release notes](docs/releases/v0.1.8.md).
+Publication is established only by a completed exact `v0.1.8` tag workflow and
+[GitHub release](https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.8);
+source notes or a tag alone do not prove artifacts are ready.
 
-- **Precision styling:** restrained dark/light surfaces, thinner borders,
-  smaller desktop controls, compact cards, and a quieter topology canvas.
-  Touch targets, keyboard focus, source evidence, and safety notices remain.
-- **Fleet summary strip:** one shared surface with inset dividers, clearer
-  labels, and right-aligned values replaces individually bulky summary cards.
-  Narrow layouts reflow while keeping observation notes visible.
-- **Collapsible navigation:** a 56-pixel icon rail or 184-pixel labeled sidebar,
-  with the preference saved per account and controller origin. **Workspace**
-  contains daily network tools; **Insights** groups Statistics, Reports, and
-  Alerts. Settings, Accounts, and Logs stay at the bottom.
-- **Settings sections:** [Firmware](docs/guide/firmware.md) and
-  [Integrations](docs/guide/integrations.md) move into Settings. Existing
-  `/firmware` and `/integrations` links still open the correct section;
-  `/settings?section=firmware` and `/settings?section=integrations` are the new
-  direct links. Permissions and explicit-check requirements are unchanged.
-- **Compact identity:** a smaller bottom-left account button opens My account;
-  the orbit mark appears in the controller, sign-in screen, documentation,
-  favicon, and installed-app icons. The mark adapts Lucide Orbit under ISC,
-  with attribution retained; it is not exclusive artwork.
-- **Correct report exports:** a report must match the selected period and
-  refresh before its measurements can render or export to CSV. Missing
-  coverage remains visible instead of being turned into zero.
-- **Updated illustrated guides:** real dark-mode screenshots show the current
-  navigation, with visible MAC addresses covered by solid masks.
+This patch release corrects two edge cases without adding router authority:
 
-v0.1.6's Reports, durable Alerts, historical Statistics, editable topology,
-read-only integrations, and isolated demo remain available. Firmware support
-is still catalogue-only; the optional router helper remains experimental.
+- The Devices page accepts a null or omitted LLDP package list and reports an
+  empty controller-added list as **none recorded**, not “already installed.”
+  Existing errors, ownership, and rollback behavior are unchanged; no LLDP
+  reinstall, re-adoption, reset, or database edit is needed for this display
+  fix, and it does not claim to solve every LLDP installation failure.
+- Configured radios that share one PHY retain their actual UCI `wifi-device`
+  section keys through probe, Preview, and Apply. Invalid, duplicate, or
+  ambiguous targets are rejected before router writes.
 
-v0.1.7 retains database **schema 25**: upgrading from v0.1.6 adds no schema
-migration or router-write authority. Older v0.1.5 data still follows
-**23 → 24 → 25**. Preserve the matching recovery unit before any upgrade;
-v0.1.5 cannot open schema 25. See the
-[release and migration guide](docs/reference/releases.md) for the full boundary.
+For a device affected by the earlier shared-PHY behavior, inspect any prior
+Apply outcome and current router state, re-probe the device, and review a fresh
+Preview for distinct radio targets before separately authorizing Apply. Do not
+clear ownership, edit the database, or re-adopt as recovery.
+
+v0.1.8 keeps database **schema 25**. Upgrades from v0.1.6 or v0.1.7 add no
+migration, router permission, package action, or automatic Apply. Older v0.1.5
+data still follows **23 → 24 → 25**. The v0.1.7 Precision interface and its
+September 12 screenshots remain representative.
 
 ## Preview
 
@@ -205,7 +191,9 @@ Requirements:
 
 - Docker with Compose support.
 
-Create a private working directory and download the release Compose file:
+After the completed exact-tag workflow and GitHub release establish v0.1.8
+publication, create a private working directory and download the release
+Compose file:
 
 ```sh
 install -d -m 0700 oonfeewrt
@@ -214,14 +202,14 @@ umask 077
 
 curl --fail --location \
   --output docker-compose.yml \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.7/deploy/docker-compose.yml
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.8/deploy/docker-compose.yml
 
 head -c 32 /dev/urandom | base64 > passphrase
 sudo chown 65532:65532 passphrase
 sudo chmod 600 passphrase
 
 printf '%s\n' \
-  'OONFEE_VERSION=v0.1.7' \
+  'OONFEE_VERSION=v0.1.8' \
   'OONFEE_HTTP_BIND=127.0.0.1' > .env
 chmod 600 .env
 docker compose up -d
@@ -231,14 +219,14 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and create the first owner
 account. The default Compose configuration publishes HTTP only on host
 loopback, runs as UID 65532, drops all capabilities, uses a read-only root
 filesystem, and stores controller state in a named volume. It pulls
-`ghcr.io/aiden0rchad/oonfeewrt:v0.1.7` for `linux/amd64` or `linux/arm64`.
+`ghcr.io/aiden0rchad/oonfeewrt:v0.1.8` for `linux/amd64` or `linux/arm64`.
 
 The release Compose file also accepts a Compose-only host bind IP. When browsers
 must connect from another machine, change `.env` to the controller's specific
 management-LAN address, then recreate the service:
 
 ```dotenv
-OONFEE_VERSION=v0.1.7
+OONFEE_VERSION=v0.1.8
 OONFEE_HTTP_BIND=192.168.1.20
 ```
 
@@ -268,31 +256,33 @@ For checksummed binaries, signature verification, reverse-proxy TLS,
 persistence, upgrades, and rollback, follow the
 [installation guide](docs/INSTALL.md).
 
-### Upgrade from v0.1.6 or earlier
+<span id="upgrade-from-v016-or-earlier"></span>
 
-v0.1.6 and v0.1.7 both use **schema 25**. Moving between these versions does
-not add a schema migration. Preserve a verified backup and matching recovery
-unit, replace the controller with the verified release, and refresh the browser
-to load the new interface. No re-adoption, helper installation, or access
-expansion is needed for the Precision UI.
+### Upgrade to v0.1.8
+
+v0.1.6, v0.1.7, and v0.1.8 use **schema 25**. Upgrading from v0.1.6 or
+v0.1.7 adds no schema migration. Preserve a verified backup and matching
+recovery unit, replace the controller with the verified release while keeping
+the same data volume and runtime passphrase, then refresh the browser. An
+ordinary upgrade does not apply router changes automatically.
 
 When upgrading from v0.1.5, export and verify a portable backup. For a direct rollback,
 also retain a consistent pre-upgrade database/keyring pair or whole-volume
 snapshot and its matching runtime passphrase and v0.1.5 executable/image.
-v0.1.7 runs the existing migrations from schema 23 to 24 for persistent alert state, then schema
+v0.1.8 runs the existing migrations from schema 23 to 24 for persistent alert state, then schema
 25 for encrypted AdGuard Home settings. No alert rule, external connection,
 helper installation, or router configuration is created by migration.
 v0.1.5 cannot open schema 24 or 25. Restore the matching pre-upgrade schema-23
 recovery unit to roll back; replacing only the binary or image tag is not enough.
 
-A portable restore into v0.1.7 pauses external alert delivery and cancels its
+A portable restore into v0.1.8 pauses external alert delivery and cancels its
 queued notifications. Review the restored destination and explicitly re-enable
 delivery when ready; cancelled history is not replayed.
 
 Upgrades from v0.1.4 also apply the existing schema 20 → 21 → 22 → 23 steps.
 Keep a recovery unit matching the version you intend to return to.
 
-Compose users should download or deliberately merge the v0.1.7 Compose file
+Compose users should download or deliberately merge the v0.1.8 Compose file
 and pin the intended image tag or digest. Follow the [upgrade and rollback
 guide](docs/installation/upgrades.md) before changing the running version.
 
@@ -436,7 +426,7 @@ passphrases.
   measured.
 - Native controller TLS, cloud remote access, multi-WAN management, manual WAN
   selection, gateway-run speed tests, DPI, and application-flow history are not
-  included in v0.1.7. The flow feasibility page is a gated research plan, not a
+  included in v0.1.8. The flow feasibility page is a gated research plan, not a
   shipped capability.
 - Optional LLDP may install official-feed packages. Adoption itself never
   installs a package, daemon, service, firmware, or executable.
@@ -469,6 +459,7 @@ oonfeeWRT rejects passphrases supplied through environment variables.
 
 - [Documentation site — capabilities, setup, guides, and troubleshooting](https://aiden0rchad.github.io/oonfeeWRT/)
 - [Install, upgrade, TLS, and recovery](docs/INSTALL.md)
+- [v0.1.8 release notes](docs/releases/v0.1.8.md)
 - [v0.1.7 release notes](docs/releases/v0.1.7.md)
 - [v0.1.6 release notes](docs/releases/v0.1.6.md)
 - [v0.1.5 release notes](docs/releases/v0.1.5.md)

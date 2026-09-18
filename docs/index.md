@@ -37,25 +37,23 @@ features:
     details: Export encrypted portable backups, validate them in staging, restore through a controlled restart, and keep router writes suppressed until an owner reviews the result.
 ---
 
-<p class="doc-kicker">Documentation for v0.1.7</p>
+<p class="doc-kicker">Documentation for v0.1.8</p>
 
-::: tip Current release — v0.1.7 · Precision
-A slimmer dark/light interface brings collapsible **Workspace** and
-**Insights** navigation, a unified fleet summary strip, compact cards and topology, a smaller account footer,
-and the orbit project mark. **Firmware** and **Integrations** now live inside
-**Settings**; their previous direct links still work. Reports waits for the
-selected period's measurements before enabling CSV export.
+::: tip Current release — v0.1.8 · LLDP and shared-PHY reliability
+The Devices page now handles a null LLDP package list and displays an empty
+controller-added list as **none recorded**. Configured radios that share one
+physical PHY retain distinct, authoritative UCI `wifi-device` section keys;
+invalid, duplicate, or ambiguous targets fail before router writes.
 
-v0.1.6's [Statistics](/guide/statistics), [Reports](/guide/reports),
-[Alerts](/guide/alerts), [Accounts](/operations/accounts), and
-[isolated synthetic demo](/guide/demo) remain available. This is a presentation
-and navigation release, not a new router agent or firmware execution engine.
-[See the v0.1.7 changes](/reference/releases#changes-in-v0-1-7).
+The v0.1.7 Precision interface, v0.1.6 feature set, and existing safety
+boundaries remain. Affected shared-PHY devices should be re-probed and checked
+in a fresh Preview before an explicitly authorized Apply.
+[See the v0.1.8 changes](/reference/releases#changes-in-v0-1-8).
 :::
 
 ::: info Schema-safe upgrades
-v0.1.7 retains **schema 25** from v0.1.6, with no new migration between those
-versions. Older v0.1.5 data still migrates **23 → 24 → 25**. Preserve the matching
+v0.1.8 retains **schema 25** from v0.1.6 and v0.1.7, with no new migration
+between those versions. Older v0.1.5 data still migrates **23 → 24 → 25**. Preserve the matching
 pre-upgrade database, keyring, runtime passphrase, and old binary/image before
 starting the new controller. A binary-only downgrade cannot restore older
 state. [Follow the migration and rollback guide](/installation/upgrades).
@@ -76,7 +74,7 @@ observation reads only. The controller-managed optional package workflow is LLDP
 with a separate plan and rollback.
 
 The source tree also includes a separately opt-in, manually packaged rpcd helper
-introduced in v0.1.6 and unchanged in v0.1.7.
+introduced in v0.1.6 and unchanged in v0.1.8.
 It is not installed by adoption and does not add a daemon, listener, arbitrary
 command channel, or firmware flashing. Ordinary management remains agent-free.
 
@@ -151,8 +149,8 @@ command channel, or firmware flashing. Ordinary management remains agent-free.
 
 ## See the controller
 
-These screenshots show the v0.1.7 interface using
-a real development controller in dark mode. The documentation supports both
+These screenshots show the v0.1.7 interface, which remains visually
+representative of v0.1.8, using a real development controller in dark mode. The documentation supports both
 light and dark themes; screenshots remain dark. Select any image to see it at
 full size.
 
@@ -196,7 +194,7 @@ running on a router or a remote-access tunnel.
 
 ## Current boundaries
 
-oonfeeWRT v0.1.7 deliberately does not claim capabilities it cannot prove.
+oonfeeWRT v0.1.8 deliberately does not claim capabilities it cannot prove.
 
 - One managed Gateway; multiple reachable monitor-only routers are allowed but
   are not failover gateways or configuration targets. No controller high

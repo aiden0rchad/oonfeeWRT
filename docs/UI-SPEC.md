@@ -1,5 +1,13 @@
 # oonfeeWRT — UI Specification
 
+> **v0.1.8 behavior corrections (2026-09-17):** The Devices screen accepts a
+> null or omitted LLDP package list and labels an empty controller-added list
+> **none recorded**. Configured radios keep their exact UCI `wifi-device`
+> section keys when multiple sections share one PHY; invalid, duplicate, or
+> ambiguous targets fail before router writes. These corrections add no new
+> screen, permission, package action, or authority, and the v0.1.7 screenshots
+> remain representative.
+
 > **v0.1.7 Precision refinement (2026-09-12):** The interface uses a 56px
 > collapsed / 184px expanded sidebar, separate Workspace and Insights groups,
 > a compact account footer, and the attributed Lucide orbit project mark.
@@ -8,7 +16,7 @@
 > presentation. No router permissions or collection behavior
 > changed as part of this visual refinement.
 
-> **Introduced in v0.1.6, retained in v0.1.7:** The interface includes
+> **Introduced in v0.1.6, retained in v0.1.8:** The interface includes
 > original illustrations, Devices Cards/List, explicit client count scopes,
 > editable account-scoped browser topology layout, Reports, Alerts, Firmware,
 > Integrations, and responsive navigation. Consult the
@@ -181,7 +189,7 @@ mobile browser coverage now runs in light and dark themes; tokens, focus,
 status-without-color, and responsive no-overflow behavior remain release
 gates.
 
-The v0.1.7 UI also preserves the selected light/dark theme across
+The v0.1.8 UI also preserves the selected light/dark theme across
 reloads, including native form controls and scrollbars. Shared cards and form
 controls use a consistent spacing scale. Adoption is grouped into connection,
 device responsibility, and access review, with discovery alongside the form on
@@ -272,12 +280,12 @@ their warnings or controls.
 
 ## 2. Navigation map
 
-The v0.1.7 interface exposes **Dashboard**, **Statistics**, **Reports**,
+The v0.1.8 interface exposes **Dashboard**, **Statistics**, **Reports**,
 **Alerts**, **Topology**,
 **Radios**, **Devices**, **Client Devices**, **Policy Engine**, **Adopt a
 device**, **Settings**, **Accounts**, and **Logs**. The stable v0.1.5 artifacts do
 not contain Statistics, the standalone Accounts route, or the bottom-anchored Controller
-group; account controls remain inside Settings in that release. In v0.1.7,
+group; account controls remain inside Settings in that release. In v0.1.8,
 `/accounts` opens **My account** for every signed-in role and adds
 the owner-only **Manage accounts** tab. `/settings` contains **Network**,
 **Firmware**, **Integrations**, **Diagnostics** for owner/admin, and **Backup &
@@ -295,7 +303,7 @@ Engine, and Adopt a device. Insights groups Statistics, Reports, and Alerts.
 Settings, Accounts, and Logs stay at the bottom, followed by the compact
 signed-in profile shortcut to Accounts. The profile is not an account switcher.
 
-The larger map below is the long-term target; entries absent from v0.1.7
+The larger map below is the long-term target; entries absent from v0.1.8
 remain specifications only.
 
 ```
@@ -629,8 +637,10 @@ report it.**
 **Insights → Radios.** Left: channel occupancy heatmap, AP/band filters, Channel
 Plan legend, MIMO filter. Content: per-radio table with capability-gated
 channel-utilization, interference/airtime and retry columns, color-graded only
-when their required counter deltas are valid. Stable identity is the UCI `wifi-device` section,
-not a PHY or BSS name. Show inventory/channel observation times and last-known
+when their required counter deltas are valid. Stable identity is the exact UCI
+`wifi-device` section key, not a PHY or BSS name; multiple sections may share
+one PHY without sharing identity. Invalid, duplicate, or ambiguous targets are
+rejected before router writes and direct the operator to re-probe. Show inventory/channel observation times and last-known
 staleness. `Scan` opens a keyboard-trapped confirmation modal, warns that the
 serving radio goes off-channel, and sends the request only after explicit
 acknowledgment. A suggestion is shown only for a completed scan ≤24 hours old
@@ -726,6 +736,9 @@ then identifies only non-wireless physical bridge members. Replacing only
 only `lldpd` requires another unchecked acknowledgement bound to that plan.
 Read-only diagnosis reports the retained durable install/configuration state,
 UCI export, runtime interfaces, and neighbors without changing the router.
+Null or omitted package lists normalize to arrays before rendering; an empty
+controller-added list says **none recorded**, not “already installed.” This
+does not suppress existing LLDP errors or alter ownership and rollback state.
 Removal has its own reviewed plan and acknowledgement, drift-checks and restores
 the exact UCI baseline, removes the recorded controller-added package set, keeps
 pre-existing packages, restores and verifies prior service state, and must
@@ -811,12 +824,12 @@ middleware, My Account and owner account-management screens are implemented.
 Logout, password change, role/enable/delete/reset, explicit revocation, REST expiry and
 Sweep close affected `/live` sockets and cancel in-flight requests.
 
-**Accounts → My account (v0.1.6–v0.1.7); Settings → My account (v0.1.5).**
+**Accounts → My account (v0.1.6–v0.1.8); Settings → My account (v0.1.5).**
 Every signed-in user can change their own password and list/revoke their own
 in-memory sessions. Sessions state plainly that
 controller restart invalidates them.
 
-**Accounts → Manage accounts (v0.1.6–v0.1.7); Settings → Accounts (v0.1.5).**
+**Accounts → Manage accounts (v0.1.6–v0.1.8); Settings → Accounts (v0.1.5).**
 Owner-only management lists accounts, canonical role (`owner`, `admin`,
 `operator` or `viewer`), enabled state and recent login without
 exposing password material. Owner can create, change role, enable/disable,
