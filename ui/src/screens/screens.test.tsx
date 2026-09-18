@@ -2661,6 +2661,45 @@ describe('Devices — re-probe panel', () => {
     expect(api.changeLLDPCapability).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['null', null, 'none recorded'],
+    ['absent', undefined, 'none recorded'],
+    ['empty', [], 'none recorded'],
+    ['nonempty', ['lldpd', 'libcap'], 'lldpd, libcap'],
+  ])('renders legacy %s LLDP added packages while details are collapsed', async (_shape, addedPackages, want) => {
+    const response: Record<string, unknown> = {
+      device_id: 1,
+      name: 'ap-1',
+      state: 'installed',
+      requested_packages: ['lldpd'],
+    }
+    if (addedPackages !== undefined) response.added_packages = addedPackages
+    api.lldpCapability.mockResolvedValue(response)
+
+    await openPanel()
+
+    const details = screen.getByText('What this installs and rolls back').closest('details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    expect((await screen.findByText(/Controller record:/)).textContent).toContain(`Controller-added packages: ${want}.`)
+  })
+
+  it('keeps a legacy null-package LLDP error state visible', async () => {
+    api.lldpCapability.mockResolvedValue({
+      device_id: 1,
+      name: 'ap-1',
+      state: 'error',
+      requested_packages: ['lldpd'],
+      added_packages: null,
+      detail: 'LLDP verification failed',
+    })
+
+    await openPanel()
+
+    const notice = await screen.findByRole('group', { name: 'Warning: Optional LLDP topology capability' })
+    expect(notice.textContent).toMatch(/needs attention/)
+    expect((await screen.findByText('LLDP verification failed')).closest('[role="alert"]')).toBeTruthy()
+  })
+
   it('disables ACL and LLDP surfaces when the management mode is invalid', async () => {
     api.device.mockResolvedValue({
       ...detail,
@@ -2707,7 +2746,7 @@ describe('Devices — re-probe panel', () => {
         state: 'installed',
         package_manager: 'apk',
         requested_packages: ['lldpd'],
-        added_packages: ['lldpd'],
+        added_packages: null,
         service_enabled: true,
         service_running: true,
     })
@@ -2771,6 +2810,7 @@ describe('Devices — re-probe panel', () => {
         }),
       ),
     )
+    expect(await screen.findByText(/Controller-added packages: none recorded\./)).toBeTruthy()
   })
 
   it('clears rejected LLDP package-plan credentials before a retry', async () => {

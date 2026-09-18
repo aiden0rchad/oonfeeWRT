@@ -1513,7 +1513,7 @@ function LLDPCapability({ deviceID, managementMode, managementModeError, onUpdat
             {installed && (
               <p style={{ margin: '8px 0 0' }}>
                 Controller record: {status?.state}. Controller-added packages:{' '}
-                {status?.added_packages.join(', ') || 'none; lldpd existed before adoption'}.
+                {(status?.added_packages ?? []).join(', ') || 'none recorded'}.
               </p>
             )}
             {!installed && !readOnly && (
