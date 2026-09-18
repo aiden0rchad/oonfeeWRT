@@ -2,42 +2,45 @@
 
 oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safety depends on preserving a matching database/keyring/passphrase set before replacing a binary or image.
 
-> **Outcome:** The controller runs v0.1.7 with its existing state intact, and you retain a verified recovery unit matching the version you may need to restore.
+> **Outcome:** The controller runs v0.1.8 with its existing state intact, and you retain a verified recovery unit matching the version you may need to restore.
 
-::: info Upgrading from v0.1.6
-v0.1.7 retains **schema 25** and adds no database migration over v0.1.6.
-The update refines the interface and navigation; it does not require
-re-adoption, a router helper, or new router permissions. Preserve a verified
-matching recovery unit before replacing any binary or image.
+::: info Upgrading from v0.1.6 or v0.1.7
+v0.1.8 retains **schema 25** and adds no database migration over v0.1.6 or
+v0.1.7. Keep the same data volume and runtime passphrase, then refresh the
+browser after replacement. The upgrade does not require re-adoption, add router
+permissions, run an LLDP package action, or apply router configuration.
+Preserve a verified matching recovery unit and old binary/image first.
 :::
 
 ::: warning Upgrading from v0.1.5 or earlier
-v0.1.5 uses schema **23**. v0.1.7 applies the migrations introduced in v0.1.6:
+v0.1.5 uses schema **23**. v0.1.8 applies the migrations introduced in v0.1.6:
 schema **23 → 24 → 25**: persistent alert state, then encrypted AdGuard
-connection configuration. Starting v0.1.7 against your existing data performs
+connection configuration. Starting v0.1.8 against your existing data performs
 the migrations; building or previewing the isolated demo does not.
 
-Before v0.1.7 opens your data, preserve a verified, matching
+Before v0.1.8 opens your data, preserve a verified, matching
 **schema-23 database + keyring + runtime passphrase + v0.1.5 binary/image**.
 Use a disposable data copy if evaluating first. A v0.1.5 binary cannot open
 schema 24 or 25. Changing only the executable or image tag is not a rollback.
 :::
 
-## Upgrade v0.1.6 to v0.1.7 {#upgrade-v016-to-v017}
+## Upgrade v0.1.6 or v0.1.7 to v0.1.8 {#upgrade-v016-to-v017}
 
 1. Complete any in-flight operation, export and verify a backup, and retain
-   the matching database, keyring, runtime passphrase, and v0.1.6 binary/image.
+   the matching database, keyring, runtime passphrase, and current v0.1.6 or
+   v0.1.7 binary/image.
 2. Stop the old controller cleanly. Replace it with the checksum-verified
-   v0.1.7 binary or pinned container, keeping the same data volume and passphrase.
-3. Start the controller and sign in again. Confirm `v0.1.7`, healthy service
+   v0.1.8 binary or pinned container, keeping the same data volume and passphrase.
+3. Start the controller and sign in again. Confirm `v0.1.8`, healthy service
    status, expected devices, and the existing router-write gate state.
-4. Check the new navigation: **Workspace** contains operational screens;
-   **Insights** contains Statistics, Reports, and Alerts; **Settings** contains
-   Firmware and Integrations alongside Network and permitted maintenance tabs.
-   Existing `/firmware` and `/integrations` bookmarks still work.
-5. Verify the intended Reports period has finished loading before exporting.
-   Missing measurements remain unavailable; the compact Dashboard summary
-   does not change the meaning of its fleet counts.
+4. Refresh the browser. If an LLDP ledger previously prevented the Devices page
+   from rendering, confirm an empty controller-added package list now says
+   **none recorded**. Do not reinstall LLDP or re-adopt for this display fix.
+5. For a device affected by shared-PHY radio collapse, inspect any earlier
+   Apply outcome and current wireless state, run **Re-probe capabilities**, and
+   generate a fresh Preview. Confirm distinct UCI `wifi-device` targets before
+   separately authorizing Apply. Stop if the targets remain ambiguous; do not
+   clear ownership or edit the database.
 
 The schema number is unchanged, but it is not a substitute for a recovery plan.
 For a controlled return to the earlier deployment, stop the new process,
@@ -48,7 +51,7 @@ discards controller changes made since that point and does not undo router chang
 
 <span id="evaluate-development-without-losing-a-stable-rollback"></span>
 
-## Upgrade v0.1.5 to v0.1.7 {#upgrade-v015-to-v016}
+## Upgrade v0.1.5 to v0.1.8 {#upgrade-v015-to-v016}
 
 This direct upgrade uses the same schema-23 → 25 migration path introduced in
 v0.1.6; installing that intermediate version first is not required. The older
@@ -61,7 +64,7 @@ section anchor is retained so existing recovery-guide bookmarks keep working.
    Retain the matching runtime passphrase and exact released binary/image.
 3. Stop the old daemon before copying or replacing a live data directory.
    Never let two controllers open the same SQLite files.
-4. Start v0.1.7 only against the intended copy or upgrade target. Schema
+4. Start v0.1.8 only against the intended copy or upgrade target. Schema
    24 stores alert rules, evaluation state, incidents, and bounded delivery
    state; schema 25 stores encrypted AdGuard connection settings. Neither
    migration installs a router helper or flashes firmware.
@@ -69,7 +72,7 @@ section anchor is retained so existing recovery-guide bookmarks keep working.
    coverage, role gates, and backup access before enabling any new alert
    delivery or service connection. An ordinary upgrade does not create alert
    rules or configure an external integration for you.
-6. To return to v0.1.5, stop v0.1.7 and retain its schema-25 recovery unit
+6. To return to v0.1.5, stop v0.1.8 and retain its schema-25 recovery unit
    separately. Restore the untouched matching schema-23 unit and start the
    v0.1.5 binary/image with its passphrase. Do not hand-edit the schema number.
 
@@ -80,7 +83,7 @@ newer state into v0.1.5. If only a **pre-upgrade** v0.1.5 portable backup
 remains, restore it through v0.1.5's staged restore in a fresh supported data
 directory; do not point that daemon at the migrated volume.
 
-When using the v0.1.7 portable-restore path, external alert delivery is
+When using the v0.1.8 portable-restore path, external alert delivery is
 paused, its pending outbox is cancelled, and evaluation/hold continuity resets.
 Rules, history, cooldowns, and encrypted destination settings are retained.
 An Owner reviews the restored environment and explicitly re-enables future
@@ -89,7 +92,7 @@ the router-write suppression gate. An ordinary startup upgrade does not
 perform this restore-specific reset.
 
 For UI exploration without a database migration or router connection, use the
-[isolated demo](../guide/demo.md). The installation steps below target v0.1.7;
+[isolated demo](../guide/demo.md). The installation steps below target v0.1.8;
 historical rollback targets are documented separately at the end.
 
 ## Before you begin
@@ -102,9 +105,11 @@ historical rollback targets are documented separately at the end.
 
 **Router write impact:** Replacing the binary/image and migrating the database do not themselves contact or configure routers. After startup, read-only polling resumes and, for managed devices only when the write gate is open, automatic 802.11k neighbour reconciliation may update runtime hostapd neighbour lists. Monitor-only devices are excluded. A restore, unlike an ordinary upgrade, activates a persistent router-write safety gate.
 
-## Version facts for v0.1.7
+<span id="version-facts-for-v0-1-7"></span>
 
-- v0.1.7 keeps v0.1.6's controller database schema **25**. From v0.1.5/schema 23,
+## Version facts for v0.1.8
+
+- v0.1.8 keeps v0.1.6 and v0.1.7 on controller database schema **25**. From v0.1.5/schema 23,
   startup adds schema 24's durable alert snapshot/outbox and schema 25's
   encrypted AdGuard connection. No rules, destinations, or helpers are enabled
   automatically. Earlier supported databases run the earlier steps first:
@@ -133,7 +138,7 @@ historical rollback targets are documented separately at the end.
   status uses newly allowlisted read-only LuCI methods; already-adopted routers
   need a separately reviewed controller-access refresh only if that clock
   status is wanted. Re-adoption is not required.
-- Historical v0.1.0-rc.1 uses schema 17. v0.1.7 can migrate supported schema-17
+- Historical v0.1.0-rc.1 uses schema 17. v0.1.8 can migrate supported schema-17
   state through schemas 18–25. Returning to the RC requires
   restoring the untouched schema-17 backup, not merely replacing the executable
   or image.
@@ -143,7 +148,7 @@ historical rollback targets are documented separately at the end.
 Always use **Settings → Backup & Restore** to export an encrypted `.oowrtbak`,
 download it before it expires, record its separate export passphrase, and
 verify that the job completed. For the simplest direct rollback,
-also retain one of the raw recovery units below before v0.1.7 opens
+also retain one of the raw recovery units below before v0.1.8 opens
 the live data. The public recovery helper verifies raw databases but does not
 extract `.oowrtbak` files. Keep schema 23 for v0.1.5, schema 20 for v0.1.4,
 or the exact schema supported by your earlier rollback target. Verify with
@@ -188,7 +193,7 @@ Never copy only the main SQLite file while WAL is active. It may omit committed 
 
 ## 2A. Upgrade a standalone binary
 
-1. Download, checksum-verify, and extract v0.1.7 using [Install the binary](binary.md).
+1. Download, checksum-verify, and extract v0.1.8 using [Install the binary](binary.md).
 2. Stop the old daemon using the same process manager or foreground terminal that started it. Give it time to finish a graceful shutdown.
 3. Replace the executable:
 
@@ -210,25 +215,25 @@ Do not point a new process at a copied database while leaving the old process ru
 
 ## 2B. Upgrade Docker Compose
 
-Download the exact v0.1.7 Compose file beside the existing one, compare it,
+Download the exact v0.1.8 Compose file beside the existing one, compare it,
 and reapply only intentional local
 changes. Do not replace `.env`, `passphrase`, or the named volume:
 
 ```sh
 curl --fail --location \
-  --output docker-compose.yml.v0.1.7 \
-  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.7/deploy/docker-compose.yml
-diff -u docker-compose.yml docker-compose.yml.v0.1.7
-OONFEE_VERSION=v0.1.7 docker compose -f docker-compose.yml.v0.1.7 config --quiet
+  --output docker-compose.yml.v0.1.8 \
+  https://raw.githubusercontent.com/aiden0rchad/oonfeeWRT/v0.1.8/deploy/docker-compose.yml
+diff -u docker-compose.yml docker-compose.yml.v0.1.8
+OONFEE_VERSION=v0.1.8 docker compose -f docker-compose.yml.v0.1.8 config --quiet
 ```
 
-After reviewing the diff, replace `docker-compose.yml` with the v0.1.7 file or
+After reviewing the diff, replace `docker-compose.yml` with the v0.1.8 file or
 merge its changes deliberately. Update the existing `.env` without removing
 other intentional deployment values. Pin both the release and the publish
 address you intend to retain across future lifecycle commands:
 
 ```dotenv
-OONFEE_VERSION=v0.1.7
+OONFEE_VERSION=v0.1.8
 OONFEE_HTTP_BIND=127.0.0.1
 ```
 
@@ -312,12 +317,12 @@ In the browser:
 14. Review **Alerts**, **Firmware**, and **Integrations** without enabling a
     webhook, checking an external service, or installing the optional helper
     just to validate the upgrade. Fresh v0.1.5 upgrades have no alert rules or
-    AdGuard connection; firmware installation remains unavailable in v0.1.7.
+    AdGuard connection; firmware installation remains unavailable in v0.1.8.
 
 ## Roll back v0.1.5 to v0.1.4
 
 The following explains that earlier release transition. When rolling back
-directly from v0.1.7, retain its schema-25 recovery unit and use the same exact
+directly from v0.1.8, retain its schema-25 recovery unit and use the same exact
 pre-v0.1.5 schema-20 target below; schema 23 is not a compatible substitute.
 
 Do not point v0.1.4 at a database that v0.1.5 migrated to schema 23. Rollback is
@@ -360,7 +365,7 @@ those rows exist in a pre-v0.1.1 backup.
 Do not point the RC daemon at a schema-19, schema-20, schema-23, or schema-25 database. Rollback is a data restore:
 
 1. Stop the stable controller.
-2. Retain its current database/keyring pair separately (schema 25 for v0.1.7).
+2. Retain its current database/keyring pair separately (schema 25 for v0.1.8).
 3. Restore the untouched schema-17 database and matching `keyring.json` captured before migration.
 4. Use the prior runtime passphrase file.
 5. Install the v0.1.0-rc.1 binary or image.

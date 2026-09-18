@@ -1,6 +1,6 @@
 # Firmware and optional router helper
 
-::: info Find Firmware in v0.1.7
+::: info Find Firmware in v0.1.8
 Open **Settings → Firmware**, or bookmark `/settings?section=firmware` on your
 controller. The older `/firmware` URL remains an alias for this tab. The page
 heading is **Settings**; the selected **Firmware** tab identifies its content.
@@ -90,7 +90,7 @@ current stored probe does not capture. See the
 The displayed checksum is the checksum **published in the HTTPS catalogue**.
 oonfeeWRT has not downloaded the firmware, checked its bytes, validated a
 signature, executed `sysupgrade -T`, or confirmed that settings can migrate.
-There is no enabled Install button in v0.1.7.
+There is no enabled Install button in v0.1.8.
 
 Before using an image outside the controller:
 

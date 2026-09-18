@@ -8,7 +8,7 @@ adoption never equals applying network configuration.
 
 ## The device lifecycle
 
-::: info Device views retained in v0.1.7
+::: info Device views retained in v0.1.8
 v0.1.6 introduced illustrated **Cards** and **List** views, device search,
 and status filtering. Adoption, management-mode fences, and configuration approval
 remain unchanged.
@@ -26,7 +26,7 @@ remain unchanged.
 
 ## Find your way around the inventory
 
-In v0.1.7, start with the fleet summary, then use **Search devices**
+In v0.1.8, start with the fleet summary, then use **Search devices**
 to match a name, address, firmware, or adopted function. Combine it with the
 status selector to narrow the loaded infrastructure inventory. The summary
 describes the fleet; **Showing … of … devices** describes the current filters.
@@ -236,7 +236,7 @@ can remain empty until that exact interface has collected samples. Dashboard
 adds a stricter series-catalog check before labeling data as WAN throughput.
 
 If the route cannot be mapped to exactly one active logical interface, the
-current v0.1.7 API explicitly reports no proved WAN interface and the UI leaves
+current v0.1.8 API explicitly reports no proved WAN interface and the UI leaves
 the WAN series unavailable. It does not guess from the metric catalog. Route
 evidence is refreshed on the slower network/topology cycle, approximately
 every 15 minutes; opening a focused device view does not make it a rapid
@@ -305,6 +305,16 @@ evidence is worth the storage, service, and change footprint on that device.
 Rollback restores the recorded configuration and service state and removes
 only packages recorded as additions. A live LLDP ownership record blocks
 un-adoption until rollback is resolved.
+
+::: info v0.1.8 null-ledger display fix
+An older LLDP ledger can contain a null or omitted package list. v0.1.8
+normalizes that value to an array before the Devices screen renders it; an
+empty controller-added list says **none recorded**. That wording does not mean
+the package was already installed. No LLDP reinstall, re-adoption, controller
+reset, or database edit is needed for this display fix. Existing LLDP errors,
+ownership records, and rollback behavior are unchanged, so this does not claim
+to solve every LLDP installation failure.
+:::
 
 In v0.1.4, fresh LLDP port evidence can also help distinguish a direct managed
 peer from client FDB entries merely seen through that peer. The current

@@ -2,10 +2,10 @@
 
 oonfeeWRT state is not one interchangeable database file. `oonfeewrt.db` and its matching `keyring.json` are a recovery unit, and the runtime passphrase is required to unlock that keyring.
 
-The recommended v0.1.7 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file. Schema-25 backups include device management modes, named policy sets, alert state, and encrypted integration settings.
+The recommended v0.1.8 workflow packages the consistent database snapshot and matching wrapped key material into one encrypted `.oowrtbak` file. Schema-25 backups include device management modes, named policy sets, alert state, and encrypted integration settings.
 
-::: warning v0.1.7 backups are not v0.1.5 downgrade artifacts
-v0.1.7 retains schema 25 from v0.1.6, with no additional migration.
+::: warning v0.1.8 backups are not v0.1.5 downgrade artifacts
+v0.1.8 retains schema 25 from v0.1.6 and v0.1.7, with no additional migration.
 The earlier schema-24 and schema-25 migrations added persistent alerts and
 encrypted AdGuard connection settings. Protect those credentials as
 part of the matching database/keyring recovery unit. Keep a verified raw
@@ -36,7 +36,7 @@ The `.oowrtbak` contains:
 
 It contains sensitive controller state, including account password hashes, configuration, inventory, and encrypted saved credentials. It does not back up foreign/unmanaged router UCI, router firmware, or arbitrary router files. Schema-23 source-relative client observations may be present in the encrypted artifact, but restore treats them as nonportable evidence and clears them from the prepared destination database.
 
-In v0.1.7, alert configuration/history and encrypted integration
+In v0.1.8, alert configuration/history and encrypted integration
 configuration are also database state. Browser-only topology positions,
 theme/navigation preferences, and downloaded report CSVs are **not** included.
 The optional router helper, its manual read grant, router configuration backup,
@@ -45,7 +45,7 @@ recovery planning. A controller backup is not a firmware rollback image.
 
 ### Restore and external delivery
 
-During disposable restore preparation, v0.1.7 pauses webhook
+During disposable restore preparation, v0.1.8 pauses webhook
 delivery and cancels the pending outbox before the prepared state can replace
 the controller. Alert rules, incident history, cooldowns, and the encrypted
 destination are retained, but old hold/evaluation continuity is reset. Missing

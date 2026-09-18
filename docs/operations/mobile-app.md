@@ -2,7 +2,7 @@
 
 ::: info Added in v0.1.6
 The installable-app manifest, offline guidance, and mobile navigation drawer
-were introduced in v0.1.6 and remain available in v0.1.7. Installation does not
+were introduced in v0.1.6 and remain available in v0.1.8. Installation does not
 add offline access to private data.
 :::
 
@@ -20,7 +20,7 @@ when the drawer is closed. Settings, Accounts, and Logs remain in the
 Controller group at the end of the navigation, followed by your compact
 profile shortcut to Accounts.
 
-In the v0.1.7 Precision layout, **Workspace** contains network tools and
+In the v0.1.8 Precision layout, **Workspace** contains network tools and
 **Insights** contains Statistics, Reports, and Alerts. Open **Settings** for
 the Firmware and Integrations tabs; they are no longer separate sidebar
 buttons. Existing bookmarked `/firmware` and `/integrations` URLs still work.

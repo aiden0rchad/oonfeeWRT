@@ -5,7 +5,7 @@ description: Direct answers about deployment, router changes, compatibility, sec
 
 # Frequently asked questions
 
-Answers below describe **oonfeeWRT v0.1.7** unless a historical release or
+Answers below describe **oonfeeWRT v0.1.8** unless a historical release or
 rollback target is named explicitly.
 
 ## What is oonfeeWRT?
@@ -291,11 +291,11 @@ modify a router, but its traffic follows the normal WAN path. The test uses
 about 15 MiB, is bounded to 30 seconds, and can temporarily saturate the WAN.
 
 Gateway-run testing, loaded latency, and loaded jitter are unavailable in
-v0.1.7.
+v0.1.8.
 
 ## Does the controller have HTTPS?
 
-Not natively in v0.1.7. Bind it to loopback or a trusted isolated management
+Not natively in v0.1.8. Bind it to loopback or a trusted isolated management
 LAN and use a trusted reverse proxy for TLS. Do not expose port 8080 directly to
 the Internet.
 
@@ -359,15 +359,18 @@ server-selected five-minute resolution and a 30d view at hourly resolution. It
 reads completed stored rollups only; opening the page does not focus devices or
 preserve raw samples.
 
-## Can I downgrade from v0.1.7?
+<span id="can-i-downgrade-from-v0-1-7"></span>
 
-Yes, using a verified matching recovery unit. v0.1.7 retains v0.1.6's schema 25,
-so returning to v0.1.6 crosses no schema boundary. Still preserve the exact
-pre-upgrade binary/image, database, keyring, and runtime passphrase and follow
+## Can I downgrade from v0.1.8?
+
+Yes, using a verified matching recovery unit. v0.1.8 retains schema 25 from
+v0.1.6 and v0.1.7, so returning to either version crosses no schema boundary.
+Still preserve the exact target binary/image, matching database, keyring, and
+runtime passphrase and follow
 the [controlled recovery procedure](../installation/upgrades.md#upgrade-v016-to-v017).
 
 Returning to v0.1.5 or earlier is different:
-v0.1.5 uses schema 23 and cannot open the newer database. Stop v0.1.7, retain
+v0.1.5 uses schema 23 and cannot open the newer database. Stop v0.1.8, retain
 its current recovery unit separately, and restore the schema-23 database,
 keyring, runtime passphrase, and v0.1.5 binary/image together. Replacing only
 the executable or image tag is not a rollback. A pre-upgrade v0.1.5 portable
@@ -411,8 +414,21 @@ RC daemon.
 - native mobile apps;
 - continuous proprietary spectrum analysis, paid threat feeds, and branded AI
   features; and
-- DPI/application flow history on constrained routers in v0.1.7. The Phase 5
+- DPI/application flow history on constrained routers in v0.1.8. The Phase 5
   feasibility page does not install or ship a flow package.
+
+## What changed in v0.1.8?
+
+The Devices page now handles a null or omitted LLDP package list and displays
+an empty controller-added list as **none recorded**. This rendering fix needs no
+LLDP reinstall, reset, or re-adoption and does not claim to solve every LLDP
+installation failure.
+
+Shared-PHY devices now preserve each configured UCI `wifi-device` section key
+instead of deriving target identity from the PHY. If an affected device was
+previously probed, inspect any earlier Apply outcome, re-probe it, and review a
+fresh Preview for distinct targets before separately authorizing Apply. Do not
+edit the database, clear ownership, or re-adopt as recovery.
 
 ## What is new in the v0.1.7 interface?
 
@@ -457,7 +473,7 @@ hold-window, cooldown, and retry boundaries.
 
 ## Does restoring a backup replay notifications?
 
-No. v0.1.7 portable restore pauses external alert delivery, cancels its pending
+No. v0.1.8 portable restore pauses external alert delivery, cancels its pending
 outbox, and resets pending evaluation continuity. It preserves rules, incident
 history, cooldowns, and the encrypted destination without claiming recovery.
 An Owner must review the restored environment and explicitly re-enable

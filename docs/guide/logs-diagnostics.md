@@ -5,7 +5,7 @@ redacted subset of stored controller evidence for support. Diagnostics do not
 poll or change routers while generating a bundle.
 
 The [Alerts](./alerts.md) workspace introduced in v0.1.6 remains available
-under **Insights → Alerts** in v0.1.7 for
+under **Insights → Alerts** in v0.1.8 for
 configured sustained conditions, incident history, and opt-in webhook delivery.
 It does not replace General/Audit logs or their coverage record. A delivery
 failure describes the notification path, not necessarily the router; use the
@@ -55,7 +55,7 @@ A useful incident filter sequence:
 6. note source gaps and timestamps;
 7. correlate with Dashboard, Client Observability, or Topology at the same time.
 
-v0.1.7 does not provide a device or free-text search filter on the Logs page.
+v0.1.8 does not provide a device or free-text search filter on the Logs page.
 
 ## Understand router-log coverage
 
@@ -63,7 +63,7 @@ Coverage describes which router-log intervals the controller can establish.
 It is not a warning that logs grow without a limit, and a stored cursor alone
 does not prove that a router is currently reachable.
 
-In v0.1.7, **Router log coverage** separates two cases:
+In v0.1.8, **Router log coverage** separates two cases:
 
 - **Current collection is up to date; earlier history is unavailable.** The
   compact information disclosure preserves the affected routers and gap

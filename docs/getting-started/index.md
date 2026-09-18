@@ -17,11 +17,12 @@ It is **not firmware**. The controller runs on a Linux or macOS computer, NAS, m
 | HTTPS access through an existing host | [Put a reverse proxy in front](../installation/reverse-proxy.md) |
 | To connect the first router | [First adoption](first-adoption.md) |
 
-::: info v0.1.7 and schema 25
-Installation examples target **v0.1.7**, schema **25**, including Statistics,
+::: info v0.1.8 and schema 25
+Installation examples target **v0.1.8**, schema **25**, including Statistics,
 Reports, Alerts, editable topology, Firmware catalogue checks, Integrations,
-Accounts, and mobile improvements. v0.1.7 adds the Precision sidebar and compact
-fleet presentation without a new migration over v0.1.6. Open Firmware and
+Accounts, and mobile improvements. v0.1.7 introduced the Precision sidebar and
+compact fleet presentation; v0.1.8 retains them while fixing LLDP null-ledger
+rendering and shared-PHY radio identity, without a new migration. Open Firmware and
 Integrations inside Settings; Statistics, Reports, and Alerts are under Insights.
 Preserve a matching pre-upgrade recovery
 unit before opening existing controller data; returning to v0.1.5 requires
@@ -157,10 +158,10 @@ Unavailable features are capability-gated. For example, a legacy `swconfig` devi
   not use ARP or mDNS. A Docker bridge usually requires add-by-address.
 - The controller has no native TLS listener.
 - Existing networks upgrade to **Router managed** IPv6 and receive no IPv6
-  router write merely from installing v0.1.7. Prefix delegation and Disabled
+  router write merely from installing v0.1.8. Prefix delegation and Disabled
   remain explicit Preview-and-Apply choices.
 - The speed test runs on the controller host through Cloudflare, not on the router. It transfers about 15 MiB and is bounded to 30 seconds.
-- Cloud remote access, automatic NAT traversal, native mobile apps, firmware execution, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.7. Flow visibility is documented as a gated feasibility track only.
+- Cloud remote access, automatic NAT traversal, native mobile apps, firmware execution, gateway-run speed tests, DPI/application identification, and universal PoE or switch control are not included in v0.1.8. Flow visibility is documented as a gated feasibility track only.
 
 ## Next steps
 

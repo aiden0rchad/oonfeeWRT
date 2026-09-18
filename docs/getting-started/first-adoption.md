@@ -152,14 +152,14 @@ Switch behavior is capability-dependent:
 - `unknown` retains the uncertainty;
 - `none` means no switch capability was observed.
 
-A generic single-interface LAN is separate from legacy `swconfig`. v0.1.7
+A generic single-interface LAN is separate from legacy `swconfig`. v0.1.8
 does not create tagged VLAN attachments on that layout and leaves its existing
 LAN/VLAN configuration unchanged. See [Networks, VLANs, and DHCP](../guide/networks.md)
 before planning a tagged network.
 
 ## 5. Review the controller access payload
 
-In v0.1.7, find **Install the oonfeeWRT
+In v0.1.8, find **Install the oonfeeWRT
 controller access payload?** in **Review access and adopt**, then expand
 **View access details**. The short explanation, full access details, and consent
 checkbox are grouped together; the checkbox is not selected automatically.

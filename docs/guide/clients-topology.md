@@ -4,7 +4,7 @@ The Clients and Topology workspaces connect endpoint presence with the
 infrastructure path used to observe it. Both preserve evidence confidence and
 coverage gaps so an inferred link never looks like a measured cable.
 
-::: info Client and topology features retained in v0.1.7
+::: info Client and topology features retained in v0.1.8
 v0.1.6 introduced a clearer client summary and illustrated topology nodes,
 plus a browser-local editable map. These are presentation changes: they do not
 add packet capture, virtual-machine discovery, new link evidence, or router
@@ -33,7 +33,7 @@ Filters operate on the complete matching result before pagination:
 - connection evidence (**Wireless**, **Unknown**, or all).
 
 The current table does not claim that an endpoint is wired merely because no
-managed AP reports it, and v0.1.7 has no client text-search or source-coverage
+managed AP reports it, and v0.1.8 has no client text-search or source-coverage
 filter.
 
 The count above the table is the filtered total, not merely the number of rows

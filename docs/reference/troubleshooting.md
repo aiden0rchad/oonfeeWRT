@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.7.
+description: Symptom-based diagnosis, verification, and recovery for oonfeeWRT v0.1.8.
 ---
 
 # Troubleshooting
@@ -11,15 +11,15 @@ until you know the previous operation's terminal state.
 
 ## Interface quick checks
 
-These symptoms concern the v0.1.7 interface. Check the executable version and
+These symptoms concern the v0.1.8 interface. Check the executable version and
 use its matching embedded UI; earlier releases do not include every workspace.
 
 | Symptom | Explanation or safe next check |
 |---|---|
-| Reports, Alerts, Firmware, Integrations, or Cards/List are missing | These workspaces were introduced in v0.1.6 and remain in v0.1.7. Do not copy only new UI assets onto an older daemon; use a matching build and read the schema migration boundary |
-| Firmware or Integrations disappeared from the sidebar | In v0.1.7, open **Settings → Firmware** or **Settings → Integrations**. Existing `/firmware` and `/integrations` bookmarks open those sections; this is a navigation change, not a removed capability |
+| Reports, Alerts, Firmware, Integrations, or Cards/List are missing | These workspaces were introduced in v0.1.6 and remain in v0.1.8. Do not copy only new UI assets onto an older daemon; use a matching build and read the schema migration boundary |
+| Firmware or Integrations disappeared from the sidebar | In v0.1.8, open **Settings → Firmware** or **Settings → Integrations**. Existing `/firmware` and `/integrations` bookmarks open those sections; this is a navigation change, not a removed capability |
 | Settings opens Network instead of a bookmarked maintenance tab | Diagnostics requires Administrator/Owner and Backup & Restore requires Owner. A disallowed section safely falls back to Network and replaces the invalid history entry; verify the signed-in role rather than changing the URL to bypass access |
-| Reports export becomes unavailable after changing the period | Expected while the newly selected period loads. v0.1.7 hides the previous result and blocks export until the completed data matches the selected period and refresh. Retry a failed load; do not treat the old period as current |
+| Reports export becomes unavailable after changing the period | Expected while the newly selected period loads. v0.1.8 hides the previous result and blocks export until the completed data matches the selected period and refresh. Retry a failed load; do not treat the old period as current |
 | Device count differs from the filtered cards | Fleet summaries and filtered results have different scopes. Read **Showing … of …**; clear search/status filters before diagnosing missing inventory |
 | Client signal count is smaller than the matching total | **Signal readings** describes only this page and only measured RSSI; **Matching clients** spans all pages under the filters. Unknown connection is not proof of wired attachment |
 | A topology move is not saved | Finish the drag, check the storage notice, and use the same signed-in account, controller origin, browser, and Current/History mode. Clearing site data or blocked storage removes persistence |
@@ -31,7 +31,7 @@ use its matching embedded UI; earlier releases do not include every workspace.
 | Official firmware catalogue cannot be checked | Verify DNS resolution and HTTPS access to `downloads.openwrt.org` from the controller host, then retry. A transient DNS failure is not evidence that router firmware is outdated; a failed check confirms no version status |
 | AdGuard or WireGuard check is unavailable | Confirm Administrator/Owner role, explicit connection/read grant, reachability, and the [integration-specific instructions](../guide/integrations.md). No automatic service or helper install is attempted |
 | Demo action says read-only | Intentional: it has no controller/router connection. Use synthetic data only, and do not enter real credentials or upload a backup |
-| v0.1.5 binary refuses schema 24 or 25 | Use v0.1.7 for schema 25, or restore the matching pre-upgrade schema-23 database/keyring/passphrase and v0.1.5 binary/image. Do not edit schema metadata or replace only the executable |
+| v0.1.5 binary refuses schema 24 or 25 | Use v0.1.8 for schema 25, or restore the matching pre-upgrade schema-23 database/keyring/passphrase and v0.1.5 binary/image. Do not edit schema metadata or replace only the executable |
 
 For responsive navigation, install requirements, and theme preference, see
 [Mobile and installed app](../operations/mobile-app.md). An installed browser
@@ -45,7 +45,7 @@ shortcut is not offline access, a native app, or Web Push support.
    oonfeewrtd -version
    ```
 
-   Expected for this guide: `v0.1.7`.
+   Expected for this guide: `v0.1.8`.
 
 2. Check controller liveness using the same listener configuration as the
    running process:
@@ -205,7 +205,7 @@ Inspect can still display the ordinary result and adds a note explaining that
 the sanitized report was unavailable.
 
 1. Confirm both daemon and UI are the same v0.1.2-or-newer release; for this
-   guide, both should be v0.1.7.
+   guide, both should be v0.1.8.
 2. Repeat read-only Inspect once after confirming the target address and
    credentials. It makes a fresh probe, but do not loop it aggressively.
 3. Record the controller version, router model/OpenWrt version, the displayed
@@ -254,11 +254,44 @@ Read the exact source reason. Do not install packages manually merely to remove
 an unavailable badge; adoption promises not to do that, and optional capability
 state needs a recorded plan and rollback.
 
+## LLDP package history is empty or the Devices screen failed before v0.1.8
+
+An existing LLDP ownership ledger can contain a null or omitted package list.
+v0.1.8 normalizes that value to an array for both status and successful action
+responses. The Devices screen then reports **Controller-added packages: none
+recorded** instead of failing to render. This means the ledger records no added
+packages; it is not proof that `lldpd` was already installed.
+
+Upgrade the controller and refresh the browser. Do not reinstall LLDP,
+re-adopt the router, reset the controller, or edit its database for this display
+case. LLDP error reporting, ownership, rollback, and un-adoption gates are
+unchanged. Investigate a genuine installation or rollback error separately;
+v0.1.8 does not claim to solve every LLDP failure.
+
+## Shared-PHY Preview reports duplicate or ambiguous radio targets
+
+v0.1.8 uses each configured UCI `wifi-device` section key as authoritative,
+even when several configured radios share one physical PHY. If an older probe
+collapsed those identities, do not retry a failed Apply: it may already have
+changed router configuration before ownership recording failed.
+
+1. Inspect the durable Apply outcome and current wireless configuration.
+2. Re-probe capabilities for the affected device.
+3. Generate a fresh Preview and confirm distinct section targets for every
+   intended radio and matching `wifi-iface` references.
+4. Authorize Apply separately only after that Preview is unambiguous.
+
+Invalid, duplicate, or ambiguous identities are rejected before router writes.
+Do not edit the database, clear ownership, re-adopt, or use repeated Apply as
+recovery. If ambiguity remains, stop and provide only a sanitized compatibility
+report and redacted Preview/error evidence; omit addresses, MACs, SSIDs, and
+credentials. See the [Wi-Fi recovery sequence](../guide/wifi.md#shared-phy-radios-after-a-controller-upgrade).
+
 ## An IPv6 router-advertisement warning remains after choosing Disabled
 
 Saving **Disabled** changes controller desired state only. Generate a fresh
 Preview and inspect the option-level plan. On the management LAN, the sections
-remain foreign: v0.1.7 can patch only the allowlisted IPv6 options on the exact
+remain foreign: v0.1.8 can patch only the allowlisted IPv6 options on the exact
 existing LAN/DHCP and supported conventional WAN targets. It cannot create,
 claim, rename, or delete them. Resolve any missing, ambiguous, wrong-type, or
 static-IPv6 blocker deliberately, then Apply once. Static IPv6 addresses,
@@ -285,7 +318,7 @@ it simply stops oonfeeWRT from changing existing IPv6 option values.
 
 ## Understand notices without treating every gap as a fault
 
-The v0.1.7 UI separates routine information from conditions that need
+The v0.1.8 UI separates routine information from conditions that need
 attention. Expand a notice for the exact source, what can be done, and what the
 controller cannot establish. Historical or unsupported evidence is not erased
 to make a screen appear healthy.
@@ -452,7 +485,7 @@ same slow topology poll.
 
 Start read-only:
 
-1. Confirm the controller is v0.1.7 and the device is adopted as a managed Gateway.
+1. Confirm the controller is v0.1.8 and the device is adopted as a managed Gateway.
 2. Allow one topology cycle (normally up to 15 minutes) after startup, adoption,
    or a route change, then read the device's source/degradation reason.
 3. From an independently trusted router shell, if appropriate, inspect the two
@@ -483,7 +516,7 @@ stale evidence does not become a current Dashboard WAN path.
 
 Do not change route metrics, PPPoE, firewall, or failover configuration merely
 to populate a chart. If the route layout is intentional but outside the modeled
-scope, treat WAN selection as unavailable in v0.1.7. Re-probing capabilities
+scope, treat WAN selection as unavailable in v0.1.8. Re-probing capabilities
 does not force or repair this topology observation.
 
 ## Charts are initially empty after startup or adoption
@@ -533,7 +566,7 @@ seconds. Only one test may be active.
 - Verify the controller host/container has HTTPS and DNS access to the provider.
 - Run during a quiet period if saturation affects clients.
 - Do not interpret the result as router-local forwarding performance.
-- Loaded latency and jitter are unavailable in v0.1.7.
+- Loaded latency and jitter are unavailable in v0.1.8.
 
 ## Diagnostics or backup download expired
 
@@ -584,7 +617,7 @@ record; forced removal cannot prove the inaccessible router is clean.
 
 ## Upgrade or rollback trouble
 
-v0.1.7 retains v0.1.6's schema **25**. From v0.1.5 it applies the existing
+v0.1.8 retains schema **25** from v0.1.6 and v0.1.7. From v0.1.5 it applies the existing
 schema **23 → 24 → 25** migrations: persistent alert state,
 then encrypted AdGuard Home settings. It does not configure a router, create
 a rule, connect a service, install a helper, or enable firmware execution.
@@ -596,7 +629,7 @@ To roll back to v0.1.5, stop the controller and restore its matching untouched
 schema-23 database, `keyring.json`, runtime passphrase, and executable/image.
 Keep the newer recovery unit separately. Do not change the schema number by
 hand or feed a schema-25 backup to an older controller. A portable restore
-into v0.1.7 pauses external alert delivery and cancels queued notifications;
+into v0.1.8 pauses external alert delivery and cancels queued notifications;
 review the receiver and explicitly re-enable delivery after restoration.
 
 To roll back to v0.1.4, stop the controller and restore the matching

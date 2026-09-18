@@ -1,16 +1,17 @@
 ---
 title: CLI and environment reference
-description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.7.
+description: Exact oonfeewrtd and recovery helper flags, environment variables, defaults, and safe command examples for v0.1.8.
 ---
 
 # CLI and environment reference
 
-This reference applies to **v0.1.7** and its `oonfeewrtd` and
-`oonfeewrt-recoverycheck` executables. The completed tagged workflow and GitHub
-release establish availability of the matching artifacts.
+This reference applies to **v0.1.8** and its `oonfeewrtd` and
+`oonfeewrt-recoverycheck` executables. Matching artifacts are available only
+after the exact-tag workflow and GitHub release complete.
 
 ::: info Version and command boundary
-v0.1.7 refines the UI and retains v0.1.6's schema 25; it does
+v0.1.8 corrects LLDP rendering and shared-PHY radio identity while retaining
+v0.1.6 and v0.1.7 schema 25; it does
 not add a CLI command for firmware flashing, installing the optional helper,
 or extracting a newer backup into v0.1.5. Use a matching executable/recovery
 helper and follow [migration and rollback](../installation/upgrades.md).
@@ -34,7 +35,7 @@ oonfeewrtd [flags]
 | `-log-level <level>` | `info` | One of `debug`, `info`, `warn`, `error` |
 | `-healthcheck` | false | Probe the configured listener's `/healthz` and exit without opening controller data |
 | `-version` | false | Print the embedded version and exit without opening controller data |
-| `-h`, `-help` | — | Print standard flag help; v0.1.7 then exits non-zero (a known CLI quirk) |
+| `-h`, `-help` | — | Print standard flag help; v0.1.8 then exits non-zero (a known CLI quirk) |
 
 Flags are parsed after environment configuration, so an explicit flag overrides
 a valid corresponding environment value. Environment loading/validation happens
@@ -88,10 +89,10 @@ starting with an empty keyring.
 oonfeewrtd -version
 ```
 
-For release v0.1.7 the output must be:
+For release v0.1.8 the output must be:
 
 ```text
-v0.1.7
+v0.1.8
 ```
 
 ### Interactive local start
@@ -158,7 +159,7 @@ application behavior; neither adds a daemon flag or environment variable.
   contains fields outside the share-safe allowlist.
 - Effective-WAN evidence is collected automatically for adopted gateways on the
   network/topology cycle. Existing v0.1.2 adoptions need no CLI migration, ACL
-  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.7.
+  refresh, or re-adoption. There is no manual-WAN-selection flag in v0.1.8.
 
 v0.1.4 adds per-network IPv6 policy, router-time observation, topology
 projection fixes, and filter- and page-independent current state/action UI for
@@ -192,7 +193,7 @@ clears them. Evidence outside the 30-day age and five-minute future-skew window
 is rejected independently of cleanup. Existing blocked/fixed-address intent
 can still be cleared one client at a time.
 
-The Phase 5 flow-visibility page is a feasibility record. v0.1.7 adds no
+The Phase 5 flow-visibility page is a feasibility record. v0.1.8 adds no
 `nlbwmon`, `netifyd`, DPI, or flow-collector daemon flag and installs no such
 package.
 
@@ -200,7 +201,7 @@ package.
 host-side publish address. It is not read by `oonfeewrtd` and does not replace
 the container's `OONFEE_LISTEN=:8080`.
 
-v0.1.7 retains v0.1.6's database schema **25** without a new migration.
+v0.1.8 retains v0.1.6 and v0.1.7 database schema **25** without a new migration.
 From v0.1.5, the existing automatic path is
 **23 → 24 → 25**: persistent alert state, then encrypted AdGuard Home settings.
 It does not create rules, connect a service, install a helper, or configure

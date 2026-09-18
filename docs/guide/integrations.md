@@ -1,6 +1,6 @@
 # Read-only integrations
 
-::: info Find Integrations in v0.1.7
+::: info Find Integrations in v0.1.8
 Open **Settings → Integrations**, or bookmark `/settings?section=integrations`
 on your controller. The older `/integrations` URL remains an alias for this
 tab. The page heading is **Settings**; the selected **Integrations** tab

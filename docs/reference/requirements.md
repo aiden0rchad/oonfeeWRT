@@ -1,15 +1,15 @@
 ---
 title: Requirements and compatibility
-description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.7.
+description: Controller host, network, OpenWrt, storage, and security requirements for oonfeeWRT v0.1.8.
 ---
 
 # Requirements and compatibility
 
 Use this checklist before installing or adopting a router with **oonfeeWRT
-v0.1.7**.
+v0.1.8**.
 
-::: info v0.1.7 upgrade and optional-feature requirements
-v0.1.7 retains v0.1.6's schema **25** without a new migration.
+::: info v0.1.8 upgrade and optional-feature requirements
+v0.1.8 retains v0.1.6 and v0.1.7 schema **25** without a new migration.
 Preserve a matching pre-upgrade recovery unit before
 opening existing controller data; returning to v0.1.5 requires schema 23.
 The optional rpcd helper must be built with a matching OpenWrt SDK and installed
@@ -111,11 +111,11 @@ Ordinary single DHCP, static, and PPPoE uplinks satisfy the modeled shape.
 Equal-metric distinct defaults, ECMP/multipath, custom policy routing,
 `mwan3`, unmappable runtime devices, and bond-member selection remain
 unavailable rather than guessed. Those layouts can still be managed outside
-oonfeeWRT, but v0.1.7 does not claim their Dashboard WAN path is authoritative.
+oonfeeWRT, but v0.1.8 does not claim their Dashboard WAN path is authoritative.
 
 ### Optional router-clock status prerequisites
 
-v0.1.7 can compare fresh router UTC with the controller through
+v0.1.8 can compare fresh router UTC with the controller through
 `luci.getUnixtime`, falling back to `luci.getLocaltime` only when the preferred
 method is unavailable. A new adoption's reviewed ACL includes these read-only
 methods. An adoption created by an older release keeps ordinary polling,
@@ -216,16 +216,19 @@ or volume snapshots.
 
 ## Installation artifacts
 
-For v0.1.7:
+Use these artifacts only after the completed exact `v0.1.8` tag workflow and
+GitHub release establish publication; source preparation or a tag alone does
+not establish availability. For v0.1.8:
 
-- download release archives and `SHA256SUMS` from the v0.1.7 GitHub release;
+- download release archives and `SHA256SUMS` from the v0.1.8 GitHub release;
 - reject any checksum mismatch;
 - note that macOS binaries are not Developer ID signed or notarized; and
 - verify the OCI image's keyless signature before first use where `cosign` is
   available.
 
-The immutable image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.7`. Stable aliases
-exist, but deployments should pin the exact version or digest.
+The version-pinned image is `ghcr.io/aiden0rchad/oonfeewrt:v0.1.8`. Stable
+aliases exist and rolling aliases can advance; only a verified digest pin is
+immutable.
 
 ## Source-build requirements
 
@@ -273,7 +276,7 @@ read its capability report.
 
 ## Pre-adoption checklist
 
-- [ ] Controller runs `v0.1.7` (`oonfeewrtd -version`).
+- [ ] Controller runs `v0.1.8` (`oonfeewrtd -version`).
 - [ ] Data directory and matching passphrase backup are protected.
 - [ ] Controller healthcheck passes.
 - [ ] Browser access is loopback-only, trusted-LAN-only, or behind trusted TLS.

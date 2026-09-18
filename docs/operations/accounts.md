@@ -6,7 +6,7 @@ Controller accounts are local to oonfeeWRT. They are separate from router logins
 
 ## Find account controls
 
-v0.1.7 keeps the dedicated **Accounts** workspace introduced in v0.1.6
+v0.1.8 keeps the dedicated **Accounts** workspace introduced in v0.1.6
 at `/accounts`. It sits between **Settings** and **Logs** in the bottom
 **Controller** sidebar group. Opening it shows **My account** for every signed-in
 role; only owners also see **Manage accounts**.
@@ -17,16 +17,16 @@ when collapsed; its accessible name still identifies the account and role.
 It does not switch users or create an additional session. On mobile, open
 the navigation drawer to reach this profile.
 
-The procedures below use v0.1.7 navigation. Older v0.1.5 keeps
+The procedures below use v0.1.8 navigation. Older v0.1.5 keeps
 the same account controls inside Settings:
 
-| Task | v0.1.6–v0.1.7 | v0.1.5 |
+| Task | v0.1.6–v0.1.8 | v0.1.5 |
 |---|---|---|
 | Own identity, password, and sessions | **Accounts → My account** | **Settings → My account** |
 | Create or manage other accounts and sessions | **Accounts → Manage accounts** | **Settings → Accounts** |
 
 These navigation refinements do not change permissions or account data.
-In v0.1.7, **Settings** contains **Network**, **Firmware**, **Integrations**,
+In v0.1.8, **Settings** contains **Network**, **Firmware**, **Integrations**,
 **Diagnostics** for administrators/owners, and **Backup & Restore** for owners.
 Firmware and Integrations were standalone workspaces in v0.1.6. A direct link
 to an unauthorized Settings section returns to Network; it does not grant
@@ -59,7 +59,7 @@ Roles are hierarchical: each higher role includes the lower role's permissions.
 
 Audit events are more sensitive than ordinary General events. The API applies additional authorization after it knows an event's scope.
 
-In v0.1.7, every signed-in role can read Statistics, Reports,
+In v0.1.8, every signed-in role can read Statistics, Reports,
 Alerts, firmware inventory, and saved integration metadata. Administrator or
 Owner is required to run firmware-catalogue, AdGuard, or WireGuard checks.
 Only the Owner edits alert rules/delivery or saves/removes AdGuard credentials;

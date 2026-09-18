@@ -6,7 +6,7 @@ description: Read WAN, system, interface, and radio history without hiding missi
 # Statistics and historical telemetry
 
 ::: info Added in v0.1.6
-Statistics was introduced in v0.1.6 and remains available in v0.1.7.
+Statistics was introduced in v0.1.6 and remains available in v0.1.8.
 The underlying rollup API and retention described here already exist in
 v0.1.5; this workspace is the presentation layer for those observations.
 :::

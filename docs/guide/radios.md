@@ -4,7 +4,7 @@ The Radios workspace combines inventory, measured RF data, source gaps, and an
 evidence-aware channel plan. It helps you decide what to investigate; it does
 not claim spectrum knowledge the hardware did not report.
 
-In v0.1.7, compare the exact stable-radio series in
+In v0.1.8, compare the exact stable-radio series in
 [Statistics](./statistics.md) when one current RF value needs historical
 context. A cleaner chart or compact channel-classification note does not fill
 missing measurements or remove DFS restrictions. The [isolated demo](./demo.md)
@@ -21,7 +21,7 @@ The channel plan lays out known radios, bands, current channels, and evidence
 that can support a placement decision. The per-radio table adds utilization,
 interference, airtime, retry/failure, signal, and a scan-derived channel score
 when those sources are available. The latest scan row shows its outcome and BSS
-count; v0.1.7 does not display the raw BSS inventory.
+count; v0.1.8 does not display the raw BSS inventory.
 
 <DocScreenshot
   src="radios-channel-plan" :width="1600" :height="1000"
@@ -41,7 +41,7 @@ Treat it as a plan, not an automatic optimizer:
 
 ### Per-radio observability
 
-The v0.1.7 UI presents **Channel classification** as compact information,
+The v0.1.8 UI presents **Channel classification** as compact information,
 not a router fault. OpenWrt's `freqlist.restricted` flag does not prove DFS
 status, and the current controller does not persist explicit DFS or configured
 channel-exclusion evidence. Channels stay **Restricted** or unknown where
@@ -51,7 +51,10 @@ for the restrictions it reports; do not bypass them to clear a notice.
 
 Each radio row identifies the device, stable radio key, band, channel,
 utilization/interference and related metrics, scan capability, and source state
-that the controller can establish.
+that the controller can establish. The stable key is the configured UCI
+`wifi-device` section, such as `radio0`, not a runtime PHY or BSS name. v0.1.8
+keeps distinct section keys when multiple configured radios share one PHY and
+fails Preview closed when those targets cannot be resolved uniquely.
 
 Values can be:
 
@@ -78,7 +81,7 @@ numbers.
 8. Refresh oonfeeWRT and compare client experience and new measurements after
    the change.
 
-oonfeeWRT v0.1.7 does not include spectrum analysis or an automatic channel
+oonfeeWRT v0.1.8 does not include spectrum analysis or an automatic channel
 change loop, and it has no radio-channel editor or Apply path. Its planner is
 read-only; only the separately acknowledged RF scan can disrupt a serving
 radio.
@@ -146,6 +149,7 @@ the observation.
 | Scan completes with few results | Quiet environment, band/channel visibility, driver behavior, or scan limitations | Compare from another AP and time; do not infer full-spectrum cleanliness |
 | Clients disconnect | Expected scan disruption or unstable radio recovery | Let the scan finish, verify radio state, review OpenWrt/controller logs, and avoid scanning that production path again |
 | Channel plan looks inconsistent | Mixed widths/bands, stale samples, or one AP lacks evidence | Align the time/source coverage before comparing rows |
+| Shared-PHY Preview reports duplicate or ambiguous radio targets | Stored capability data does not prove distinct UCI `wifi-device` sections | Stop before Apply, re-probe the affected device, then inspect a fresh Preview; follow the [shared-PHY recovery sequence](./wifi.md#shared-phy-radios-after-a-controller-upgrade) if ambiguity remains |
 
 ## Related guides
 
