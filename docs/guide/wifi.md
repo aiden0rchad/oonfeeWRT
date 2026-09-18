@@ -182,6 +182,26 @@ includes the passphrase.
 
 ## Troubleshooting
 
+### Shared-PHY radios after a controller upgrade
+
+Some MediaTek devices expose multiple configured radios, such as `radio0` and
+`radio1`, on one PHY. After upgrading a controller that previously collapsed
+those targets, use this recovery sequence once for each already-adopted affected
+device:
+
+1. Do not retry the failed Apply automatically. The old operation may already
+   have changed router configuration before ownership recording failed; inspect
+   the device's current wireless state and the durable Apply outcome first.
+2. Run **Re-probe capabilities** once.
+3. Generate a fresh Preview. Confirm that each band names a distinct
+   `wifi-device` target (for example, `radio0` and `radio1`) and that the desired
+   `wifi-iface` sections reference the matching target.
+4. Only after that Preview is correct, authorize Apply as a separate action.
+
+If the Preview still reports ambiguous radio targets or tells you to re-probe,
+stop rather than retrying. Do not clear ownership, delete the controller
+database, re-adopt the device, or use repeated Apply attempts as recovery.
+
 | Symptom | Likely cause | Action |
 |---|---|---|
 | WLAN omitted from one AP | Band/radio capability, AP function, group membership, or unreadable source | Expand that device's preview and capability report; do not force the section manually |

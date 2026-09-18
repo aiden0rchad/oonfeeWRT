@@ -617,7 +617,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 			// unasked rather than answered — there is no interface to survey,
 			// and "we did not look" is not "it cannot".
 			r.Radios = append(r.Radios, Radio{
-				Device: entry.radio, Phy: entry.radio,
+				Section: entry.section, Device: entry.radio, Phy: entry.radio,
 				Channel: entry.channel, Band: entry.band,
 			})
 			survey.undecided()
@@ -629,7 +629,7 @@ func probeRadios(ctx context.Context, c *ubus.Client, r *Registry) {
 		// SurveyUsest starts Unknown, not Absent: the switch below sets it from
 		// what the call actually showed, and a default of Absent is a claim
 		// about a radio nobody has asked yet.
-		radio := Radio{Device: dev, Band: entry.band}
+		radio := Radio{Section: entry.section, Device: dev, Band: entry.band}
 
 		info, infoErr := readInfo(ctx, c, dev)
 		if infoErr == nil {
@@ -1363,7 +1363,8 @@ func uplinkFromPackages(pkgs []string) State {
 // radioEntry pairs a configured radio with the interface (if any) that can be
 // sampled for it.
 type radioEntry struct {
-	radio   string // the UCI wifi-device name, e.g. radio0
+	radio   string // configured name, or fallback iwinfo interface name
+	section string // authoritative getWirelessDevices outer key only
 	iface   string // a broadcasting interface on it, empty when there is none
 	channel int
 	band    string
@@ -1418,7 +1419,7 @@ func radiosWithInterfaces(ctx context.Context, c *ubus.Client, ifaces []string) 
 	known := map[string]bool{}
 	out := make([]radioEntry, 0, len(wl))
 	for radio, v := range wl {
-		e := radioEntry{radio: radio}
+		e := radioEntry{radio: radio, section: radio}
 		sampleMode := ""
 		e.band = v.Config.Band
 		switch ch := v.Config.Channel.(type) {

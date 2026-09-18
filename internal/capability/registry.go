@@ -181,8 +181,13 @@ type Ports struct {
 	WAN string
 }
 
-// Radio is one PHY as the UI needs to know it.
+// Radio is one configured UCI radio as the UI needs to know it. Multiple
+// configured radios can share one PHY.
 type Radio struct {
+	// Section is the authoritative UCI wifi-device section reported as the
+	// outer key of luci-rpc.getWirelessDevices. Empty means legacy or
+	// unresolved evidence.
+	Section   string
 	Device    string // e.g. phy0-ap0
 	Phy       string
 	Channel   int

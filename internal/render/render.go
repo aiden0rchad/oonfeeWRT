@@ -167,6 +167,19 @@ type Doc struct {
 	Blind  []string
 }
 
+// Validate rejects document shapes that cannot be applied unambiguously.
+func (d Doc) Validate() error {
+	seen := make(map[SectionRef]struct{}, len(d.Sections))
+	for _, section := range d.Sections {
+		ref := SectionRef{Config: section.Config, Name: section.Name}
+		if _, duplicate := seen[ref]; duplicate {
+			return fmt.Errorf("duplicate desired section %s.%s", section.Config, section.Name)
+		}
+		seen[ref] = struct{}{}
+	}
+	return nil
+}
+
 // retained reports a section this render could not decide about.
 func (d Doc) retained(config, name string) bool {
 	for _, r := range d.Retain {
@@ -477,6 +490,9 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 			})
 		}
 		return doc, rep, nil
+	}
+	if err := validateRadioTargets(caps); err != nil {
+		return Doc{}, rep, err
 	}
 
 	// An access point that no WLAN targets broadcasts nothing, and says so
@@ -1075,9 +1091,12 @@ func radiosByBand(caps *capability.Registry) map[model.Band]string {
 
 // radioSection is the UCI wifi-device name a wifi-iface must reference.
 //
-// Capability reports the runtime interface (phy0-ap0); UCI wants the config
-// section (radio0). The phy index is the stable link between them.
+// Section is the authoritative configured UCI identity. PHY-number inference
+// remains only for compatibility with legacy or unresolved capability records.
 func radioSection(r capability.Radio) string {
+	if r.Section != "" {
+		return r.Section
+	}
 	phy := r.Phy
 	if phy == "" {
 		return r.Device
@@ -1087,6 +1106,38 @@ func radioSection(r capability.Radio) string {
 		return "radio" + phy[3:]
 	}
 	return phy
+}
+
+func validateRadioTargets(caps *capability.Registry) error {
+	if caps == nil {
+		return nil
+	}
+	seen := make(map[string]int, len(caps.Radios))
+	for i, radio := range caps.Radios {
+		target := radioSection(radio)
+		if !validUCIIdentifier(target) {
+			return fmt.Errorf("render: capability radio %d resolves to invalid UCI wifi-device section %q; Re-probe capabilities before Preview or Apply", i+1, target)
+		}
+		if previous, duplicate := seen[target]; duplicate {
+			return fmt.Errorf("render: capability radios %d and %d both resolve to UCI wifi-device section %q; radio targets are ambiguous. Re-probe capabilities before Preview or Apply", previous+1, i+1, target)
+		}
+		seen[target] = i
+	}
+	return nil
+}
+
+func validUCIIdentifier(name string) bool {
+	if len(name) < 1 || len(name) > 64 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') &&
+			(c < '0' || c > '9') && c != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // orderedBands returns the requested bands in a stable order, so section
