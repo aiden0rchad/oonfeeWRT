@@ -714,7 +714,8 @@ export interface LLDPCapabilityResult {
   state: 'not_installed' | 'install_planned' | 'installing' | 'installed' | 'configure_planned' | 'remove_planned' | 'removing' | 'error'
   package_manager?: 'apk' | 'opkg'
   requested_packages: string[]
-  added_packages: string[]
+  // Older controllers may return null or omit this field; current responses always use an array.
+  added_packages?: string[] | null
   plan?: string
   plan_hash?: string
   diagnostics?: string

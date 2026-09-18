@@ -34,6 +34,20 @@ type LLDPCapabilityResult struct {
 	Detail               string   `json:"detail,omitempty"`
 }
 
+func normalizedLLDPCapabilityResult(result *LLDPCapabilityResult) *LLDPCapabilityResult {
+	if result == nil {
+		return nil
+	}
+	normalized := *result
+	if normalized.RequestedPackages == nil {
+		normalized.RequestedPackages = []string{}
+	}
+	if normalized.AddedPackages == nil {
+		normalized.AddedPackages = []string{}
+	}
+	return &normalized
+}
+
 func (s *Server) handleLLDPStatus(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(w, r, "id")
 	if !ok {
@@ -72,7 +86,7 @@ func (s *Server) handleLLDPStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, normalizedLLDPCapabilityResult(&out))
 }
 
 func (s *Server) handleLLDPCapability(w http.ResponseWriter, r *http.Request) {
@@ -147,5 +161,5 @@ func (s *Server) handleLLDPCapability(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, normalizedLLDPCapabilityResult(res))
 }
