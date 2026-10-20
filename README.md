@@ -444,7 +444,7 @@ Detailed hardware evidence and known gaps are in the
 
 ## Build from source
 
-Go 1.26.6 and Node.js 22 are the release toolchain.
+Go 1.26.10 and Node.js 22 are the release toolchain.
 
 ```sh
 make check

@@ -300,7 +300,7 @@ v0.1.5 installs and ships no flow package or application identity.
 
 | Layer | Choice | Rationale |
 |---|---|---|
-| Language | Go ≥ 1.26; toolchain pinned to Go 1.26.6 | static binary in a scratch container, goroutine-per-device polling; patch pin matches the verified container build |
+| Language | Go ≥ 1.26; toolchain pinned to Go 1.26.10 | static binary in a scratch container, goroutine-per-device polling; patch pin matches the verified container build |
 | SQLite driver | `modernc.org/sqlite` | pure Go (D3) |
 | HTTP router | stdlib `net/http` (1.22+ pattern mux) | zero deps, auditable |
 | WebSocket | `github.com/coder/websocket` | maintained, minimal |

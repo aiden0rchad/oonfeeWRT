@@ -19,7 +19,7 @@ func TestReleaseBuildContract(t *testing.T) {
 		"go build -trimpath -buildvcs=false",
 		"-buildid= -X main.version=$VERSION",
 		"node:22-alpine@sha256:",
-		"golang:1.26.6-alpine@sha256:",
+		"golang:1.26.10-alpine@sha256:",
 		`LABEL org.opencontainers.image.licenses="Apache-2.0"`,
 		"COPY LICENSE NOTICE third_party/THIRD_PARTY_LICENSES /licenses/",
 		"COPY docs/releases/current.md /release/RELEASE-NOTES.md",
@@ -96,7 +96,7 @@ func TestReleaseBuildContract(t *testing.T) {
 	}
 	for _, required := range []string{
 		`"GOROOT"`, `"GOVERSION"`, "GO_LICENSE_SHA256", "VETTED_SHA256",
-		"ca-certificates-bundle", "20260611-r0", "LUCIDE_ORBIT_SHA256", "lucide-orbit",
+		"ca-certificates-bundle", "20260909-r0", "LUCIDE_ORBIT_SHA256", "lucide-orbit",
 	} {
 		if !strings.Contains(string(licenseGenerator), required) {
 			t.Errorf("license generator lost pinned runtime inventory %q", required)
@@ -156,8 +156,8 @@ func TestReleaseBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		"Go toolchain/runtime and standard library: go1.26.6",
-		"Runtime CA roots: Alpine ca-certificates-bundle 20260611-r0",
+		"Go toolchain/runtime and standard library: go1.26.10",
+		"Runtime CA roots: Alpine ca-certificates-bundle 20260909-r0",
 		"License expression: MPL-2.0 AND MIT",
 		"Mozilla Public License Version 2.0",
 		"Copyright (c) 2013-2014 Timo Teräs",
