@@ -21,7 +21,7 @@ LUCIDE_ORBIT_SHA256 = {
 VETTED_SHA256 = {
     "MIT.txt": "232f7df28fcccad44e6d049dd3408721a61daeaa682c5e9dd0df4283a48d2f2e",
     "MPL-2.0.txt": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-    "PROVENANCE": "e00577c4db3dfb11c18aea9fc129676033a95eb32237452d02dbdad325c5d092",
+    "PROVENANCE": "7242c7641c3a2e9507bc4bf6e2f4184fa538ac48d162bb9c83319085d9b0c5ba",
 }
 GO_LICENSE_SHA256 = {
     "LICENSE": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
@@ -165,7 +165,7 @@ def generate() -> str:
     for filename in ("PROVENANCE", "MPL-2.0.txt", "MIT.txt"):
         add_section(
             sections,
-            "Runtime CA roots: Alpine ca-certificates-bundle 20260611-r0",
+            "Runtime CA roots: Alpine ca-certificates-bundle 20260909-r0",
             "Vetted source file",
             CA_BUNDLE_DIR / filename,
             VETTED_SHA256[filename],

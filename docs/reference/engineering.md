@@ -13,7 +13,7 @@ hardware behavior.
 
 | Layer | Current choice |
 |---|---|
-| Go | Module declares Go 1.26 semantics and pins toolchain `go1.26.6` |
+| Go | Module declares Go 1.26 semantics and pins toolchain `go1.26.10` |
 | Database | Pure-Go `modernc.org/sqlite`; cgo is not used |
 | HTTP | Standard-library `net/http` pattern mux |
 | WebSocket | `github.com/coder/websocket` |
@@ -23,7 +23,7 @@ hardware behavior.
 | Tests | Go test/race/vet; Vitest; Playwright browser tests |
 | Release runtime | Static Go binary; non-root `scratch` container |
 
-Use Go **1.26.6** and Node.js **22** to match release and CI.
+Use Go **1.26.10** and Node.js **22** to match release and CI.
 
 ## Repository map
 
