@@ -672,6 +672,10 @@ export function Adopt({ onAdopted }: { onAdopted: () => void }) {
                         the scoped <code>rpcd.oonfeewrt</code> login.
                       </li>
                       <li>
+                        Registers the ACL in <code>/etc/sysupgrade.conf</code> so firmware
+                        upgrades that keep settings preserve controller access.
+                      </li>
+                      <li>
                         Grants read access for supported inventory, topology, radio/scan,
                         OpenWrt log, and fixed-target <code>1.1.1.1</code> ICMP observations.
                       </li>

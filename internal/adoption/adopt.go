@@ -172,7 +172,8 @@ func (a *Adopter) Adopt(ctx context.Context, operator *ubus.Client, boot Bootstr
 	// 3. Install the ACL file BEFORE the login, so the login never exists with
 	//    its access-groups undefined.
 	if err := boot.InstallACL(ctx, aclPath, a.ACL); err != nil {
-		return nil, fmt.Errorf("adoption: write %s: %w", aclPath, err)
+		primary := fmt.Errorf("adoption: write %s: %w", aclPath, err)
+		return nil, rollbackAdoption(ctx, boot, aclPath, user, false, primary)
 	}
 
 	// 4. Create the login.
@@ -392,7 +393,7 @@ func (r *UnadoptReport) Residue() []string {
 		out = append(out, fmt.Sprintf("config section %s.%s", s.Config, s.Section))
 	}
 	if !r.ACLRemoved {
-		out = append(out, r.ACLPath)
+		out = append(out, r.ACLPath, "backup entry for "+r.ACLPath+" in /etc/sysupgrade.conf")
 	}
 	if !r.LoginRemoved {
 		out = append(out, fmt.Sprintf("config login '%s' in /etc/config/rpcd", r.User))
@@ -440,6 +441,7 @@ func (r *UnadoptReport) CleanupCommands() []string {
 		out = append(out,
 			"rm -f "+quoted,
 			"[ ! -e "+quoted+" ] && echo 'ACL gone' || echo 'ERROR: ACL still present'",
+			"[ ! -e "+quoted+" ] && "+sysupgradeEntryCommand(r.ACLPath, false),
 		)
 	}
 	return out

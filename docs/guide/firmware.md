@@ -115,6 +115,42 @@ firmware flash**. See the
 [official upgrade overview](https://openwrt.org/docs/guide-user/installation/generic.sysupgrade)
 and [LuCI verification procedure](https://openwrt.org/docs/guide-quick-start/sysupgrade.luci).
 
+## Preserve and recover controller access
+
+In development builds after v0.1.8, adoption and **Review or refresh controller
+access payload** register `/usr/share/rpcd/acl.d/oonfeewrt.json` in
+`/etc/sysupgrade.conf`. This keeps the ACL alongside the controller login when
+an OpenWrt upgrade preserves settings, including upgrades through owut or
+Attended Sysupgrade. Monitor-only devices preserve their read-only ACL using
+**Review or refresh read-only observation ACL**. Un-adoption and failed-adoption
+cleanup remove the ACL's backup entry without removing other backup paths.
+
+For devices adopted by an earlier controller, run the appropriate refresh action
+once before the next firmware upgrade. Upgrading the controller alone cannot
+change an existing router's backup list. Verify inclusion over administrator SSH
+without flashing anything:
+
+```sh
+sysupgrade -l | grep -Fx '/usr/share/rpcd/acl.d/oonfeewrt.json'
+```
+
+If an upgrade already removed the ACL, the device can still accept its controller
+login while all observations fail with `access denied`. Open the device's detail
+panel and use the same refresh action with its administrator password or SSH key.
+Recovery requires the SSH host key saved at adoption to match before any
+administrator credential is sent. The controller then restores the appropriate
+ACL, registers it for future upgrades, and verifies a fresh controller session,
+device MAC, and capability probe before reporting success. It keeps the existing
+controller login, management mode, inventory, and configuration ownership.
+
+If there is no saved SSH host key, verify the router through a trusted
+administrator SSH connection and restore the ACL matching its managed or
+monitor-only mode. Refresh can then verify its MAC and record the SSH identity.
+If a saved key changed, investigate and resolve the stored identity mismatch
+before retrying; recovery never accepts a replacement key silently. Upgrades
+that discard settings also discard the controller login and require adoption
+again.
+
 ## Optional read-only router helper
 
 The source tree includes an OpenWrt SDK package at `deploy/openwrt-agent`. This
