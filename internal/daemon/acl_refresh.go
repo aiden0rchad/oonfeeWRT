@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/api"
 	"github.com/aiden0rchad/oonfeewrt/internal/capability"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/ubus"
 )
 
 const aclRefreshTimeout = 90 * time.Second
@@ -45,8 +47,10 @@ func (d *Daemon) RefreshACL(ctx context.Context, req api.RefreshACLRequest) (*ap
 		defer collector.Quiesce(dev.ID)()
 	}
 
-	// Prove the stored controller identity before offering the administrator
-	// credential to SSH or writing anything.
+	// A missing ACL still permits login but blocks the identity read. Recovery
+	// then requires the SSH key pinned at adoption; DialSSH checks it before
+	// sending any administrator credential. Never fall back on transport errors
+	// or a different MAC, and never learn a new SSH identity during recovery.
 	controller, err := d.Connect(ctx, dev)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: verify the existing controller login before ACL refresh: %w", err)
@@ -54,9 +58,16 @@ func (d *Daemon) RefreshACL(ctx context.Context, req api.RefreshACLRequest) (*ap
 	mac, err := deviceMAC(ctx, controller)
 	controller.Close()
 	if err != nil {
-		return nil, fmt.Errorf("daemon: verify device identity before ACL refresh: %w", err)
-	}
-	if mac != dev.MAC {
+		var denied *ubus.DeniedError
+		var status *ubus.StatusError
+		if !(errors.As(err, &denied) && denied.Retried) &&
+			!(errors.As(err, &status) && status.Status == ubus.StatusPermissionDenied) {
+			return nil, fmt.Errorf("daemon: verify device identity before ACL refresh: %w", err)
+		}
+		if dev.HostKeyFP == "" {
+			return nil, fmt.Errorf("daemon: controller access is denied and no saved SSH host key is available for safe ACL recovery; restore the ACL using a trusted administrator SSH connection, then refresh controller access: %w", err)
+		}
+	} else if mac != dev.MAC {
 		return nil, fmt.Errorf("daemon: ACL refresh endpoint identity is %s, expected %s", mac, dev.MAC)
 	}
 

@@ -257,7 +257,7 @@ func redactSSHError(msg string, values []string) string {
 	return msg
 }
 
-// InstallACL writes the file and proves it landed.
+// InstallACL writes the file, proves it landed, and preserves it across upgrades.
 //
 // The content goes over stdin rather than inside the command, so no amount of
 // JSON quoting can become shell syntax. It is written to a temporary file and
@@ -284,7 +284,37 @@ func (b *SSHBootstrap) InstallACL(ctx context.Context, path string, content []by
 		"mv "+shellQuote(tmp)+" "+shellQuote(path)+" && chmod 0644 "+shellQuote(path)); err != nil {
 		return err
 	}
-	return nil
+	_, err = b.run(ctx, nil, "preserve controller ACL across firmware upgrades", sysupgradeEntryCommand(path, true))
+	return err
+}
+
+// Rewrite atomically: a full overlay must not truncate the operator's backup
+// list. Fixed-string matching leaves comments and unrelated paths untouched.
+func sysupgradeEntryCommand(aclPath string, keep bool) string {
+	missing, appendEntry := "exit 0", ""
+	if keep {
+		missing = "source=/dev/null"
+		appendEntry = "printf '%s\\n' " + shellQuote(aclPath) + " >> \"$tmp\" || exit 1\n"
+	}
+	return `(conf=/etc/sysupgrade.conf
+source="$conf"
+if [ -e "$conf" ] || [ -L "$conf" ]; then
+  [ -f "$conf" ] && [ ! -L "$conf" ] || exit 1
+else
+  ` + missing + `
+fi
+tmp=$(mktemp "$conf.oonfee.XXXXXX") || exit 1
+trap 'rm -f "$tmp"' EXIT
+if [ "$source" = /dev/null ]; then
+  chmod 0644 "$tmp" || exit 1
+else
+  cp -p "$source" "$tmp" || exit 1
+fi
+grep -Fvx -- ` + shellQuote(aclPath) + ` "$source" > "$tmp"
+result=$?
+[ "$result" -le 1 ] || exit "$result"
+` + appendEntry + `mv -f "$tmp" "$conf"
+)`
 }
 
 func verifyACLHash(content []byte, output string) error {
@@ -355,7 +385,8 @@ func (b *SSHBootstrap) RemoveACL(ctx context.Context, aclPath string) error {
 	if strings.Contains(out, "acl=present") {
 		return fmt.Errorf("adoption: the ACL file %s is still on the device after removal", aclPath)
 	}
-	return nil
+	_, err = b.run(ctx, nil, "remove controller ACL backup entry", sysupgradeEntryCommand(aclPath, false))
+	return err
 }
 
 // RemoveFootprint deletes the login and the ACL file.
@@ -404,7 +435,8 @@ func (b *SSHBootstrap) RemoveFootprint(ctx context.Context, aclPath, user string
 		return fmt.Errorf("adoption: the ACL file %s is still on the device "+
 			"after removal", aclPath)
 	}
-	return nil
+	_, err = b.run(ctx, nil, "remove controller ACL backup entry", sysupgradeEntryCommand(aclPath, false))
+	return err
 }
 
 // PackageState reads only the fixed package/service facts needed by the LLDP
