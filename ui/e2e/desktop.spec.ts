@@ -259,6 +259,9 @@ const accounts = {
 interface ControllerFixtureOptions {
   statistics?: boolean
   accountRole?: 'owner' | 'admin' | 'operator' | 'viewer'
+  updateStatus?: unknown
+  dashboardGate?: Promise<void>
+  updateGate?: Promise<void>
 }
 
 const alertFixture = () => ({
@@ -273,6 +276,18 @@ const firmwareFixture = {
   checking: { source_url: 'https://downloads.openwrt.org/', scope: 'same-branch', note: 'Only checks the official catalogue when requested.' },
   agent: { available: true, installed_state: 'unknown', package_path: 'deploy/openwrt-agent', note: 'No helper is installed automatically.' },
   installation: { enabled: false, required_checks: ['Validate the exact image on the device.', 'Keep a recoverable configuration backup.'] },
+}
+
+const controllerUpdateFixture = {
+  state: 'available',
+  current_version: 'v0.1.8',
+  latest_version: '0.1.9',
+  latest_tag: 'v0.1.9',
+  release_url: 'https://github.com/aiden0rchad/oonfeeWRT/releases/tag/v0.1.9',
+  update_available: true,
+  checked_at: '2026-09-18T12:00:00Z',
+  next_check_at: '2026-09-19T00:00:00Z',
+  message: 'A newer published stable oonfeeWRT controller release is available.',
 }
 
 for (const width of [320, 1280]) {
@@ -432,6 +447,176 @@ test('mobile navigation traps focus, supports Escape, and reaches the new worksp
   expect(unexpected).toEqual([])
 })
 
+test('controller update modal traps focus, survives delayed dashboard data, persists dismissal, and deep-links in both themes', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  let releaseDashboard!: () => void
+  const dashboardGate = new Promise<void>((resolve) => { releaseDashboard = resolve })
+  const unexpected = await installControllerFixture(page, topology, {
+    statistics: true,
+    updateStatus: controllerUpdateFixture,
+    dashboardGate,
+  })
+  await page.goto('/')
+
+  const dialog = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+  const close = dialog.getByRole('button', { name: 'Close update notice' })
+  const instructions = dialog.getByRole('button', { name: 'View update instructions' })
+  await expect(dialog).toBeVisible()
+  await expect(close).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(instructions).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(close).toBeFocused()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  let box = await dialog.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(1280)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(720)
+
+  releaseDashboard()
+  await expect(page.getByRole('heading', { level: 1, name: 'Dashboard' })).toBeVisible()
+  await expect(close).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  const settings = page.getByRole('button', { name: 'Settings', exact: true })
+  await expect(settings).toHaveAttribute('aria-describedby', 'controller-update-navigation-status')
+  await expect(settings.locator('.controller-update-nav-dot')).toHaveText('1')
+  await page.getByRole('button', { name: 'Expand navigation' }).click()
+  await expect(settings.locator('.controller-update-nav-pill')).toHaveText('Update')
+
+  await page.reload()
+  await expect(dialog).toBeHidden()
+  await expect(settings).toHaveAttribute('aria-describedby', 'controller-update-navigation-status')
+  await page.getByRole('button', { name: /switch to light theme/i }).click()
+  await page.evaluate(() => {
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+      const key = localStorage.key(index)
+      if (key?.startsWith('oonfeewrt:controller-update-dismissed:')) localStorage.removeItem(key)
+    }
+  })
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(dialog).toBeVisible()
+  await expect(close).toBeFocused()
+  box = await dialog.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x + box!.width).toBeLessThanOrEqual(1280)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(720)
+
+  await instructions.click()
+  await expect(dialog).toBeHidden()
+  await expect(page).toHaveURL(/\/settings\?section=updates$/)
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeFocused()
+  await expect(page.getByRole('tab', { name: 'Updates', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('OONFEE_VERSION=v0.1.9', { exact: true })).toBeVisible()
+  await expect(page.getByText(/docker compose pull oonfeewrt/)).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+test('an arriving controller update closes the mobile drawer before opening its modal', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  let releaseUpdate!: () => void
+  const updateGate = new Promise<void>((resolve) => { releaseUpdate = resolve })
+  const unexpected = await installControllerFixture(page, topology, {
+    updateStatus: controllerUpdateFixture,
+    updateGate,
+  })
+  await page.goto('/')
+
+  const open = page.getByRole('button', { name: 'Open navigation', exact: true, includeHidden: true })
+  const navigation = page.getByRole('navigation', { name: 'Main navigation', includeHidden: true })
+  await open.click()
+  await expect(navigation).toHaveAttribute('data-mobile-open', 'true')
+  await expect(navigation.getByRole('button', { name: 'Close navigation ×' })).toBeFocused()
+  releaseUpdate()
+
+  const dialog = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Close update notice' })).toBeFocused()
+  await expect(navigation).toHaveAttribute('data-mobile-open', 'false')
+  await expect(open).toHaveAttribute('aria-expanded', 'false')
+  const box = await dialog.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844)
+
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(navigation).toHaveAttribute('data-mobile-open', 'false')
+  await expect(page.getByRole('main')).not.toHaveAttribute('inert')
+  await open.click()
+  await expect(page.getByRole('button', { name: 'Settings', exact: true }).locator('.controller-update-nav-pill')).toHaveText('Update')
+  expect(unexpected).toEqual([])
+})
+
+test('an arriving controller update waits for an existing editor and Escape closes one dialog at a time', async ({ page }) => {
+  let releaseUpdate!: () => void
+  let releaseDetail!: () => void
+  const updateGate = new Promise<void>((resolve) => { releaseUpdate = resolve })
+  const detailGate = new Promise<void>((resolve) => { releaseDetail = resolve })
+  const unexpected = await installControllerFixture(page, topology, {
+    statistics: true,
+    updateStatus: controllerUpdateFixture,
+    updateGate,
+  })
+  await page.route('**/api/v1/devices/1', async (route) => {
+    await detailGate
+    await route.abort('blockedbyclient')
+  })
+  await page.goto('/devices')
+
+  const device = page.getByRole('button', { name: 'Open device Gateway' })
+  await device.click()
+  const editor = page.getByRole('dialog', { name: 'Device' })
+  const closeEditor = editor.getByRole('button', { name: 'Close', exact: true })
+  await expect(editor).toBeVisible()
+  await expect(closeEditor).toBeFocused()
+  releaseUpdate()
+
+  const update = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+  await expect(page.locator('.controller-update-dialog')).toBeHidden()
+  await expect(editor).toBeVisible()
+  await expect(closeEditor).toBeFocused()
+  const settings = page.getByRole('button', { name: 'Settings', exact: true })
+  await expect(settings).toHaveAttribute('aria-describedby', 'controller-update-navigation-status')
+  await expect(settings.locator('.controller-update-nav-dot')).toHaveText('1')
+
+  await page.keyboard.press('Escape')
+  await expect(editor).toBeHidden()
+  await expect(update).toBeVisible()
+  await expect(update.getByRole('button', { name: 'Close update notice' })).toBeFocused()
+  releaseDetail()
+  await page.keyboard.press('Escape')
+  await expect(update).toBeHidden()
+  await expect(editor).toBeHidden()
+  await expect(device).toBeFocused()
+  expect(unexpected).toEqual([])
+})
+
+test('dismissing a delayed controller update restores the previously focused form control', async ({ page }) => {
+  let releaseUpdate!: () => void
+  const updateGate = new Promise<void>((resolve) => { releaseUpdate = resolve })
+  const unexpected = await installControllerFixture(page, topology, {
+    updateStatus: controllerUpdateFixture,
+    updateGate,
+  })
+  await page.goto('/accounts')
+
+  const password = page.getByLabel('Current password', { exact: true })
+  await password.focus()
+  await expect(password).toBeFocused()
+  releaseUpdate()
+  const update = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+  await expect(update).toBeVisible()
+  await update.getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await expect(update).toBeHidden()
+  await expect(password).toBeFocused()
+  expect(unexpected).toEqual([])
+})
+
 test('Settings preserves firmware and integration deep links, history, and explicit checks', async ({ page }) => {
   const unexpected = await installControllerFixture(page, topology, { statistics: true })
   const serviceRequests: string[] = []
@@ -491,6 +676,7 @@ test('viewer Settings links retain read-only firmware and integration controls',
   for (const name of ['Diagnostics', 'Backup & Restore']) {
     await expect(page.getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
+  await expect(page.getByRole('tab', { name: 'Updates', exact: true })).toBeVisible()
   expect(unexpected).toEqual([])
 })
 
@@ -578,6 +764,30 @@ test.describe('coarse-pointer Precision shell', () => {
       expect(box!.height).toBeGreaterThanOrEqual(44)
       expect(box!.width).toBeGreaterThanOrEqual(44)
     }
+    expect(unexpected).toEqual([])
+  })
+
+  test('controller update close stays touch-sized inside a narrow modal', async ({ page }) => {
+    const viewport = { width: 320, height: 568 }
+    await page.setViewportSize(viewport)
+    const unexpected = await installControllerFixture(page, topology, { updateStatus: controllerUpdateFixture })
+    await page.goto('/')
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true)
+
+    const dialog = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+    const close = dialog.getByRole('button', { name: 'Close update notice' })
+    await expect(dialog).toBeVisible()
+    const closeBox = await close.boundingBox()
+    expect(closeBox!.width).toBeGreaterThanOrEqual(44)
+    expect(closeBox!.height).toBeGreaterThanOrEqual(44)
+    const dialogBox = await dialog.boundingBox()
+    expect(dialogBox!.x).toBeGreaterThanOrEqual(0)
+    expect(dialogBox!.y).toBeGreaterThanOrEqual(0)
+    expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(viewport.width)
+    expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(viewport.height)
+
+    await close.click()
+    await expect(dialog).toBeHidden()
     expect(unexpected).toEqual([])
   })
 })
@@ -714,6 +924,8 @@ async function installControllerFixture(
       return
     }
     const path = url.pathname
+    if (path === '/api/v1/dashboard' && options.dashboardGate) await options.dashboardGate
+    if (path === '/api/v1/updates' && options.updateGate) await options.updateGate
     const responses: Record<string, unknown> = {
       '/api/v1/setup': { needs_setup: false },
       '/api/v1/session': {
@@ -725,6 +937,10 @@ async function installControllerFixture(
         reauthenticated_until: null,
       },
       '/api/v1/dashboard': dashboard,
+      '/api/v1/updates': options.updateStatus ?? {
+        state: 'unknown', current_version: 'dev', update_available: false,
+        message: 'Synthetic development build; no public release request was made.',
+      },
       '/api/v1/alerts': alertFixture(),
       '/api/v1/firmware': firmwareFixture,
       '/api/v1/integrations/adguard': {

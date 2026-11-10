@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   api: {
     setupState: vi.fn(),
     session: vi.fn(),
+    updates: vi.fn(),
     dashboard: vi.fn(),
     devices: vi.fn(),
     login: vi.fn(),
@@ -71,6 +72,20 @@ function signedIn(username = 'admin') {
   mocks.api.accounts.mockResolvedValue({ accounts: [], roles: [] })
 }
 
+function updateAvailable(tag = 'v0.1.9') {
+  return {
+    state: 'available' as const,
+    current_version: 'v0.1.8',
+    latest_version: tag.replace(/^v/, ''),
+    latest_tag: tag,
+    release_url: `https://github.com/aiden0rchad/oonfeeWRT/releases/tag/${tag}`,
+    update_available: true,
+    checked_at: '2026-09-18T12:00:00Z',
+    next_check_at: '2026-09-19T00:00:00Z',
+    message: 'A newer published stable release is available.',
+  }
+}
+
 describe('App session boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -78,6 +93,10 @@ describe('App session boundaries', () => {
     window.history.replaceState(null, '', '/')
     mocks.radioCrash = false
     mocks.api.logout.mockResolvedValue({ ok: true })
+    mocks.api.updates.mockResolvedValue({
+      state: 'unknown', current_version: 'dev', update_available: false,
+      message: 'Development build.',
+    })
   })
 
   it('shows controller bootstrap failures instead of guessing that sign-in mode is valid', async () => {
@@ -223,6 +242,78 @@ describe('App session boundaries', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy())
     expect(screen.queryByText('dashboard data')).toBeNull()
     expect(mocks.live.close).toHaveBeenCalled()
+  })
+
+  it('fetches update status independently, badges Settings in both sidebar modes, and routes the popup CTA', async () => {
+    signedIn()
+    mocks.api.devices.mockRejectedValue(new Error('inventory offline'))
+    mocks.api.updates.mockResolvedValue(updateAvailable())
+    render(<App />)
+
+    const dialog = await screen.findByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+    const settings = screen.getByRole('button', { name: 'Settings' })
+    expect(settings.getAttribute('aria-describedby')).toBe('controller-update-navigation-status')
+    expect(settings.querySelector('.controller-update-nav-dot')?.textContent).toBe('1')
+    expect(settings.querySelector('.controller-update-nav-pill')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand navigation' }))
+    expect(settings.querySelector('.controller-update-nav-dot')).toBeNull()
+    expect(settings.querySelector('.controller-update-nav-pill')?.textContent).toBe('Update')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'View update instructions' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
+    expect(window.location.pathname + window.location.search).toBe('/settings?section=updates')
+    expect(screen.getByText('Update available')).toBeTruthy()
+    expect(settings.querySelector('.controller-update-nav-pill')?.textContent).toBe('Update')
+    expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
+  })
+
+  it('does not let delayed dashboard focus steal focus from the update modal', async () => {
+    signedIn()
+    let resolveDashboard!: (value: { devices: object; recent_events: never[]; recent_alert_events: never[] }) => void
+    mocks.api.dashboard.mockReturnValue(new Promise((resolve) => { resolveDashboard = resolve }))
+    mocks.api.updates.mockResolvedValue(updateAvailable())
+    render(<App />)
+
+    const close = await screen.findByRole('button', { name: 'Close update notice' })
+    close.focus()
+    await act(async () => resolveDashboard({ devices: {}, recent_events: [], recent_alert_events: [] }))
+    expect(await screen.findByText('dashboard data')).toBeTruthy()
+    expect(document.activeElement).toBe(close)
+  })
+
+  it('aborts and ignores a late update response after logout', async () => {
+    signedIn()
+    let resolveUpdates!: (value: ReturnType<typeof updateAvailable>) => void
+    mocks.api.updates.mockReturnValue(new Promise((resolve) => { resolveUpdates = resolve }))
+    render(<App />)
+    await waitFor(() => expect(mocks.api.updates).toHaveBeenCalledOnce())
+    const signal = mocks.api.updates.mock.calls[0][0] as AbortSignal
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy()
+    expect(signal.aborted).toBe(true)
+    await act(async () => resolveUpdates(updateAvailable()))
+    expect(screen.queryByRole('dialog', { name: 'A newer oonfeeWRT version is available' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Settings' })).toBeNull()
+  })
+
+  it('opens a deep-linked Updates tab even when inventory fails', async () => {
+    window.history.replaceState(null, '', '/settings?section=updates')
+    signedIn('viewer')
+    mocks.api.devices.mockRejectedValue(new Error('inventory offline'))
+    mocks.api.updates.mockResolvedValue({
+      state: 'unknown', current_version: 'dev', update_available: false,
+      message: 'Development build; no release request was made.',
+    })
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
+    expect(await screen.findByText('Running version unknown')).toBeTruthy()
+    expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
+    await waitFor(() => expect(document.title).toBe('Updates · Settings — oonfeeWRT'))
   })
 
   it('names the theme control and moves focus on desktop navigation', async () => {

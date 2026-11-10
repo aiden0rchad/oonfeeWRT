@@ -101,6 +101,12 @@ function clientObservability(mac: string, from: number, to: number): ClientObser
 
 const readers = {
   setupState: () => reply({ needs_setup: false }), session: () => reply(session), account: () => reply({ account }), accountSessions: () => reply({ sessions: [] }),
+  updates: (signal?: AbortSignal) => reply({
+    state: 'unknown' as const,
+    current_version: 'demo',
+    update_available: false,
+    message: 'The isolated demonstration does not contact GitHub or represent a running controller release.',
+  }, signal),
   dashboard: (signal?: AbortSignal) => reply(dashboard, signal), devices: (signal?: AbortSignal) => reply({ devices }, signal),
   device: (id: number) => reply(deviceDetail(id)), deviceSeries: (id: number) => reply(catalog(id)),
   stats: (kind: string, id: number, key: string, from: number, to: number) => reply(series(kind, id, key, from, to)),

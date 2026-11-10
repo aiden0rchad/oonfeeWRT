@@ -35,6 +35,7 @@ import (
 	"github.com/aiden0rchad/oonfeewrt/internal/secrets"
 	"github.com/aiden0rchad/oonfeewrt/internal/speedtest"
 	"github.com/aiden0rchad/oonfeewrt/internal/store"
+	"github.com/aiden0rchad/oonfeewrt/internal/updates"
 )
 
 // Fleet is what the API needs from the daemon. An interface rather than the
@@ -135,6 +136,7 @@ type Server struct {
 	SpeedTests      *speedtest.Manager
 	Alerts          *alerts.Manager
 	FirmwareChecker FirmwareChecker
+	UpdateChecker   UpdateChecker
 	AdGuardChecker  AdGuardChecker
 	WireGuard       WireGuardReader
 	// Diagnostics packages bounded stored evidence only. The directory and log
@@ -243,6 +245,7 @@ func New(db *store.DB, fleet Fleet, enroll Enroller, log *slog.Logger) *Server {
 	})
 	srv.Alerts.Now = srv.now
 	srv.FirmwareChecker = firmware.NewChecker()
+	srv.UpdateChecker = updates.NewChecker()
 	srv.AdGuardChecker = integrations.NewAdGuardChecker()
 	runner, err := speedtest.NewHTTPRunner(speedtest.DefaultHTTPConfig())
 	if err != nil {
@@ -388,6 +391,7 @@ func (s *Server) protectedRoutes() []protectedRoute {
 		{"DELETE /api/v1/alerts/rules/{id}", store.RoleOwner, s.handleDeleteAlertRule},
 		{"POST /api/v1/alerts/delivery", store.RoleOwner, s.handleAlertDelivery},
 		{"GET /api/v1/firmware", store.RoleViewer, s.handleFirmware},
+		{"GET /api/v1/updates", store.RoleViewer, s.handleUpdates},
 		{"POST /api/v1/devices/{id}/firmware/check", store.RoleAdmin, s.handleFirmwareCheck},
 		{"GET /api/v1/integrations/adguard", store.RoleViewer, s.handleAdGuardConfig},
 		{"POST /api/v1/integrations/adguard/check", store.RoleAdmin, s.handleAdGuardCheck},

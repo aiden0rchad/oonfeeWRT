@@ -1,7 +1,7 @@
 import { Component, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api, ApiError, isDemo, onControllerRestart, onUnauthorized } from './lib/api'
-import type { Dashboard as DashboardData, Device, SessionInfo } from './lib/api'
+import type { ControllerUpdateStatus, Dashboard as DashboardData, Device, SessionInfo } from './lib/api'
 import { Auth } from './screens/Auth'
 import { Dashboard } from './screens/Dashboard'
 import { Statistics } from './screens/Statistics'
@@ -20,6 +20,7 @@ import { Radios } from './screens/Radios'
 import { Banner, Button } from './components/ui'
 import { NavigationIcon } from './components/icons'
 import { BrandMark } from './components/BrandMark'
+import { ControllerUpdateNotice } from './components/ControllerUpdateNotice'
 import type { NavigationIconName } from './components/icons'
 import { live } from './lib/live'
 import './Shell.css'
@@ -57,7 +58,7 @@ const NAV: { id: Screen; label: string; icon: NavigationIconName }[] = [
 const insightScreens: Screen[] = ['statistics', 'reports', 'alerts']
 const controllerScreens: Screen[] = ['settings', 'accounts', 'logs']
 const settingsLabels: Record<SettingsTab, string> = {
-  network: 'Network', firmware: 'Firmware', integrations: 'Integrations',
+  network: 'Network', updates: 'Updates', firmware: 'Firmware', integrations: 'Integrations',
   diagnostics: 'Diagnostics', backups: 'Backup & Restore',
 }
 
@@ -131,6 +132,7 @@ export function App() {
       .filter((el) => getComputedStyle(el).display !== 'none')
     focusable()[0]?.focus()
     const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector('.controller-update-dialog[open]')) return
       if (event.key === 'Escape') {
         setMobileNavigationOpen(false)
         requestAnimationFrame(() => menuButtonRef.current?.focus())
@@ -164,10 +166,15 @@ export function App() {
   const [refreshErrors, setRefreshErrors] = useState<{ dashboard?: string; devices?: string }>({})
   const [accountErr, setAccountErr] = useState('')
   const [signingOut, setSigningOut] = useState(false)
+  const [updateStatus, setUpdateStatus] = useState<ControllerUpdateStatus | null>(null)
+  const [updateError, setUpdateError] = useState('')
+  const [updateRefreshing, setUpdateRefreshing] = useState(false)
   const sessionGeneration = useRef(0)
   const refreshGeneration = useRef(0)
   const dashboardRefresh = useRef<AbortController | null>(null)
   const devicesRefresh = useRef<AbortController | null>(null)
+  const updatesRefresh = useRef<AbortController | null>(null)
+  const updateDismissals = useRef(new Set<string>())
   const mainRef = useRef<HTMLElement>(null)
 
   const clearProtectedState = useCallback(() => {
@@ -175,14 +182,19 @@ export function App() {
     refreshGeneration.current++
     dashboardRefresh.current?.abort()
     devicesRefresh.current?.abort()
+    updatesRefresh.current?.abort()
     dashboardRefresh.current = null
     devicesRefresh.current = null
+    updatesRefresh.current = null
     setDash(null)
     setDevices([])
     setDevicesLoaded(false)
     setRefreshErrors({})
     setAccountErr('')
     setSettingsIntent(null)
+    setUpdateStatus(null)
+    setUpdateError('')
+    setUpdateRefreshing(false)
   }, [])
 
   const navigate = useCallback((next: Screen, intent: SettingsIntent = null, tab: SettingsTab = 'network', replace = false) => {
@@ -195,6 +207,10 @@ export function App() {
     if (next === 'settings') setSettingsTab(tab)
     setSettingsIntent(next === 'settings' ? intent : null)
     setScreen(next)
+  }, [])
+
+  const prepareUpdateDialog = useCallback(() => {
+    setMobileNavigationOpen(false)
   }, [])
 
   const dropSession = useCallback(() => {
@@ -320,6 +336,31 @@ export function App() {
     return Promise.all(requests).then(() => undefined)
   }, [username])
 
+  const refreshUpdates = useCallback(() => {
+    if (!username || updatesRefresh.current) return Promise.resolve()
+    const generation = sessionGeneration.current
+    const controller = new AbortController()
+    updatesRefresh.current = controller
+    setUpdateRefreshing(true)
+    return (async () => {
+      try {
+        const next = await api.updates(controller.signal)
+        if (generation !== sessionGeneration.current) return
+        setUpdateStatus(next)
+        setUpdateError('')
+      } catch (error) {
+        if (generation !== sessionGeneration.current || controller.signal.aborted) return
+        setUpdateStatus(null)
+        setUpdateError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (updatesRefresh.current === controller) {
+          updatesRefresh.current = null
+          if (generation === sessionGeneration.current) setUpdateRefreshing(false)
+        }
+      }
+    })()
+  }, [username])
+
   useEffect(() => {
     if (!username) return
     refresh()
@@ -336,6 +377,17 @@ export function App() {
       devicesRefresh.current = null
     }
   }, [username, refresh])
+
+  useEffect(() => {
+    if (!username) return
+    refreshUpdates()
+    const timer = window.setInterval(refreshUpdates, 15 * 60_000)
+    return () => {
+      window.clearInterval(timer)
+      updatesRefresh.current?.abort()
+      updatesRefresh.current = null
+    }
+  }, [username, refreshUpdates])
 
   // Close the live channel on sign-out, but not before we know whether anyone
   // is signed in: `ready` gates it so the initial render does not close a
@@ -358,6 +410,7 @@ export function App() {
     if (!username) return
     if (!headingReady) return
     const timer = window.setTimeout(() => {
+      if (document.querySelector('.controller-update-dialog[open]')) return
       const target = mainRef.current?.querySelector<HTMLElement>('h1') ?? mainRef.current
       if (target && target !== mainRef.current) target.tabIndex = -1
       target?.focus()
@@ -393,6 +446,7 @@ export function App() {
   }
 
   const showNavigationLabels = navigationExpanded || mobileNavigationOpen
+  const updateAvailable = updateStatus?.state === 'available' && updateStatus.update_available
   const navigationWidth = showNavigationLabels ? 184 : 56
   const currentLabel = screen === 'settings' && settingsTab !== 'network'
     ? settingsLabels[settingsTab]
@@ -404,11 +458,18 @@ export function App() {
     type="button"
     title={item.label}
     aria-label={item.label}
+    aria-describedby={item.id === 'settings' && updateAvailable ? 'controller-update-navigation-status' : undefined}
     aria-current={screen === item.id ? 'page' : undefined}
     onClick={() => navigate(item.id)}
   >
     <NavigationIcon name={item.icon} />
     {showNavigationLabels && <span>{item.label}</span>}
+    {item.id === 'settings' && updateAvailable && (showNavigationLabels
+      ? <span className="controller-update-nav-pill" aria-hidden="true">Update</span>
+      : <span className="controller-update-nav-dot" aria-hidden="true">1</span>)}
+    {item.id === 'settings' && updateAvailable && <span id="controller-update-navigation-status" className="controller-update-sr-only">
+      Controller update available: {updateStatus.latest_tag}
+    </span>}
   </button>
   const signOut = async () => {
     setSigningOut(true)
@@ -564,6 +625,10 @@ export function App() {
                 onTabChange={(tab, navigation) => navigate('settings', null, tab, navigation === 'replace')}
                 initialNetworkSection={settingsIntent}
                 onInitialNetworkSectionHandled={() => setSettingsIntent(null)}
+                updateStatus={updateStatus}
+                updateError={updateError}
+                updateRefreshing={updateRefreshing}
+                onRefreshUpdates={refreshUpdates}
               />
             )}
             {screen === 'accounts' && session && (
@@ -583,6 +648,13 @@ export function App() {
         </main>
         </div>
       </div>
+      {session && <ControllerUpdateNotice
+        status={updateStatus}
+        session={session}
+        onViewInstructions={() => navigate('settings', null, 'updates')}
+        onBeforeOpen={prepareUpdateDialog}
+        memoryDismissals={updateDismissals.current}
+      />}
     </div>
   )
 }

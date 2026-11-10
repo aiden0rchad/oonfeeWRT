@@ -50,6 +50,7 @@ func expectedProtectedRouteRoles() map[string]store.AccountRole {
 		"GET /api/v1/dashboard",
 		"GET /api/v1/alerts",
 		"GET /api/v1/firmware",
+		"GET /api/v1/updates",
 		"GET /api/v1/integrations/adguard",
 		"GET /api/v1/speedtests",
 		"GET /api/v1/speedtests/{id}",
@@ -151,7 +152,7 @@ func TestProtectedRoutesHaveExhaustiveRoleChecks(t *testing.T) {
 	srv := &Server{}
 	routes := append(srv.protectedRoutes(), srv.reauthenticatedRoutes()...)
 	expected := expectedProtectedRouteRoles()
-	if len(routes) != len(expected) || len(routes) != 116 {
+	if len(routes) != len(expected) || len(routes) != 117 {
 		t.Fatalf("protected routes=%d expected=%d", len(routes), len(expected))
 	}
 	seen := make(map[string]bool, len(routes))

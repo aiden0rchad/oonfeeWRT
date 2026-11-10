@@ -286,6 +286,34 @@ Compose users should download or deliberately merge the v0.1.8 Compose file
 and pin the intended image tag or digest. Follow the [upgrade and rollback
 guide](docs/installation/upgrades.md) before changing the running version.
 
+### Controller release notices (development / unreleased)
+
+The current development branch adds authenticated controller release notices;
+published v0.1.8 does **not** contain this feature. The daemon compares its
+build-stamped executable version with the latest published stable oonfeeWRT
+release. For example, v0.1.5 reports v0.1.6, while extra commits or rebuilt
+images still based on v0.1.8 do not report v0.1.8 as an update.
+
+A compact Settings badge and **Settings → Updates** show the result. A first-load
+dialog appears once per browser, account, and target release; dismissal survives
+reload, while a newer target can prompt again. Successful checks are cached for
+12 hours and failures for at least 15 minutes. Offline, malformed, development,
+prerelease, and unknown-version states remain explicit and are never called
+“up to date.”
+
+The controller—not the browser—contacts GitHub's public Releases API. It sends
+no credentials, account details, controller identity, or router inventory,
+although GitHub can observe the request's ordinary public IP and transport
+metadata. This is a controller-version check, not an OpenWrt firmware or
+security assessment.
+
+Before installing a validated target, finish ongoing operations, preserve a
+verified matching database/keyring/passphrase recovery unit and the old
+binary/image, then follow the [upgrade guide](docs/installation/upgrades.md).
+Compose deployments pin the validated tag in `.env`, pull the `oonfeewrt`
+service image, and recreate that service while retaining its volume and
+passphrase. There is no one-click or automatic upgrade.
+
 ## Common questions
 
 ### Is Docker required?
