@@ -234,7 +234,7 @@ immutable.
 
 Building is not required to run a release. To build the repository:
 
-- Go toolchain **1.26.6** (declared by `go.mod`);
+- Go toolchain **1.26.10** (declared by `go.mod`);
 - Node.js **22**;
 - npm; and
 - a POSIX shell for repository scripts.

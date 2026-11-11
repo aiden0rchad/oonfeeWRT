@@ -1222,6 +1222,11 @@ function ACLRefresh({ deviceID, managementMode, managementModeError, onUpdated }
               remain explicit gaps.
             </>
           )}
+          <p>
+            This action also registers the ACL in <code>/etc/sysupgrade.conf</code> so firmware upgrades
+            that keep settings preserve controller access. It can restore access lost after an upgrade
+            when the router&apos;s saved SSH identity still matches.
+          </p>
         </div>
       )}
       {open && !managementModeError && (
@@ -1269,6 +1274,7 @@ function ACLRefresh({ deviceID, managementMode, managementModeError, onUpdated }
             {monitorOnly
               ? <>I understand that accepting replaces the controller&apos;s single rpcd ACL JSON file with the read-only <code>oonfeewrt-monitor</code> observation scope. It does not grant UCI write access.</>
               : <>I understand that accepting installs the payload if missing or replaces the controller&apos;s single rpcd ACL JSON file and grants the read and write access described above.</>}
+            {' '}It also updates the router&apos;s firmware backup list.
           </label>
           <Button disabled={busy || username.trim() === '' || !acknowledged} onClick={() => void run()}>
             {busy

@@ -272,7 +272,7 @@ describe('Radios', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toMatch(/Scan failed: device refused the scan/)
     expect(screen.getByRole('dialog')).toBe(dialog)
-    expect(document.activeElement).toBe(alert)
+    await waitFor(() => expect(document.activeElement).toBe(alert))
   })
 
   it('labels a 23-hour-old rollup stale while keeping its exact evidence', async () => {

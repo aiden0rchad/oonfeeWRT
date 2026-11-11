@@ -28,16 +28,16 @@ import (
 // afterwards is ubus, and §2's argument for it is untouched: this is the
 // bootstrap, not the transport.
 type Bootstrap interface {
-	// InstallACL writes the access-control file and verifies it landed intact.
+	// InstallACL writes and verifies the ACL, and registers it in sysupgrade.conf.
 	InstallACL(ctx context.Context, path string, content []byte) error
 
 	// CreateLogin adds the rpcd login and commits it. passHash must already be
 	// a crypt hash — rpcd rejects a plaintext password outright.
 	CreateLogin(ctx context.Context, user, passHash string, groups []string) error
 
-	// RemoveACL removes only the ACL file. Adoption uses this when login
-	// creation fails: removing a login whose creation was not proved could
-	// delete pre-existing state that does not belong to the controller.
+	// RemoveACL removes the ACL and its sysupgrade.conf entry. Adoption uses
+	// this when login creation fails: removing an unproved login could delete
+	// pre-existing state that does not belong to the controller.
 	RemoveACL(ctx context.Context, aclPath string) error
 
 	// RemoveFootprint deletes the login and the ACL file. Used by un-adopt.

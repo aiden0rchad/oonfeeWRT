@@ -336,6 +336,7 @@ describe('Adopt', () => {
     fireEvent.click(reviewPayload)
     expect(capabilityDetails.open).toBe(true)
     expect(optIn.checked).toBe(false)
+    expect(within(capabilityDetails).getByText('/etc/sysupgrade.conf')).toBeTruthy()
     expect(submit.disabled).toBe(true)
     expect(api.adopt).not.toHaveBeenCalled()
     const permissionDetails = capabilityDetails.textContent
@@ -2500,6 +2501,8 @@ describe('Devices — re-probe panel', () => {
     expect(screen.getByText(/installs no package, binary, daemon, service, or firmware/i)).toBeTruthy()
     expect(screen.getByText(/Leave it off or cancel to keep the router unchanged/i)).toBeTruthy()
     expect(screen.getByText(/remain explicit gaps/i)).toBeTruthy()
+    expect(screen.getByText('/etc/sysupgrade.conf')).toBeTruthy()
+    expect(screen.getByText(/saved SSH identity still matches/i)).toBeTruthy()
     fireEvent.click(screen.getByText('Review or refresh controller access payload'))
     fireEvent.change(screen.getByLabelText('Device administrator password'), {
       target: { value: 'cancelled-password' },
@@ -2523,6 +2526,7 @@ describe('Devices — re-probe panel', () => {
     const acknowledgement = screen.getByRole('checkbox', {
       name: /accepting installs the payload if missing or replaces the controller's single rpcd ACL JSON file/i,
     }) as HTMLInputElement
+    expect(screen.getByText(/It also updates the router's firmware backup list/i)).toBeTruthy()
     expect(acknowledgement.checked).toBe(false)
     expect(submit.disabled).toBe(true)
     fireEvent.click(submit)

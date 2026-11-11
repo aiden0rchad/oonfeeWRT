@@ -126,12 +126,9 @@ func newBootFor(c *ubus.Client) *fakeBoot {
 }
 
 func (b *fakeBoot) InstallACL(_ context.Context, path string, content []byte) error {
-	if b.failACL != nil {
-		return b.failACL
-	}
 	b.acl[path] = append([]byte(nil), content...)
 	b.installed = true
-	return nil
+	return b.failACL
 }
 
 func (b *fakeBoot) CreateLogin(_ context.Context, user, passHash string, groups []string) error {
@@ -420,6 +417,7 @@ func TestAdoptRollbackFailureReportsSafeResidueAndRemedy(t *testing.T) {
 	}
 	wantResidue := []string{
 		DefaultACLPath,
+		"backup entry for " + DefaultACLPath + " in /etc/sysupgrade.conf",
 		"config login '" + DefaultUser + "' in /etc/config/rpcd",
 	}
 	if fmt.Sprint(rollback.Residue) != fmt.Sprint(wantResidue) {
@@ -458,7 +456,7 @@ func TestAdoptACLOnlyRollbackFailureDoesNotPrescribeLoginRemoval(t *testing.T) {
 	if !errors.As(err, &rollback) || !errors.Is(err, primary) {
 		t.Fatalf("rollback failure lost its primary cause: %v", err)
 	}
-	if fmt.Sprint(rollback.Residue) != fmt.Sprint([]string{DefaultACLPath}) {
+	if fmt.Sprint(rollback.Residue) != fmt.Sprint([]string{DefaultACLPath, "backup entry for " + DefaultACLPath + " in /etc/sysupgrade.conf"}) {
 		t.Fatalf("ACL-only residue = %v", rollback.Residue)
 	}
 	commands := strings.Join(rollback.CleanupCommands, "\n")
@@ -510,21 +508,22 @@ func TestUnadoptWithoutOperatorStopsAndReportsResidue(t *testing.T) {
 		t.Error("the footprint must be reported as remaining")
 	}
 	residue := rep.Residue()
-	if len(residue) != 2 {
-		t.Fatalf("residue should name both the ACL file and the login, got %v", residue)
+	if len(residue) != 3 {
+		t.Fatalf("residue should name the ACL, backup entry, and login, got %v", residue)
 	}
 	// The fallback screen shows these, so they must be the real paths.
 	if !strings.Contains(residue[0], DefaultACLPath) {
 		t.Errorf("residue should name the ACL path, got %q", residue[0])
 	}
-	if !strings.Contains(residue[1], "/etc/config/rpcd") {
-		t.Errorf("residue should name the rpcd login, got %q", residue[1])
+	if !strings.Contains(residue[2], "/etc/config/rpcd") {
+		t.Errorf("residue should name the rpcd login, got %q", residue[2])
 	}
 	commands := rep.CleanupCommands()
 	want := "uci -q delete rpcd.oonfeewrt\nuci commit rpcd\n" +
 		"uci -q get rpcd.oonfeewrt >/dev/null 2>&1 && echo 'ERROR: login still present' || echo 'login gone'\n" +
 		"rm -f '/usr/share/rpcd/acl.d/oonfeewrt.json'\n" +
-		"[ ! -e '/usr/share/rpcd/acl.d/oonfeewrt.json' ] && echo 'ACL gone' || echo 'ERROR: ACL still present'"
+		"[ ! -e '/usr/share/rpcd/acl.d/oonfeewrt.json' ] && echo 'ACL gone' || echo 'ERROR: ACL still present'\n" +
+		"[ ! -e '/usr/share/rpcd/acl.d/oonfeewrt.json' ] && " + sysupgradeEntryCommand(DefaultACLPath, false)
 	if got := strings.Join(commands, "\n"); got != want {
 		t.Errorf("manual cleanup recipe = %q, want %q", got, want)
 	}
@@ -618,6 +617,9 @@ func TestAdoptDoesNotCreateALoginIfTheACLFails(t *testing.T) {
 	}
 	if boot.login != "" {
 		t.Fatalf("a login %q was created after the ACL write failed", boot.login)
+	}
+	if len(boot.acl) != 0 || boot.removeACLCalls != 1 || boot.removeFootprintCalls != 0 {
+		t.Fatalf("partial ACL installation was not rolled back safely: %+v", boot)
 	}
 }
 

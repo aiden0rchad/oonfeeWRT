@@ -15,7 +15,7 @@ version string, or a tag alone does not prove that the archives are available.
 - Network reachability to each router's management address.
 - A private directory for controller state and a separate private passphrase file.
 
-The release is built with Go 1.26.6 and includes the UI; the host does not need Go or Node.js.
+The release is built with Go 1.26.10 and includes the UI; the host does not need Go or Node.js.
 
 **Write impact:** Installing the executable writes files on the controller host only. A first start with new state does not contact a router. Starting with existing adopted-device state resumes polling and may resume automatic runtime 802.11k neighbour maintenance.
 

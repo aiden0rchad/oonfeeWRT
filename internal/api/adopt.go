@@ -214,10 +214,10 @@ type AdoptResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// RefreshACLRequest upgrades the controller's existing read-only device ACL.
+// RefreshACLRequest upgrades or restores the controller's mode-scoped device ACL
+// and registers it for firmware upgrades that preserve settings.
 // The administrator credential is used only for this SSH transaction and is
-// never stored. The controller login and all router configuration remain in
-// place.
+// never stored. The controller login and managed UCI configuration remain in place.
 type RefreshACLRequest struct {
 	DeviceID                 int64  `json:"-"`
 	Username                 string `json:"username"`
