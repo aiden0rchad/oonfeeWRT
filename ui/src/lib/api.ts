@@ -1636,6 +1636,22 @@ export interface SessionInfo {
   reauthenticated_until: number | null
 }
 
+export type ControllerUpdateState = 'available' | 'current' | 'unknown' | 'unavailable'
+
+export interface ControllerUpdateStatus {
+  state: ControllerUpdateState
+  current_version: string
+  install_kind: 'container' | 'binary' | 'unknown'
+  latest_version?: string
+  latest_tag?: string
+  release_url?: string
+  update_available: boolean
+  checked_at?: string
+  next_check_at?: string
+  message: string
+  error?: { code: string; message: string }
+}
+
 export interface AccountsResponse {
   accounts: Account[]
   roles: AccountRoleOption[]
@@ -1867,6 +1883,8 @@ export const api = {
     post<SessionInfo>('/login', { username, password }),
   logout: () => post<{ ok: boolean }>('/logout'),
   session: () => get<SessionInfo>('/session'),
+  updates: (signal?: AbortSignal) => get<ControllerUpdateStatus>('/updates', { signal }),
+  checkUpdates: () => post<ControllerUpdateStatus>('/updates/check'),
   changePassword: (current_password: string, new_password: string) =>
     post<{ ok: boolean; message: string }>('/session/password', {
       current_password,

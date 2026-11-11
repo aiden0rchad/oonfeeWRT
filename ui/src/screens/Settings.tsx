@@ -5,6 +5,7 @@ import type {
   APGroup,
   ApplyOperation,
   ApplyResult,
+  ControllerUpdateStatus,
   Device,
   DeviceFunction,
   Mesh,
@@ -27,6 +28,7 @@ import { Diagnostics } from './Diagnostics'
 import { Backups } from './Backups'
 import { Firmware } from './Firmware'
 import { Integrations } from './Integrations'
+import { ControllerUpdates } from './ControllerUpdates'
 
 const applyOperationStorageKey = 'oonfee_last_apply_operation'
 const applyOperationPollMs = 1000
@@ -108,7 +110,7 @@ function applyWriteSummary(
   return `Previous Apply operation ${operationID} is ${operation.state}. Durable write state: possible — a router write may have started; use the recorded device outcomes above.${result}`
 }
 
-export type SettingsTab = 'network' | 'firmware' | 'integrations' | 'diagnostics' | 'backups'
+export type SettingsTab = 'network' | 'updates' | 'firmware' | 'integrations' | 'diagnostics' | 'backups'
 
 export function Settings({
   devices,
@@ -119,6 +121,11 @@ export function Settings({
   onTabChange,
   initialNetworkSection = null,
   onInitialNetworkSectionHandled,
+  updateStatus = null,
+  updateError = '',
+  updateRefreshing = false,
+  updateCheckNote = false,
+  onRefreshUpdates,
 }: {
   devices: Device[]
   devicesLoaded?: boolean
@@ -128,6 +135,11 @@ export function Settings({
   onTabChange?: (tab: SettingsTab, navigation?: 'replace') => void
   initialNetworkSection?: 'ipv6' | null
   onInitialNetworkSectionHandled?: () => void
+  updateStatus?: ControllerUpdateStatus | null
+  updateError?: string
+  updateRefreshing?: boolean
+  updateCheckNote?: boolean
+  onRefreshUpdates?: () => void
 }) {
   const [selectedTab, setTab] = useState<SettingsTab>(initialTab)
   const diagnosticsTab = session?.role === 'owner' || session?.role === 'admin'
@@ -136,6 +148,7 @@ export function Settings({
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'network', label: 'Network' },
     ...(session ? [
+      { id: 'updates' as const, label: 'Updates' },
       { id: 'firmware' as const, label: 'Firmware' },
       { id: 'integrations' as const, label: 'Integrations' },
     ] : []),
@@ -159,6 +172,7 @@ export function Settings({
 
   const purposes: Record<SettingsTab, string> = {
     network: 'Desired network state and controller operations.',
+    updates: 'Controller release status and reviewed upgrade guidance.',
     firmware: 'Stored firmware identity and official maintenance updates.',
     integrations: 'Explicit connections and read-only checks for adjacent services.',
     diagnostics: 'Redacted, stored-only support bundles.',
@@ -215,6 +229,14 @@ export function Settings({
           : <div role="status">Loading device inventory…</div>)}
       {tab === 'diagnostics' && diagnosticsTab && <Diagnostics />}
       {tab === 'backups' && backupsTab && session && <Backups session={session} />}
+      {tab === 'updates' && session && <ControllerUpdates
+        status={updateStatus}
+        error={updateError}
+        refreshing={updateRefreshing}
+        checkNote={updateCheckNote}
+        onRefresh={onRefreshUpdates}
+        session={session}
+      />}
       {tab === 'firmware' && session && <Firmware session={session} embedded />}
       {tab === 'integrations' && session && <Integrations devices={devices} session={session} embedded />}
     </div>

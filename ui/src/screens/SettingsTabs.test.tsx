@@ -86,12 +86,15 @@ describe('Settings sections', () => {
     const network = screen.getByRole('tab', { name: 'Network' })
     expect(network.getAttribute('aria-selected')).toBe('true')
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Network', 'Firmware', 'Integrations', 'Diagnostics', 'Backup & Restore',
+      'Network', 'Updates', 'Firmware', 'Integrations', 'Diagnostics', 'Backup & Restore',
     ])
     expect(screen.getByRole('tab', { name: 'Diagnostics' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Backup & Restore' })).toBeTruthy()
 
     fireEvent.keyDown(network, { key: 'ArrowRight' })
+    expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-updates')
+    expect(screen.getByText('Checking…')).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Updates' }), { key: 'ArrowRight' })
     await waitFor(() => expect(mocks.firmware).toHaveBeenCalledOnce())
     expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-firmware')
   })
@@ -118,7 +121,7 @@ describe('Settings sections', () => {
     />)
 
     await screen.findByRole('status')
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Network', 'Firmware', 'Integrations'])
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Network', 'Updates', 'Firmware', 'Integrations'])
     expect(screen.queryByRole('tab', { name: 'Diagnostics' })).toBeNull()
     expect(screen.queryByRole('tab', { name: 'Backup & Restore' })).toBeNull()
   })
@@ -165,6 +168,26 @@ describe('Settings sections', () => {
     expect(mocks.checkWireGuard).not.toHaveBeenCalled()
     expect(mocks.saveAdguard).not.toHaveBeenCalled()
     expect(onTabChange).not.toHaveBeenCalled()
+  })
+
+  it('opens Updates for every signed-in role without depending on device inventory', () => {
+    render(<Settings
+      devices={[]}
+      devicesLoaded={false}
+      devicesError="inventory offline"
+      session={{ ...owner, role: 'viewer', role_label: 'Read-only' }}
+      initialTab="updates"
+      updateStatus={{
+        install_kind: 'unknown', state: 'unknown', current_version: 'dev', update_available: false,
+        message: 'Development build; no release request was made.',
+      }}
+    />)
+
+    expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText("Can't tell which version this is")).toBeTruthy()
+    expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
+    expect(mocks.site).not.toHaveBeenCalled()
+    expect(mocks.firmware).not.toHaveBeenCalled()
   })
 
   it('retains viewer restrictions inside Firmware and Integrations', async () => {

@@ -48,7 +48,7 @@ for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
   stage="$tmp/$name"
   mkdir "$stage"
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
-    -ldflags "-s -w -buildid= -X main.version=$version" \
+    -ldflags "-s -w -buildid= -X main.version=$version -X main.installKind=binary" \
     -o "$stage/oonfeewrtd" ./cmd/oonfeewrtd
   CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
     -ldflags "-s -w -buildid=" \

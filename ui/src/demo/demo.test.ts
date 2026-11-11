@@ -22,11 +22,12 @@ describe('isolated demo', () => {
     expect(isDemo).toBe(true)
     expect(await api.setupState()).toEqual({ needs_setup: false })
     expect((await api.session()).role).toBe('viewer')
+    expect(await api.checkUpdates()).toEqual(await api.updates())
     const results = await Promise.all([
       api.dashboard(), api.devices(), api.device(1), api.deviceSeries(1), api.clients(), api.radios(), api.alerts(), api.firmware(),
       api.site(), api.account(), api.accountSessions(), api.events(), api.policies(), api.lastNeighbours(), api.meshHealth(),
       api.restoreSuppression(), api.diagnostics(), api.backups(), api.restores(), api.scanPlan(), api.speedTests(),
-      api.adguard(),
+      api.adguard(), api.updates(),
     ])
     expect(results[0].devices.total).toBe(4)
     expect(results[1].devices).toHaveLength(4)
@@ -34,7 +35,8 @@ describe('isolated demo', () => {
     expect(results[5].devices).toHaveLength(2)
     expect(results[6].rules).toHaveLength(3)
     expect(results[7].installation.enabled).toBe(false)
-    expect(results.at(-1)).toMatchObject({ configured: false, has_password: false })
+    expect(results.at(-2)).toMatchObject({ configured: false, has_password: false })
+    expect(results.at(-1)).toMatchObject({ state: 'unknown', current_version: 'demo', update_available: false })
     results[1].devices[0].name = 'Changed only in caller memory'
     expect((await api.devices()).devices[0].name).toBe('Studio gateway')
   })

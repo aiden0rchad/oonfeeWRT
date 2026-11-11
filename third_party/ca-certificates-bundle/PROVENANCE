@@ -1,10 +1,10 @@
 Component: Alpine ca-certificates-bundle
-Package version: 20260909-r0
+Package version: 20261020-r0
 License expression: MPL-2.0 AND MIT
-Source archive: https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20260909/ca-certificates-20260909.tar.bz2
-Source SHA-512: d235529da679f14e2e8df4175bc8189507add1382fe0ef8493824b07a49763a2a3af8201f43d30a0260eb8357a10bb0d7054d9b012abf3b74ecf889551cf0dd7
+Source archive: https://gitlab.alpinelinux.org/alpine/ca-certificates/-/archive/20261020/ca-certificates-20261020.tar.bz2
+Source SHA-512: d28eb01751b1a914ffb5d8cb99e662f0a35a95148c21dcf98de1ab3108b54db9714a99472d07715023867f4f76a21f2a79a2bc1c7e9876ce5167fdd865ad2dd7
 
-The pinned golang:1.26.10-alpine build image provides this package's generated
+The pinned golang:1.26.11-alpine build image provides this package's generated
 /etc/ssl/certs/ca-certificates.crt to the scratch runtime image. The package's
 certdata.txt identifies its certificate data as MPL-2.0. Its c_rehash.c carries
 Copyright (c) 2013-2014 Timo Teräs <timo.teras@iki.fi> under the MIT License.

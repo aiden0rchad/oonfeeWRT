@@ -4,6 +4,57 @@ oonfeeWRT keeps controller state in SQLite plus a separate keyring. Upgrade safe
 
 > **Outcome:** The controller runs v0.1.8 with its existing state intact, and you retain a verified recovery unit matching the version you may need to restore.
 
+::: info Development branch: controller release notices are not in published v0.1.8
+The current development branch adds **Settings → Updates**, a compact Settings
+badge, and a first-load notice when the daemon's build-stamped executable
+version is strictly older than the latest published stable release. For
+example, v0.1.5 reports v0.1.6; extra commits or rebuilt images based on the
+same v0.1.8 tag do not report v0.1.8 as an update.
+
+Viewers see the badge and Updates tab but never the first-load dialog.
+**Remind me later**, the close button, and Escape snooze that target for 7 days.
+**Skip this version** permanently dismisses it; **How to update** records the
+same dismissal and opens the instructions. Preferences are stored per browser
+origin, signed-in account, and target release; a newer target prompts immediately.
+
+Owners and admins can use **Check now** for a fresh check, subject to a
+one-minute minimum interval and failure backoff. Automatic checks cache successes
+for 12 hours and failures for at least 15 minutes. The instructions show copyable
+commands for the build-stamped installation type; unknown installations show
+both Compose and standalone guidance. Offline, malformed, development,
+prerelease, and unknown-version results stay unavailable or unknown—never
+falsely current.
+
+The controller, not the browser, makes a credential-free request to GitHub's
+public Releases API. No router inventory or controller/account identity is
+uploaded, though the ordinary public request IP and transport metadata remain
+visible to the network and GitHub. The result is not an OpenWrt firmware check
+and cannot establish security posture. Release notes must be reviewed for
+security changes.
+:::
+
+When that screen identifies a validated newer target, finish all ongoing
+operations first. Preserve a verified matching database, keyring, runtime
+passphrase, and old image/binary. For an existing Compose deployment, set the
+validated target in the deployment `.env` without changing the volume or
+passphrase:
+
+```dotenv
+OONFEE_VERSION=vX.Y.Z
+```
+
+Then, from that Compose directory:
+
+```sh
+docker compose pull oonfeewrt
+docker compose up -d oonfeewrt
+```
+
+Confirm the running executable version and sign in after restart. Binary users
+must download and verify the target release archive and checksums before the
+same clean stop/replacement process. The notice never installs, restarts, or
+runs these commands automatically.
+
 ::: info Upgrading from v0.1.6 or v0.1.7
 v0.1.8 retains **schema 25** and adds no database migration over v0.1.6 or
 v0.1.7. Keep the same data volume and runtime passphrase, then refresh the

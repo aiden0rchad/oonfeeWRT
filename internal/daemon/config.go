@@ -36,6 +36,9 @@ type Config struct {
 	// Version is build metadata supplied by the executable, never an environment
 	// setting. Diagnostic bundles use it verbatim.
 	Version string
+	// InstallKind is build metadata supplied by the executable, never an
+	// environment setting.
+	InstallKind string
 
 	// DataDir holds the database and the keyring. One volume, per §11.
 	DataDir string

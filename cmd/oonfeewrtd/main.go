@@ -24,6 +24,7 @@ import (
 //
 //	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
 var version = "dev"
+var installKind = ""
 
 func main() {
 	if err := run(); err != nil {
@@ -47,6 +48,7 @@ func run() error {
 // keyring, passphrase file, or database.
 func runWithConfig(cfg daemon.Config, args []string) error {
 	cfg.Version = version
+	cfg.InstallKind = installKind
 	flags := flag.NewFlagSet("oonfeewrtd", flag.ContinueOnError)
 	var (
 		showVersion = flags.Bool("version", false, "print the version and exit")

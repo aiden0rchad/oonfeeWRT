@@ -17,6 +17,13 @@ afterEach(() => {
 })
 
 describe('response trust boundary', () => {
+  it('requests a manual update check with POST', async () => {
+    vi.mocked(fetch).mockResolvedValue(ok({ state: 'unknown', install_kind: 'unknown' }))
+    await api.checkUpdates()
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/updates/check')
+    expect(vi.mocked(fetch).mock.calls[0][1]?.method).toBe('POST')
+  })
+
   it('requests the three retained speed-test attempts by default', async () => {
     vi.mocked(fetch).mockResolvedValue(ok({ jobs: [], active: null }))
 

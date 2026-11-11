@@ -1,10 +1,45 @@
 import { Children, isValidElement, useCallback, useEffect, useId, useRef, useState } from 'react'
-import type { CSSProperties, MouseEventHandler, ReactNode } from 'react'
+import type { CSSProperties, MouseEventHandler, ReactNode, RefObject } from 'react'
 import { moveColumn, orderColumns, parsePrefs } from '../lib/columns'
 import type { ColumnPrefs } from '../lib/columns'
 
 export type { ColumnPrefs }
 export { orderColumns, moveColumn }
+
+export function CopyButton({ target, label }: { target: RefObject<HTMLElement | null>; label: string }) {
+  const [message, setMessage] = useState('')
+  const copy = async () => {
+    const block = target.current
+    if (!block) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(block.textContent ?? '')
+        setMessage('Copied')
+        return
+      }
+    } catch {
+      // Plain HTTP and denied clipboard access use the selection fallback.
+    }
+    try {
+      const selection = window.getSelection()
+      const range = document.createRange()
+      range.selectNodeContents(block)
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      if (selection && document.execCommand('copy')) {
+        setMessage('Copied')
+        return
+      }
+    } catch {
+      // Keep the block selected for a keyboard copy when permission is denied.
+    }
+    setMessage('Press Ctrl/Cmd+C to copy')
+  }
+  return <div className="copy-control">
+    <Button aria-label={label} onClick={copy}>Copy</Button>
+    <span aria-live="polite">{message}</span>
+  </div>
+}
 
 /** Status pill. The dot is never the only signal — UI-SPEC §3 calls colour-only
  *  status a genuine accessibility flaw and says not to inherit it, so the text

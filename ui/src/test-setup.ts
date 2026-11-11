@@ -57,6 +57,22 @@ Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
 })
 
+// happy-dom exposes <dialog> but not its modal methods. Keep component tests on
+// the native API shape used by browsers instead of replacing dialogs in each test.
+if (typeof HTMLDialogElement !== 'undefined') {
+  if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function showModal() {
+      this.setAttribute('open', '')
+    }
+  }
+  if (!HTMLDialogElement.prototype.close) {
+    HTMLDialogElement.prototype.close = function close() {
+      this.removeAttribute('open')
+      this.dispatchEvent(new Event('close'))
+    }
+  }
+}
+
 // Registered FIRST so it runs LAST — see the hook-order note above. Clearing
 // state before unmounting would tear the store out from under a component
 // mid-teardown.

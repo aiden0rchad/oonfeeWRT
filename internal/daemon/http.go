@@ -47,6 +47,7 @@ func (d *Daemon) routes() (http.Handler, error) {
 	d.api.BackupsDir = filepath.Join(d.Config.DataDir, "backups")
 	d.api.RestoresDir = filepath.Join(d.Config.DataDir, "restores")
 	d.api.ControllerVersion = d.Config.Version
+	d.api.ControllerInstallKind = d.Config.InstallKind
 	d.api.ControllerStartedAt = d.startedAt
 	if d.controllerLog != nil {
 		d.api.ControllerLogTail = d.controllerLog.Tail

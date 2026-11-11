@@ -24,7 +24,7 @@ RUN npm run build
 # GOOS/GOARCH below, which is what decision D3 (CGO off) buys us. Leaving this
 # unpinned would emulate the whole toolchain and make TARGETOS/TARGETARCH a
 # no-op, since they would just restate the emulated platform.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine@sha256:ae52b5bc6ed045a9ed26ab03dc19327a802a9cc9aa8b27ed57f5c6b60579b0bb AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -34,7 +34,7 @@ COPY --from=ui /src/ui/dist ./ui/dist
 ARG TARGETOS TARGETARCH VERSION=dev
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -buildvcs=false \
-      -ldflags "-s -w -buildid= -X main.version=$VERSION" \
+      -ldflags "-s -w -buildid= -X main.version=$VERSION -X main.installKind=container" \
       -o /oonfeewrtd ./cmd/oonfeewrtd
 # Materialised here so the scratch stage can COPY them in with an owner —
 # see the /data note below.
