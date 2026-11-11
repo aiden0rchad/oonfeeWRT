@@ -22,6 +22,7 @@ describe('isolated demo', () => {
     expect(isDemo).toBe(true)
     expect(await api.setupState()).toEqual({ needs_setup: false })
     expect((await api.session()).role).toBe('viewer')
+    expect(await api.checkUpdates()).toEqual(await api.updates())
     const results = await Promise.all([
       api.dashboard(), api.devices(), api.device(1), api.deviceSeries(1), api.clients(), api.radios(), api.alerts(), api.firmware(),
       api.site(), api.account(), api.accountSessions(), api.events(), api.policies(), api.lastNeighbours(), api.meshHealth(),

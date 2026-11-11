@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	Endpoint       = "https://api.github.com/repos/aiden0rchad/oonfeeWRT/releases/latest"
-	ReleaseOrigin  = "https://github.com/aiden0rchad/oonfeeWRT/releases/tag/"
-	SuccessTTL     = 12 * time.Hour
-	FailureBackoff = 15 * time.Minute
-	maxBodyBytes   = 1 << 20
-	maxTagBytes    = 128
-	maxETagBytes   = 256
+	Endpoint          = "https://api.github.com/repos/aiden0rchad/oonfeeWRT/releases/latest"
+	ReleaseOrigin     = "https://github.com/aiden0rchad/oonfeeWRT/releases/tag/"
+	SuccessTTL        = 12 * time.Hour
+	MinManualInterval = 60 * time.Second
+	FailureBackoff    = 15 * time.Minute
+	maxBodyBytes      = 1 << 20
+	maxTagBytes       = 128
+	maxETagBytes      = 256
 )
 
 type State string
@@ -44,6 +45,7 @@ type StatusError struct {
 // Status is the stable API projection of one cached update check.
 type Status struct {
 	State           State        `json:"state"`
+	InstallKind     string       `json:"install_kind"`
 	CurrentVersion  string       `json:"current_version"`
 	LatestVersion   string       `json:"latest_version,omitempty"`
 	LatestTag       string       `json:"latest_tag,omitempty"`
@@ -80,9 +82,10 @@ type Checker struct {
 	client HTTPClient
 	now    func() time.Time
 
-	inFlight chan struct{}
-	last     attempt
-	haveLast bool
+	inFlight      chan struct{}
+	last          attempt
+	haveLast      bool
+	lastStartedAt time.Time
 
 	// A failed refresh replaces the public attempt, but the last valid release
 	// and ETag remain private so a later conditional request can use a 304.
@@ -114,6 +117,15 @@ func NewCheckerWithClient(client HTTPClient, now func() time.Time) *Checker {
 // Check returns an explanatory status rather than an HTTP-shaped error. An
 // unrecognised development version never causes an outbound request.
 func (c *Checker) Check(ctx context.Context, current string) Status {
+	return c.check(ctx, current, false)
+}
+
+// Refresh bypasses the success TTL, but respects backoff and the manual floor.
+func (c *Checker) Refresh(ctx context.Context, current string) Status {
+	return c.check(ctx, current, true)
+}
+
+func (c *Checker) check(ctx context.Context, current string, force bool) Status {
 	currentVersion, kind, ok := parseCurrent(current)
 	if !ok {
 		return Status{
@@ -128,7 +140,8 @@ func (c *Checker) Check(ctx context.Context, current string) Status {
 		}
 		now := c.now().UTC()
 		c.mu.Lock()
-		if c.haveLast && now.Before(c.last.nextCheckAt) {
+		if c.haveLast && now.Before(c.last.nextCheckAt) &&
+			(!force || c.last.err != nil || now.Before(c.last.checkedAt.Add(MinManualInterval))) {
 			last := cloneAttempt(c.last)
 			c.mu.Unlock()
 			return statusFor(current, currentVersion, kind, last)
@@ -144,6 +157,16 @@ func (c *Checker) Check(ctx context.Context, current string) Status {
 			}
 		}
 
+		// Cancelling an upstream request cannot evade the manual floor.
+		if force && !c.lastStartedAt.IsZero() && now.Before(c.lastStartedAt.Add(MinManualInterval)) {
+			last, haveLast := cloneAttempt(c.last), c.haveLast
+			c.mu.Unlock()
+			if haveLast {
+				return statusFor(current, currentVersion, kind, last)
+			}
+			return cancelledStatus(current)
+		}
+		c.lastStartedAt = now
 		wait := make(chan struct{})
 		c.inFlight = wait
 		previous := cloneRelease(c.lastRelease)
@@ -225,13 +248,13 @@ func statusFor(current string, currentVersion version, kind currentKind, last at
 	status.Error = nil
 	if status.UpdateAvailable {
 		status.State = StateAvailable
-		status.Message = "A newer published stable oonfeeWRT controller release is available. Review its release notes and upgrade instructions."
+		status.Message = "A newer oonfeeWRT release is available."
 		return status
 	}
 	status.State = StateCurrent
-	status.Message = "No newer published stable oonfeeWRT controller release was found. This does not establish the controller's security posture."
+	status.Message = "You're running the latest published stable release."
 	if kind == currentGitDescribe {
-		status.Message = "No newer published stable release was found above the base release in this git-describe build. Extra commits or a rebuilt image do not change the release comparison."
+		status.Message = "No release newer than this build's base version has been published."
 	}
 	return status
 }

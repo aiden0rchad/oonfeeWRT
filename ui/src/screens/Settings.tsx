@@ -124,6 +124,7 @@ export function Settings({
   updateStatus = null,
   updateError = '',
   updateRefreshing = false,
+  updateCheckNote = false,
   onRefreshUpdates,
 }: {
   devices: Device[]
@@ -137,6 +138,7 @@ export function Settings({
   updateStatus?: ControllerUpdateStatus | null
   updateError?: string
   updateRefreshing?: boolean
+  updateCheckNote?: boolean
   onRefreshUpdates?: () => void
 }) {
   const [selectedTab, setTab] = useState<SettingsTab>(initialTab)
@@ -231,6 +233,7 @@ export function Settings({
         status={updateStatus}
         error={updateError}
         refreshing={updateRefreshing}
+        checkNote={updateCheckNote}
         onRefresh={onRefreshUpdates}
         session={session}
       />}

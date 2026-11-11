@@ -11,10 +11,19 @@ version is strictly older than the latest published stable release. For
 example, v0.1.5 reports v0.1.6; extra commits or rebuilt images based on the
 same v0.1.8 tag do not report v0.1.8 as an update.
 
-Dismissal is stored per browser origin, signed-in account, and target release;
-a newer target can prompt again. Successful checks are cached for 12 hours and
-failures for at least 15 minutes. Offline, malformed, development, prerelease,
-and unknown-version results stay unavailable or unknown—never falsely current.
+Viewers see the badge and Updates tab but never the first-load dialog.
+**Remind me later**, the close button, and Escape snooze that target for 7 days.
+**Skip this version** permanently dismisses it; **How to update** records the
+same dismissal and opens the instructions. Preferences are stored per browser
+origin, signed-in account, and target release; a newer target prompts immediately.
+
+Owners and admins can use **Check now** for a fresh check, subject to a
+one-minute minimum interval and failure backoff. Automatic checks cache successes
+for 12 hours and failures for at least 15 minutes. The instructions show copyable
+commands for the build-stamped installation type; unknown installations show
+both Compose and standalone guidance. Offline, malformed, development,
+prerelease, and unknown-version results stay unavailable or unknown—never
+falsely current.
 
 The controller, not the browser, makes a credential-free request to GitHub's
 public Releases API. No router inventory or controller/account identity is

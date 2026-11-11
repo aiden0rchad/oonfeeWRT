@@ -159,6 +159,7 @@ type Server struct {
 	ResumeRouterWrites     func(context.Context, string) error
 	RouterWritesResumed    func()
 	ControllerVersion      string
+	ControllerInstallKind  string
 	ControllerStartedAt    time.Time
 	ControllerLogTail      func(int) ([]byte, []string, error)
 	Hub                    *Hub
@@ -392,6 +393,7 @@ func (s *Server) protectedRoutes() []protectedRoute {
 		{"POST /api/v1/alerts/delivery", store.RoleOwner, s.handleAlertDelivery},
 		{"GET /api/v1/firmware", store.RoleViewer, s.handleFirmware},
 		{"GET /api/v1/updates", store.RoleViewer, s.handleUpdates},
+		{"POST /api/v1/updates/check", store.RoleAdmin, s.handleCheckUpdates},
 		{"POST /api/v1/devices/{id}/firmware/check", store.RoleAdmin, s.handleFirmwareCheck},
 		{"GET /api/v1/integrations/adguard", store.RoleViewer, s.handleAdGuardConfig},
 		{"POST /api/v1/integrations/adguard/check", store.RoleAdmin, s.handleAdGuardCheck},

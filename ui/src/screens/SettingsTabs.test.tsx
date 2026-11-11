@@ -93,7 +93,7 @@ describe('Settings sections', () => {
 
     fireEvent.keyDown(network, { key: 'ArrowRight' })
     expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-updates')
-    expect(screen.getByText('Loading release status…')).toBeTruthy()
+    expect(screen.getByText('Checking…')).toBeTruthy()
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Updates' }), { key: 'ArrowRight' })
     await waitFor(() => expect(mocks.firmware).toHaveBeenCalledOnce())
     expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('settings-tab-firmware')
@@ -178,13 +178,13 @@ describe('Settings sections', () => {
       session={{ ...owner, role: 'viewer', role_label: 'Read-only' }}
       initialTab="updates"
       updateStatus={{
-        state: 'unknown', current_version: 'dev', update_available: false,
+        install_kind: 'unknown', state: 'unknown', current_version: 'dev', update_available: false,
         message: 'Development build; no release request was made.',
       }}
     />)
 
     expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByText('Running version unknown')).toBeTruthy()
+    expect(screen.getByText("Can't tell which version this is")).toBeTruthy()
     expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
     expect(mocks.site).not.toHaveBeenCalled()
     expect(mocks.firmware).not.toHaveBeenCalled()

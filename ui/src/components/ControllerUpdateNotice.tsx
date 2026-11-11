@@ -35,6 +35,7 @@ export function ControllerUpdateNotice({
   onBeforeOpen,
   onOpenChange,
   memoryDismissals: suppliedMemoryDismissals,
+  memorySnoozes: suppliedMemorySnoozes,
 }: {
   status: ControllerUpdateStatus | null
   session: SessionInfo
@@ -42,12 +43,15 @@ export function ControllerUpdateNotice({
   onBeforeOpen?: () => void
   onOpenChange?: (open: boolean) => void
   memoryDismissals?: Set<string>
+  memorySnoozes?: Map<string, number>
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const localMemoryDismissals = useRef(new Set<string>())
   const memoryDismissals = suppliedMemoryDismissals ?? localMemoryDismissals.current
-  const available = status?.state === 'available' && status.update_available &&
+  const localMemorySnoozes = useRef(new Map<string, number>())
+  const memorySnoozes = suppliedMemorySnoozes ?? localMemorySnoozes.current
+  const available = session.role !== 'viewer' && status?.state === 'available' && status.update_available &&
     Boolean(status.latest_version && status.latest_tag && status.release_url)
   const key = status && available ? dismissalKey(session, status) : ''
 
@@ -69,12 +73,31 @@ export function ControllerUpdateNotice({
       return
     }
 
+    const snoozeRemaining = () => {
+      let until = memorySnoozes.get(key + ':snoozed-until') ?? 0
+      try {
+        const stored = Number(window.localStorage.getItem(key + ':snoozed-until'))
+        if (Number.isFinite(stored)) until = Math.max(until, stored)
+      } catch {
+        // Storage-disabled browsers retain snoozes in this mounted app.
+      }
+      return Number.isFinite(until) ? until - Date.now() : 0
+    }
     let stopped = false
     let prepared = !onBeforeOpen
     let preparationPending = false
     let timer = 0
+    let snoozeTimer = 0
     const open = () => {
-      if (stopped || element.open || dismissed() || hasBlockingModal(element)) return
+      if (stopped || element.open || dismissed()) return
+      const remaining = snoozeRemaining()
+      if (remaining > 0) {
+        prepared = !onBeforeOpen
+        window.clearTimeout(snoozeTimer)
+        snoozeTimer = window.setTimeout(open, Math.min(remaining, 2_147_483_647))
+        return
+      }
+      if (hasBlockingModal(element)) return
       if (!prepared) {
         prepared = true
         preparationPending = true
@@ -102,26 +125,30 @@ export function ControllerUpdateNotice({
     return () => {
       stopped = true
       window.clearTimeout(timer)
+      window.clearTimeout(snoozeTimer)
       observer.disconnect()
       if (element.open) element.close()
       onOpenChange?.(false)
     }
-  }, [key, memoryDismissals, onBeforeOpen, onOpenChange])
+  }, [key, memoryDismissals, memorySnoozes, onBeforeOpen, onOpenChange])
 
   if (!status || !available || !key) return null
 
-  const dismiss = (viewInstructions = false) => {
-    memoryDismissals.add(key)
+  const dismiss = (action: 'snooze' | 'skip' | 'instructions' = 'snooze') => {
+    const storageKey = action === 'snooze' ? key + ':snoozed-until' : key
+    const until = Date.now() + 7 * 24 * 60 * 60_000
+    if (action === 'snooze') memorySnoozes.set(storageKey, until)
+    else memoryDismissals.add(key)
     try {
-      window.localStorage.setItem(key, '1')
+      window.localStorage.setItem(storageKey, action === 'snooze' ? String(until) : '1')
     } catch {
-      // The in-memory set still prevents another prompt during this app load.
+      // In-memory preferences still apply when storage is denied.
     }
     const restore = previousFocus.current
     previousFocus.current = null
     dialog.current?.close()
     onOpenChange?.(false)
-    if (viewInstructions) {
+    if (action === 'instructions') {
       onViewInstructions()
     } else {
       requestAnimationFrame(() => {
@@ -163,11 +190,13 @@ export function ControllerUpdateNotice({
       <code>{status.current_version}</code> <span aria-hidden="true">→</span><span className="controller-update-sr-only">to</span> <code>{status.latest_tag}</code>
     </p>
     <p>Stay current with the latest fixes and features. Review the release notes before upgrading.</p>
-    <p>For Docker Compose, pull the newer image and recreate the controller container while preserving its data volume and passphrase.</p>
+    {status.install_kind === 'container' && <p>For Docker Compose, pull the newer image and recreate the controller container while preserving its data volume and passphrase.</p>}
+    {status.install_kind === 'binary' && <p>For a standalone binary, verify the release checksum, stop the daemon, replace the executable, and restart with the unchanged data directory and passphrase source.</p>}
     <p><a href={status.release_url} target="_blank" rel="noreferrer">View release notes</a></p>
     <div className="controller-update-dialog-actions">
-      <Button onClick={() => dismiss()}>Dismiss</Button>
-      <Button kind="primary" onClick={() => dismiss(true)}>View update instructions</Button>
+      <Button onClick={() => dismiss()}>Remind me later</Button>
+      <Button onClick={() => dismiss('skip')}>Skip this version</Button>
+      <Button kind="primary" onClick={() => dismiss('instructions')}>How to update</Button>
     </div>
   </dialog>
 }

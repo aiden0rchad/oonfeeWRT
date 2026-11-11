@@ -51,6 +51,11 @@
 .controller-update-instructions h3 { margin: 4px 0 0; font-size: 13px; }
 .controller-update-instructions pre { max-width: 100%; margin: 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-primary); }
 
+.copy-control { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--text-muted); font-size: 12px; }
+.controller-update-scope { padding: 14px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); line-height: 1.55; }
+.controller-update-scope summary { cursor: pointer; color: var(--text-primary); }
+.controller-update-scope p:last-child { margin-bottom: 0; }
+
 .controller-update-dialog { width: min(500px, calc(100vw - 28px)); max-height: min(680px, calc(100vh - 28px)); padding: 24px; overflow: auto; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-1); color: var(--text-primary); box-shadow: 0 24px 80px #0009; }
 .controller-update-dialog::backdrop { background: #05070bcc; backdrop-filter: blur(2px); }
 .controller-update-dialog h2 { max-width: 420px; margin: 5px 32px 12px 0; font-size: 21px; line-height: 1.2; }
@@ -66,6 +71,7 @@
   .app-navigation[data-expanded='false'] .app-nav-item { width: 44px; }
   .app-navigation[data-expanded='false'] .app-profile { min-width: 44px; }
   .controller-update-dialog-close { min-width: 44px; min-height: 44px; }
+  .controller-update-scope summary { min-height: 44px; align-content: center; }
   .controller-update-dialog h2 { margin-right: 44px; }
 }
 @media (max-width: 720px) {

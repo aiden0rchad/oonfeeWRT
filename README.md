@@ -294,10 +294,18 @@ build-stamped executable version with the latest published stable oonfeeWRT
 release. For example, v0.1.5 reports v0.1.6, while extra commits or rebuilt
 images still based on v0.1.8 do not report v0.1.8 as an update.
 
-A compact Settings badge and **Settings → Updates** show the result. A first-load
-dialog appears once per browser, account, and target release; dismissal survives
-reload, while a newer target can prompt again. Successful checks are cached for
-12 hours and failures for at least 15 minutes. Offline, malformed, development,
+A compact Settings badge and **Settings → Updates** show the result, with
+copyable commands for the build-stamped installation type. Owners and admins
+can use **Check now** to request a fresh check, at most once a minute and without
+bypassing failure backoff. Automatic checks cache successes for 12 hours and
+failures for at least 15 minutes.
+
+Viewers see the badge and Updates tab but are never prompted by the first-load
+dialog. Other roles can choose **Remind me later** to snooze the target for
+7 days, **Skip this version** to dismiss it permanently, or **How to update**
+to dismiss it and open the instructions. Closing the dialog or pressing Escape
+also snoozes it. Preferences are stored per browser origin, account, and target
+release; a newer target can prompt immediately. Offline, malformed, development,
 prerelease, and unknown-version states remain explicit and are never called
 “up to date.”
 

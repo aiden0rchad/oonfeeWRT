@@ -34,7 +34,7 @@ COPY --from=ui /src/ui/dist ./ui/dist
 ARG TARGETOS TARGETARCH VERSION=dev
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -buildvcs=false \
-      -ldflags "-s -w -buildid= -X main.version=$VERSION" \
+      -ldflags "-s -w -buildid= -X main.version=$VERSION -X main.installKind=container" \
       -o /oonfeewrtd ./cmd/oonfeewrtd
 # Materialised here so the scratch stage can COPY them in with an owner —
 # see the /data note below.

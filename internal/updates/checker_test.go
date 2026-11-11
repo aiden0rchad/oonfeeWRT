@@ -88,6 +88,92 @@ func boolInt(value bool) int {
 	return 0
 }
 
+func TestRefreshBypassesSuccessTTLButKeepsFloorAndConditionalRequest(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	calls := 0
+	checker := NewCheckerWithClient(clientFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls > 1 {
+			if req.Header.Get("If-None-Match") != `"release"` {
+				t.Fatal("manual check lost conditional request")
+			}
+			return githubResponse(http.StatusNotModified, "", nil), nil
+		}
+		return githubResponse(http.StatusOK, published("v1.2.4"), http.Header{"Etag": {`"release"`}}), nil
+	}), func() time.Time { return now })
+	first := checker.Check(context.Background(), "v1.2.3")
+	now = now.Add(MinManualInterval - time.Nanosecond)
+	if got := checker.Refresh(context.Background(), "v1.2.3"); calls != 1 || !got.CheckedAt.Equal(*first.CheckedAt) {
+		t.Fatalf("manual floor: calls=%d status=%+v", calls, got)
+	}
+	now = now.Add(time.Nanosecond)
+	if got := checker.Check(context.Background(), "v1.2.3"); calls != 1 || !got.CheckedAt.Equal(*first.CheckedAt) {
+		t.Fatalf("automatic TTL: calls=%d status=%+v", calls, got)
+	}
+	got := checker.Refresh(context.Background(), "v1.2.3")
+	if calls != 2 || !got.CheckedAt.Equal(now) || got.LatestTag != "v1.2.4" || got.NextCheckAt.Sub(now) != SuccessTTL {
+		t.Fatalf("fresh manual check: calls=%d status=%+v", calls, got)
+	}
+	checker.Refresh(context.Background(), "v1.2.3")
+	if calls != 2 {
+		t.Fatal("repeated manual check bypassed floor")
+	}
+}
+
+func TestRefreshHonorsFailureBackoffAndRateLimit(t *testing.T) {
+	for _, retry := range []time.Duration{FailureBackoff, time.Hour} {
+		t.Run(retry.String(), func(t *testing.T) {
+			now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+			calls := 0
+			checker := NewCheckerWithClient(clientFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return githubResponse(http.StatusTooManyRequests, "PRIVATE", http.Header{
+					"Retry-After": {strconv.Itoa(int(retry.Seconds()))},
+				}), nil
+			}), func() time.Time { return now })
+			first := checker.Refresh(context.Background(), "v1.2.3")
+			now = now.Add(retry - time.Nanosecond)
+			got := checker.Refresh(context.Background(), "v1.2.3")
+			if calls != 1 || got.Error == nil || !got.CheckedAt.Equal(*first.CheckedAt) {
+				t.Fatalf("backoff bypassed: calls=%d status=%+v", calls, got)
+			}
+			now = now.Add(time.Nanosecond)
+			checker.Refresh(context.Background(), "v1.2.3")
+			if calls != 2 {
+				t.Fatal("manual check did not resume after backoff")
+			}
+		})
+	}
+}
+
+func TestRefreshUnknownBuildNeverContactsGitHub(t *testing.T) {
+	checker := NewCheckerWithClient(clientFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("unknown version contacted GitHub")
+		return nil, nil
+	}), time.Now)
+	for _, current := range []string{"", "dev", "abcdef0", "v1.2.3-rc.1"} {
+		if got := checker.Refresh(context.Background(), current); got.State != StateUnknown || got.CheckedAt != nil {
+			t.Fatalf("unknown status=%+v", got)
+		}
+	}
+}
+
+func TestCancelledManualCheckCannotBypassFloor(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	checker := NewCheckerWithClient(clientFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		cancel()
+		return nil, context.Canceled
+	}), func() time.Time { return now })
+	checker.Refresh(ctx, "v1.2.3")
+	checker.Refresh(context.Background(), "v1.2.3")
+	if calls != 1 {
+		t.Fatal("cancelled manual check bypassed floor")
+	}
+}
+
 func TestRequestIsFixedBoundedAndIdentityFree(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	checker := NewCheckerWithClient(clientFunc(func(req *http.Request) (*http.Response, error) {
@@ -197,11 +283,15 @@ func TestConcurrentChecksCoalesce(t *testing.T) {
 	const count = 24
 	results := make(chan Status, count)
 	var wg sync.WaitGroup
-	for range count {
+	for i := range count {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- checker.Check(context.Background(), "v1.0.0")
+			if i%2 == 0 {
+				results <- checker.Check(context.Background(), "v1.0.0")
+			} else {
+				results <- checker.Refresh(context.Background(), "v1.0.0")
+			}
 		}()
 	}
 	<-started

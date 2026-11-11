@@ -18,6 +18,7 @@ func TestReleaseBuildContract(t *testing.T) {
 		"ARG TARGETOS TARGETARCH VERSION=dev",
 		"go build -trimpath -buildvcs=false",
 		"-buildid= -X main.version=$VERSION",
+		"-X main.installKind=container",
 		"node:22-alpine@sha256:",
 		"golang:1.26.6-alpine@sha256:",
 		`LABEL org.opencontainers.image.licenses="Apache-2.0"`,
@@ -134,6 +135,7 @@ func TestReleaseBuildContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, packaged := range []string{
+		"-X main.installKind=binary",
 		"third_party/THIRD_PARTY_LICENSES", `cp "$release_notes" "$stage/RELEASE-NOTES.md"`,
 		"deploy/docker-compose.yml",
 		"generate-third-party-licenses.py --check",

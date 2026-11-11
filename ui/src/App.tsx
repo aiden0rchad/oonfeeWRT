@@ -169,12 +169,15 @@ export function App() {
   const [updateStatus, setUpdateStatus] = useState<ControllerUpdateStatus | null>(null)
   const [updateError, setUpdateError] = useState('')
   const [updateRefreshing, setUpdateRefreshing] = useState(false)
+  const [updateCheckNote, setUpdateCheckNote] = useState(false)
+  const updateCheckedAt = useRef<string | undefined>(undefined)
   const sessionGeneration = useRef(0)
   const refreshGeneration = useRef(0)
   const dashboardRefresh = useRef<AbortController | null>(null)
   const devicesRefresh = useRef<AbortController | null>(null)
   const updatesRefresh = useRef<AbortController | null>(null)
   const updateDismissals = useRef(new Set<string>())
+  const updateSnoozes = useRef(new Map<string, number>())
   const mainRef = useRef<HTMLElement>(null)
 
   const clearProtectedState = useCallback(() => {
@@ -195,6 +198,8 @@ export function App() {
     setUpdateStatus(null)
     setUpdateError('')
     setUpdateRefreshing(false)
+    setUpdateCheckNote(false)
+    updateCheckedAt.current = undefined
   }, [])
 
   const navigate = useCallback((next: Screen, intent: SettingsIntent = null, tab: SettingsTab = 'network', replace = false) => {
@@ -336,16 +341,19 @@ export function App() {
     return Promise.all(requests).then(() => undefined)
   }, [username])
 
-  const refreshUpdates = useCallback(() => {
+  const refreshUpdates = useCallback((manual = false) => {
     if (!username || updatesRefresh.current) return Promise.resolve()
     const generation = sessionGeneration.current
     const controller = new AbortController()
     updatesRefresh.current = controller
     setUpdateRefreshing(true)
+    setUpdateCheckNote(false)
     return (async () => {
       try {
-        const next = await api.updates(controller.signal)
+        const next = await (manual ? api.checkUpdates() : api.updates(controller.signal))
         if (generation !== sessionGeneration.current) return
+        setUpdateCheckNote(manual && next.checked_at === updateCheckedAt.current && !next.error)
+        updateCheckedAt.current = next.checked_at
         setUpdateStatus(next)
         setUpdateError('')
       } catch (error) {
@@ -628,7 +636,8 @@ export function App() {
                 updateStatus={updateStatus}
                 updateError={updateError}
                 updateRefreshing={updateRefreshing}
-                onRefreshUpdates={refreshUpdates}
+                updateCheckNote={updateCheckNote}
+                onRefreshUpdates={() => refreshUpdates(true)}
               />
             )}
             {screen === 'accounts' && session && (
@@ -654,6 +663,7 @@ export function App() {
         onViewInstructions={() => navigate('settings', null, 'updates')}
         onBeforeOpen={prepareUpdateDialog}
         memoryDismissals={updateDismissals.current}
+        memorySnoozes={updateSnoozes.current}
       />}
     </div>
   )

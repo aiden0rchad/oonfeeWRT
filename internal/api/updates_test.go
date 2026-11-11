@@ -12,10 +12,11 @@ import (
 )
 
 type stubUpdateChecker struct {
-	mu       sync.Mutex
-	calls    int
-	versions []string
-	status   updates.Status
+	mu           sync.Mutex
+	calls        int
+	refreshCalls int
+	versions     []string
+	status       updates.Status
 }
 
 func (s *stubUpdateChecker) Check(_ context.Context, version string) updates.Status {
@@ -24,6 +25,13 @@ func (s *stubUpdateChecker) Check(_ context.Context, version string) updates.Sta
 	s.calls++
 	s.versions = append(s.versions, version)
 	return s.status
+}
+
+func (s *stubUpdateChecker) Refresh(ctx context.Context, version string) updates.Status {
+	s.mu.Lock()
+	s.refreshCalls++
+	s.mu.Unlock()
+	return s.Check(ctx, version)
 }
 
 func (s *stubUpdateChecker) callCount() int {
@@ -50,6 +58,9 @@ func TestUpdatesRequireAuthenticationAndUseExecutableVersionForEveryRole(t *test
 		t.Fatal("unauthenticated request reached update checker")
 	}
 
+	if w := h.do(http.MethodPost, "/api/v1/updates/check", nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated manual status=%d", w.Code)
+	}
 	h.setup()
 	owner, err := h.db.AdminByName(context.Background(), "admin")
 	if err != nil {
@@ -74,10 +85,20 @@ func TestUpdatesRequireAuthenticationAndUseExecutableVersionForEveryRole(t *test
 				body["latest_tag"] != "v1.2.4" {
 				t.Fatalf("body=%v", body)
 			}
+			before := checker.callCount()
+			w = h.do(http.MethodPost, "/api/v1/updates/check", nil)
+			allowed := role == store.RoleAdmin || role == store.RoleOwner
+			if allowed {
+				if w.Code != http.StatusOK || checker.callCount() != before+1 {
+					t.Fatalf("manual check status=%d calls=%d", w.Code, checker.callCount())
+				}
+			} else if w.Code != http.StatusForbidden || checker.callCount() != before {
+				t.Fatalf("forbidden manual check status=%d calls=%d", w.Code, checker.callCount())
+			}
 		})
 	}
-	if checker.callCount() != len(roles) {
-		t.Fatalf("checker calls=%d want=%d", checker.callCount(), len(roles))
+	if checker.callCount() != len(roles)+2 || checker.refreshCalls != 2 {
+		t.Fatalf("checker calls=%d want=%d", checker.callCount(), len(roles)+2)
 	}
 	for _, version := range checker.versions {
 		if version != "v1.2.3-actual-executable" {
@@ -101,5 +122,34 @@ func TestUpdatesReturnTypedUnavailableStatusWhenCheckerMissing(t *testing.T) {
 	if body["state"] != string(updates.StateUnavailable) || body["update_available"] != false ||
 		body["current_version"] != "v1.2.3" || !ok || errorBody["code"] != "checker_unavailable" {
 		t.Fatalf("body=%v", body)
+	}
+}
+
+func TestUpdateInstallKindNormalisationAndMissingManualChecker(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+	for _, checker := range []UpdateChecker{nil, &stubUpdateChecker{status: updates.Status{State: updates.StateUnknown}}} {
+		h.srv.UpdateChecker = checker
+		for _, kind := range []string{"container", "binary", "unknown", "", "CONTAINER", "environment-value"} {
+			h.srv.ControllerInstallKind = kind
+			want := kind
+			if want != "container" && want != "binary" {
+				want = "unknown"
+			}
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				path := "/api/v1/updates"
+				if method == http.MethodPost {
+					path += "/check"
+				}
+				w := h.do(method, path, nil)
+				body := h.json(w)
+				if w.Code != http.StatusOK || body["install_kind"] != want {
+					t.Fatalf("%s kind=%q status=%d body=%v", method, kind, w.Code, body)
+				}
+				if checker == nil && body["error"].(map[string]any)["code"] != "checker_unavailable" {
+					t.Fatalf("missing checker error=%v", body)
+				}
+			}
+		}
 	}
 }

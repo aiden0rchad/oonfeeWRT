@@ -280,6 +280,7 @@ const firmwareFixture = {
 
 const controllerUpdateFixture = {
   state: 'available',
+  install_kind: 'unknown',
   current_version: 'v0.1.8',
   latest_version: '0.1.9',
   latest_tag: 'v0.1.9',
@@ -447,7 +448,7 @@ test('mobile navigation traps focus, supports Escape, and reaches the new worksp
   expect(unexpected).toEqual([])
 })
 
-test('controller update modal traps focus, survives delayed dashboard data, persists dismissal, and deep-links in both themes', async ({ page }) => {
+test('controller update modal traps focus, survives delayed dashboard data, snoozes on Escape, and deep-links in both themes', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 })
   let releaseDashboard!: () => void
   const dashboardGate = new Promise<void>((resolve) => { releaseDashboard = resolve })
@@ -460,7 +461,7 @@ test('controller update modal traps focus, survives delayed dashboard data, pers
 
   const dialog = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
   const close = dialog.getByRole('button', { name: 'Close update notice' })
-  const instructions = dialog.getByRole('button', { name: 'View update instructions' })
+  const instructions = dialog.getByRole('button', { name: 'How to update' })
   await expect(dialog).toBeVisible()
   await expect(close).toBeFocused()
   await page.keyboard.press('Shift+Tab')
@@ -480,6 +481,12 @@ test('controller update modal traps focus, survives delayed dashboard data, pers
   await expect(close).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
+  const snooze = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((key) => key.endsWith(':snoozed-until'))!
+    return { remaining: Number(localStorage.getItem(key)) - Date.now(), skipped: localStorage.getItem(key.replace(':snoozed-until', '')) }
+  })
+  expect(snooze.remaining).toBeGreaterThan(6 * 24 * 60 * 60_000)
+  expect(snooze.skipped).toBeNull()
   const settings = page.getByRole('button', { name: 'Settings', exact: true })
   await expect(settings).toHaveAttribute('aria-describedby', 'controller-update-navigation-status')
   await expect(settings.locator('.controller-update-nav-dot')).toHaveText('1')
@@ -493,7 +500,7 @@ test('controller update modal traps focus, survives delayed dashboard data, pers
   await page.evaluate(() => {
     for (let index = localStorage.length - 1; index >= 0; index--) {
       const key = localStorage.key(index)
-      if (key?.startsWith('oonfeewrt:controller-update-dismissed:')) localStorage.removeItem(key)
+      if (key?.endsWith(':snoozed-until')) localStorage.setItem(key, String(Date.now() - 1))
     }
   })
   await page.reload()
@@ -512,6 +519,44 @@ test('controller update modal traps focus, survives delayed dashboard data, pers
   await expect(page.getByRole('tab', { name: 'Updates', exact: true })).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByText('OONFEE_VERSION=v0.1.9', { exact: true })).toBeVisible()
   await expect(page.getByText(/docker compose pull oonfeewrt/)).toBeVisible()
+  expect(unexpected).toEqual([])
+})
+
+for (const kind of ['container', 'binary', 'unknown'] as const) {
+  test(`controller update guidance matches ${kind} installs and Check now uses POST`, async ({ page }) => {
+    const unexpected = await installControllerFixture(page, topology, {
+      updateStatus: { ...controllerUpdateFixture, install_kind: kind },
+    })
+    let checks = 0
+    await page.route('**/api/v1/updates/check', async (route) => {
+      expect(route.request().method()).toBe('POST')
+      checks++
+      await route.fulfill({ json: { ...controllerUpdateFixture, install_kind: kind } })
+    })
+    await page.goto('/')
+    const dialog = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText(/For Docker Compose/)).toHaveCount(kind === 'container' ? 1 : 0)
+    await dialog.getByRole('button', { name: 'How to update' }).click()
+    await expect(page.getByRole('heading', { name: 'Docker Compose', exact: true })).toHaveCount(kind !== 'binary' ? 1 : 0)
+    await expect(page.getByRole('heading', { name: 'Standalone binary', exact: true })).toHaveCount(kind !== 'container' ? 1 : 0)
+    await page.getByRole('button', { name: 'Check now' }).click()
+    await expect(page.getByText('Checked a moment ago — try again in a minute.')).toBeVisible()
+    expect(checks).toBe(1)
+    expect(unexpected).toEqual([])
+  })
+}
+
+test('viewers see update navigation and instructions without a first-load dialog or Check now', async ({ page }) => {
+  const unexpected = await installControllerFixture(page, topology, {
+    accountRole: 'viewer', updateStatus: controllerUpdateFixture,
+  })
+  await page.goto('/settings?section=updates')
+  await expect(page.getByText('Update available — v0.1.9', { exact: true })).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toHaveAttribute('aria-describedby', 'controller-update-navigation-status')
+  await expect(page.getByText(/Ask the deployment owner/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Check now' })).toHaveCount(0)
   expect(unexpected).toEqual([])
 })
 
@@ -611,7 +656,7 @@ test('dismissing a delayed controller update restores the previously focused for
   releaseUpdate()
   const update = page.getByRole('dialog', { name: 'A newer oonfeeWRT version is available' })
   await expect(update).toBeVisible()
-  await update.getByRole('button', { name: 'Dismiss', exact: true }).click()
+  await update.getByRole('button', { name: 'Remind me later', exact: true }).click()
   await expect(update).toBeHidden()
   await expect(password).toBeFocused()
   expect(unexpected).toEqual([])

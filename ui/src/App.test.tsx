@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     setupState: vi.fn(),
     session: vi.fn(),
     updates: vi.fn(),
+    checkUpdates: vi.fn(),
     dashboard: vi.fn(),
     devices: vi.fn(),
     login: vi.fn(),
@@ -75,6 +76,7 @@ function signedIn(username = 'admin') {
 function updateAvailable(tag = 'v0.1.9') {
   return {
     state: 'available' as const,
+    install_kind: 'unknown' as const,
     current_version: 'v0.1.8',
     latest_version: tag.replace(/^v/, ''),
     latest_tag: tag,
@@ -260,11 +262,11 @@ describe('App session boundaries', () => {
     expect(settings.querySelector('.controller-update-nav-dot')).toBeNull()
     expect(settings.querySelector('.controller-update-nav-pill')?.textContent).toBe('Update')
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'View update instructions' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'How to update' }))
     expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
     expect(window.location.pathname + window.location.search).toBe('/settings?section=updates')
-    expect(screen.getByText('Update available')).toBeTruthy()
+    expect(screen.getByText('Update available — v0.1.9')).toBeTruthy()
     expect(settings.querySelector('.controller-update-nav-pill')?.textContent).toBe('Update')
     expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
   })
@@ -281,6 +283,38 @@ describe('App session boundaries', () => {
     await act(async () => resolveDashboard({ devices: {}, recent_events: [], recent_alert_events: [] }))
     expect(await screen.findByText('dashboard data')).toBeTruthy()
     expect(document.activeElement).toBe(close)
+  })
+
+  it('uses manual checks only on request and explains unchanged timestamps', async () => {
+    window.history.replaceState(null, '', '/settings?section=updates')
+    signedIn()
+    mocks.api.updates.mockResolvedValue(updateAvailable())
+    mocks.api.checkUpdates.mockResolvedValueOnce(updateAvailable()).mockResolvedValueOnce({
+      ...updateAvailable(), checked_at: '2026-09-18T12:01:00Z',
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Skip this version' }))
+    expect(mocks.api.checkUpdates).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    expect(await screen.findByText('Checked a moment ago — try again in a minute.')).toBeTruthy()
+    expect(mocks.api.checkUpdates).toHaveBeenCalledOnce()
+    expect(mocks.api.updates).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(mocks.api.checkUpdates).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText('Checked a moment ago — try again in a minute.')).toBeNull())
+  })
+
+  it('keeps the badge and Updates tab for viewers without opening a dialog', async () => {
+    signedIn('viewer')
+    mocks.api.updates.mockResolvedValue(updateAvailable())
+    render(<App />)
+    const settings = await screen.findByRole('button', { name: 'Settings' })
+    await waitFor(() => expect(settings.getAttribute('aria-describedby')).toBe('controller-update-navigation-status'))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(settings)
+    fireEvent.click(screen.getByRole('tab', { name: 'Updates' }))
+    expect(screen.getByText(/Ask the deployment owner/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull()
   })
 
   it('aborts and ignores a late update response after logout', async () => {
@@ -311,7 +345,7 @@ describe('App session boundaries', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: 'Updates' }).getAttribute('aria-selected')).toBe('true')
-    expect(await screen.findByText('Running version unknown')).toBeTruthy()
+    expect(await screen.findByText("Can't tell which version this is")).toBeTruthy()
     expect(screen.queryByText(/Device inventory is unavailable/)).toBeNull()
     await waitFor(() => expect(document.title).toBe('Updates · Settings — oonfeeWRT'))
   })
