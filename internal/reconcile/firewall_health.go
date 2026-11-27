@@ -29,6 +29,11 @@ type firewallService struct {
 type firewallRuntimeExpectation struct {
 	touchedSources map[string]bool
 	desiredZones   map[string]bool
+	// openInput is the rendered zone input policy. True means UCI input is
+	// ACCEPT, so fw4 gives input_<zone> policy accept and does not install
+	// reject_from_<zone>. That open path is the desired state. False keeps
+	// the closed-tail requirement. Forward stays closed either way.
+	openInput      map[string]bool
 	desiredDevices map[string]map[string]bool
 	desiredEdges   map[string]map[string]bool
 	destinationSet map[string]bool
@@ -98,6 +103,7 @@ func buildFirewallRuntimeExpectation(plan *DevicePlan) (*firewallRuntimeExpectat
 	want := &firewallRuntimeExpectation{
 		touchedSources: map[string]bool{},
 		desiredZones:   map[string]bool{},
+		openInput:      map[string]bool{},
 		desiredDevices: map[string]map[string]bool{},
 		desiredEdges:   map[string]map[string]bool{},
 		// lan is device-owned and can never be selected as a managed
@@ -249,6 +255,10 @@ func buildFirewallRuntimeExpectation(plan *DevicePlan) (*firewallRuntimeExpectat
 				want.destinationSet[zone] = true
 				if want.touchedSources[zone] {
 					want.desiredZones[zone] = true
+					if want.openInput == nil {
+						want.openInput = map[string]bool{}
+					}
+					want.openInput[zone] = strings.EqualFold(strings.TrimSpace(section.Values["input"]), "ACCEPT")
 					want.desiredDevices[zone] = map[string]bool{}
 					for _, network := range section.Lists["network"] {
 						device, ok := networkDevices[network]
@@ -491,7 +501,12 @@ func (want *firewallRuntimeExpectation) verify(runtime *nftRuntime) error {
 		if diff := firstSetDifference(forwardDevices, want.desiredDevices[source]); diff != "" {
 			return fmt.Errorf("managed zone %q forward dispatch still includes device %q", source, diff)
 		}
-		if !runtime.hasClosedTail(input, "reject_from_"+source, "drop_from_"+source) {
+		// ACCEPT zone input makes the chain policy accept and omits the reject
+		// tail. Requiring that tail would fail the health check and roll the
+		// Apply back. REJECT still needs the closed tail. Forward stays REJECT,
+		// so its tail is required in both cases. The input and forward BASE
+		// chains are checked above and stay non-ACCEPT.
+		if !want.openInput[source] && !runtime.hasClosedTail(input, "reject_from_"+source, "drop_from_"+source) {
 			return fmt.Errorf("managed zone %q has no default reject/drop input path", source)
 		}
 		if !runtime.hasClosedTail(forward, "reject_to_"+source, "drop_to_"+source) {

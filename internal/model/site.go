@@ -258,6 +258,19 @@ type Network struct {
 	// customize or disable the pool before any site apply.
 	LegacyDHCPDefaults bool
 	Enabled            bool
+	// AllowRouterAccess is whether clients on this network may reach the router
+	// (LuCI, SSH, the panel). Nil means the caller omitted the field: creating a
+	// network stores false, and updating one keeps the stored value. False
+	// renders the firewall zone input as REJECT. True renders it as ACCEPT.
+	// Several networks can share one zone; that zone is ACCEPT when any enabled
+	// member is true. Output and forward are not changed by this field.
+	AllowRouterAccess *bool
+}
+
+// AllowsRouterAccess reports the stored choice. A nil pointer is the omitted
+// field, which is the closed default rather than an open zone.
+func (n Network) AllowsRouterAccess() bool {
+	return n.AllowRouterAccess != nil && *n.AllowRouterAccess
 }
 
 // EffectiveDHCP returns the explicit policy or the historical default.
@@ -365,6 +378,9 @@ type Site struct {
 	// Overrides are the places individual devices are allowed to differ. See
 	// override.go for what is overridable and, more importantly, what is not.
 	Overrides Overrides
+	// PortRoles are per-device LAN port roles. A port with no row is a trunk:
+	// the renderer tags it on every panel VLAN and does not edit VLAN 1.
+	PortRoles []PortRole
 }
 
 // NetworkByID looks up a network.
@@ -471,6 +487,7 @@ func (s Site) Validate() []error {
 				routed[i].name, routed[i].prefix, routed[j].name, routed[j].prefix))
 		}
 	}
+	errs = append(errs, s.ValidatePortRoles()...)
 	errs = append(errs, s.ValidateZonePolicies()...)
 	errs = append(errs, s.ValidatePolicies()...)
 	for _, w := range s.WLANs {

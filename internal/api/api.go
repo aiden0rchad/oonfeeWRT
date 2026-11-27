@@ -358,6 +358,7 @@ func (s *Server) protectedRoutes() []protectedRoute {
 		{"POST /api/v1/site/networks", store.RoleAdmin, s.handleSaveNetwork},
 		{"POST /api/v1/site/networks/{id}", store.RoleAdmin, s.handleSaveNetwork},
 		{"DELETE /api/v1/site/networks/{id}", store.RoleAdmin, s.handleDeleteNetwork},
+		{"POST /api/v1/site/port-roles", store.RoleAdmin, s.handleSavePortRole},
 		{"POST /api/v1/site/zones/{name}", store.RoleAdmin, s.handleSaveZonePolicy},
 		{"DELETE /api/v1/site/zones/{name}", store.RoleAdmin, s.handleDeleteZonePolicy},
 		{"GET /api/v1/site/policies", store.RoleViewer, s.handlePolicies},

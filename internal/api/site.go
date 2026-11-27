@@ -403,14 +403,15 @@ func (v *dhcpRequest) toModel() (*model.DHCPConfig, error) {
 // rebuilt every omitted field from its zero value. A DHCP-only update could
 // therefore disable and rename the whole network before DHCP was even read.
 type networkRequest struct {
-	ID      int          `json:"id,omitempty"`
-	Name    *string      `json:"name"`
-	VLAN    *int         `json:"vlan"`
-	CIDR    *string      `json:"cidr"`
-	Zone    *string      `json:"zone"`
-	DHCP    *dhcpRequest `json:"dhcp"`
-	IPv6    *ipv6Request `json:"ipv6"`
-	Enabled *bool        `json:"enabled"`
+	ID                int          `json:"id,omitempty"`
+	Name              *string      `json:"name"`
+	VLAN              *int         `json:"vlan"`
+	CIDR              *string      `json:"cidr"`
+	Zone              *string      `json:"zone"`
+	DHCP              *dhcpRequest `json:"dhcp"`
+	IPv6              *ipv6Request `json:"ipv6"`
+	Enabled           *bool        `json:"enabled"`
+	AllowRouterAccess *bool        `json:"allow_router_access"`
 }
 
 func (v networkRequest) apply(n *model.Network) error {
@@ -443,18 +444,22 @@ func (v networkRequest) apply(n *model.Network) error {
 		}
 		n.IPv6 = ipv6
 	}
+	if v.AllowRouterAccess != nil {
+		n.AllowRouterAccess = v.AllowRouterAccess
+	}
 	return nil
 }
 
 type networkView struct {
-	ID      int       `json:"id"`
-	Name    string    `json:"name"`
-	VLAN    int       `json:"vlan"`
-	CIDR    string    `json:"cidr"`
-	Zone    string    `json:"zone"`
-	DHCP    *dhcpView `json:"dhcp,omitempty"`
-	IPv6    *ipv6View `json:"ipv6,omitempty"`
-	Enabled bool      `json:"enabled"`
+	ID                int       `json:"id"`
+	Name              string    `json:"name"`
+	VLAN              int       `json:"vlan"`
+	CIDR              string    `json:"cidr"`
+	Zone              string    `json:"zone"`
+	DHCP              *dhcpView `json:"dhcp,omitempty"`
+	IPv6              *ipv6View `json:"ipv6,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	AllowRouterAccess bool      `json:"allow_router_access"`
 }
 
 type zonePolicyView struct {
@@ -477,7 +482,7 @@ func viewNetwork(n model.Network) networkView {
 	d := n.EffectiveDHCP()
 	ipv6 := n.EffectiveIPv6()
 	v := networkView{ID: n.ID, Name: n.Name, VLAN: n.VLAN, CIDR: n.CIDR,
-		Zone: n.Zone, Enabled: n.Enabled}
+		Zone: n.Zone, Enabled: n.Enabled, AllowRouterAccess: n.AllowsRouterAccess()}
 	v.DHCP = &dhcpView{Enabled: d.Enabled, Start: d.Start, Limit: d.Limit,
 		LeaseTime: d.LeaseTime, LegacyDefault: n.LegacyDHCPDefaults}
 	v.IPv6 = &ipv6View{Mode: string(ipv6.Mode), AssignmentLength: ipv6.AssignmentLength}
@@ -566,6 +571,18 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 		return deviations[i].Key < deviations[j].Key
 	})
 
+	roles := make([]portRoleView, 0, len(site.PortRoles))
+	for _, role := range site.PortRoles {
+		roles = append(roles, viewPortRole(role))
+	}
+	lanPorts, err := s.lanPortCatalog(r.Context())
+	if handleStoreErr(w, err, "LAN ports") {
+		return
+	}
+	if lanPorts == nil {
+		lanPorts = []lanPortsView{}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":                site.Name,
 		"wlans":               wlans,
@@ -573,6 +590,8 @@ func (s *Server) handleSite(w http.ResponseWriter, r *http.Request) {
 		"uplinks":             uplinks,
 		"groups":              groups,
 		"networks":            nets,
+		"port_roles":          roles,
+		"lan_ports":           lanPorts,
 		"zones":               zones,
 		"policies":            master.Rows,
 		"policy_sets":         site.PolicySets,
@@ -815,6 +834,11 @@ func (s *Server) handleSaveNetwork(w http.ResponseWriter, r *http.Request) {
 		// Store.SaveNetwork preserves this independently of DHCP, so concurrent
 		// partial edits cannot overwrite a newly changed IPv6 policy.
 		n.IPv6 = nil
+	}
+	if v.AllowRouterAccess == nil {
+		// A bool cannot say "omitted". Nil keeps the stored switch, so a zone
+		// rename or a DHCP edit cannot close router access that was turned on.
+		n.AllowRouterAccess = nil
 	}
 	if err := s.Store.SaveNetwork(r.Context(), &n); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

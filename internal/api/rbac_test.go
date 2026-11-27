@@ -94,6 +94,7 @@ func expectedProtectedRouteRoles() map[string]store.AccountRole {
 		"POST /api/v1/site/networks",
 		"POST /api/v1/site/networks/{id}",
 		"DELETE /api/v1/site/networks/{id}",
+		"POST /api/v1/site/port-roles",
 		"POST /api/v1/site/zones/{name}",
 		"DELETE /api/v1/site/zones/{name}",
 		"POST /api/v1/site/policies",
@@ -153,7 +154,7 @@ func TestProtectedRoutesHaveExhaustiveRoleChecks(t *testing.T) {
 	srv := &Server{}
 	routes := append(srv.protectedRoutes(), srv.reauthenticatedRoutes()...)
 	expected := expectedProtectedRouteRoles()
-	if len(routes) != len(expected) || len(routes) != 118 {
+	if len(routes) != len(expected) || len(routes) != 119 {
 		t.Fatalf("protected routes=%d expected=%d", len(routes), len(expected))
 	}
 	seen := make(map[string]bool, len(routes))

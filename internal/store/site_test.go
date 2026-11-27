@@ -583,6 +583,60 @@ func TestNetworkIPv6SurvivesRoundTripAndOlderClientUpdate(t *testing.T) {
 	}
 }
 
+func TestSaveNetworkRouterAccessDefaultsClosedAndOmissionPreservesIt(t *testing.T) {
+	db := open(t)
+	ctx := context.Background()
+	n := &model.Network{Name: "dom", VLAN: 50, CIDR: "192.168.50.1/24", Enabled: true}
+	if err := db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if n.AllowsRouterAccess() {
+		t.Fatal("creating a network without the switch stored it open")
+	}
+	var stored int
+	if err := db.SQL().QueryRowContext(ctx,
+		`SELECT allow_router_access FROM networks WHERE id=?`, n.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Fatalf("allow_router_access = %d, want 0", stored)
+	}
+
+	on := true
+	dhcp := model.DHCPConfig{Enabled: true, Start: 20, Limit: 40, LeaseTime: "1h"}
+	ipv6 := model.IPv6Config{Mode: model.IPv6PrefixDelegation, AssignmentLength: 56}
+	n.AllowRouterAccess = &on
+	n.DHCP = &dhcp
+	n.IPv6 = &ipv6
+	if err := db.SaveNetwork(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+
+	// An older or partial client omits the new field. That must not close the
+	// zone or rewrite DHCP and IPv6.
+	older := &model.Network{ID: n.ID, Name: "dom", VLAN: 50,
+		CIDR: "192.168.50.1/24", Zone: "dom", Enabled: true}
+	if err := db.SaveNetwork(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	if !older.AllowsRouterAccess() || older.EffectiveDHCP() != dhcp || older.EffectiveIPv6() != ipv6 {
+		t.Fatalf("omitted switch rewrote network policy: access=%v dhcp=%+v ipv6=%+v",
+			older.AllowsRouterAccess(), older.EffectiveDHCP(), older.EffectiveIPv6())
+	}
+
+	off := false
+	older.AllowRouterAccess = &off
+	older.DHCP = nil
+	older.IPv6 = nil
+	if err := db.SaveNetwork(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	if older.AllowsRouterAccess() || older.EffectiveDHCP() != dhcp || older.EffectiveIPv6() != ipv6 {
+		t.Fatalf("explicit false did not close access without touching DHCP/IPv6: access=%v dhcp=%+v ipv6=%+v",
+			older.AllowsRouterAccess(), older.EffectiveDHCP(), older.EffectiveIPv6())
+	}
+}
+
 func TestNewNetworkPersistsExplicitIPv6PreservePolicy(t *testing.T) {
 	db := open(t)
 	ctx := context.Background()

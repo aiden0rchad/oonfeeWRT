@@ -347,12 +347,49 @@ func TestOptionPatchLeavesExistingSectionUnowned(t *testing.T) {
 	}
 }
 
+func TestPortListPatchReplacesMembershipWithoutOwnership(t *testing.T) {
+	ctx := context.Background()
+	c := dial(t)
+	seed(t, c, "oonfeewrt_probe", "BASE_PORTS")
+
+	p := Plan{Timeout: 2 * time.Second, Ops: []Op{{
+		Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Patch: true,
+		Lists: map[string][]string{"ports": {"lan1:u*", "lan3"}},
+	}}}
+	if _, err := fastEngine().Apply(ctx, c, p,
+		func(context.Context, *ubus.Client) error { return nil }); err != nil {
+		t.Fatalf("Apply port list patch: %v", err)
+	}
+	fresh, err := c.FreshSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Destroy(ctx)
+	var out struct {
+		Values map[string]any `json:"values"`
+	}
+	if err := fresh.Call(ctx, "uci", "get", map[string]any{
+		"config": "oonfeewrt_probe", "section": "probe"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Values[OwnershipTag] != nil {
+		t.Fatalf("list patch claimed the section: %v", out.Values)
+	}
+	if out.Values["marker"] != "BASE_PORTS" {
+		t.Fatalf("list patch rewrote unrelated options: %v", out.Values)
+	}
+	got, ok := out.Values["ports"].([]any)
+	if !ok || len(got) != 2 || got[0] != "lan1:u*" || got[1] != "lan3" {
+		t.Fatalf("ports = %#v, want the replacement list", out.Values["ports"])
+	}
+}
+
 func TestInvalidPatchShapesAreRejectedBeforeApply(t *testing.T) {
 	tests := []Op{
 		{Kind: OpAdd, Config: "oonfeewrt_probe", Type: "probe", Name: "probe", Patch: true},
 		{Kind: OpDelete, Config: "oonfeewrt_probe", Section: "probe", Option: "marker", Patch: true},
 		{Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Values: map[string]string{OwnershipTag: "1"}, Patch: true},
-		{Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Lists: map[string][]string{"value": {"x"}}, Patch: true},
+		{Kind: OpSet, Config: "oonfeewrt_probe", Section: "probe", Lists: map[string][]string{"device": {"br-lan"}}, Patch: true},
 	}
 	for i, op := range tests {
 		c := dial(t)

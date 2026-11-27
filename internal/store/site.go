@@ -96,6 +96,9 @@ func (db *DB) populateSiteOn(ctx context.Context, q siteReader, s model.Site,
 	if s.Overrides, err = db.overridesOn(ctx, q); err != nil {
 		return model.Site{}, err
 	}
+	if s.PortRoles, err = db.portRolesOn(ctx, q); err != nil {
+		return model.Site{}, err
+	}
 	return s, nil
 }
 
@@ -212,7 +215,8 @@ func (db *DB) networks(ctx context.Context) ([]model.Network, error) {
 
 func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT id, name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled
+		`SELECT id, name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled,
+		        allow_router_access
 		   FROM networks ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list networks: %w", err)
@@ -225,10 +229,12 @@ func (db *DB) networksOn(ctx context.Context, q siteReader) ([]model.Network, er
 		}
 		var n model.Network
 		var rawDHCP, rawIPv6 string
+		var allowRouter int
 		if err := rows.Scan(&n.ID, &n.Name, &n.VLAN, &n.CIDR, &n.Zone,
-			&rawDHCP, &rawIPv6, &n.Enabled); err != nil {
+			&rawDHCP, &rawIPv6, &n.Enabled, &allowRouter); err != nil {
 			return nil, err
 		}
+		n.AllowRouterAccess = boolPtr(allowRouter != 0)
 		dhcp := model.DefaultDHCPConfig()
 		if err := json.Unmarshal([]byte(rawDHCP), &dhcp); err != nil {
 			return nil, fmt.Errorf("store: decode DHCP for network %d: %w", n.ID, err)
@@ -441,10 +447,16 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 		if err != nil {
 			return fmt.Errorf("store: encode IPv6 for network %q: %w", n.Name, err)
 		}
+		allowRouter := 0
+		if n.AllowsRouterAccess() {
+			allowRouter = 1
+		}
 		res, err := db.sql.ExecContext(ctx,
-			`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled)
-			 VALUES (?,?,?,?,?,?,?)`,
-			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), string(rawIPv6), n.Enabled)
+			`INSERT INTO networks (name, vlan, cidr, zone, dhcp_json, ipv6_json, enabled,
+			                       allow_router_access)
+			 VALUES (?,?,?,?,?,?,?,?)`,
+			n.Name, n.VLAN, n.CIDR, n.Zone, string(rawDHCP), string(rawIPv6), n.Enabled,
+			allowRouter)
 		if err != nil {
 			return fmt.Errorf("store: create network: %w", err)
 		}
@@ -453,12 +465,13 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 		n.DHCP = &dhcp
 		n.IPv6 = &ipv6
 		n.LegacyDHCPDefaults = false
+		n.AllowRouterAccess = boolPtr(allowRouter != 0)
 		return nil
 	}
 	// A nil policy is an older or partial client's omission, not a request to
 	// reset it. COALESCE keeps both policy columns unchanged atomically while
 	// allowing either object to be updated independently.
-	var rawDHCP, rawIPv6 any
+	var rawDHCP, rawIPv6, rawAllow any
 	if n.DHCP != nil {
 		encoded, err := json.Marshal(n.DHCP)
 		if err != nil {
@@ -473,13 +486,23 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 		}
 		rawIPv6 = string(encoded)
 	}
+	// Nil is an omitted switch, not a request to close an already-open zone.
+	// COALESCE keeps the stored integer while an explicit false writes 0.
+	if n.AllowRouterAccess != nil {
+		rawAllow = 0
+		if *n.AllowRouterAccess {
+			rawAllow = 1
+		}
+	}
 	res, err := db.sql.ExecContext(ctx,
 		`UPDATE networks
 		    SET name=?, vlan=?, cidr=?, zone=?,
 		        dhcp_json=COALESCE(?, dhcp_json),
-		        ipv6_json=COALESCE(?, ipv6_json), enabled=?
+		        ipv6_json=COALESCE(?, ipv6_json),
+		        allow_router_access=COALESCE(?, allow_router_access),
+		        enabled=?
 		  WHERE id=?`,
-		n.Name, n.VLAN, n.CIDR, n.Zone, rawDHCP, rawIPv6, n.Enabled, n.ID)
+		n.Name, n.VLAN, n.CIDR, n.Zone, rawDHCP, rawIPv6, rawAllow, n.Enabled, n.ID)
 	if err != nil {
 		return err
 	}
@@ -489,9 +512,10 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 		return ErrNotFound
 	}
 	var storedDHCP, storedIPv6 string
+	var storedAllow int
 	if err := db.sql.QueryRowContext(ctx,
-		`SELECT dhcp_json, ipv6_json FROM networks WHERE id=?`, n.ID).
-		Scan(&storedDHCP, &storedIPv6); err != nil {
+		`SELECT dhcp_json, ipv6_json, allow_router_access FROM networks WHERE id=?`, n.ID).
+		Scan(&storedDHCP, &storedIPv6, &storedAllow); err != nil {
 		return err
 	}
 	dhcp := model.DefaultDHCPConfig()
@@ -505,7 +529,12 @@ func (db *DB) SaveNetwork(ctx context.Context, n *model.Network) error {
 	n.DHCP = &dhcp
 	n.LegacyDHCPDefaults = isLegacyDHCPJSON(storedDHCP)
 	n.IPv6 = &ipv6
+	n.AllowRouterAccess = boolPtr(storedAllow != 0)
 	return nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func isLegacyDHCPJSON(raw string) bool {
@@ -577,7 +606,19 @@ func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
 	if err := db.ensureNetworkChangeSafe(ctx, nil, id); err != nil {
 		return err
 	}
-	res, err := db.sql.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, id)
+	tx, err := db.sql.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	// An access role points at this network. Deleting the row would forget the
+	// port and the next render would leave it out of VLAN 1. Trunk keeps the
+	// role so the renderer can put the port back on the management VLAN.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE port_roles SET mode='trunk', network_id=NULL WHERE network_id=?`, id); err != nil {
+		return fmt.Errorf("store: release port roles for network %d: %w", id, err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM networks WHERE id=?`, id)
 	if err != nil {
 		return err
 	}
@@ -586,7 +627,7 @@ func (db *DB) DeleteNetwork(ctx context.Context, id int) error {
 	} else if changed == 0 {
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ---- AP groups ----

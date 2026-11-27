@@ -19,6 +19,7 @@ const api = {
   clientObservability: vi.fn(),
   saveNetwork: vi.fn(),
   deleteNetwork: vi.fn(),
+  savePortRole: vi.fn(),
   devices: vi.fn(),
   saveWLAN: vi.fn(),
   deleteWLAN: vi.fn(),
@@ -3831,6 +3832,37 @@ describe('Settings — wireless uplinks', () => {
     expect(sent).toEqual({ id: 2, zone: 'iot' })
   })
 
+  it('keeps router access off until the operator turns the switch on', async () => {
+    api.site.mockResolvedValue({
+      ...base,
+      wlans: [],
+      networks: [
+        {
+          id: 2,
+          name: 'dom',
+          vlan: 50,
+          cidr: '192.168.50.1/24',
+          zone: 'dom',
+          enabled: true,
+        },
+      ],
+    })
+    api.saveNetwork.mockResolvedValue({})
+    render(<Settings devices={[]} />)
+
+    const box = await screen.findByRole('checkbox', {
+      name: 'Allow clients to reach this router on dom',
+    })
+    expect((box as HTMLInputElement).checked).toBe(false)
+    expect(screen.getAllByText('Apply writes this value to the zone Input policy.').length).toBeGreaterThan(0)
+    expect(api.saveNetwork).not.toHaveBeenCalled()
+
+    fireEvent.click(box)
+    await waitFor(() => expect(api.saveNetwork).toHaveBeenCalledWith({
+      id: 2, allow_router_access: true,
+    }))
+  })
+
   it('states the legacy WAN-only policy before moving a network into an unconfigured zone', async () => {
     api.site.mockResolvedValue({
       ...base,
@@ -4050,7 +4082,7 @@ describe('Settings — wireless uplinks', () => {
 
     fireEvent.click(await screen.findByText('Preview changes'))
     await waitFor(() => expect(api.preview).toHaveBeenCalled())
-    const apply = () => screen.getAllByText(/^Apply/)[0].closest('button')!
+    const apply = () => screen.getAllByRole('button', { name: /^Apply/ })[0] as HTMLButtonElement
     await waitFor(() => {
       if (apply().disabled) throw new Error('precondition: preview did not enable Apply')
     })
@@ -7180,5 +7212,51 @@ describe('Settings — the hazard a rollback cannot undo', () => {
     if (!applyBtn().disabled) {
       throw new Error('a stale acknowledgement carried to a fresh preview')
     }
+  })
+})
+
+describe('Settings — LAN port roles', () => {
+  const site = {
+    name: 'Site',
+    uuid: 'abcdef01-2345-6789-abcd-ef0123456789',
+    wlans: [],
+    meshes: [],
+    uplinks: [],
+    groups: [],
+    networks: [
+      {
+        id: 1, name: 'lan', vlan: 1, cidr: '192.0.2.1/24', zone: 'lan', enabled: true,
+        ipv6: { mode: 'preserve', assignment_length: 64 },
+      },
+      {
+        id: 2, name: 'Dom', vlan: 50, cidr: '192.0.2.50/24', zone: 'dom', enabled: true,
+        ipv6: { mode: 'preserve', assignment_length: 64 },
+      },
+    ],
+    lan_ports: [{ device_id: 7, ports: ['lan1', 'lan2', 'lan3'] }],
+    port_roles: [],
+    problems: [],
+    overrides: [],
+    overridable: [],
+    override_note: '',
+  }
+
+  it('saves one LAN port as an access member of one network', async () => {
+    api.site.mockResolvedValue(site)
+    api.savePortRole.mockResolvedValue({ port_role: {}, note: 'saved' })
+    render(<Settings devices={[{ id: 7, name: 'gateway', role: 'gateway', adopted: true } as never]} />)
+    await screen.findByRole('button', { name: 'Save port role' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'lan2' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Access' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Dom (VLAN 50)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save port role' }))
+
+    await waitFor(() => expect(api.savePortRole).toHaveBeenCalledWith({
+      device_id: 7,
+      port: 'lan2',
+      mode: 'access',
+      network_id: 2,
+    }))
   })
 })

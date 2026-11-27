@@ -122,10 +122,16 @@ type Section struct {
 // would make pruning or un-adopt capable of deleting the operator's LAN.
 // Patches therefore cannot create or delete a section, never carry the
 // ownership marker, and are excluded from ownership and drift bookkeeping.
+//
+// Lists is the same idea for a UCI list. Replacing bridge-vlan `ports`
+// changes membership without adopting VLAN 1, which would let a later prune
+// delete the management VLAN. device, vlan and local are not list keys a
+// patch may write.
 type Patch struct {
 	Config  string
 	Section string
 	Values  map[string]string
+	Lists   map[string][]string
 	Deletes []string
 }
 
@@ -429,6 +435,11 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 	// Networks first: a WLAN attaches to one, and a config file that declares
 	// the interface before the wireless section referencing it reads the way a
 	// human would write it.
+	//
+	// Port roles are decided once, before any bridge-vlan is written. A port
+	// that cannot safely leave VLAN 1 stays a trunk in every section, instead
+	// of being untagged on a panel VLAN and still untagged on VLAN 1.
+	portDecision := decideLANPortRoles(site, dev, caps, existing)
 	var members []zoneMember
 	for _, n := range site.Networks {
 		if n.Enabled && n.VLAN <= 1 && dev.EffectiveFunctions().Routes() {
@@ -438,7 +449,7 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 				addPatch(&doc, &rep, patch)
 			}
 		}
-		secs, oms, m := renderNetwork(n, dev, caps, existing)
+		secs, oms, m := renderNetwork(n, dev, caps, existing, portDecision.Access)
 		for _, sec := range secs {
 			if sec.Config == "network" && sec.Type == "bridge-vlan" {
 				rep.Conflicts = append(rep.Conflicts,
@@ -454,6 +465,10 @@ func Render(site model.Site, dev model.Device, caps *capability.Registry, existi
 		if m.iface != "" {
 			members = append(members, m)
 		}
+	}
+	rep.Omissions = append(rep.Omissions, portDecision.Omissions...)
+	if portDecision.Patch != nil {
+		addPatch(&doc, &rep, *portDecision.Patch)
 	}
 	// Firewall zones last, and once per zone rather than once per network. See
 	// renderZones: a zone is identified by its name, so two networks sharing

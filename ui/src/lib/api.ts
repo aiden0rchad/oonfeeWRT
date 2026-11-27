@@ -1133,6 +1133,26 @@ export interface SiteNetwork {
     assignment_length: number
   }
   enabled: boolean
+  /** False, including when an older response omits it, keeps zone input REJECT.
+   *  True lets clients on this network reach the router. Apply writes the
+   *  value onto the shared zone Input policy. */
+  allow_router_access?: boolean
+}
+
+/** One LAN port's wired role. Absence from port_roles means trunk, which does
+ *  not edit VLAN 1. WAN is never listed. */
+export interface PortRole {
+  device_id: number
+  port: string
+  mode: 'trunk' | 'access'
+  /** Set only for access. The network's VLAN must be greater than 1. */
+  network_id?: number
+}
+
+/** LAN switch ports the device reported. WAN is already omitted. */
+export interface LANPortList {
+  device_id: number
+  ports: string[]
 }
 
 /** Effective forwarding policy for one managed routed zone.
@@ -1410,6 +1430,10 @@ export interface Site {
   uplinks: Uplink[]
   groups: APGroup[]
   networks: SiteNetwork[]
+  /** Saved roles. Missing on a controller from before port roles existed. */
+  port_roles?: PortRole[]
+  /** Known LAN ports per device, from the capability record. Not desired state. */
+  lan_ports?: LANPortList[]
   zones: SiteZonePolicy[]
   /** Unified effective policy rows. Optional only for mixed-version upgrades. */
   policies?: PolicyRow[]
@@ -2105,6 +2129,8 @@ export const api = {
   saveNetwork: (n: Partial<SiteNetwork> & { id?: number }) =>
     post<SiteNetwork>(n.id ? `/site/networks/${n.id}` : '/site/networks', n),
   deleteNetwork: (id: number) => del<{ deleted: number }>(`/site/networks/${id}`),
+  savePortRole: (role: PortRole) =>
+    post<{ port_role: PortRole; note: string }>('/site/port-roles', role),
   saveZonePolicy: (name: string, forwardTo: string[]) =>
     post<SiteZonePolicy>(`/site/zones/${encodeURIComponent(name)}`, {
       forward_to: forwardTo,
