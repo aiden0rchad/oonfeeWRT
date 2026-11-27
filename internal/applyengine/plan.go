@@ -52,7 +52,9 @@ type Op struct {
 	// Patch marks an option-only Set on a pre-existing section that remains
 	// operator-owned. Ordinary Add/Set operations are stamped with OwnershipTag;
 	// a Patch is deliberately not. It is invalid on Add, whole-section Delete,
-	// or a Set containing the ownership marker.
+	// or a Set containing the ownership marker. A list replace is allowed for
+	// membership options such as bridge-vlan ports; device, vlan and local are
+	// not, so the patch cannot move the management interface or turn filtering on.
 	Patch bool
 }
 

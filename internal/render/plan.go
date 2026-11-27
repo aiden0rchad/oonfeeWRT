@@ -119,10 +119,26 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 			}
 			changed[option] = value
 		}
-		if len(changed) > 0 {
+		changedLists := map[string][]string{}
+		for option, want := range p.Lists {
+			if forbiddenPatchOption(option) || patchListForbidden(option) {
+				continue
+			}
+			// A string option that merely joins to the same text is the form
+			// netifd stores and ignores. Do not "repair" a foreign section by
+			// turning that option into a list — the failure mode is silent.
+			if isList, known := StoredAsList(current, option); !known || !isList {
+				continue
+			}
+			if current[option] == strings.Join(want, " ") {
+				continue
+			}
+			changedLists[option] = append([]string(nil), want...)
+		}
+		if len(changed) > 0 || len(changedLists) > 0 {
 			ops = append(ops, applyengine.Op{
 				Kind: applyengine.OpSet, Config: p.Config,
-				Section: p.Section, Values: changed, Patch: true,
+				Section: p.Section, Values: changed, Lists: changedLists, Patch: true,
 			})
 		}
 	}
@@ -131,6 +147,18 @@ func (d Doc) Plan(existing Existing) applyengine.Plan {
 
 func forbiddenPatchOption(option string) bool {
 	return option == OwnershipTag || option == ".type" || option == ".name"
+}
+
+// patchListForbidden are options a foreign list replace must not touch.
+// device and vlan identify the bridge-vlan; local is the CPU port. Changing
+// any of them is how a membership edit becomes a management-path edit.
+func patchListForbidden(option string) bool {
+	switch option {
+	case "device", "vlan", "local", "vlan_filtering":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortedPatches(in []Patch) []Patch {

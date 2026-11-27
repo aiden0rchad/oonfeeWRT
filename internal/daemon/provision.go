@@ -239,9 +239,17 @@ func summarise(p *reconcile.DevicePlan) []api.Change {
 		// The passphrase is never put in a preview. An operator who wants to
 		// check it can look at the WLAN; a diff screen is exactly the kind of
 		// thing that ends up in a screenshot in a support thread.
-		keys := make([]string, 0, len(op.Values))
+		keys := make([]string, 0, len(op.Values)+len(op.Lists))
+		seen := map[string]bool{}
 		for k := range op.Values {
 			if k == "key" || k == "wpa_psk" {
+				continue
+			}
+			seen[k] = true
+			keys = append(keys, k)
+		}
+		for k := range op.Lists {
+			if seen[k] {
 				continue
 			}
 			keys = append(keys, k)

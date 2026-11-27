@@ -16,9 +16,14 @@ import (
 // # What this deliberately does not do
 //
 // It only ever ADDS sections, all of them ours and all of them named. It never
-// modifies the device's existing `lan` interface, its `br-lan` device, or any
-// other section a human or the firmware wrote. That is the ownership rule, and
-// here it has a consequence worth stating plainly rather than discovering:
+// modifies the device's existing `lan` interface or its `br-lan` device, and it
+// does not turn VLAN filtering on. The one foreign edit is the ports list of
+// the existing VLAN 1 bridge-vlan, and only when an operator saved a LAN port
+// role — see decideLANPortRoles. That edit does not adopt the section, does
+// not move `lan` off `br-lan.1`, and is refused when it would remove VLAN 1's
+// last untagged member. Everything else a human or the firmware wrote stays
+// untouched. That is the ownership rule, and here it has a consequence worth
+// stating plainly rather than discovering:
 //
 //	**oonfeeWRT cannot re-address your LAN or move your management interface.**
 //
@@ -129,13 +134,14 @@ type zoneMember struct {
 	dhcp4       bool   // this interface needs router-local IPv4 DHCP and DNS access
 	ipv6        bool   // this interface needs DHCPv6, IPv6 DNS, and ICMPv6 access
 	dhcpSection bool   // the desired document contains an owned DHCP section
+	allowRouter bool   // clients on this network may reach the router
 }
 
 // renderNetwork produces the sections for one network on one device.
 //
 // Zones are not among them — see zoneMember and renderZones.
 func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
-	existing Existing) ([]Section, []Omission, zoneMember) {
+	existing Existing, access map[string]int) ([]Section, []Omission, zoneMember) {
 	var (
 		out       []Section
 		omissions []Omission
@@ -211,13 +217,11 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		return nil, omissions, none
 	}
 
-	// The bridge-VLAN. Every LAN port carries it tagged: an untagged member
-	// would change what an existing port already does, which is the device's
-	// configuration and not ours to repurpose.
-	tagged := make([]string, 0, len(ports.LAN))
-	for _, p := range ports.LAN {
-		tagged = append(tagged, p+":t")
-	}
+	// The bridge-VLAN. A trunk port — the default, and any port with no saved
+	// role — carries this VLAN tagged. An untagged member would change what
+	// that port already does on VLAN 1. An access role is the exception: the
+	// chosen port is emitted as :u* here and omitted from every other panel
+	// VLAN. decideLANPortRoles is what makes that safe for VLAN 1.
 	out = append(out, Section{
 		Config: "network", Type: "bridge-vlan",
 		Name: fmt.Sprintf("%s_bv%d", NamePrefix, n.VLAN),
@@ -232,7 +236,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 			OwnershipTag: "1",
 		},
 		// A list, not a joined string — see Section.Lists.
-		Lists: map[string][]string{"ports": tagged},
+		Lists: map[string][]string{"ports": bridgeVLANPorts(caps, access, n.ID)},
 	})
 
 	functions := dev.EffectiveFunctions()
@@ -348,6 +352,7 @@ func renderNetwork(n model.Network, dev model.Device, caps *capability.Registry,
 		zone: zone, iface: ifaceName, dhcp4: dhcp.Enabled,
 		ipv6:        ipv6.Mode == model.IPv6PrefixDelegation || preservedServer,
 		dhcpSection: dhcp.Enabled || ipv6.Mode != model.IPv6Preserve || preservedState,
+		allowRouter: n.AllowsRouterAccess(),
 	}
 }
 
@@ -703,8 +708,17 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 		}
 
 		ifaces := make([]string, 0, len(group))
+		// Zone input is shared by every network in the zone. ACCEPT if any
+		// enabled member asked for it; otherwise REJECT. Disabled networks are
+		// not members, so a switch left on a disabled row cannot open the zone.
+		// Output stays ACCEPT and forward stays REJECT: this switch does not
+		// add a forwarding edge between zones.
+		input := "REJECT"
 		for _, m := range group {
 			ifaces = append(ifaces, m.iface)
+			if m.allowRouter {
+				input = "ACCEPT"
+			}
 		}
 		sort.Strings(ifaces) // deterministic diffs
 
@@ -714,12 +728,10 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 			Name: fmt.Sprintf("%s_zone_%s", NamePrefix, section),
 			Values: map[string]string{
 				"name": fw,
-				// A new network defaults to "can reach out, cannot reach in".
-				// That is the safe direction to be wrong in: an operator who
-				// wanted a guest network and got an isolated one notices
-				// immediately, and one who wanted isolation and got an open
-				// zone may never notice.
-				"input":      "REJECT",
+				// Closed unless an enabled network in this zone opted in.
+				// Opening input lets clients reach the router. It does not
+				// change output, forward, or firewall.defaults.
+				"input":      input,
 				"output":     "ACCEPT",
 				"forward":    "REJECT",
 				OwnershipTag: "1",
@@ -730,10 +742,9 @@ func renderZones(members []zoneMember, policies []model.ZonePolicy, existing Exi
 			Manages: []string{"enabled", "family"},
 		})
 		if needsDHCP {
-			// The zone rejects router-local input by default. Without these two
-			// narrow exceptions dnsmasq can be running with the exact desired
-			// pool while clients receive neither a lease nor the DNS service that
-			// lease advertises. They are owned and disappear when the last pool in
+			// These two exceptions stay even when zone input is ACCEPT. The
+			// closed default still needs them, and turning the switch off again
+			// must not strand DHCP or DNS. They disappear when the last pool in
 			// this zone is disabled.
 			out = append(out,
 				Section{

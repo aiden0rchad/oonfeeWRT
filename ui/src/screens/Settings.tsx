@@ -293,7 +293,7 @@ function NetworkSettings({
 
   // Any desired-state write invalidates the whole fleet preview. Apply must
   // never remain enabled beside a plan computed before a network, DHCP, WLAN,
-  // mesh, group, uplink, override, or zone edit.
+  // mesh, group, uplink, override, zone, or LAN port role edit.
   const modelChanged = useCallback(async () => {
     previewGeneration.current += 1
     setPreview(null)
@@ -705,6 +705,7 @@ function NetworkSettings({
         openPrimaryIPv6={initialNetworkSection === 'ipv6'}
         onPrimaryIPv6Opened={onInitialNetworkSectionHandled}
       />
+      <LANPortRoles site={site} devices={devices} onChanged={modelChanged} />
 
       {/* The pending-changes flow. Preview is a read; apply is the only thing
           that writes, and it is deliberately unreachable without previewing
@@ -1677,6 +1678,40 @@ function zoneReassignmentWarning(
   return `Moving this network to zone “${name}” uses the legacy policy until you define one: Internet/WAN is allowed and every other managed zone is blocked. Review Policy Engine, then Preview before Apply.`
 }
 
+// Router access is a per-network switch. Apply copies it onto the shared
+// firewall zone's Input policy: off stays REJECT, on becomes ACCEPT. The
+// control starts from the stored value, which is off when the field is absent,
+// and it saves only after the operator changes it.
+function RouterAccessSwitch({
+  name, on, disabled = false, onChange,
+}: {
+  name: string
+  on: boolean
+  disabled?: boolean
+  onChange: (next: boolean) => void
+}) {
+  return (
+    <span
+      onClick={(event) => event.stopPropagation()}
+      style={{ display: 'grid', gap: 2, maxWidth: 280 }}
+    >
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+        <input
+          type="checkbox"
+          aria-label={`Allow clients to reach this router on ${name}`}
+          checked={on}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        Allow clients to reach this router
+      </label>
+      <span style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+        Apply writes this value to the zone Input policy.
+      </span>
+    </span>
+  )
+}
+
 // The zone a network's firewall rules live in, editable in place.
 //
 // There was no control for this at all, and store.SaveNetwork used to default
@@ -1689,8 +1724,13 @@ function NetworkZone({
 }: { n: SiteNetwork; zones: Site['zones']; onChanged: () => void }) {
   const [value, setValue] = useState(n.zone)
   const [busy, setBusy] = useState(false)
+  const [allowRouter, setAllowRouter] = useState(n.allow_router_access === true)
+  const [accessBusy, setAccessBusy] = useState(false)
   const trimmed = value.trim()
   const dirty = trimmed !== n.zone && trimmed !== ''
+  useEffect(() => {
+    setAllowRouter(n.allow_router_access === true)
+  }, [n.allow_router_access])
   const warning = zoneWarning(dirty ? trimmed : n.zone, n.name, n.vlan)
   const policyWarning = dirty
     ? zoneReassignmentWarning(n.zone, trimmed, n.vlan, zones)
@@ -1748,6 +1788,24 @@ function NetworkZone({
           {policyWarning}
         </span>
       )}
+      <RouterAccessSwitch
+        name={n.name}
+        on={allowRouter}
+        disabled={accessBusy}
+        onChange={(next) => {
+          if (accessBusy || next === allowRouter) return
+          const previous = allowRouter
+          setAllowRouter(next)
+          setAccessBusy(true)
+          void api.saveNetwork({ id: n.id, allow_router_access: next })
+            .then(() => onChanged())
+            .catch((e: unknown) => {
+              setAllowRouter(previous)
+              alert(e instanceof Error ? e.message : String(e))
+            })
+            .finally(() => setAccessBusy(false))
+        }}
+      />
     </>
   )
 }
@@ -1911,6 +1969,7 @@ function NetworkEditor({
   const [draft, setDraft] = useState({
     name: n.name, vlan: n.vlan, cidr: n.cidr ?? '', zone: n.zone,
     dhcp: { ...dhcpFor(n) }, ipv6: { ...ipv6For(n) }, enabled: n.enabled,
+    allow_router_access: n.allow_router_access === true,
   })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -1940,6 +1999,7 @@ function NetworkEditor({
     draft.name !== n.name || draft.vlan !== n.vlan ||
     (draft.cidr || '') !== (n.cidr ?? '') || draft.zone !== n.zone ||
     draft.enabled !== n.enabled ||
+    draft.allow_router_access !== (n.allow_router_access === true) ||
     JSON.stringify(draft.dhcp) !== JSON.stringify(dhcpFor(n)) ||
     JSON.stringify(draft.ipv6) !== JSON.stringify(ipv6For(n))
 
@@ -1961,6 +2021,7 @@ function NetworkEditor({
           limit: draft.dhcp.limit,
           leasetime: draft.dhcp.leasetime.trim(),
         }, ipv6: { ...draft.ipv6 }, enabled: draft.enabled,
+        allow_router_access: draft.allow_router_access,
       })
       onChanged()
       onClose()
@@ -2001,6 +2062,12 @@ function NetworkEditor({
                 {policyWarning}
               </div>
             )}
+            <RouterAccessSwitch
+              name={n.name}
+              on={draft.allow_router_access}
+              disabled={busy}
+              onChange={(next) => setDraft({ ...draft, allow_router_access: next })}
+            />
             <Toggle
               label="Enabled"
               on={draft.enabled}
@@ -2229,6 +2296,152 @@ function NetworkEditor({
   )
 }
 
+function LANPortRoles({
+  site, devices, onChanged,
+}: {
+  site: Site
+  devices: Device[]
+  onChanged: () => Promise<void> | void
+}) {
+  const catalog = (site.lan_ports ?? []).filter((row) => row.ports.length > 0)
+  const roles = site.port_roles ?? []
+  const accessNets = site.networks.filter((n) => n.enabled && n.vlan > 1)
+  const names = new Map(devices.map((device) => [device.id, device.name]))
+  const [deviceID, setDeviceID] = useState(0)
+  const [port, setPort] = useState('')
+  const [mode, setMode] = useState<'trunk' | 'access'>('trunk')
+  const [networkID, setNetworkID] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [roleErr, setRoleErr] = useState('')
+
+  const selected = catalog.find((row) => row.device_id === deviceID) ?? catalog[0]
+  const activeDevice = selected?.device_id ?? 0
+  const activePort = selected && selected.ports.includes(port) ? port : (selected?.ports[0] ?? '')
+  const activeNetwork = accessNets.some((n) => n.id === networkID) ? networkID : (accessNets[0]?.id ?? 0)
+
+  const rows = catalog.flatMap((row) => row.ports.map((name) => {
+    const saved = roles.find((role) => role.device_id === row.device_id && role.port === name)
+    const net = site.networks.find((network) => network.id === saved?.network_id)
+    const summary = !saved || saved.mode !== 'access'
+      ? 'Trunk'
+      : `Access · ${net ? `${net.name} (VLAN ${net.vlan})` : 'unknown network'}`
+    return {
+      key: `${row.device_id}:${name}`,
+      device: names.get(row.device_id) || `Device ${row.device_id}`,
+      port: name,
+      summary,
+    }
+  }))
+
+  async function save() {
+    if (!activeDevice || !activePort || (mode === 'access' && !activeNetwork)) return
+    setSaving(true)
+    setRoleErr('')
+    try {
+      await api.savePortRole({
+        device_id: activeDevice,
+        port: activePort,
+        mode,
+        ...(mode === 'access' ? { network_id: activeNetwork } : {}),
+      })
+      await onChanged()
+    } catch (e) {
+      setRoleErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title="LAN port roles">
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Each known LAN port is a trunk until you save another role. A trunk stays
+          in VLAN 1 exactly as the router has it now, and every additional VLAN is
+          tagged. An access port is untagged on one network only (VLAN 2 or higher)
+          and is removed from VLAN 1, so an ordinary switch behind that port sees
+          a single network. WAN is not listed. Saving changes the site model only.
+          Preview, then Apply, is what writes a router. The default trunk does not
+          change a port you have not assigned.
+        </div>
+        {roleErr && <div role="alert"><Banner tone="critical">{roleErr}</Banner></div>}
+        {catalog.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            No device has reported named LAN switch ports. Port names come from the
+            board description read at adoption. WAN is omitted, and names are not guessed.
+          </div>
+        ) : (
+          <>
+            <DataGrid
+              rows={rows}
+              rowKey={(row) => row.key}
+              onRowClick={(row) => {
+                const [id, name] = row.key.split(':')
+                setDeviceID(Number(id))
+                setPort(name)
+              }}
+              columns={[
+                { key: 'device', header: 'Device', required: true, render: (row) => row.device, sortBy: (row) => row.device },
+                { key: 'port', header: 'Port', width: 90, render: (row) => row.port, sortBy: (row) => row.port },
+                { key: 'role', header: 'Role', width: 240, render: (row) => row.summary, sortBy: (row) => row.summary },
+              ]}
+            />
+            <Choice
+              label="Device"
+              options={catalog.map((row) => ({
+                v: String(row.device_id),
+                l: names.get(row.device_id) || `Device ${row.device_id}`,
+              }))}
+              value={[String(activeDevice)]}
+              onChange={([value]) => {
+                setDeviceID(Number(value))
+                setPort('')
+              }}
+            />
+            <Choice
+              label="Port"
+              options={(selected?.ports ?? []).map((name) => ({ v: name, l: name }))}
+              value={activePort ? [activePort] : []}
+              onChange={([value]) => setPort(value)}
+            />
+            <Choice
+              label="Role"
+              options={[
+                { v: 'trunk', l: 'Trunk' },
+                { v: 'access', l: 'Access' },
+              ]}
+              value={[mode]}
+              onChange={([value]) => setMode(value as 'trunk' | 'access')}
+            />
+            {mode === 'access' && (accessNets.length === 0 ? (
+              <div role="note" style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Add a network with VLAN 2 or higher before assigning an access port.
+                VLAN 1 is the router’s existing management LAN and cannot be the access network.
+              </div>
+            ) : (
+              <Choice
+                label="Network"
+                options={accessNets.map((n) => ({ v: String(n.id), l: `${n.name} (VLAN ${n.vlan})` }))}
+                value={[String(activeNetwork)]}
+                onChange={([value]) => setNetworkID(Number(value))}
+              />
+            ))}
+            <div>
+              <Button
+                aria-label="Save port role"
+                disabled={saving || !activePort || (mode === 'access' && !activeNetwork)}
+                onClick={save}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 function Networks({
   site, onChanged, openPrimaryIPv6 = false, onPrimaryIPv6Opened,
 }: {
@@ -2239,7 +2452,9 @@ function Networks({
 }) {
   const [editing, setEditing] = useState<SiteNetwork | null>(null)
   const [focusIPv6Editor, setFocusIPv6Editor] = useState(false)
-  const [draft, setDraft] = useState({ name: '', vlan: 1, cidr: '', zone: '' })
+  const [draft, setDraft] = useState({
+    name: '', vlan: 1, cidr: '', zone: '', allow_router_access: false,
+  })
   const openedIPv6Intent = useRef(false)
   const primaryNetwork = site.networks.find((network) => network.vlan <= 1) ?? site.networks[0]
 
@@ -2329,7 +2544,7 @@ function Networks({
             {
               key: 'zone',
               header: 'Firewall zone',
-              width: 240,
+              width: 420,
               render: (n) => (
                 <NetworkZone n={n} zones={site.zones ?? []} onChanged={onChanged} />
               ),
@@ -2390,6 +2605,11 @@ function Networks({
               onChange={(e) => setDraft({ ...draft, zone: e.target.value })}
             />
           </div>
+          <RouterAccessSwitch
+            name={draft.name.trim() || 'the new network'}
+            on={draft.allow_router_access}
+            onChange={(next) => setDraft({ ...draft, allow_router_access: next })}
+          />
           <Button
             disabled={!draft.name.trim()}
             onClick={async () => {
@@ -2398,7 +2618,7 @@ function Networks({
                 zone: draft.zone.trim(), dhcp: { ...DEFAULT_DHCP },
                 ipv6: { ...DEFAULT_IPV6 }, enabled: true,
               })
-              setDraft({ name: '', vlan: 1, cidr: '', zone: '' })
+              setDraft({ name: '', vlan: 1, cidr: '', zone: '', allow_router_access: false })
               onChanged()
             }}
           >

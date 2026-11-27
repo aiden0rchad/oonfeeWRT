@@ -65,7 +65,7 @@ var recoveryBounds = []recoveryBound{
 	{"controller accounts", "admins", "", bytesOf("id", "username", "pass_hash", "created_at", "last_login", "role", "enabled", "deleted_at"), recoveryMaxAdmins, recoveryMaxStateBytes, recoveryMaxAdminRowBytes},
 	{"device inventory", "devices", "", bytesOf("id", "mac", "host", "port", "scheme", "cert_fp", "host_key_fp", "name", "role", "functions_json", "management_mode", "adopted_at", "cred_enc", "class", "caps_json", "fw_release", "last_seen", "poll_state", "poll_interval_s"), recoveryMaxDevices, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"site", "site", "", bytesOf("id", "uuid", "name"), 1, recoveryMaxRowBytes, recoveryMaxRowBytes},
-	{"networks", "networks", "", bytesOf("id", "name", "vlan", "cidr", "zone", "dhcp_json", "ipv6_json", "enabled"), recoveryMaxNetworks, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"networks", "networks", "", bytesOf("id", "name", "vlan", "cidr", "zone", "dhcp_json", "ipv6_json", "enabled", "allow_router_access"), recoveryMaxNetworks, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"zone policies", "zones", "", bytesOf("name", "policy_json"), recoveryMaxZones, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"policies", "fw_rules", "", bytesOf("id", "sort", "rule_json", "enabled"), recoveryMaxPolicies, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"policy sets", "policy_sets", "", bytesOf("id", "name"), recoveryMaxPolicySets, recoveryMaxStateBytes, recoveryMaxRowBytes},
@@ -78,6 +78,7 @@ var recoveryBounds = []recoveryBound{
 	{"meshes", "meshes", "", bytesOf("id", "mesh_id", "network_id", "group_id", "band", "key", "key_enc", "enabled"), recoveryMaxMeshes, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"uplinks", "uplinks", "", bytesOf("id", "device_id", "wlan_id", "band", "enabled"), recoveryMaxUplinks, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"device overrides", "device_overrides", "", bytesOf("device_id", "path", "value_json"), recoveryMaxOverrides, recoveryMaxStateBytes, recoveryMaxRowBytes},
+	{"LAN port roles", "port_roles", "", bytesOf("device_id", "port", "mode", "network_id"), recoveryMaxOverrides, recoveryMaxStateBytes, recoveryMaxRowBytes},
 	{"owned sections", "owned_sections", "", bytesOf("device_id", "config", "section", "rendered_hash", "rendered_hash_enc", "applied_at"), recoveryMaxOwnedSections, recoveryMaxStateBytes, recoveryMaxRowBytes},
 }
 

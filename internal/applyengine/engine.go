@@ -368,9 +368,7 @@ func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
 			}
 			args["values"] = withLists(withOwnership(op.Values), op.Lists)
 		case OpSet:
-			_, patchOwns := op.Values[OwnershipTag]
-			if op.Patch && (op.Section == "" || op.Type != "" || op.Name != "" ||
-				len(op.Values) == 0 || len(op.Lists) != 0 || patchOwns) {
+			if op.Patch && invalidPatchSet(op) {
 				return errors.New("patch operation must be an option-only set without an ownership marker")
 			}
 			args["section"] = op.Section
@@ -403,6 +401,34 @@ func (e *Engine) stage(ctx context.Context, c *ubus.Client, plan Plan) error {
 		}
 	}
 	return nil
+}
+
+// invalidPatchSet reports a Set that would adopt a foreign section or change
+// the options that identify it. A ports list is allowed: that is how VLAN 1
+// membership changes without the controller owning the bridge-vlan. device,
+// vlan, local and the ownership marker are not.
+func invalidPatchSet(op Op) bool {
+	if op.Section == "" || op.Type != "" || op.Name != "" {
+		return true
+	}
+	if len(op.Values) == 0 && len(op.Lists) == 0 {
+		return true
+	}
+	for option := range op.Values {
+		if option == OwnershipTag || option == ".type" || option == ".name" {
+			return true
+		}
+	}
+	for option, values := range op.Lists {
+		switch option {
+		case OwnershipTag, ".type", ".name", "device", "vlan", "local", "vlan_filtering":
+			return true
+		}
+		if values == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // withOwnership stamps every section we create or wholly manage. The only Set

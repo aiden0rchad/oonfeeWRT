@@ -2180,6 +2180,56 @@ func TestNetworkIPv6PartialUpdateAndValidation(t *testing.T) {
 	}
 }
 
+func TestNetworkRouterAccessPartialUpdateDoesNotResetOtherFields(t *testing.T) {
+	h := newHarness(t)
+	h.setup()
+
+	created := h.do(http.MethodPost, "/api/v1/site/networks", map[string]any{
+		"name": "dom", "vlan": 50, "cidr": "192.168.50.1/24", "zone": "dom",
+		"enabled": true,
+		"dhcp": map[string]any{
+			"enabled": true, "start": 20, "limit": 40, "leasetime": "1h",
+		},
+		"ipv6": map[string]any{"mode": "prefix_delegation", "assignment_length": 56},
+	})
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status %d: %s", created.Code, created.Body.String())
+	}
+	body := h.json(created)
+	id := int(body["id"].(float64))
+	if body["allow_router_access"] != false {
+		t.Fatalf("create without the field stored %#v", body["allow_router_access"])
+	}
+
+	path := fmt.Sprintf("/api/v1/site/networks/%d", id)
+	updated := h.do(http.MethodPost, path, map[string]any{"allow_router_access": true})
+	if updated.Code != http.StatusOK {
+		t.Fatalf("partial update status %d: %s", updated.Code, updated.Body.String())
+	}
+	body = h.json(updated)
+	if body["name"] != "dom" || body["vlan"] != float64(50) ||
+		body["cidr"] != "192.168.50.1/24" || body["zone"] != "dom" || body["enabled"] != true ||
+		body["allow_router_access"] != true {
+		t.Fatalf("partial switch update reset network fields: %v", body)
+	}
+	dhcp := body["dhcp"].(map[string]any)
+	ipv6 := body["ipv6"].(map[string]any)
+	if dhcp["start"] != float64(20) || dhcp["leasetime"] != "1h" ||
+		ipv6["mode"] != "prefix_delegation" || ipv6["assignment_length"] != float64(56) {
+		t.Fatalf("partial switch update reset DHCP or IPv6: dhcp=%v ipv6=%v", dhcp, ipv6)
+	}
+
+	renamed := h.do(http.MethodPost, path, map[string]any{"name": "house"})
+	if renamed.Code != http.StatusOK {
+		t.Fatalf("rename status %d: %s", renamed.Code, renamed.Body.String())
+	}
+	body = h.json(renamed)
+	if body["name"] != "house" || body["allow_router_access"] != true ||
+		body["cidr"] != "192.168.50.1/24" || body["vlan"] != float64(50) {
+		t.Fatalf("omitted switch was not preserved: %v", body)
+	}
+}
+
 func TestApplyParsesAChunkedRequestBody(t *testing.T) {
 	h := newHarness(t)
 	h.setup()

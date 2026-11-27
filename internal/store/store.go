@@ -28,7 +28,7 @@ import (
 var schemaSQL string
 
 // schemaVersion is the migration level this build expects.
-const schemaVersion = 25
+const schemaVersion = 27
 
 // secretSchemaVersion is the one-time plaintext-to-ciphertext migration. Keep
 // it explicit: a future schema bump must never re-run it against already
@@ -43,6 +43,17 @@ const secretSchemaVersion = 14
 var migrations = map[int][]string{
 	24: {alertSchemaSQL},
 	25: {integrationSchemaSQL},
+	26: {portRoleSchemaSQL},
+	27: {
+		// Per-network zone input policy. 0 is REJECT, which is what every
+		// existing row already deploys. 1 is ACCEPT: clients on that network
+		// may reach the router. The default keeps upgraded rows closed, so
+		// opening the panel cannot turn access on by itself.
+		//
+		// Not copied into schema.sql. A fresh database and an upgraded one
+		// both run this statement, so the column cannot drift between them.
+		`ALTER TABLE networks ADD COLUMN allow_router_access INTEGER NOT NULL DEFAULT 0`,
+	},
 	2: {
 		// The address a client was last seen at, as observed. Distinct from
 		// fixed_ip, which is a reservation an operator asked for — conflating

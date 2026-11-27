@@ -1100,17 +1100,23 @@ func TestInvalidNetworkAddressBlocksRenderBeforePrune(t *testing.T) {
 	}
 }
 
-// Every LAN port carries the VLAN tagged. An untagged member would change what
-// an existing port already does, which is the device's config and not ours.
-func TestBridgeVLANTagsEveryPort(t *testing.T) {
+// Default trunk: every LAN port carries the VLAN tagged. No saved port role
+// means the render is the historical one — an untagged member would change
+// what an existing port already does, and this test is the guard that the
+// default does not. Access ports are covered in portrole_test.go.
+func TestDefaultTrunkTagsEveryLANPort(t *testing.T) {
 	site := model.Site{UUID: "abc", Networks: []model.Network{{
 		ID: 1, Name: "iot", VLAN: 45, CIDR: "10.7.45.1/24", Enabled: true,
 	}}}
 	doc, _, _ := Render(site, model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
 	bv := sectionsIn(doc, "network")["oowrt_bv45"]
 	if got := strings.Join(bv.Lists["ports"], " "); got != "lan1:t lan2:t lan3:t lan4:t" {
-		t.Errorf("ports = %q; every port must be tagged, never untagged — an "+
-			"untagged member repurposes a port the device already uses", got)
+		t.Errorf("ports = %q; a default trunk must tag every LAN port and never "+
+			"make one untagged — an untagged member repurposes a port the device "+
+			"already uses", got)
+	}
+	if len(doc.Patches) != 0 {
+		t.Errorf("default trunk patched a foreign section: %+v", doc.Patches)
 	}
 	if _, wrong := bv.Values["ports"]; wrong {
 		t.Error("ports was rendered as a plain option; UCI needs a list, and the " +
@@ -1243,6 +1249,72 @@ func TestNewZoneDefaultsToClosed(t *testing.T) {
 	if zone.Values["output"] != "ACCEPT" {
 		t.Errorf("zone output = %q; a network that cannot reach anything is not a network",
 			zone.Values["output"])
+	}
+}
+
+// Networks that share a zone share one input policy. The zone is ACCEPT when
+// any enabled member opted in, and REJECT otherwise. A disabled network is not
+// a member, so its switch cannot open the zone. Output and forward stay put,
+// and no extra inter-zone forwarding is added.
+func TestSharedZoneInputFollowsAnyEnabledNetwork(t *testing.T) {
+	on, off := true, false
+	alpha := model.Network{ID: 1, Name: "alpha", VLAN: 45, CIDR: "10.7.45.1/24", Zone: "shared", Enabled: true}
+	beta := model.Network{ID: 2, Name: "beta", VLAN: 46, CIDR: "10.7.46.1/24", Zone: "shared", Enabled: true}
+	tests := []struct {
+		name    string
+		betaOn  bool
+		betaOff bool
+		disable bool
+		want    string
+		members []string
+	}{
+		{name: "one enabled member opens the shared zone", betaOn: true, want: "ACCEPT", members: []string{"oowrt_net_alpha", "oowrt_net_beta"}},
+		{name: "every enabled member closed", betaOff: true, want: "REJECT", members: []string{"oowrt_net_alpha", "oowrt_net_beta"}},
+		{name: "a disabled member cannot open the zone", disable: true, want: "REJECT", members: []string{"oowrt_net_alpha"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left, right := alpha, beta
+			left.AllowRouterAccess = &off
+			switch {
+			case test.betaOn:
+				right.AllowRouterAccess = &on
+			case test.disable:
+				right.Enabled = false
+				right.AllowRouterAccess = &on
+			default:
+				right.AllowRouterAccess = &off
+			}
+			doc, _, err := Render(model.Site{UUID: "abc", Networks: []model.Network{left, right}},
+				model.Device{ID: 1, Role: "gateway"}, netCaps(), vlanAware())
+			if err != nil {
+				t.Fatal(err)
+			}
+			firewall := sectionsIn(doc, "firewall")
+			zone := firewall["oowrt_zone_shared"]
+			if zone.Values["input"] != test.want || zone.Values["output"] != "ACCEPT" || zone.Values["forward"] != "REJECT" {
+				t.Fatalf("zone = %+v, want input %s output ACCEPT forward REJECT", zone.Values, test.want)
+			}
+			if got := strings.Join(zone.Lists["network"], " "); got != strings.Join(test.members, " ") {
+				t.Fatalf("zone networks = %q, want %q", got, strings.Join(test.members, " "))
+			}
+			if firewall["oowrt_in_shared_dhcp"].Values["target"] != "ACCEPT" ||
+				firewall["oowrt_in_shared_dns"].Values["target"] != "ACCEPT" {
+				t.Fatalf("DHCP/DNS exceptions = dhcp:%+v dns:%+v", firewall["oowrt_in_shared_dhcp"], firewall["oowrt_in_shared_dns"])
+			}
+			var forwardings []Section
+			for _, section := range doc.Sections {
+				if section.Config == "firewall" && section.Type == "defaults" {
+					t.Fatalf("firewall.defaults was rendered: %+v", section)
+				}
+				if section.Config == "firewall" && section.Type == "forwarding" {
+					forwardings = append(forwardings, section)
+				}
+			}
+			if len(forwardings) != 1 || forwardings[0].Values["src"] != "shared" || forwardings[0].Values["dest"] != "wan" {
+				t.Fatalf("forwarding = %+v, want only shared -> wan", forwardings)
+			}
+		})
 	}
 }
 

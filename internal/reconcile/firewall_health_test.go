@@ -84,6 +84,102 @@ func TestFirewallRuntimeVerifierAcceptsFW4ZoneAndServiceShape(t *testing.T) {
 	}
 }
 
+// UCI zone input ACCEPT makes fw4 use chain policy accept and skip the
+// reject_from_<zone> tail. That is the open path the switch asked for, so the
+// health check must not demand the tail and then roll the Apply back. REJECT
+// still demands it. Forward and the base chains stay closed in both cases.
+func TestZoneInputPolicySelectsInputTailRequirement(t *testing.T) {
+	t.Run("accept does not require an input reject tail", func(t *testing.T) {
+		records := dropJump(fw4HealthRecords(), "input_guest", "reject_from_guest")
+		want := fw4HealthExpectation()
+		want.openInput = map[string]bool{"guest": true}
+		runtime, err := parseNFTRuntime(nftJSON(t, records...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := want.verify(runtime); err != nil {
+			t.Fatalf("open zone input rejected: %v", err)
+		}
+	})
+
+	t.Run("reject still requires an input reject tail", func(t *testing.T) {
+		records := dropJump(fw4HealthRecords(), "input_guest", "reject_from_guest")
+		assertFirewallRuntimeRejected(t, records, fw4HealthExpectation(), "no default reject/drop input path")
+	})
+
+	t.Run("accept still requires a forward reject tail", func(t *testing.T) {
+		records := dropJump(fw4HealthRecords(), "forward_guest", "reject_to_guest")
+		want := fw4HealthExpectation()
+		want.openInput = map[string]bool{"guest": true}
+		assertFirewallRuntimeRejected(t, records, want, "no default reject/drop forwarding path")
+	})
+
+	t.Run("accept still requires a non-accept input base chain", func(t *testing.T) {
+		records := fw4HealthRecords()
+		for _, record := range records {
+			chain, ok := record.(map[string]any)["chain"].(map[string]any)
+			if ok && chain["name"] == "input" {
+				chain["policy"] = "accept"
+			}
+		}
+		want := fw4HealthExpectation()
+		want.openInput = map[string]bool{"guest": true}
+		assertFirewallRuntimeRejected(t, records, want, "input base chain")
+	})
+}
+
+func TestRenderedZoneInputFeedsTheHealthExpectation(t *testing.T) {
+	closed := managedFirewallDoc(1, true, true)
+	open := managedFirewallDoc(1, true, true)
+	for i := range open.Sections {
+		if open.Sections[i].Type == "zone" {
+			open.Sections[i].Values["input"] = "ACCEPT"
+		}
+	}
+	for _, test := range []struct {
+		name string
+		doc  render.Doc
+		open bool
+	}{
+		{name: "reject", doc: closed, open: false},
+		{name: "accept", doc: open, open: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want, needed, err := buildFirewallRuntimeExpectation(managedFirewallPlan(t, render.Existing{}, test.doc, time.Minute))
+			if err != nil || !needed {
+				t.Fatalf("needed=%v err=%v", needed, err)
+			}
+			if want.openInput["guest"] != test.open {
+				t.Fatalf("openInput[guest]=%v, want %v", want.openInput["guest"], test.open)
+			}
+			if !want.desiredZones["guest"] || len(want.desiredService) != 2 {
+				t.Fatalf("zone input policy dropped the rest of the expectation: %+v", want)
+			}
+		})
+	}
+}
+
+func dropJump(records []any, chain, target string) []any {
+	out := make([]any, 0, len(records))
+	for _, record := range records {
+		rule, ok := record.(map[string]any)["rule"].(map[string]any)
+		if ok && rule["chain"] == chain {
+			skip := false
+			for _, expr := range rule["expr"].([]any) {
+				jump, _ := expr.(map[string]any)["jump"].(map[string]any)
+				if jump["target"] == target {
+					skip = true
+				}
+			}
+			if skip {
+				continue
+			}
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
 func TestFirewallRuntimeVerifierRejectsIncompleteZoneProof(t *testing.T) {
 	t.Run("accepting forward fallthrough", func(t *testing.T) {
 		records := fw4HealthRecords()
